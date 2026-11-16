@@ -1,0 +1,254 @@
+'use client';
+
+import React, { useEffect, useRef } from 'react';
+import { Compass, MapPin, X } from 'lucide-react';
+import { HUDStateSnapshot } from '@/game/types';
+import {
+  BIOME_INFO,
+  CAVE_POS,
+  EXPEDITION_POS,
+  LAKE_CENTER,
+  WATERFALL_POS,
+  getBiomeAt,
+  getTerrainHeight,
+} from '@/game/world/terrain';
+
+interface IslandMapModalProps {
+  hud: HUDStateSnapshot;
+  onClose: () => void;
+}
+
+export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const size = 340;
+    const worldSpan = 320; // -160 .. +160
+    const fogGrid = 32;
+    const exploredSet = new Set(hud.exploredCells || []);
+    const isExploredWorld = (wx: number, wz: number) => {
+      const gx = Math.floor(((wx + worldSpan / 2) / worldSpan) * fogGrid);
+      const gz = Math.floor(((wz + worldSpan / 2) / worldSpan) * fogGrid);
+      return exploredSet.has(gz * fogGrid + gx);
+    };
+
+    const img = ctx.createImageData(size, size);
+
+    for (let py = 0; py < size; py++) {
+      for (let px = 0; px < size; px++) {
+        const wx = ((px / size) - 0.5) * worldSpan;
+        const wz = ((py / size) - 0.5) * worldSpan;
+        const explored = isExploredWorld(wx, wz);
+
+        let r = 15,
+          g = 23,
+          b = 34;
+
+        if (explored) {
+          const h = getTerrainHeight(wx, wz);
+          const biome = getBiomeAt(wx, wz);
+
+          if (biome === 'ocean' || h < -0.2) {
+            const depth = Math.max(0, Math.min(1, (-h) / 5));
+            r = 12 - depth * 6;
+            g = 84 - depth * 35;
+            b = 125 - depth * 35;
+          } else if (biome === 'lake' || biome === 'river') {
+            r = 20;
+            g = 184;
+            b = 166;
+          } else if (biome === 'beach') {
+            r = 230;
+            g = 200;
+            b = 135;
+          } else if (biome === 'mountain' || biome === 'cave') {
+            const shade = Math.min(45, h * 1.8);
+            r = 82 + shade;
+            g = 76 + shade;
+            b = 70 + shade;
+          } else if (biome === 'grassland') {
+            r = 128;
+            g = 162;
+            b = 60;
+          } else if (biome === 'expedition') {
+            r = 165;
+            g = 120;
+            b = 70;
+          } else {
+            r = 46;
+            g = 112;
+            b = 54;
+          }
+        }
+
+        const idx = (py * size + px) * 4;
+        img.data[idx] = r;
+        img.data[idx + 1] = g;
+        img.data[idx + 2] = b;
+        img.data[idx + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+
+    const toPx = (wx: number, wz: number) => ({
+      x: ((wx / worldSpan) + 0.5) * size,
+      y: ((wz / worldSpan) + 0.5) * size,
+    });
+
+    // Discovered Landmarks only
+    const landmarks = [
+      { label: 'Waterfall', pos: WATERFALL_POS, color: '#67e8f9' },
+      { label: 'Obsidian Cave', pos: CAVE_POS, color: '#cbd5e1' },
+      { label: 'Expedition', pos: EXPEDITION_POS, color: '#fbbf24' },
+      { label: 'Azure Lake', pos: LAKE_CENTER, color: '#2dd4bf' },
+    ];
+    ctx.font = '600 10px sans-serif';
+    landmarks.forEach((lm) => {
+      if (!isExploredWorld(lm.pos.x, lm.pos.z)) return;
+      const p = toPx(lm.pos.x, lm.pos.z);
+      ctx.fillStyle = lm.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#0c0a09';
+      ctx.lineWidth = 2;
+      ctx.strokeText(lm.label, p.x + 6, p.y + 3);
+      ctx.fillText(lm.label, p.x + 6, p.y + 3);
+    });
+
+    // Placed Camp Structures
+    hud.structures.forEach((st) => {
+      const p = toPx(st.x, st.z);
+      ctx.fillStyle = st.type === 'campfire' ? '#f97316' : '#fcd34d';
+      ctx.fillRect(p.x - 3, p.y - 3, 6, 6);
+    });
+
+    // Tracked Dinosaur / Wildlife Sightings in explored areas
+    hud.trackedSightings.forEach((s) => {
+      if (!isExploredWorld(s.x, s.z)) return;
+      const p = toPx(s.x, s.z);
+      ctx.fillStyle =
+        s.species === 'trex' || s.species === 'velociraptor'
+          ? '#ef4444'
+          : s.species === 'dolphin'
+            ? '#38bdf8'
+            : '#a3e635';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // Player Marker + Heading Arrow
+    const playerP = toPx(hud.playerX, hud.playerZ);
+    ctx.save();
+    ctx.translate(playerP.x, playerP.y);
+    ctx.rotate(-hud.playerYaw + Math.PI);
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#0c0a09';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -8);
+    ctx.lineTo(6, 6);
+    ctx.lineTo(0, 3);
+    ctx.lineTo(-6, 6);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.fill();
+    ctx.restore();
+  }, [
+    hud.playerX,
+    hud.playerZ,
+    hud.playerYaw,
+    hud.structures,
+    hud.trackedSightings,
+    hud.exploredCells,
+  ]);
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/75 p-4">
+      <div className="w-full max-w-2xl rounded-2xl bg-stone-900 border border-stone-700/80 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-stone-800">
+          <div className="flex items-center gap-2.5">
+            <Compass className="w-5 h-5 text-amber-400" />
+            <h2 className="font-display text-lg font-bold text-stone-100">
+              Island Topographical Map
+            </h2>
+          </div>
+          <button
+            onClick={onClose}
+            className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200"
+            aria-label="Close Map"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-5 overflow-y-auto survival-scroll grid grid-cols-1 md:grid-cols-2 gap-5 items-center">
+          <div className="flex justify-center">
+            <canvas
+              ref={canvasRef}
+              width={340}
+              height={340}
+              className="w-full max-w-[340px] aspect-square rounded-xl border border-stone-700 bg-stone-950"
+            />
+          </div>
+
+          <div className="space-y-4">
+            <div className="rounded-xl bg-stone-950/70 border border-stone-800 p-3.5">
+              <div className="text-xs text-stone-400">Current Region</div>
+              <div className="text-base font-semibold text-amber-300 mt-0.5 flex items-center gap-1.5">
+                <MapPin className="w-4 h-4 shrink-0" />
+                <span>{hud.biomeName}</span>
+              </div>
+              <p className="text-xs text-stone-400 mt-1">
+                {BIOME_INFO[hud.biome].description}
+              </p>
+              <div className="text-xs font-mono-tabular text-stone-300 mt-2">
+                Coords: X {Math.round(hud.playerX)} · Z {Math.round(hud.playerZ)}
+              </div>
+            </div>
+
+            <div className="space-y-2 text-xs text-stone-300">
+              <div className="font-semibold text-stone-100">Map Legend</div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-white border border-stone-950 inline-block" />
+                  <span>Explorer</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-sm bg-orange-500 inline-block" />
+                  <span>Campfire / Base</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-red-500 inline-block" />
+                  <span>Predator Nearby</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-lime-400 inline-block" />
+                  <span>Herbivore Herd</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-sky-400 inline-block" />
+                  <span>Coastal Dolphins</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-amber-400 inline-block" />
+                  <span>Expedition Camp</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="text-xs text-stone-400">
+              Discovered Regions: {hud.visitedBiomes.length} / 9
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
