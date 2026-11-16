@@ -7,6 +7,7 @@ import {
   Box,
   Check,
   Clock,
+  Droplets,
   Hammer,
   Layers,
   Lock,
@@ -42,8 +43,10 @@ const RESOURCE_ORDER: ItemId[] = [
 interface InventoryModalProps {
   hud: HUDStateSnapshot;
   nearTable?: boolean;
+  nearOceanWater?: boolean;
   chestStructureId?: string;
   onUseOrEquip: (itemId: ItemId) => void;
+  onCleanBottle?: () => void;
   onDropItem?: (itemId: ItemId) => void;
   onAssignHotbar: (slotIdx: number, itemId: ItemId | null) => void;
   onSelectHotbarSlot?: (slotIdx: number) => void;
@@ -57,8 +60,10 @@ interface InventoryModalProps {
 export function InventoryModal({
   hud,
   nearTable = false,
+  nearOceanWater = false,
   chestStructureId,
   onUseOrEquip,
+  onCleanBottle,
   onDropItem,
   onAssignHotbar,
   onSelectHotbarSlot,
@@ -209,8 +214,10 @@ export function InventoryModal({
                 {chest ? 'Storage Box & Explorer Backpack' : 'Explorer Backpack'}
               </h2>
               <p className="text-[11px] text-stone-400">
-                {hud.inventory.length} carried stacks · Equipped Slot{' '}
-                {hud.equippedSlot + 1}
+                {hud.inventory.length} carried stacks ·{' '}
+                {hud.equippedSlot >= 0
+                  ? `Equipped Slot ${hud.equippedSlot + 1}`
+                  : 'Bare Hands'}
               </p>
             </div>
           </div>
@@ -395,6 +402,27 @@ export function InventoryModal({
                   </div>
 
                   <div className="space-y-2.5">
+                    {selectedDef.id === 'dirty_water_bottle' && onCleanBottle && (
+                      <button
+                        onClick={() => {
+                          onCleanBottle();
+                          if (nearOceanWater) onClose();
+                        }}
+                        className={`w-full min-h-[46px] rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-colors ${
+                          nearOceanWater
+                            ? 'bg-sky-500 hover:bg-sky-400 text-stone-950'
+                            : 'bg-sky-950/70 hover:bg-sky-900/80 border border-sky-700/70 text-sky-200'
+                        }`}
+                      >
+                        <Droplets className="w-4 h-4" />
+                        <span>
+                          {nearOceanWater
+                            ? 'Clean & Fill in Ocean Water'
+                            : 'Clean Water Bottle (Walk to Ocean)'}
+                        </span>
+                      </button>
+                    )}
+
                     {(selectedDef.category === 'food' ||
                       selectedDef.category === 'tool' ||
                       selectedDef.category === 'weapon' ||
@@ -407,11 +435,13 @@ export function InventoryModal({
                         }}
                         className="w-full min-h-[46px] rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-semibold text-sm"
                       >
-                        {selectedDef.category === 'food'
-                          ? 'Eat Now'
-                          : selectedDef.structureType
-                            ? 'Place in World'
-                            : 'Equip Tool / Weapon'}
+                        {selectedDef.id === 'filtered_water_bottle'
+                          ? 'Drink Filtered Water'
+                          : selectedDef.category === 'food'
+                            ? 'Eat Now'
+                            : selectedDef.structureType
+                              ? 'Place in World'
+                              : 'Equip Tool / Weapon'}
                       </button>
                     )}
 
@@ -709,13 +739,14 @@ export function InventoryModal({
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {equipmentItems.map((slot) => {
+                  {equipmentItems.map((slot, idx) => {
                     const def = ITEMS[slot.itemId];
                     const equipped =
+                      hud.equippedSlot >= 0 &&
                       hud.hotbarItemIds[hud.equippedSlot] === slot.itemId;
                     return (
                       <div
-                        key={slot.itemId}
+                        key={`${slot.itemId}_${idx}`}
                         className="rounded-xl bg-stone-950/70 border border-stone-800 p-3.5 flex items-center justify-between gap-3"
                       >
                         <div className="flex items-center gap-3 min-w-0">

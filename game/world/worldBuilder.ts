@@ -1,10 +1,16 @@
 import * as THREE from 'three';
 import { ResourceNodeKind, ResourceNodeState } from '../types';
 import {
+  AUTUMN_GROVE_POS,
   CAVE_POS,
+  DEAD_OAK_POS,
   EXPEDITION_POS,
+  FARM_POND_POS,
+  HOMESTEAD_POS,
   LAKE_CENTER,
   OCEAN_LEVEL,
+  SNOWY_WOODLAND_POS,
+  SWAMP_POS,
   WATERFALL_POS,
   getBiomeAt,
   getRiverSample,
@@ -14,6 +20,7 @@ import {
 import {
   createBarkTexture,
   createGroundDetailTexture,
+  createHayTexture,
   createLeafCanopyTexture,
   createRockTexture,
   createWaterNormalTexture,
@@ -91,8 +98,18 @@ export function buildIslandWorld(
     const onExpPath =
       Math.abs((z + 12) - (-0.45 * (x - 44))) < 2.1 && x > -8 && x < 44;
 
+    const dSnow = Math.hypot(x - SNOWY_WOODLAND_POS.x, z - SNOWY_WOODLAND_POS.z);
+    const dAutumn = Math.hypot(x - AUTUMN_GROVE_POS.x, z - AUTUMN_GROVE_POS.z);
+    const dSwamp = Math.hypot(x - SWAMP_POS.x, z - SWAMP_POS.z);
+
     if (y < -0.3) {
       c.setHex(0x1e6b7b);
+    } else if (dSwamp < SWAMP_POS.radius + 2.2) {
+      c.setHex(0x3f4224); // murky swamp mud & moss
+    } else if (dSnow < 13.5) {
+      c.setHex(dSnow < 10.5 ? 0xdbe4ee : 0x9aa8b8); // snowy woodland floor
+    } else if (dAutumn < 11.0) {
+      c.setHex(0x8c5228); // warm fallen autumn leaf bed
     } else if (biome === 'beach' || y < 2.2) {
       c.setHex(0xe5c88b);
     } else if (biome === 'river' || biome === 'lake') {
@@ -382,6 +399,513 @@ export function buildIslandWorld(
     expY + 0.85,
     EXPEDITION_POS.z + 1.6,
   );
+
+  // 8b. Homestead Barnyard, Open-Slat Wooden Barn, Golden Hay Bales, Dusty Paddock & Muddy Pond
+  const homesteadY = getTerrainHeight(HOMESTEAD_POS.x, HOMESTEAD_POS.z);
+  const hayTex = createHayTexture(Math.min(4, renderer.capabilities.getMaxAnisotropy()));
+  const barnWoodMat = new THREE.MeshStandardMaterial({
+    color: 0x6b4226,
+    map: woodTex,
+    roughness: 0.9,
+  });
+  const darkBeamMat = new THREE.MeshStandardMaterial({
+    color: 0x422614,
+    map: woodTex,
+    roughness: 0.92,
+  });
+  const roofShingleMat = new THREE.MeshStandardMaterial({
+    color: 0x4b382a,
+    roughness: 0.94,
+  });
+  const hayMat = new THREE.MeshStandardMaterial({
+    color: 0xe6b84c,
+    map: hayTex,
+    roughness: 0.92,
+  });
+  const dustyDirtMat = new THREE.MeshStandardMaterial({
+    color: 0xa68966,
+    map: groundTex,
+    roughness: 0.96,
+  });
+  const muddyBankMat = new THREE.MeshStandardMaterial({
+    color: 0x5c4028,
+    map: groundTex,
+    roughness: 0.56,
+  });
+
+  // Dimly Lit Open-Slat Wooden Barn at (-28.5, 58)
+  const barnX = HOMESTEAD_POS.x - 4.5;
+  const barnZ = HOMESTEAD_POS.z;
+  const barnY = getTerrainHeight(barnX, barnZ);
+  const barnGroup = new THREE.Group();
+  barnGroup.position.set(barnX, barnY, barnZ);
+
+  // Barn earthen floor & 4 corner posts
+  const barnFloor = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.06, 6.2), dustyDirtMat);
+  barnFloor.position.y = 0.03;
+  barnFloor.receiveShadow = true;
+  barnGroup.add(barnFloor);
+
+  [
+    [-2.65, -2.95],
+    [2.65, -2.95],
+    [-2.65, 2.95],
+    [2.65, 2.95],
+  ].forEach(([px, pz]) => {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.22, 3.1, 0.22), darkBeamMat);
+    post.position.set(px, 1.55, pz);
+    post.castShadow = true;
+    barnGroup.add(post);
+  });
+
+  // Horizontal wooden slats on west back wall & north/south walls with light gaps for sunbeams
+  for (let s = 0; s < 6; s++) {
+    const sy = 0.35 + s * 0.44;
+    const westSlat = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.28, 5.9), barnWoodMat);
+    westSlat.position.set(-2.68, sy, 0);
+    westSlat.castShadow = true;
+    const northSlat = new THREE.Mesh(new THREE.BoxGeometry(5.4, 0.28, 0.1), barnWoodMat);
+    northSlat.position.set(0, sy, -2.98);
+    northSlat.castShadow = true;
+    const southSlat = new THREE.Mesh(new THREE.BoxGeometry(5.4, 0.26, 0.1), barnWoodMat);
+    southSlat.position.set(0, sy, 2.98);
+    southSlat.castShadow = true;
+    barnGroup.add(westSlat, northSlat, southSlat);
+  }
+
+  // Pitched barn roof
+  [-1, 1].forEach((side) => {
+    const slope = new THREE.Mesh(new THREE.BoxGeometry(6.3, 0.16, 3.65), roofShingleMat);
+    slope.position.set(0, 3.62, side * 1.58);
+    slope.rotation.x = side * 0.48;
+    slope.castShadow = true;
+    slope.receiveShadow = true;
+    barnGroup.add(slope);
+  });
+
+  // Stack of Golden Hay Bales inside the barn (under (-28.8, 56.8))
+  const hayStackLocalX = -0.3;
+  const hayStackLocalZ = -1.2;
+  const balePositions: [number, number, number, number][] = [
+    [hayStackLocalX - 0.52, 0.36, hayStackLocalZ, 0.04],
+    [hayStackLocalX + 0.52, 0.36, hayStackLocalZ, -0.03],
+    [hayStackLocalX, 0.36, hayStackLocalZ + 0.78, 0.08],
+    [hayStackLocalX, 1.06, hayStackLocalZ, -0.05], // Upper bale where Barn Cat sits!
+  ];
+  balePositions.forEach(([bx, by, bz, ry]) => {
+    const bale = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.68, 0.76), hayMat);
+    bale.position.set(bx, by, bz);
+    bale.rotation.y = ry;
+    bale.castShadow = true;
+    bale.receiveShadow = true;
+    barnGroup.add(bale);
+  });
+
+  // Volumetric sunbeams filtering diagonally through barn wall slats onto the hay bales
+  const sunbeamMat = new THREE.MeshBasicMaterial({
+    color: 0xfef08a,
+    transparent: true,
+    opacity: 0.11,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  for (let b = 0; b < 3; b++) {
+    const beam = new THREE.Mesh(new THREE.ConeGeometry(0.68, 4.2, 8, 1, true), sunbeamMat);
+    beam.position.set(-0.6 + b * 0.55, 1.55, 0.55 - b * 0.62);
+    beam.rotation.x = -0.58;
+    beam.rotation.z = -0.25;
+    barnGroup.add(beam);
+  }
+  const barnWarmFill = new THREE.PointLight(0xfbbf24, 1.35, 9.5, 1.6);
+  barnWarmFill.position.set(0.3, 2.35, 0);
+  barnGroup.add(barnWarmFill);
+  scene.add(barnGroup);
+
+  // Barn back/side colliders (keeping east doorway open so player can walk inside!)
+  colliders.push({ x: barnX - 2.6, z: barnZ, radius: 1.5 });
+  colliders.push({ x: barnX, z: barnZ - 2.8, radius: 1.5 });
+  colliders.push({ x: barnX, z: barnZ + 2.8, radius: 1.5 });
+  colliders.push({ x: barnX + hayStackLocalX, z: barnZ + hayStackLocalZ, radius: 1.15 });
+
+  // Dusty Paddock & Rustic Wooden Barn Fence (for Horse & Yorkshire Pig)
+  const paddockPatch = new THREE.Mesh(new THREE.CircleGeometry(7.2, 22), dustyDirtMat);
+  paddockPatch.rotation.x = -Math.PI / 2;
+  paddockPatch.position.set(-31.5, homesteadY + 0.025, 66.5);
+  paddockPatch.receiveShadow = true;
+  scene.add(paddockPatch);
+
+  // Farmyard dirt patch for Rooster scratching & muddy pig pen corner
+  const yardDirt = new THREE.Mesh(new THREE.CircleGeometry(4.6, 18), dustyDirtMat);
+  yardDirt.rotation.x = -Math.PI / 2;
+  yardDirt.position.set(-19.5, homesteadY + 0.024, 60.5);
+  yardDirt.receiveShadow = true;
+  scene.add(yardDirt);
+
+  const addFenceSpan = (ax: number, az: number, bx: number, bz: number) => {
+    const len = Math.hypot(bx - ax, bz - az);
+    const angle = Math.atan2(bx - ax, bz - az);
+    const steps = Math.max(1, Math.round(len / 2.6));
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      const px = ax + (bx - ax) * t;
+      const pz = az + (bz - az) * t;
+      const py = getTerrainHeight(px, pz);
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.28, 0.16), darkBeamMat);
+      post.position.set(px, py + 0.64, pz);
+      post.castShadow = true;
+      scene.add(post);
+      colliders.push({ x: px, z: pz, radius: 0.25 });
+    }
+    const mx = (ax + bx) / 2;
+    const mz = (az + bz) / 2;
+    const my = getTerrainHeight(mx, mz);
+    [0.52, 0.98].forEach((ry) => {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.1, len), barnWoodMat);
+      rail.position.set(mx, my + ry, mz);
+      rail.rotation.y = angle;
+      rail.castShadow = true;
+      scene.add(rail);
+    });
+  };
+  // Rustic split-rail fence segments around dusty paddock (open entrance on east side)
+  addFenceSpan(-39, 61.5, -39, 72);
+  addFenceSpan(-39, 72, -23.5, 72);
+  addFenceSpan(-23.5, 72, -23.5, 68.5);
+  addFenceSpan(-23.5, 64.5, -23.5, 61.5);
+  addFenceSpan(-39, 61.5, -31.5, 61.5);
+
+  // Barnyard Wooden Crate for Nigerian Dwarf Goat at (-22.0, 56.2)
+  const crateX = -22.0;
+  const crateZ = 56.2;
+  const crateBaseY = getTerrainHeight(crateX, crateZ);
+  const goatCrate = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.68, 1.05), barnWoodMat);
+  goatCrate.position.set(crateX, crateBaseY + 0.34, crateZ);
+  goatCrate.castShadow = true;
+  goatCrate.receiveShadow = true;
+  scene.add(goatCrate);
+  colliders.push({ x: crateX, z: crateZ, radius: 0.68 });
+
+  // Muddy Farm Pond beside the barnyard for Pekin Ducks
+  const muddyRing = new THREE.Mesh(
+    new THREE.RingGeometry(FARM_POND_POS.radius - 0.6, FARM_POND_POS.radius + 1.8, 22),
+    muddyBankMat,
+  );
+  muddyRing.rotation.x = -Math.PI / 2;
+  muddyRing.position.set(FARM_POND_POS.x, FARM_POND_POS.waterY + 0.04, FARM_POND_POS.z);
+  muddyRing.receiveShadow = true;
+  const pondWater = new THREE.Mesh(
+    new THREE.CircleGeometry(FARM_POND_POS.radius + 0.4, 24),
+    freshwaterMat,
+  );
+  pondWater.rotation.x = -Math.PI / 2;
+  pondWater.position.set(FARM_POND_POS.x, FARM_POND_POS.waterY, FARM_POND_POS.z);
+  scene.add(muddyRing, pondWater);
+
+  // 8c. Wild Animal Habitats (Misty Lake, Snowy Woodland, Rocky Pine Bank, Autumn Grove, Murky Swamp, Savanna Tall Grass, Dead Oak Perch)
+  // 1) Misty Azure Lake surface wisps (Bald Eagle soaring backdrop)
+  const lakeMistMat = new THREE.MeshBasicMaterial({
+    color: 0xe0f2fe,
+    transparent: true,
+    opacity: 0.14,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  for (let m = 0; m < 4; m++) {
+    const mistRing = new THREE.Mesh(
+      new THREE.RingGeometry(3.5 + m * 3.1, 5.2 + m * 3.2, 24),
+      lakeMistMat,
+    );
+    mistRing.rotation.x = -Math.PI / 2;
+    mistRing.position.set(
+      LAKE_CENTER.x + (m % 2 === 0 ? -1.4 : 1.4),
+      LAKE_CENTER.waterY + 0.34 + m * 0.14,
+      LAKE_CENTER.z + (m - 1.5) * 1.1,
+    );
+    scene.add(mistRing);
+  }
+
+  // 2) Snowy Woodland Plateau (Timber Wolves)
+  const snowCapMat = new THREE.MeshStandardMaterial({ color: 0xeef2f6, roughness: 0.88 });
+  const snowCedarLeafMat = new THREE.MeshStandardMaterial({ color: 0x1e4a38, map: leafTex, roughness: 0.85 });
+  const snowBarkMat = new THREE.MeshStandardMaterial({ color: 0x453226, map: barkTex, roughness: 0.94 });
+  const snowBoulderMat = new THREE.MeshStandardMaterial({ color: 0x64748b, map: rockTex, roughness: 0.9 });
+  const snowTreeOffsets: [number, number, number][] = [
+    [-7.5, -5.5, 1.05],
+    [7.0, -6.2, 1.15],
+    [-9.0, 4.0, 0.95],
+    [8.2, 4.8, 1.08],
+    [-2.5, -9.2, 1.2],
+    [4.5, 8.6, 0.92],
+  ];
+  snowTreeOffsets.forEach(([ox, oz, sc]) => {
+    const tx = SNOWY_WOODLAND_POS.x + ox;
+    const tz = SNOWY_WOODLAND_POS.z + oz;
+    const ty = getTerrainHeight(tx, tz);
+    const tree = new THREE.Group();
+    tree.position.set(tx, ty, tz);
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.28 * sc, 0.42 * sc, 4.8 * sc, 8), snowBarkMat);
+    trunk.position.y = 2.4 * sc;
+    trunk.castShadow = true;
+    tree.add(trunk);
+    for (let tier = 0; tier < 4; tier++) {
+      const tierY = (2.1 + tier * 1.05) * sc;
+      const tierR = (2.15 - tier * 0.42) * sc;
+      const bough = new THREE.Mesh(new THREE.ConeGeometry(tierR, 1.55 * sc, 8), snowCedarLeafMat);
+      bough.position.y = tierY;
+      bough.castShadow = true;
+      const snowTop = new THREE.Mesh(new THREE.ConeGeometry(tierR * 0.86, 0.58 * sc, 8), snowCapMat);
+      snowTop.position.y = tierY + 0.48 * sc;
+      tree.add(bough, snowTop);
+    }
+    scene.add(tree);
+    colliders.push({ x: tx, z: tz, radius: 0.55 * sc });
+  });
+  [
+    [-4.8, 6.2],
+    [5.8, -1.8],
+    [-6.2, -0.5],
+  ].forEach(([ox, oz]) => {
+    const rx = SNOWY_WOODLAND_POS.x + ox;
+    const rz = SNOWY_WOODLAND_POS.z + oz;
+    const ry = getTerrainHeight(rx, rz);
+    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(1.05, 1), snowBoulderMat);
+    rock.scale.set(1.25, 0.72, 1.05);
+    rock.position.set(rx, ry + 0.38, rz);
+    rock.castShadow = true;
+    const snowDrift = new THREE.Mesh(new THREE.DodecahedronGeometry(0.86, 1), snowCapMat);
+    snowDrift.scale.set(1.18, 0.35, 0.96);
+    snowDrift.position.set(rx, ry + 0.85, rz);
+    scene.add(rock, snowDrift);
+    colliders.push({ x: rx, z: rz, radius: 1.05 });
+  });
+
+  // 3) Rocky Crystal River Bank & Dense Pine Pines (Grizzly Bear territory near (-4, -26))
+  const riverBankRockMat = new THREE.MeshStandardMaterial({ color: 0x706c66, map: rockTex, roughness: 0.85 });
+  const bankPines: [number, number, number][] = [
+    [-11.2, -23.5, 1.1],
+    [-10.4, -31.2, 1.25],
+    [4.6, -24.0, 1.15],
+    [6.5, -32.8, 1.05],
+    [-9.5, -16.8, 1.0],
+  ];
+  bankPines.forEach(([px, pz, sc]) => {
+    const py = getTerrainHeight(px, pz);
+    const pine = new THREE.Group();
+    pine.position.set(px, py, pz);
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.26 * sc, 0.4 * sc, 5.2 * sc, 8), snowBarkMat);
+    trunk.position.y = 2.6 * sc;
+    trunk.castShadow = true;
+    pine.add(trunk);
+    for (let t = 0; t < 4; t++) {
+      const bough = new THREE.Mesh(
+        new THREE.ConeGeometry((2.1 - t * 0.4) * sc, 1.65 * sc, 8),
+        snowCedarLeafMat,
+      );
+      bough.position.y = (2.3 + t * 1.1) * sc;
+      bough.castShadow = true;
+      pine.add(bough);
+    }
+    scene.add(pine);
+    colliders.push({ x: px, z: pz, radius: 0.55 * sc });
+  });
+  [
+    [-8.0, -25.2, 0.95],
+    [-7.6, -29.4, 0.72],
+    [2.8, -28.0, 0.85],
+    [-1.5, -33.2, 0.8],
+  ].forEach(([rx, rz, sc]) => {
+    const ry = getTerrainHeight(rx, rz);
+    const cobble = new THREE.Mesh(new THREE.DodecahedronGeometry(0.85 * sc, 1), riverBankRockMat);
+    cobble.scale.set(1.3, 0.65, 1.1);
+    cobble.position.set(rx, ry + 0.3 * sc, rz);
+    cobble.castShadow = true;
+    scene.add(cobble);
+    colliders.push({ x: rx, z: rz, radius: 0.8 * sc });
+  });
+
+  // 4) Autumn Forest Grove & Fallen Leaves (Red Fox undergrowth)
+  const autumnColors = [0xd97706, 0xb45309, 0xc2410c, 0xeab308];
+  const autumnLeafMats = autumnColors.map(
+    (col) => new THREE.MeshStandardMaterial({ color: col, map: leafTex, roughness: 0.84 }),
+  );
+  const autumnTreeOffsets: [number, number, number][] = [
+    [-5.5, -4.8, 1.05],
+    [5.8, -3.6, 1.15],
+    [-4.8, 5.6, 0.96],
+    [6.2, 5.2, 1.1],
+  ];
+  autumnTreeOffsets.forEach(([ox, oz, sc], idx) => {
+    const ax = AUTUMN_GROVE_POS.x + ox;
+    const az = AUTUMN_GROVE_POS.z + oz;
+    const ay = getTerrainHeight(ax, az);
+    const tree = new THREE.Group();
+    tree.position.set(ax, ay, az);
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.24 * sc, 0.38 * sc, 3.6 * sc, 8), snowBarkMat);
+    trunk.position.y = 1.8 * sc;
+    trunk.castShadow = true;
+    tree.add(trunk);
+    for (let c = 0; c < 3; c++) {
+      const ca = (c / 3) * Math.PI * 2 + idx;
+      const crown = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(1.55 * sc, 1),
+        autumnLeafMats[(idx + c) % autumnLeafMats.length],
+      );
+      crown.scale.set(1.15, 0.78, 1.15);
+      crown.position.set(Math.cos(ca) * 0.75 * sc, (3.6 + (c % 2) * 0.65) * sc, Math.sin(ca) * 0.75 * sc);
+      crown.castShadow = true;
+      tree.add(crown);
+    }
+    scene.add(tree);
+    colliders.push({ x: ax, z: az, radius: 0.5 * sc });
+  });
+  // Undergrowth ferns & fallen autumn leaves on ground
+  const autumnUndergrowthMat = new THREE.MeshStandardMaterial({ color: 0x9a3412, roughness: 0.88 });
+  for (let lf = 0; lf < 48; lf++) {
+    const la = (lf / 48) * Math.PI * 2 + rand() * 0.5;
+    const lr = 1.2 + rand() * 8.5;
+    const lx = AUTUMN_GROVE_POS.x + Math.cos(la) * lr;
+    const lz = AUTUMN_GROVE_POS.z + Math.sin(la) * lr;
+    const ly = getTerrainHeight(lx, lz);
+    const leafPatch = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.28 + rand() * 0.18, 0.2 + rand() * 0.14),
+      autumnLeafMats[lf % autumnLeafMats.length],
+    );
+    leafPatch.rotation.x = -Math.PI / 2;
+    leafPatch.rotation.z = rand() * Math.PI * 2;
+    leafPatch.position.set(lx, ly + 0.03, lz);
+    scene.add(leafPatch);
+  }
+  for (let u = 0; u < 10; u++) {
+    const ua = (u / 10) * Math.PI * 2 + 0.3;
+    const ur = 3.8 + (u % 3) * 1.9;
+    const ux = AUTUMN_GROVE_POS.x + Math.cos(ua) * ur;
+    const uz = AUTUMN_GROVE_POS.z + Math.sin(ua) * ur;
+    const uy = getTerrainHeight(ux, uz);
+    const bush = new THREE.Group();
+    bush.position.set(ux, uy, uz);
+    for (let f = 0; f < 4; f++) {
+      const frond = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.82, 4), autumnUndergrowthMat);
+      frond.position.y = 0.28;
+      frond.rotation.z = 0.68;
+      frond.rotation.y = (f / 4) * Math.PI * 2;
+      bush.add(frond);
+    }
+    scene.add(bush);
+  }
+
+  // 5) Murky Jungle Swamp Lagoon (Saltwater Crocodile territory)
+  const swampWaterMat = new THREE.MeshStandardMaterial({
+    color: 0x2d3b22,
+    normalMap: waterNormalTex,
+    normalScale: new THREE.Vector2(0.25, 0.25),
+    roughness: 0.22,
+    metalness: 0.14,
+    transparent: true,
+    opacity: 0.9,
+  });
+  const swampMudMat = new THREE.MeshStandardMaterial({ color: 0x3b3322, roughness: 0.72 });
+  const swampBankRing = new THREE.Mesh(
+    new THREE.RingGeometry(SWAMP_POS.radius - 0.8, SWAMP_POS.radius + 2.4, 28),
+    swampMudMat,
+  );
+  swampBankRing.rotation.x = -Math.PI / 2;
+  swampBankRing.position.set(SWAMP_POS.x, SWAMP_POS.waterY + 0.03, SWAMP_POS.z);
+  swampBankRing.receiveShadow = true;
+  const swampWater = new THREE.Mesh(
+    new THREE.CircleGeometry(SWAMP_POS.radius + 0.6, 30),
+    swampWaterMat,
+  );
+  swampWater.rotation.x = -Math.PI / 2;
+  swampWater.position.set(SWAMP_POS.x, SWAMP_POS.waterY, SWAMP_POS.z);
+  scene.add(swampBankRing, swampWater);
+
+  // Mossy swamp logs & dense jungle reeds along lagoon edge
+  const swampReedMat = new THREE.MeshStandardMaterial({ color: 0x365314, roughness: 0.86 });
+  for (let r = 0; r < 14; r++) {
+    const ra = (r / 14) * Math.PI * 2;
+    const rx = SWAMP_POS.x + Math.cos(ra) * (SWAMP_POS.radius - 0.4 + (r % 2) * 1.3);
+    const rz = SWAMP_POS.z + Math.sin(ra) * (SWAMP_POS.radius - 0.4 + (r % 2) * 1.3);
+    const ry = Math.max(SWAMP_POS.waterY - 0.2, getTerrainHeight(rx, rz));
+    const clump = new THREE.Group();
+    clump.position.set(rx, ry, rz);
+    for (let s = 0; s < 5; s++) {
+      const reed = new THREE.Mesh(new THREE.ConeGeometry(0.06, 1.35, 4), swampReedMat);
+      reed.position.set((s - 2) * 0.14, 0.62, ((s % 2) - 0.5) * 0.16);
+      reed.rotation.z = (s - 2) * 0.1;
+      clump.add(reed);
+    }
+    scene.add(clump);
+  }
+  const sunkenLog = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.34, 4.4, 8), snowBarkMat);
+  sunkenLog.position.set(SWAMP_POS.x - 4.2, SWAMP_POS.waterY + 0.02, SWAMP_POS.z + 3.8);
+  sunkenLog.rotation.set(0.06, 0.72, Math.PI / 2);
+  scene.add(sunkenLog);
+
+  // 6) Tall Golden Savanna Grass Patch (African Lion prowling & Bison windswept prairie)
+  const goldenSavannaBladeGeo = new THREE.ConeGeometry(0.08, 1.32, 4);
+  goldenSavannaBladeGeo.translate(0, 0.66, 0);
+  const goldenSavannaMat = new THREE.MeshStandardMaterial({ color: 0xd4a438, roughness: 0.88 });
+  const savannaGrassCount = 180;
+  const savannaGrassMesh = new THREE.InstancedMesh(
+    goldenSavannaBladeGeo,
+    goldenSavannaMat,
+    savannaGrassCount,
+  );
+  const savannaDummy = new THREE.Object3D();
+  const savannaTint = new THREE.Color();
+  for (let sg = 0; sg < savannaGrassCount; sg++) {
+    const sx = -67 + rand() * 22;
+    const sz = -18 + rand() * 54;
+    const sy = getTerrainHeight(sx, sz);
+    savannaDummy.position.set(sx, sy, sz);
+    savannaDummy.rotation.set((rand() - 0.5) * 0.22, rand() * Math.PI * 2, (rand() - 0.5) * 0.28);
+    const sc = 0.85 + rand() * 0.55;
+    savannaDummy.scale.set(sc, sc * (0.9 + rand() * 0.4), sc);
+    savannaDummy.updateMatrix();
+    savannaGrassMesh.setMatrixAt(sg, savannaDummy.matrix);
+    savannaTint.setHex(0xd4a438).offsetHSL((rand() - 0.5) * 0.03, 0, (rand() - 0.5) * 0.08);
+    savannaGrassMesh.setColorAt(sg, savannaTint);
+  }
+  savannaGrassMesh.instanceMatrix.needsUpdate = true;
+  if (savannaGrassMesh.instanceColor) savannaGrassMesh.instanceColor.needsUpdate = true;
+  savannaGrassMesh.computeBoundingSphere();
+  scene.add(savannaGrassMesh);
+
+  // 7) Gnarled Dead Oak Tree & Exposed Perch Branch (Great Horned Owl at DEAD_OAK_POS = (18, 78))
+  const deadOakBaseY = getTerrainHeight(DEAD_OAK_POS.x, DEAD_OAK_POS.z);
+  const deadOakMat = new THREE.MeshStandardMaterial({ color: 0x574c43, map: barkTex, roughness: 0.96 });
+  const deadOakGroup = new THREE.Group();
+  deadOakGroup.position.set(DEAD_OAK_POS.x, deadOakBaseY, DEAD_OAK_POS.z);
+  const oakTrunk = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.56, 4.4, 9), deadOakMat);
+  oakTrunk.position.y = 2.2;
+  oakTrunk.castShadow = true;
+  deadOakGroup.add(oakTrunk);
+  for (let r = 0; r < 5; r++) {
+    const ra = (r / 5) * Math.PI * 2;
+    const oakRoot = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.22, 1.1, 6), deadOakMat);
+    oakRoot.position.set(Math.cos(ra) * 0.5, 0.35, Math.sin(ra) * 0.5);
+    oakRoot.rotation.z = Math.cos(ra) * 0.6;
+    oakRoot.rotation.x = -Math.sin(ra) * 0.6;
+    deadOakGroup.add(oakRoot);
+  }
+  // Exact horizontal owl perch limb reaching (1.35, 3.25, 0.2) relative to trunk base
+  const owlBranch = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.18, 2.2, 7), deadOakMat);
+  owlBranch.position.set(0.95, 3.16, 0.14);
+  owlBranch.rotation.z = -Math.PI / 2.22;
+  owlBranch.rotation.y = -0.15;
+  owlBranch.castShadow = true;
+  // Secondary bare upper branches
+  const upperLimbL = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.16, 2.1, 6), deadOakMat);
+  upperLimbL.position.set(-0.75, 4.15, -0.35);
+  upperLimbL.rotation.z = 0.68;
+  upperLimbL.rotation.x = -0.25;
+  const upperLimbR = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.14, 1.85, 6), deadOakMat);
+  upperLimbR.position.set(0.45, 4.35, -0.55);
+  upperLimbR.rotation.z = -0.52;
+  upperLimbR.rotation.x = -0.38;
+  deadOakGroup.add(owlBranch, upperLimbL, upperLimbR);
+  scene.add(deadOakGroup);
+  colliders.push({ x: DEAD_OAK_POS.x, z: DEAD_OAK_POS.z, radius: 0.7 });
 
   // 9. Interactive Realistic Trees, Breakable Rocks & Resource Nodes
   const resourceNodes: ResourceNodeState[] = [];
@@ -901,6 +1425,12 @@ export function buildIslandWorld(
     if (Math.hypot(x, z - 112) < 12) continue;
     if (Math.hypot(x - EXPEDITION_POS.x, z - EXPEDITION_POS.z) < 9) continue;
     if (Math.hypot(x - CAVE_POS.x, z - CAVE_POS.z) < 9) continue;
+    if (Math.hypot(x - HOMESTEAD_POS.x, z - HOMESTEAD_POS.z) < 20) continue;
+    if (Math.hypot(x - FARM_POND_POS.x, z - FARM_POND_POS.z) < 8) continue;
+    if (Math.hypot(x - SNOWY_WOODLAND_POS.x, z - SNOWY_WOODLAND_POS.z) < 14) continue;
+    if (Math.hypot(x - AUTUMN_GROVE_POS.x, z - AUTUMN_GROVE_POS.z) < 11) continue;
+    if (Math.hypot(x - SWAMP_POS.x, z - SWAMP_POS.z) < SWAMP_POS.radius + 3.5) continue;
+    if (Math.hypot(x - DEAD_OAK_POS.x, z - DEAD_OAK_POS.z) < 5) continue;
 
     const h = getTerrainHeight(x, z);
     const slope = getTerrainSlope(x, z);
@@ -1019,6 +1549,9 @@ export function buildIslandWorld(
     const py = getTerrainHeight(px, pz);
     const biome = getBiomeAt(px, pz);
     if (py < 0.4) continue;
+    if (Math.hypot(px - SNOWY_WOODLAND_POS.x, pz - SNOWY_WOODLAND_POS.z) < 14) continue;
+    if (Math.hypot(px - AUTUMN_GROVE_POS.x, pz - AUTUMN_GROVE_POS.z) < 11) continue;
+    if (Math.hypot(px - SWAMP_POS.x, pz - SWAMP_POS.z) < SWAMP_POS.radius + 2.5) continue;
 
     if (gPlaced < grassCount && (biome === 'forest' || biome === 'grassland')) {
       dummy.position.set(px, py, pz);

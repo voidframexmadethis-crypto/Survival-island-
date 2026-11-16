@@ -37,7 +37,8 @@ export function PlaceModal({
       .filter((s) => s.itemId === itemId)
       .reduce((acc, s) => acc + s.quantity, 0);
 
-  const equippedId = hud.hotbarItemIds[hud.equippedSlot];
+  const equippedId =
+    hud.equippedSlot >= 0 ? hud.hotbarItemIds[hud.equippedSlot] : null;
   const equippedQty = equippedId ? countOf(equippedId) : 0;
   const equippedDef = equippedId && equippedQty > 0 ? ITEMS[equippedId] : null;
 
@@ -192,11 +193,11 @@ export function PlaceModal({
 
             {ownedStructures.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {ownedStructures.map((slot) => {
+                {ownedStructures.map((slot, idx) => {
                   const def = ITEMS[slot.itemId];
                   return (
                     <div
-                      key={slot.itemId}
+                      key={`${slot.itemId}_${idx}`}
                       className="rounded-xl bg-stone-950/75 border border-stone-800 p-3 flex items-center justify-between gap-3"
                     >
                       <div className="flex items-center gap-3 min-w-0">
@@ -263,11 +264,11 @@ export function PlaceModal({
             </h3>
             {ownedSupplies.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {ownedSupplies.map((slot) => {
+                {ownedSupplies.map((slot, idx) => {
                   const def = ITEMS[slot.itemId];
                   return (
                     <div
-                      key={slot.itemId}
+                      key={`${slot.itemId}_${idx}`}
                       className="rounded-xl bg-stone-950/75 border border-stone-800 p-3 flex items-center justify-between gap-3"
                     >
                       <div className="flex items-center gap-3 min-w-0">

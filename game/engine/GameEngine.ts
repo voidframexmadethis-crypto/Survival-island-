@@ -1,19 +1,25 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { SoundEngine } from '../audio/soundEngine';
-import { ITEMS } from '../data/items';
+import { ITEMS, isActiveWeaponItem, isAmmoItem } from '../data/items';
 import { STAGE_1_MISSIONS } from '../data/missions';
 import { COOKING_RECIPES, CRAFTING_RECIPES } from '../data/recipes';
-import { CreatureManager } from '../systems/creatureSystem';
+import {
+  CreatureManager,
+  ScavengerCarcassTarget,
+} from '../systems/creatureSystem';
 import { rollStage1FishCatch } from '../systems/marineRoadmap';
 import {
   BiomeId,
   CampStructureType,
+  CarcassSaveData,
+  CreatureSpecies,
   GameSaveData,
   GameSettings,
   GameStats,
   HUDStateSnapshot,
   InventorySlot,
+  ItemDefinition,
   ItemId,
   NearbyInteraction,
   PlacedStructure,
@@ -28,6 +34,7 @@ import {
 } from '../types';
 import {
   createCampStructureModel,
+  createCarcassMesh,
   createFirstPersonHandsRig,
   createPickupMesh,
   createSailingShipModel,
@@ -36,13 +43,17 @@ import {
   SkyCelestialHandles,
 } from '../world/models';
 import {
+  AUTUMN_GROVE_POS,
   BIOME_INFO,
   CAVE_POS,
   EXPEDITION_POS,
+  HOMESTEAD_POS,
   LAKE_CENTER,
   OCEAN_LEVEL,
   PLAYABLE_MAX_RADIUS,
   PLAYER_SPAWN,
+  SNOWY_WOODLAND_POS,
+  SWAMP_POS,
   getBiomeAt,
   getTerrainHeight,
   getTerrainSlope,
@@ -84,6 +95,27 @@ interface ActivePickup {
   placedOnGround?: boolean;
   collected: boolean;
   mesh: THREE.Group;
+}
+
+interface ActiveCarcass {
+  id: string;
+  species: CreatureSpecies;
+  displayName: string;
+  isDino: boolean;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  drops: { itemId: ItemId; quantity: number }[];
+  initialTotalQty: number;
+  life: number;
+  autoCollectDelay?: number;
+  fallProgress: number;
+  currentY?: number;
+  fallYVel?: number;
+  scavengeToastCooldown: number;
+  mesh: THREE.Group;
+  harvested: boolean;
 }
 
 export interface EngineCallbacks {
@@ -154,6 +186,11 @@ export class GameEngine {
   private swingTimer = 0;
   private actionCooldown = 0;
   private recoilTimer = 0;
+  private eatTimer = 0;
+  private eatBiteCount = 0;
+  private drinkTimer = 0;
+  private washBottleTimer = 0;
+  private activeConsumeColor = '#b91c1c';
   private footstepAccum = 0;
   private hurtFlash = 0;
 
@@ -212,6 +249,7 @@ export class GameEngine {
   private arrows: ArrowProjectile[] = [];
   private particles: HitParticle[] = [];
   private pickups: ActivePickup[] = [];
+  private carcasses: ActiveCarcass[] = [];
   private pendingTreeDrops = new Map<string, [ItemId, number][]>();
   private shakenTreeDropIds = new Set<string>();
   private nodeById = new Map<string, ResourceNodeState>();
@@ -455,11 +493,14 @@ export class GameEngine {
       this.emitHud();
     } else if (e.code === 'KeyE') {
       this.triggerPrimaryAction();
+    } else if (e.code === 'KeyF') {
+      this.collectNearbyCarcass();
+    } else if (e.code === 'Digit0' || e.code === 'Backquote') {
+      this.selectHotbarSlot(-1);
     } else if (e.code.startsWith('Digit')) {
       const idx = parseInt(e.code.replace('Digit', ''), 10) - 1;
       if (idx >= 0 && idx < 6) {
-        this.equippedSlot = idx;
-        this.emitHud();
+        this.selectHotbarSlot(idx);
       }
     }
   };
@@ -475,11 +516,15 @@ export class GameEngine {
   }
 
   public setMode(mode: 'menu' | 'playing' | 'paused'): void {
+    const wasNotPlaying = this.mode !== 'playing';
     this.mode = mode;
     if (mode !== 'playing') {
       this.clearMovementInputs();
     } else {
       this.sound.unlock();
+      if (wasNotPlaying) {
+        this.ensurePlayerHasGun(false);
+      }
       this.emitHud();
     }
   }
@@ -565,8 +610,20 @@ export class GameEngine {
     this.emitHud();
   }
 
+  public getEquippedItemId(): ItemId | null {
+    if (
+      this.equippedSlot < 0 ||
+      this.equippedSlot >= this.hotbarItemIds.length
+    ) {
+      return null;
+    }
+    const id = this.hotbarItemIds[this.equippedSlot];
+    if (!id || this.getItemCount(id) <= 0) return null;
+    return id;
+  }
+
   public selectHotbarSlot(index: number): void {
-    if (index >= 0 && index < 6) {
+    if (index === -1 || (index >= 0 && index < 6)) {
       this.equippedSlot = index;
       this.emitHud();
     }
@@ -614,15 +671,33 @@ export class GameEngine {
     this.gameOver = false;
     this.gameOverReason = '';
 
-    // Starter survival pack salvaged on shore with Survival Gun & Cartridges
+    // Starter survival pack salvaged on shore: Survival Gun, Basic Knife & diverse crafting materials
     this.inventory = [
       { itemId: 'gun', quantity: 1 },
+      { itemId: 'hunting_knife', quantity: 1 },
       { itemId: 'ammo', quantity: 60 },
-      { itemId: 'berries', quantity: 3 },
-      { itemId: 'branch', quantity: 2 },
-      { itemId: 'fiber', quantity: 2 },
+      { itemId: 'berries', quantity: 4 },
+      { itemId: 'wood', quantity: 6 },
+      { itemId: 'branch', quantity: 6 },
+      { itemId: 'stone', quantity: 6 },
+      { itemId: 'flint', quantity: 4 },
+      { itemId: 'fiber', quantity: 6 },
+      { itemId: 'leaves', quantity: 4 },
+      { itemId: 'grass', quantity: 4 },
+      { itemId: 'clay', quantity: 3 },
+      { itemId: 'metal_ore', quantity: 2 },
+      { itemId: 'hide', quantity: 2 },
+      { itemId: 'rope', quantity: 2 },
+      { itemId: 'dirty_water_bottle', quantity: 1 },
     ];
-    this.hotbarItemIds = ['gun', 'ammo', 'berries', 'branch', null, null];
+    this.hotbarItemIds = [
+      'gun',
+      'hunting_knife',
+      'ammo',
+      'berries',
+      'dirty_water_bottle',
+      'wood',
+    ];
     this.equippedSlot = 0;
 
     this.clearPlacedStructures();
@@ -644,8 +719,10 @@ export class GameEngine {
     this.stats = this.createEmptyStats();
 
     this.clearPickups();
+    this.clearCarcasses();
     this.pendingTreeDrops.clear();
     this.shakenTreeDropIds.clear();
+    this.spawnBeachBottles();
 
     // Reset all resource nodes
     this.world.resourceNodes.forEach((n) => {
@@ -670,6 +747,7 @@ export class GameEngine {
       this.shipModel.visible = false;
     }
 
+    this.ensurePlayerHasGun(true);
     this.emitHud();
   }
 
@@ -736,8 +814,9 @@ export class GameEngine {
       this.syncResourceVisual(n);
     });
 
-    // Restore physical ground pickups
+    // Restore physical ground pickups and carcasses
     this.clearPickups();
+    this.clearCarcasses();
     this.pendingTreeDrops.clear();
     this.shakenTreeDropIds.clear();
     if (save.activePickups) {
@@ -745,9 +824,33 @@ export class GameEngine {
         this.spawnPickup(p.itemId, p.quantity, p.x, p.z, p.life, p.id);
       });
     }
+    if (save.activeCarcasses) {
+      save.activeCarcasses.forEach((c) => {
+        this.spawnCarcass(
+          c.species,
+          c.displayName,
+          c.isDino,
+          c.x,
+          c.z,
+          c.yaw,
+          c.drops,
+          c.life,
+          c.id,
+          0,
+        );
+      });
+    }
 
     // CRITICAL REQUIREMENT: Character starts with a gun even on previous / last saved games
-    this.ensurePlayerHasGun();
+    this.ensurePlayerHasGun(true);
+    const hasBeachBottle = this.pickups.some(
+      (p) =>
+        p.itemId === 'dirty_water_bottle' ||
+        p.itemId === 'filtered_water_bottle',
+    );
+    if (!hasBeachBottle) {
+      this.spawnBeachBottles();
+    }
   }
 
   public respawnPlayer(): void {
@@ -758,7 +861,7 @@ export class GameEngine {
     this.playerZ = campBed ? campBed.z + 2.2 : PLAYER_SPAWN.z;
     this.playerY = getTerrainHeight(this.playerX, this.playerZ);
     this.playerVelY = 0;
-    this.vitals.health = 70;
+    this.vitals.health = 100;
     this.vitals.hunger = Math.max(55, this.vitals.hunger);
     this.vitals.thirst = Math.max(55, this.vitals.thirst);
     this.vitals.stamina = 100;
@@ -769,30 +872,48 @@ export class GameEngine {
       campBed ? 'Woke up back at your camp shelter.' : 'Washed back onto the beach.',
       'info',
     );
-    this.ensurePlayerHasGun();
+    this.ensurePlayerHasGun(true);
   }
 
   /**
-   * Guarantees that the player possesses the Survival Gun and Gun Cartridges,
-   * with the gun assigned to the active hotbar and equipped.
-   * Runs at every new game, load game (even previous saves), and player respawn.
+   * Guarantees that the character starts with the Survival Gun, Basic Knife,
+   * Gun Cartridges, and diverse starter materials, with the Gun assigned to
+   * hotbar slot 0 and Knife to hotbar slot 1.
+   * Runs at every new game, load game (even previous/last saved games), and respawn.
    */
-  public ensurePlayerHasGun(): void {
+  public ensurePlayerHasGun(forceEquip = true): void {
     // 1. Ensure Gun in inventory
     const existingGun = this.inventory.find((slot) => slot.itemId === 'gun');
     if (!existingGun) {
       this.inventory.unshift({ itemId: 'gun', quantity: 1 });
+    } else if (existingGun.quantity <= 0) {
+      existingGun.quantity = 1;
     }
 
-    // 2. Ensure Ammo in inventory
+    // 2. Ensure Knife in inventory
+    const existingKnife = this.inventory.find(
+      (slot) => slot.itemId === 'hunting_knife',
+    );
+    if (!existingKnife) {
+      this.inventory.splice(1, 0, { itemId: 'hunting_knife', quantity: 1 });
+    } else if (existingKnife.quantity <= 0) {
+      existingKnife.quantity = 1;
+    }
+
+    // 3. Ensure Ammo in inventory (at least 60 rounds)
     const existingAmmo = this.inventory.find((slot) => slot.itemId === 'ammo');
     if (!existingAmmo) {
       this.inventory.push({ itemId: 'ammo', quantity: 60 });
-    } else if (existingAmmo.quantity <= 0) {
+    } else if (existingAmmo.quantity < 30) {
       existingAmmo.quantity = 60;
     }
 
-    // 3. Ensure Gun on hotbar
+    // 4. Ensure diverse baseline materials if missing (e.g. older save files)
+    if (forceEquip) {
+      this.ensureStarterMaterials();
+    }
+
+    // 5. Ensure Gun on hotbar (prioritize slot 0)
     let hotbarGunIdx = this.hotbarItemIds.indexOf('gun');
     if (hotbarGunIdx === -1) {
       const emptyIdx = this.hotbarItemIds.findIndex((id) => id === null);
@@ -800,12 +921,33 @@ export class GameEngine {
         this.hotbarItemIds[emptyIdx] = 'gun';
         hotbarGunIdx = emptyIdx;
       } else {
+        const displaced = this.hotbarItemIds[0];
+        if (displaced && !this.inventory.some((s) => s.itemId === displaced)) {
+          this.inventory.push({ itemId: displaced, quantity: 1 });
+        }
         this.hotbarItemIds[0] = 'gun';
         hotbarGunIdx = 0;
       }
     }
 
-    // 4. Ensure Ammo on hotbar if space available
+    // 6. Ensure Knife on hotbar (slot 1 when forceEquip is active)
+    let hotbarKnifeIdx = this.hotbarItemIds.indexOf('hunting_knife');
+    if (hotbarKnifeIdx === -1) {
+      const emptyIdx = this.hotbarItemIds.findIndex((id) => id === null);
+      if (emptyIdx !== -1) {
+        this.hotbarItemIds[emptyIdx] = 'hunting_knife';
+        hotbarKnifeIdx = emptyIdx;
+      } else if (forceEquip) {
+        const displaced = this.hotbarItemIds[1];
+        if (displaced && !this.inventory.some((s) => s.itemId === displaced)) {
+          this.inventory.push({ itemId: displaced, quantity: 1 });
+        }
+        this.hotbarItemIds[1] = 'hunting_knife';
+        hotbarKnifeIdx = 1;
+      }
+    }
+
+    // 7. Ensure Ammo on hotbar if space available
     if (!this.hotbarItemIds.includes('ammo')) {
       const emptyIdx = this.hotbarItemIds.findIndex((id) => id === null);
       if (emptyIdx !== -1) {
@@ -813,12 +955,199 @@ export class GameEngine {
       }
     }
 
-    // 5. Equip the Gun slot
-    this.equippedSlot = hotbarGunIdx;
+    // 8. Equip Gun at slot 0 and place Knife at slot 1
+    if (forceEquip) {
+      if (hotbarGunIdx !== 0) {
+        const displaced = this.hotbarItemIds[0];
+        this.hotbarItemIds[0] = 'gun';
+        this.hotbarItemIds[hotbarGunIdx] = displaced;
+        hotbarGunIdx = 0;
+      }
+      hotbarKnifeIdx = this.hotbarItemIds.indexOf('hunting_knife');
+      if (hotbarKnifeIdx !== -1 && hotbarKnifeIdx !== 1) {
+        const displaced = this.hotbarItemIds[1];
+        this.hotbarItemIds[1] = 'hunting_knife';
+        this.hotbarItemIds[hotbarKnifeIdx] = displaced;
+      }
+      this.equippedSlot = 0;
+    } else if (
+      this.equippedSlot < -1 ||
+      this.equippedSlot >= this.hotbarItemIds.length
+    ) {
+      this.equippedSlot = hotbarGunIdx;
+    }
+
+    // Update hands rig mesh immediately so equipped tool/gun is visible in hands
+    if (this.handsRig) {
+      const eqId = this.getEquippedItemId();
+      const isGun = eqId === 'gun';
+      const hasWeaponOrTool = Boolean(
+        eqId &&
+          (isActiveWeaponItem(eqId) ||
+            ITEMS[eqId].category === 'tool' ||
+            eqId === 'fishing_rod' ||
+            eqId === 'lasso'),
+      );
+      this.handsRig.toolGroup.visible = hasWeaponOrTool;
+      this.handsRig.gunMesh.visible = isGun;
+      if (!hasWeaponOrTool || isGun) {
+        this.handsRig.shaft.visible = false;
+        this.handsRig.axeHead.visible = false;
+        this.handsRig.spearTip.visible = false;
+        this.handsRig.clubHead.visible = false;
+        this.handsRig.bowArc.visible = false;
+        this.handsRig.rodTip.visible = false;
+      }
+    }
+
     this.emitHud();
   }
 
+  private ensureStarterMaterials(): void {
+    const baseline: { itemId: ItemId; minQty: number }[] = [
+      { itemId: 'wood', minQty: 4 },
+      { itemId: 'branch', minQty: 4 },
+      { itemId: 'stone', minQty: 4 },
+      { itemId: 'flint', minQty: 3 },
+      { itemId: 'fiber', minQty: 4 },
+      { itemId: 'leaves', minQty: 3 },
+      { itemId: 'grass', minQty: 3 },
+      { itemId: 'clay', minQty: 2 },
+      { itemId: 'metal_ore', minQty: 1 },
+      { itemId: 'hide', minQty: 1 },
+      { itemId: 'rope', minQty: 1 },
+    ];
+    for (const mat of baseline) {
+      if (this.getItemCount(mat.itemId) <= 0) {
+        this.inventory.push({ itemId: mat.itemId, quantity: mat.minQty });
+      }
+    }
+    const hasAnyBottle =
+      this.getItemCount('dirty_water_bottle') > 0 ||
+      this.getItemCount('filtered_water_bottle') > 0;
+    if (!hasAnyBottle) {
+      this.inventory.push({ itemId: 'dirty_water_bottle', quantity: 1 });
+    }
+    if (
+      !this.hotbarItemIds.includes('dirty_water_bottle') &&
+      !this.hotbarItemIds.includes('filtered_water_bottle')
+    ) {
+      const bottleId: ItemId =
+        this.getItemCount('filtered_water_bottle') > 0
+          ? 'filtered_water_bottle'
+          : 'dirty_water_bottle';
+      const emptyIdx = this.hotbarItemIds.indexOf(null);
+      if (emptyIdx !== -1) {
+        this.hotbarItemIds[emptyIdx] = bottleId;
+      }
+    }
+  }
+
+  private spawnBeachBottles(): void {
+    const coords: [number, number][] = [
+      [-3.5, 117.5],
+      [5.2, 118.5],
+      [-11.5, 120.2],
+      [11.8, 121.0],
+    ];
+    coords.forEach(([bx, bz], idx) => {
+      this.spawnPickup(
+        'dirty_water_bottle',
+        1,
+        bx,
+        bz,
+        9999,
+        `beach_bottle_${idx}`,
+        0,
+        false,
+      );
+    });
+  }
+
+  public isNearOceanWater(): boolean {
+    if (isFreshwaterAt(this.playerX, this.playerZ)) return false;
+    const hereH = getTerrainHeight(this.playerX, this.playerZ);
+    if (hereH < OCEAN_LEVEL + 1.15) return true;
+    const fwdX = -Math.sin(this.camYaw);
+    const fwdZ = -Math.cos(this.camYaw);
+    for (const dist of [2.0, 3.6]) {
+      const tx = this.playerX + fwdX * dist;
+      const tz = this.playerZ + fwdZ * dist;
+      if (!isFreshwaterAt(tx, tz) && getTerrainHeight(tx, tz) < OCEAN_LEVEL + 0.55) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public cleanAndFilterWaterBottle(): boolean {
+    if (this.getItemCount('dirty_water_bottle') <= 0) {
+      if (this.getItemCount('filtered_water_bottle') > 0) {
+        this.toast(
+          'Your Water Bottle is already clean and filled with Filtered Water!',
+          'info',
+          'filtered_water_bottle',
+          1,
+        );
+      } else {
+        this.toast(
+          'Find an empty Water Bottle on the beach sand first.',
+          'warning',
+        );
+      }
+      return false;
+    }
+
+    if (!this.isNearOceanWater()) {
+      this.toast(
+        'Walk to the ocean surf to rinse and clean your Water Bottle!',
+        'warning',
+      );
+      return false;
+    }
+
+    const oldHotbarIdx = this.hotbarItemIds.indexOf('dirty_water_bottle');
+    this.removeItem('dirty_water_bottle', 1);
+    this.addItem('filtered_water_bottle', 1, false);
+
+    if (oldHotbarIdx !== -1 && this.getItemCount('dirty_water_bottle') === 0) {
+      this.hotbarItemIds[oldHotbarIdx] = 'filtered_water_bottle';
+      this.equippedSlot = oldHotbarIdx;
+    } else if (!this.hotbarItemIds.includes('filtered_water_bottle')) {
+      const emptyIdx = this.hotbarItemIds.indexOf(null);
+      if (emptyIdx !== -1) {
+        this.hotbarItemIds[emptyIdx] = 'filtered_water_bottle';
+        this.equippedSlot = emptyIdx;
+      }
+    } else {
+      const cleanIdx = this.hotbarItemIds.indexOf('filtered_water_bottle');
+      if (cleanIdx !== -1) this.equippedSlot = cleanIdx;
+    }
+
+    this.washBottleTimer = 1.25;
+    this.actionCooldown = 0.85;
+    this.sound.playWashBottle();
+    const fwdX = -Math.sin(this.camYaw);
+    const fwdZ = -Math.cos(this.camYaw);
+    this.spawnParticles(
+      this.playerX + fwdX * 1.15,
+      this.playerY + 0.45,
+      this.playerZ + fwdZ * 1.15,
+      0x7dd3fc,
+      12,
+    );
+    this.toast(
+      'Rinsed in ocean surf & automatically filled with Filtered Water!',
+      'craft',
+      'filtered_water_bottle',
+      1,
+    );
+    this.emitHud();
+    return true;
+  }
+
   public exportSaveData(slotId = this.currentSlotId): GameSaveData {
+    this.ensurePlayerHasGun(false);
     const resourceStates: SavedResourceNodeState[] = [];
     for (const n of this.world.resourceNodes) {
       if (n.hp < n.maxHp || n.felled || n.respawnTimer > 0) {
@@ -841,6 +1170,21 @@ export class GameEngine {
         y: p.y,
         z: p.z,
         life: p.life,
+      }));
+
+    const activeCarcasses: CarcassSaveData[] = this.carcasses
+      .filter((c) => !c.harvested)
+      .map((c) => ({
+        id: c.id,
+        species: c.species,
+        displayName: c.displayName,
+        isDino: c.isDino,
+        x: c.x,
+        y: c.y,
+        z: c.z,
+        yaw: c.yaw,
+        drops: c.drops.map((d) => ({ ...d })),
+        life: c.life,
       }));
 
     return {
@@ -869,6 +1213,7 @@ export class GameEngine {
       exploredCells: Array.from(this.exploredCells),
       resourceStates,
       activePickups,
+      activeCarcasses,
       hudPreferences: {
         showCompass: this.settings.showCompass !== false,
         compactHud: Boolean(this.settings.compactHud),
@@ -981,6 +1326,14 @@ export class GameEngine {
   }
 
   public dropItem(itemId: ItemId, qty = 1): void {
+    if (itemId === 'gun' && this.getItemCount('gun') <= 1) {
+      this.toast('Survival Gun is vital equipment and cannot be discarded.', 'warning', 'gun', 1);
+      return;
+    }
+    if (itemId === 'hunting_knife' && this.getItemCount('hunting_knife') <= 1) {
+      this.toast('Basic Knife is vital for preparing carcasses and cannot be discarded.', 'warning', 'hunting_knife', 1);
+      return;
+    }
     if (qty === 1 && this.getItemCount(itemId) >= 1) {
       const fwdX = -Math.sin(this.camYaw);
       const fwdZ = -Math.cos(this.camYaw);
@@ -1064,7 +1417,29 @@ export class GameEngine {
     const def = ITEMS[itemId];
     if (this.getItemCount(itemId) <= 0) return;
 
+    if (itemId === 'dirty_water_bottle') {
+      if (this.isNearOceanWater()) {
+        this.cleanAndFilterWaterBottle();
+        return;
+      }
+      const existingIdx = this.hotbarItemIds.indexOf(itemId);
+      if (existingIdx !== -1) {
+        this.equippedSlot = existingIdx;
+      } else {
+        this.hotbarItemIds[this.equippedSlot] = itemId;
+      }
+      this.toast(
+        'Equipped Water Bottle — walk to the ocean shore and press Clean Water Bottle.',
+        'info',
+        itemId,
+        1,
+      );
+      this.emitHud();
+      return;
+    }
+
     if (def.category === 'food') {
+      const prevCleanSlot = this.hotbarItemIds.indexOf('filtered_water_bottle');
       this.removeItem(itemId, 1);
       if (def.hungerRestore) {
         this.vitals.hunger = Math.min(
@@ -1090,7 +1465,44 @@ export class GameEngine {
           this.vitals.stamina + def.staminaRestore,
         );
       }
-      this.toast(`Ate ${def.name}`, 'info');
+
+      if (itemId === 'filtered_water_bottle') {
+        this.stats.freshWaterDrunk += 1;
+        this.drinkTimer = 0.95;
+        this.sound.playDrink();
+        // Return the empty bottle so it can be cleaned & refilled again at the ocean
+        this.addItem('dirty_water_bottle', 1, false);
+        if (
+          prevCleanSlot !== -1 &&
+          this.getItemCount('filtered_water_bottle') === 0
+        ) {
+          this.hotbarItemIds[prevCleanSlot] = 'dirty_water_bottle';
+        }
+        this.toast(
+          `Drank Filtered Water (+${def.thirstRestore || 55} Thirst) — bottle ready to clean again`,
+          'info',
+          itemId,
+          1,
+        );
+        this.evaluateMissions();
+        this.emitHud();
+        return;
+      }
+
+      this.eatTimer = 0.92;
+      this.eatBiteCount = 0;
+      this.activeConsumeColor = def.color;
+      this.sound.playEat();
+      const fwdX = -Math.sin(this.camYaw);
+      const fwdZ = -Math.cos(this.camYaw);
+      this.spawnParticles(
+        this.playerX + fwdX * 0.48,
+        this.playerY + this.currentEyeHeight - 0.14,
+        this.playerZ + fwdZ * 0.48,
+        parseInt(def.color.replace('#', ''), 16) || 0xb91c1c,
+        6,
+      );
+      this.toast(`Ate ${def.name}`, 'info', itemId, 1);
       this.emitHud();
       return;
     }
@@ -1104,7 +1516,15 @@ export class GameEngine {
     if (existingIdx !== -1) {
       this.equippedSlot = existingIdx;
     } else {
-      this.hotbarItemIds[this.equippedSlot] = itemId;
+      const emptyIdx = this.hotbarItemIds.indexOf(null);
+      const targetSlot =
+        this.equippedSlot >= 0 && this.equippedSlot < 6
+          ? this.equippedSlot
+          : emptyIdx !== -1
+            ? emptyIdx
+            : 5;
+      this.hotbarItemIds[targetSlot] = itemId;
+      this.equippedSlot = targetSlot;
     }
     this.toast(`Equipped ${def.name}`, 'info');
     this.emitHud();
@@ -1363,27 +1783,122 @@ export class GameEngine {
       return;
     }
 
-    const equippedId = this.hotbarItemIds[this.equippedSlot];
+    const equippedId = this.getEquippedItemId();
     const equippedDef = equippedId ? ITEMS[equippedId] : null;
 
+    // 1. WEAPON ISOLATION: When any weapon is equipped, ONLY that weapon works — nothing else!
+    if (equippedId && equippedDef && isActiveWeaponItem(equippedId)) {
+      if (equippedId === 'gun') {
+        this.fireGun();
+        return;
+      }
+      if (equippedId === 'primitive_bow') {
+        if (this.getItemCount('arrows') <= 0) {
+          this.toast(
+            'Out of Flint Arrows! Craft more at a Crafting Station.',
+            'warning',
+          );
+          this.actionCooldown = 0.5;
+          return;
+        }
+        this.removeItem('arrows', 1);
+        this.fireArrow();
+        this.sound.playAttack('bow');
+        this.swingTimer = 0.25;
+        this.actionCooldown = 0.45;
+        this.emitHud();
+        return;
+      }
+      this.performMeleeWeaponAttack(equippedId, equippedDef);
+      return;
+    }
+
+    // 2. HARVESTING TOOLS: Strictly scoped to their own resource type
+    if (equippedId === 'stone_axe' && equippedDef) {
+      const treeNode = this.findNearestResourceNode(3.8, (n) =>
+        this.isTreeKind(n.kind) || n.kind === 'branch_pile',
+      );
+      this.swingTimer = 0.28;
+      this.actionCooldown = 0.36;
+      if (treeNode) {
+        this.harvestResourceNode(treeNode.id, equippedDef);
+      } else {
+        this.sound.playAttack('melee');
+        this.toast('Face a tree to chop with Stone Axe', 'info');
+      }
+      return;
+    }
+
+    if (equippedId === 'stone_pickaxe' && equippedDef) {
+      const rockNode = this.findNearestResourceNode(3.8, (n) =>
+        this.isRockKind(n.kind),
+      );
+      this.swingTimer = 0.28;
+      this.actionCooldown = 0.36;
+      if (rockNode) {
+        this.harvestResourceNode(rockNode.id, equippedDef);
+      } else {
+        this.sound.playAttack('melee');
+        this.toast('Face stone, flint, or metal ore to mine with Stone Pickaxe', 'info');
+      }
+      return;
+    }
+
+    // 3. SPECIALIZED EQUIPMENT: Independently scoped to their own job
+    if (equippedId === 'fishing_rod') {
+      this.castFishingRod();
+      return;
+    }
+
+    if (equippedId === 'lasso' && equippedDef) {
+      this.performMeleeWeaponAttack('lasso', equippedDef);
+      return;
+    }
+
+    if (equippedId === 'dirty_water_bottle') {
+      this.cleanAndFilterWaterBottle();
+      return;
+    }
+
+    // 4. FOOD & FILTERED WATER: Only eats or drinks that item
     if (equippedDef && equippedDef.category === 'food') {
       this.useOrEquipItem(equippedDef.id);
       this.actionCooldown = 0.35;
       return;
     }
 
+    // 5. PLACEABLE STRUCTURE: Only builds that structure
     if (equippedDef && equippedDef.structureType) {
       this.placeStructureFromInventory(equippedDef.id);
       this.actionCooldown = 0.45;
       return;
     }
 
+    // 6. AMMO SUPPLY: Strictly informational reminder (never swings or harvests)
+    if (equippedId && isAmmoItem(equippedId)) {
+      const qty = this.getItemCount(equippedId);
+      this.toast(
+        equippedId === 'ammo'
+          ? `Gun Cartridges (${qty} rds) — select Survival Gun to fire`
+          : `Flint Arrows (${qty}) — select Primitive Bow to shoot`,
+        'info',
+        equippedId,
+        qty,
+      );
+      this.actionCooldown = 0.45;
+      return;
+    }
+
+    // 7. RAW MATERIAL / RESOURCE: Places 1 down (and sparks campfire if Flint + Kindling)
+    if (equippedDef && equippedDef.category === 'resource') {
+      this.placeItemInWorld(equippedDef.id);
+      this.actionCooldown = 0.35;
+      return;
+    }
+
+    // 8. BARE HANDS (empty slot or Hands mode): Handles world interactions cleanly
     const near = this.nearbyInteraction;
     if (near) {
-      if (near.id === 'fire_gun' || near.actionCategory === 'shoot') {
-        this.fireGun();
-        return;
-      }
       if (near.kind === 'campfire' || near.kind === 'cooking_station') {
         this.callbacks.onOpenStation('cooking', near.structureId);
         return;
@@ -1407,11 +1922,16 @@ export class GameEngine {
           this.vitals.thirst + 42,
         );
         this.stats.freshWaterDrunk += 1;
+        this.drinkTimer = 0.85;
         this.sound.playDrink();
         this.toast('Drank fresh river/lake water (+42 Thirst)', 'info');
         this.actionCooldown = 0.6;
         this.evaluateMissions();
         this.emitHud();
+        return;
+      }
+      if (near.kind === 'clean_bottle') {
+        this.cleanAndFilterWaterBottle();
         return;
       }
       if (near.kind === 'dolphin' && near.creatureId) {
@@ -1449,6 +1969,12 @@ export class GameEngine {
         this.actionCooldown = 1.0;
         return;
       }
+      if (near.kind === 'carcass') {
+        this.prepareCarcass(near.id);
+        this.swingTimer = 0.28;
+        this.actionCooldown = 0.32;
+        return;
+      }
       if (near.kind === 'pickup') {
         this.collectPickup(near.id);
         this.swingTimer = 0.18;
@@ -1456,143 +1982,128 @@ export class GameEngine {
         return;
       }
       if (near.kind === 'resource') {
-        if (equippedId === 'gun') {
-          this.fireGun();
-          return;
-        }
-        this.harvestResourceNode(near.id, equippedDef);
+        this.harvestResourceNode(near.id, null);
         this.swingTimer = 0.28;
         this.actionCooldown = 0.36;
         return;
       }
     }
 
-    // Survival Gun Shooting
-    if (equippedId === 'gun') {
-      this.fireGun();
-      return;
-    }
+    this.swingTimer = 0.25;
+    this.actionCooldown = 0.35;
+    this.sound.playAttack('melee');
+  }
 
-    // Fishing Rod cast near water
-    if (equippedId === 'fishing_rod') {
-      const fwdX = -Math.sin(this.camYaw);
-      const fwdZ = -Math.cos(this.camYaw);
-      const aheadX = this.playerX + fwdX * 3.8;
-      const aheadZ = this.playerZ + fwdZ * 3.8;
-      const aheadH = getTerrainHeight(aheadX, aheadZ);
-      const waterY = getWaterLevelAt(aheadX, aheadZ);
-      if (aheadH < waterY || this.isSwimming) {
-        this.sound.playAttack('cast');
-        this.swingTimer = 0.35;
-        this.actionCooldown = 1.1;
-        this.spawnParticles(aheadX, waterY + 0.1, aheadZ, 0x7dd3fc, 8);
-        const zone = isFreshwaterAt(aheadX, aheadZ)
-          ? Math.hypot(aheadX - LAKE_CENTER.x, aheadZ - LAKE_CENTER.z) <
-            LAKE_CENTER.radius + 4
-            ? 'freshwater_lake'
-            : 'freshwater_river'
-          : 'coastal_shallows';
-        const fish = rollStage1FishCatch(zone);
-        if (fish && fish.rewardItemId) {
-          this.stats.fishCaught += 1;
-          this.addItem(fish.rewardItemId, 1, false);
-          this.toast(`Caught ${fish.name}!`, 'gain');
-        }
-        return;
-      } else {
-        this.toast(
-          'Face river, lake, or ocean water to cast your Fishing Rod',
-          'info',
-        );
-        this.actionCooldown = 0.5;
-        return;
+  private findNearestResourceNode(
+    maxRange: number,
+    predicate: (n: ResourceNodeState) => boolean,
+  ): ResourceNodeState | null {
+    let best: ResourceNodeState | null = null;
+    let bestDist = maxRange;
+    for (const n of this.world.resourceNodes) {
+      if (n.hp <= 0 || !predicate(n)) continue;
+      const d = Math.hypot(n.x - this.playerX, n.z - this.playerZ);
+      if (d < bestDist) {
+        bestDist = d;
+        best = n;
       }
     }
+    return best;
+  }
 
-    // Bow Attack
-    if (equippedId === 'primitive_bow') {
-      if (this.getItemCount('arrows') <= 0) {
-        this.toast(
-          'Out of Flint Arrows! Craft more at a Crafting Station.',
-          'warning',
-        );
-        this.actionCooldown = 0.5;
-        return;
+  private castFishingRod(): void {
+    const fwdX = -Math.sin(this.camYaw);
+    const fwdZ = -Math.cos(this.camYaw);
+    const aheadX = this.playerX + fwdX * 3.8;
+    const aheadZ = this.playerZ + fwdZ * 3.8;
+    const aheadH = getTerrainHeight(aheadX, aheadZ);
+    const waterY = getWaterLevelAt(aheadX, aheadZ);
+    if (aheadH < waterY || this.isSwimming) {
+      this.sound.playAttack('cast');
+      this.swingTimer = 0.35;
+      this.actionCooldown = 1.1;
+      this.spawnParticles(aheadX, waterY + 0.1, aheadZ, 0x7dd3fc, 8);
+      const zone = isFreshwaterAt(aheadX, aheadZ)
+        ? Math.hypot(aheadX - LAKE_CENTER.x, aheadZ - LAKE_CENTER.z) <
+          LAKE_CENTER.radius + 4
+          ? 'freshwater_lake'
+          : 'freshwater_river'
+        : 'coastal_shallows';
+      const fish = rollStage1FishCatch(zone);
+      if (fish && fish.rewardItemId) {
+        this.stats.fishCaught += 1;
+        this.addItem(fish.rewardItemId, 1, false);
+        this.toast(`Caught ${fish.name}!`, 'gain');
       }
-      this.removeItem('arrows', 1);
-      this.fireArrow();
-      this.sound.playAttack('bow');
-      this.swingTimer = 0.25;
-      this.actionCooldown = 0.45;
-      return;
+    } else {
+      this.toast(
+        'Face river, lake, or ocean water to cast your Fishing Rod',
+        'info',
+      );
+      this.actionCooldown = 0.5;
     }
+  }
 
-    // Melee / Club / Knife / Spear / Whip / Lasso
+  private performMeleeWeaponAttack(
+    weaponId: ItemId,
+    weaponDef: ItemDefinition,
+  ): void {
     this.swingTimer = 0.3;
     this.actionCooldown = 0.4;
-    const range = equippedDef?.attackRange || 2.8;
-    const damage = equippedDef?.attackDamage || 10;
-    this.sound.playAttack(equippedId === 'rope_whip' ? 'whip' : 'melee');
+    const range = weaponDef.attackRange || 2.8;
+    const damage = weaponDef.attackDamage || 14;
+    this.sound.playAttack(weaponId === 'rope_whip' ? 'whip' : 'melee');
 
-    let hitAny = false;
     for (const c of this.creatures.creatures) {
-      if (
-        !c.alive ||
-        c.species === 'dolphin' ||
-        c.species === 'bird' ||
-        c.species === 'fish_school'
-      ) {
-        continue;
-      }
+      if (!c.alive) continue;
       const dx = c.x - this.playerX;
+      const dy = c.y - this.playerY;
       const dz = c.z - this.playerZ;
       const dist = Math.hypot(dx, dz);
-      if (dist <= range + 0.9) {
+      if (dist <= range + 0.9 && Math.abs(dy) <= 3.6) {
         const res = this.creatures.damageCreature(
           c,
           damage,
           this.playerX,
           this.playerZ,
           {
-            snareSeconds: equippedId === 'lasso' ? 6 : undefined,
-            stunSeconds: equippedId === 'rope_whip' ? 2.5 : undefined,
-            knockback: equippedId === 'rope_whip' ? 2.2 : 0.7,
+            snareSeconds: weaponId === 'lasso' ? 6 : undefined,
+            stunSeconds: weaponId === 'rope_whip' ? 2.5 : undefined,
+            knockback: weaponId === 'rope_whip' ? 2.2 : 0.7,
           },
         );
-        hitAny = true;
         this.spawnParticles(c.x, c.y + 0.9, c.z, 0xef4444, 6);
-        if (equippedId === 'lasso') {
+        if (weaponId === 'lasso') {
           this.toast(`Snared ${c.spec.displayName}!`, 'info');
-        } else if (equippedId === 'rope_whip') {
+        } else if (weaponId === 'rope_whip') {
           this.toast(`Staggered ${c.spec.displayName}!`, 'info');
         }
         if (res.killed) {
           this.stats.animalsHunted += 1;
-          if (
-            c.species === 'trex' ||
-            c.species === 'velociraptor' ||
-            c.species === 'triceratops' ||
-            c.species === 'stegosaurus' ||
-            c.species === 'brachiosaurus' ||
-            c.species === 'parasaurolophus'
-          ) {
+          const isDino = this.isDinosaurSpecies(c.species);
+          if (isDino) {
             this.stats.dinosaursEncountered += 1;
           }
-          res.drops.forEach((d) => {
-            const bonus =
-              equippedId === 'hunting_knife' &&
-              (d.itemId === 'raw_meat' || d.itemId === 'dino_meat')
-                ? 1
-                : 0;
-            this.addItem(d.itemId, d.quantity + bonus, false);
-          });
-          this.toast(`Hunted ${c.spec.displayName}! Meat & Hide collected.`, 'gain');
+          this.spawnCarcass(
+            c.species,
+            c.spec.displayName,
+            isDino,
+            c.x,
+            c.z,
+            c.yaw,
+            res.drops,
+            240,
+            undefined,
+            1.6,
+            c.y,
+          );
+          this.toast(
+            `Downed ${c.spec.displayName}! Switch to Hands (0) to collect the carcass for meat.`,
+            'gain',
+          );
         }
         break;
       }
-    }
-    if (!hitAny && near?.kind === 'resource') {
-      this.harvestResourceNode(near.id, equippedDef);
     }
   }
 
@@ -1866,6 +2377,254 @@ export class GameEngine {
       'gain',
       p.itemId,
       p.quantity,
+    );
+  }
+
+  private isDinosaurSpecies(species: CreatureSpecies): boolean {
+    return (
+      species === 'trex' ||
+      species === 'velociraptor' ||
+      species === 'triceratops' ||
+      species === 'stegosaurus' ||
+      species === 'brachiosaurus' ||
+      species === 'parasaurolophus'
+    );
+  }
+
+  private clearCarcasses(): void {
+    this.carcasses.forEach((c) => {
+      this.scene.remove(c.mesh);
+    });
+    this.carcasses = [];
+  }
+
+  private spawnCarcass(
+    species: CreatureSpecies,
+    displayName: string,
+    isDino: boolean,
+    x: number,
+    z: number,
+    yaw: number,
+    drops: { itemId: ItemId; quantity: number }[],
+    life = 240,
+    existingId?: string,
+    autoCollectDelay = 1.6,
+    startY?: number,
+  ): void {
+    if (this.carcasses.length >= 24) {
+      const oldest = this.carcasses.shift();
+      if (oldest) this.scene.remove(oldest.mesh);
+    }
+    const groundY = getTerrainHeight(x, z);
+    const waterY = getWaterLevelAt(x, z);
+    const y = Math.max(groundY, waterY - 0.12);
+    const initialY =
+      startY !== undefined && startY > y + 0.25 ? startY : y;
+    const mesh = createCarcassMesh(species, isDino);
+    mesh.position.set(x, initialY, z);
+    mesh.rotation.y = yaw;
+    const fallProgress = existingId ? 1 : 0;
+    const creatureRoot = mesh.userData.creatureRoot as THREE.Group | undefined;
+    if (creatureRoot && fallProgress < 1) {
+      creatureRoot.rotation.z = 0.12;
+      creatureRoot.position.y = isDino ? 0.95 : 0.45;
+    }
+    this.scene.add(mesh);
+
+    const clonedDrops = drops.map((d) => ({ ...d }));
+    const initialTotalQty = Math.max(
+      1,
+      clonedDrops.reduce((sum, d) => sum + d.quantity, 0),
+    );
+
+    this.carcasses.push({
+      id: existingId || `carcass_${Date.now()}_${Math.floor(Math.random() * 99999)}`,
+      species,
+      displayName,
+      isDino,
+      x,
+      y,
+      z,
+      yaw,
+      drops: clonedDrops,
+      initialTotalQty,
+      life,
+      autoCollectDelay,
+      fallProgress,
+      currentY: initialY > y ? initialY : undefined,
+      fallYVel: 0,
+      scavengeToastCooldown: 0,
+      mesh,
+      harvested: false,
+    });
+  }
+
+  private handleCarcassScavenged(
+    carcassId: string,
+    species: CreatureSpecies,
+    scavengerName: string,
+  ): void {
+    const idx = this.carcasses.findIndex((c) => c.id === carcassId);
+    if (idx === -1) return;
+    const carcass = this.carcasses[idx];
+    if (carcass.harvested) return;
+
+    // Prioritize eating meat cuts first, then leftover scraps
+    const meatDrop = carcass.drops.find(
+      (d) => (d.itemId === 'raw_meat' || d.itemId === 'dino_meat') && d.quantity > 0,
+    );
+    const anyDrop = carcass.drops.find((d) => d.quantity > 0);
+    const targetDrop = meatDrop || anyDrop;
+
+    if (targetDrop) {
+      targetDrop.quantity -= 1;
+    }
+
+    const remainingTotal = carcass.drops.reduce(
+      (sum, d) => sum + Math.max(0, d.quantity),
+      0,
+    );
+    const ratio = remainingTotal / Math.max(1, carcass.initialTotalQty);
+
+    const meatCut = carcass.mesh.userData.meatCut as THREE.Mesh | undefined;
+    if (meatCut) {
+      const remainingMeat = carcass.drops
+        .filter((d) => d.itemId === 'raw_meat' || d.itemId === 'dino_meat')
+        .reduce((sum, d) => sum + Math.max(0, d.quantity), 0);
+      if (remainingMeat <= 0) {
+        meatCut.visible = false;
+      } else {
+        const s = Math.max(0.28, ratio);
+        meatCut.scale.set(s, s, s);
+      }
+    }
+
+    const distToPlayer = Math.hypot(
+      carcass.x - this.playerX,
+      carcass.z - this.playerZ,
+    );
+    this.sound.playScavengerBite(distToPlayer, species === 'bird');
+    this.spawnParticles(
+      carcass.x,
+      carcass.y + (carcass.isDino ? 0.55 : 0.32),
+      carcass.z,
+      0xdc2626,
+      5,
+    );
+
+    if (remainingTotal <= 0) {
+      carcass.harvested = true;
+      this.scene.remove(carcass.mesh);
+      this.carcasses.splice(idx, 1);
+      if (distToPlayer < 85) {
+        this.toast(
+          `${scavengerName} finished off your unclaimed ${carcass.displayName} carcass!`,
+          'warning',
+        );
+      }
+      this.emitHud();
+      return;
+    }
+
+    if (carcass.scavengeToastCooldown <= 0 && distToPlayer < 80) {
+      carcass.scavengeToastCooldown = 7.5;
+      this.toast(
+        `A ${scavengerName} is eating your unclaimed ${carcass.displayName} carcass!`,
+        'warning',
+      );
+    }
+  }
+
+  private findNearbyCarcass(): ActiveCarcass | null {
+    let bestCarcass: ActiveCarcass | null = null;
+    let bestCarcassDist = 5.4;
+    for (const c of this.carcasses) {
+      if (c.harvested) continue;
+      const maxRange = c.isDino ? 5.2 : 4.5;
+      const d = Math.hypot(c.x - this.playerX, c.z - this.playerZ);
+      if (d <= maxRange && d < bestCarcassDist) {
+        bestCarcassDist = d;
+        bestCarcass = c;
+      }
+    }
+    return bestCarcass;
+  }
+
+  public collectNearbyCarcass(carcassId?: string): boolean {
+    this.sound.unlock();
+    if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) {
+      return false;
+    }
+    const target = carcassId
+      ? this.carcasses.find((c) => c.id === carcassId && !c.harvested) || null
+      : this.findNearbyCarcass();
+    if (!target) {
+      this.toast('Walk closer to a hunted animal carcass to collect it.', 'info');
+      return false;
+    }
+    this.prepareCarcass(target.id);
+    this.swingTimer = 0.28;
+    this.actionCooldown = 0.32;
+    return true;
+  }
+
+  private prepareCarcass(carcassId: string): void {
+    const idx = this.carcasses.findIndex((c) => c.id === carcassId);
+    if (idx === -1) return;
+    const carcass = this.carcasses[idx];
+    if (carcass.harvested) return;
+    carcass.harvested = true;
+    this.carcasses.splice(idx, 1);
+    this.scene.remove(carcass.mesh);
+
+    const hasKnife =
+      this.hotbarItemIds[this.equippedSlot] === 'hunting_knife' ||
+      this.getItemCount('hunting_knife') > 0;
+
+    this.sound.playPrepareCarcass();
+    this.spawnParticles(
+      carcass.x,
+      carcass.y + 0.35,
+      carcass.z,
+      0xdc2626,
+      carcass.isDino ? 14 : 9,
+    );
+    this.spawnParticles(
+      carcass.x,
+      carcass.y + 0.4,
+      carcass.z,
+      0xf5f5f4,
+      5,
+    );
+
+    const summaryParts: string[] = [];
+    let primaryItemId: ItemId | undefined;
+    let primaryQty = 0;
+
+    carcass.drops.forEach((d) => {
+      const isMeat = d.itemId === 'raw_meat' || d.itemId === 'dino_meat';
+      const bonus = hasKnife && isMeat ? 1 : 0;
+      const totalQty = d.quantity + bonus;
+      if (totalQty <= 0) return;
+      this.addItem(d.itemId, totalQty, false);
+      summaryParts.push(`+${totalQty} ${ITEMS[d.itemId].name}`);
+      if (!primaryItemId || isMeat) {
+        primaryItemId = d.itemId;
+        primaryQty = totalQty;
+      }
+    });
+
+    this.evaluateMissions();
+    this.emitHud();
+
+    const knifeNote = hasKnife ? ' (Cut with Knife)' : '';
+    const summaryText =
+      summaryParts.length > 0 ? `: ${summaryParts.join(', ')}` : '';
+    this.toast(
+      `Prepared ${carcass.displayName} carcass${knifeNote}${summaryText} — Cook over a Campfire & eat!`,
+      'gain',
+      primaryItemId,
+      primaryQty,
     );
   }
 
@@ -2500,6 +3259,26 @@ export class GameEngine {
     if (this.actionCooldown > 0) this.actionCooldown -= dt;
     if (this.swingTimer > 0) this.swingTimer -= dt;
     if (this.recoilTimer > 0) this.recoilTimer -= dt;
+    if (this.eatTimer > 0) {
+      this.eatTimer = Math.max(0, this.eatTimer - dt);
+      const progress = 1 - this.eatTimer / 0.92;
+      const expectedBite = Math.floor(progress * 3);
+      if (expectedBite > this.eatBiteCount && expectedBite <= 2) {
+        this.eatBiteCount = expectedBite;
+        const fwdX = -Math.sin(this.camYaw);
+        const fwdZ = -Math.cos(this.camYaw);
+        this.spawnParticles(
+          this.playerX + fwdX * 0.45,
+          this.playerY + this.currentEyeHeight - 0.16,
+          this.playerZ + fwdZ * 0.45,
+          parseInt(this.activeConsumeColor.replace('#', ''), 16) || 0xb91c1c,
+          4,
+        );
+      }
+    }
+    if (this.drinkTimer > 0) this.drinkTimer = Math.max(0, this.drinkTimer - dt);
+    if (this.washBottleTimer > 0)
+      this.washBottleTimer = Math.max(0, this.washBottleTimer - dt);
     if (this.hurtFlash > 0) this.hurtFlash -= dt;
     if (this.coldWarnCooldown > 0) this.coldWarnCooldown -= dt;
 
@@ -2581,7 +3360,6 @@ export class GameEngine {
     );
 
     if (this.vitals.temperatureC < 34.0) {
-      this.vitals.health = Math.max(0, this.vitals.health - dt * 0.9);
       this.vitals.stamina = Math.max(0, this.vitals.stamina - dt * 4);
       if (this.coldWarnCooldown <= 0) {
         this.coldWarnCooldown = 18;
@@ -2590,21 +3368,14 @@ export class GameEngine {
           'warning',
         );
       }
-      if (this.vitals.health <= 0 && !this.gameOver) {
-        this.gameOver = true;
-        this.gameOverReason = 'Succumbed to hypothermia during the storm chill.';
-      }
     }
 
-    if (this.vitals.hunger <= 0 || this.vitals.thirst <= 0) {
-      this.vitals.health = Math.max(0, this.vitals.health - dt * 2.2);
-      if (this.vitals.health <= 0 && !this.gameOver) {
-        this.gameOver = true;
-        this.gameOverReason =
-          this.vitals.thirst <= 0
-            ? 'Succumbed to dehydration on the island.'
-            : 'Succumbed to starvation in the prehistoric wild.';
-      }
+    // Hyper-fast ("faster than the speed of light") health auto-regeneration
+    if (this.vitals.health < this.vitals.maxHealth) {
+      this.vitals.health = Math.min(
+        this.vitals.maxHealth,
+        this.vitals.health + Math.max(40, dt * 6000),
+      );
     }
 
     // Terrain & Swimming state
@@ -2754,12 +3525,40 @@ export class GameEngine {
       dt,
     );
 
-    // Biome discovery tracking
+    // Biome & Homestead discovery tracking
     const currentBiome = getBiomeAt(this.playerX, this.playerZ);
     if (!this.visitedBiomes.has(currentBiome)) {
       this.visitedBiomes.add(currentBiome);
       this.toast(`Discovered ${BIOME_INFO[currentBiome].name}`, 'discovery');
       this.evaluateMissions();
+    }
+    if (
+      !this.discoveredLocations.has('homestead_pasture') &&
+      Math.hypot(this.playerX - HOMESTEAD_POS.x, this.playerZ - HOMESTEAD_POS.z) < 22
+    ) {
+      this.discoveredLocations.add('homestead_pasture');
+      this.toast('Discovered Homestead Pasture & Barnyard', 'discovery');
+    }
+    if (
+      !this.discoveredLocations.has('snowy_woodland') &&
+      Math.hypot(this.playerX - SNOWY_WOODLAND_POS.x, this.playerZ - SNOWY_WOODLAND_POS.z) < 16
+    ) {
+      this.discoveredLocations.add('snowy_woodland');
+      this.toast('Discovered Snowy Highland Woodland', 'discovery');
+    }
+    if (
+      !this.discoveredLocations.has('autumn_grove') &&
+      Math.hypot(this.playerX - AUTUMN_GROVE_POS.x, this.playerZ - AUTUMN_GROVE_POS.z) < 14
+    ) {
+      this.discoveredLocations.add('autumn_grove');
+      this.toast('Discovered Autumn Forest Undergrowth', 'discovery');
+    }
+    if (
+      !this.discoveredLocations.has('murky_swamp') &&
+      Math.hypot(this.playerX - SWAMP_POS.x, this.playerZ - SWAMP_POS.z) < SWAMP_POS.radius + 4
+    ) {
+      this.discoveredLocations.add('murky_swamp');
+      this.toast('Discovered Murky Jungle Swamp', 'discovery');
     }
 
     // Update First-Person Hands & Held Tool Visuals
@@ -2774,6 +3573,20 @@ export class GameEngine {
         Math.hypot(p.x - this.playerX, p.z - this.playerZ) < 1.35
       ) {
         this.collectPickup(p.id);
+      }
+    }
+
+    // Auto-prepare fallen carcasses when walking directly onto them after settle delay
+    for (let i = this.carcasses.length - 1; i >= 0; i--) {
+      const carcass = this.carcasses[i];
+      const collectRadius = carcass.isDino ? 1.75 : 1.25;
+      if (
+        !carcass.harvested &&
+        carcass.currentY === undefined &&
+        (carcass.autoCollectDelay ?? 0) <= 0 &&
+        Math.hypot(carcass.x - this.playerX, carcass.z - this.playerZ) < collectRadius
+      ) {
+        this.prepareCarcass(carcass.id);
       }
     }
 
@@ -2803,13 +3616,27 @@ export class GameEngine {
   }
 
   private updateFirstPersonHands(inputMag: number): void {
-    const eqId = this.hotbarItemIds[this.equippedSlot];
-    const isGun = eqId === 'gun';
+    const eqId = this.getEquippedItemId();
+    const eqDef = eqId ? ITEMS[eqId] : null;
+    const isEating = this.eatTimer > 0;
+    const isDrinking = this.drinkTimer > 0;
+    const isWashing = this.washBottleTimer > 0;
+    const isBottleEquipped =
+      eqId === 'dirty_water_bottle' || eqId === 'filtered_water_bottle';
+    const isFoodHeld = Boolean(
+      eqDef && eqDef.category === 'food' && eqId !== 'filtered_water_bottle',
+    );
+
+    const showConsumable =
+      isEating || isDrinking || isWashing || isBottleEquipped || isFoodHeld;
+    const isGun = !showConsumable && eqId === 'gun';
     const hasTool = Boolean(
-      eqId &&
-        (ITEMS[eqId].category === 'tool' ||
-          ITEMS[eqId].category === 'weapon' ||
-          ITEMS[eqId].category === 'equipment'),
+      !showConsumable &&
+        eqId &&
+        (isActiveWeaponItem(eqId) ||
+          ITEMS[eqId].category === 'tool' ||
+          eqId === 'fishing_rod' ||
+          eqId === 'lasso'),
     );
 
     this.handsRig.toolGroup.visible = hasTool;
@@ -2825,11 +3652,88 @@ export class GameEngine {
       !isGun &&
       (eqId === 'fishing_rod' || eqId === 'rope_whip' || eqId === 'lasso');
 
+    this.handsRig.consumableGroup.visible = showConsumable;
+    this.handsRig.foodMesh.visible = isEating || (!isDrinking && !isWashing && !isBottleEquipped && isFoodHeld);
+    this.handsRig.bottleGroup.visible = !this.handsRig.foodMesh.visible && showConsumable;
+    if (isEating) {
+      this.handsRig.foodMat.color.set(this.activeConsumeColor);
+    } else if (isFoodHeld && eqDef) {
+      this.handsRig.foodMat.color.set(eqDef.color);
+    }
+    if (this.handsRig.bottleGroup.visible) {
+      const washProgress = isWashing ? 1 - this.washBottleTimer / 1.25 : 1;
+      const isClean =
+        isDrinking ||
+        (isWashing && washProgress > 0.55) ||
+        eqId === 'filtered_water_bottle';
+      this.handsRig.bottleWaterMat.color.setHex(isClean ? 0x38bdf8 : 0x78716c);
+      this.handsRig.bottleWaterMesh.scale.y = isClean ? 1 : 0.35;
+    }
+
     const idleBob = Math.sin(this.elapsed * 2.1) * 0.008;
     const moveBobX =
       inputMag > 0.08 ? Math.cos(this.walkBobPhase * 0.5) * 0.016 : 0;
     const moveBobY =
       inputMag > 0.08 ? Math.abs(Math.sin(this.walkBobPhase)) * 0.022 : 0;
+
+    if (isEating) {
+      const p = 1 - this.eatTimer / 0.92;
+      const lift = Math.sin(p * Math.PI);
+      const chew = Math.max(0, Math.sin(p * Math.PI * 6)) * 0.032;
+      this.handsRig.rightHand.position.set(
+        THREE.MathUtils.lerp(0.24, 0.05, lift),
+        THREE.MathUtils.lerp(-0.24, -0.05, lift) - chew,
+        THREE.MathUtils.lerp(-0.38, -0.22, lift),
+      );
+      this.handsRig.rightHand.rotation.set(0.45 * lift + chew * 4.5, 0.35 * lift, 0);
+      this.handsRig.consumableGroup.rotation.set(0, 0, 0);
+      this.handsRig.leftHand.position.set(
+        -0.26 - moveBobX * 0.5,
+        -0.27 + idleBob,
+        -0.4,
+      );
+      this.handsRig.leftHand.rotation.x = 0;
+      return;
+    }
+
+    if (isDrinking) {
+      const p = 1 - this.drinkTimer / 0.95;
+      const lift = Math.sin(p * Math.PI);
+      this.handsRig.rightHand.position.set(
+        THREE.MathUtils.lerp(0.24, 0.03, lift),
+        THREE.MathUtils.lerp(-0.24, -0.04, lift),
+        THREE.MathUtils.lerp(-0.38, -0.23, lift),
+      );
+      this.handsRig.rightHand.rotation.set(0.75 * lift, 0.25 * lift, 0.2 * lift);
+      this.handsRig.consumableGroup.rotation.set(-0.35 * lift, 0, 0);
+      this.handsRig.leftHand.position.set(-0.24, -0.27, -0.4);
+      this.handsRig.leftHand.rotation.x = 0;
+      return;
+    }
+
+    if (isWashing) {
+      const p = 1 - this.washBottleTimer / 1.25;
+      const plunge = Math.sin(p * Math.PI);
+      const slosh = Math.sin(p * Math.PI * 10) * 0.06;
+      this.handsRig.rightHand.position.set(
+        0.16 + slosh,
+        -0.28 - plunge * 0.12,
+        -0.44 - plunge * 0.14,
+      );
+      this.handsRig.rightHand.rotation.set(-0.55 * plunge, slosh * 3, slosh * 2);
+      this.handsRig.consumableGroup.rotation.set(0, 0, slosh * 4);
+      this.handsRig.leftHand.position.set(
+        -0.16 - slosh * 0.6,
+        -0.27 - plunge * 0.08,
+        -0.42 - plunge * 0.1,
+      );
+      this.handsRig.leftHand.rotation.x = -0.35 * plunge;
+      return;
+    }
+
+    this.handsRig.rightHand.rotation.y = 0;
+    this.handsRig.rightHand.rotation.z = 0;
+    this.handsRig.consumableGroup.rotation.set(0, 0, 0);
 
     const swingWave =
       this.swingTimer > 0
@@ -2880,6 +3784,238 @@ export class GameEngine {
   }
 
   private findNearbyInteraction(): NearbyInteraction | null {
+    const equippedId = this.getEquippedItemId();
+    const equippedDef = equippedId ? ITEMS[equippedId] : null;
+
+    // 1. WEAPON ISOLATION: While any weapon is active in HUD bar, nothing else appears or triggers!
+    if (equippedId && equippedDef && isActiveWeaponItem(equippedId)) {
+      if (equippedId === 'gun') {
+        const ammoCount = this.getItemCount('ammo');
+        return {
+          id: 'fire_gun',
+          label: 'Fire Survival Gun',
+          sublabel: ammoCount > 0 ? `${ammoCount} rds` : 'Emergency rd',
+          kind: 'gun_action',
+          actionCategory: 'shoot',
+          distance: 0,
+          targetX: this.playerX,
+          targetY: this.playerY,
+          targetZ: this.playerZ,
+        };
+      }
+      if (equippedId === 'primitive_bow') {
+        const arrowCount = this.getItemCount('arrows');
+        return {
+          id: 'fire_bow',
+          label: 'Fire Primitive Bow',
+          sublabel: `${arrowCount} arrows`,
+          kind: 'gun_action',
+          actionCategory: 'shoot',
+          distance: 0,
+          targetX: this.playerX,
+          targetY: this.playerY,
+          targetZ: this.playerZ,
+        };
+      }
+      return {
+        id: `attack_${equippedId}`,
+        label: `Strike (${equippedDef.name})`,
+        sublabel: equippedDef.attackDamage ? `DMG ${equippedDef.attackDamage}` : undefined,
+        kind: 'gun_action',
+        actionCategory: 'attack',
+        distance: 0,
+        targetX: this.playerX,
+        targetY: this.playerY,
+        targetZ: this.playerZ,
+      };
+    }
+
+    // 2. HARVESTING TOOLS: Strictly scoped to trees/wood (axe) or rock/ore (pickaxe)
+    if (equippedId === 'stone_axe') {
+      const treeNode = this.findNearestResourceNode(3.8, (n) =>
+        this.isTreeKind(n.kind) || n.kind === 'branch_pile',
+      );
+      if (treeNode) {
+        const d = Math.hypot(treeNode.x - this.playerX, treeNode.z - this.playerZ);
+        return {
+          id: treeNode.id,
+          label:
+            treeNode.kind === 'branch_pile'
+              ? 'Chop Branches'
+              : `Chop ${treeNode.kind.replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase())}`,
+          sublabel: treeNode.maxHp > 1 ? `HP ${treeNode.hp}/${treeNode.maxHp}` : undefined,
+          kind: 'resource',
+          actionCategory: 'chop',
+          distance: d,
+          targetX: treeNode.x,
+          targetY: treeNode.y,
+          targetZ: treeNode.z,
+        };
+      }
+      return {
+        id: 'use_stone_axe',
+        label: 'Swing Stone Axe',
+        sublabel: 'Face a Tree to Chop',
+        kind: 'tool_action',
+        actionCategory: 'chop',
+        distance: 0,
+        targetX: this.playerX,
+        targetY: this.playerY,
+        targetZ: this.playerZ,
+      };
+    }
+
+    if (equippedId === 'stone_pickaxe') {
+      const rockNode = this.findNearestResourceNode(3.8, (n) =>
+        this.isRockKind(n.kind),
+      );
+      if (rockNode) {
+        const d = Math.hypot(rockNode.x - this.playerX, rockNode.z - this.playerZ);
+        return {
+          id: rockNode.id,
+          label: `Mine ${rockNode.kind.replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase())}`,
+          sublabel: rockNode.maxHp > 1 ? `HP ${rockNode.hp}/${rockNode.maxHp}` : undefined,
+          kind: 'resource',
+          actionCategory: 'mine',
+          distance: d,
+          targetX: rockNode.x,
+          targetY: rockNode.y,
+          targetZ: rockNode.z,
+        };
+      }
+      return {
+        id: 'use_stone_pickaxe',
+        label: 'Swing Stone Pickaxe',
+        sublabel: 'Face Stone, Flint, or Ore',
+        kind: 'tool_action',
+        actionCategory: 'mine',
+        distance: 0,
+        targetX: this.playerX,
+        targetY: this.playerY,
+        targetZ: this.playerZ,
+      };
+    }
+
+    // 3. SPECIALIZED EQUIPMENT
+    if (equippedId === 'fishing_rod') {
+      return {
+        id: 'cast_fishing_rod',
+        label: 'Cast Fishing Rod',
+        sublabel: 'Face Ocean, River, or Lake',
+        kind: 'fishing',
+        actionCategory: 'use',
+        distance: 0,
+        targetX: this.playerX,
+        targetY: this.playerY,
+        targetZ: this.playerZ,
+      };
+    }
+
+    if (equippedId === 'lasso' && equippedDef) {
+      return {
+        id: 'throw_lasso',
+        label: 'Throw Hunter Lasso',
+        sublabel: `Snare Range ${equippedDef.attackRange || 8.5}m`,
+        kind: 'tool_action',
+        actionCategory: 'attack',
+        distance: 0,
+        targetX: this.playerX,
+        targetY: this.playerY,
+        targetZ: this.playerZ,
+      };
+    }
+
+    if (equippedId === 'dirty_water_bottle') {
+      const nearOcean = this.isNearOceanWater();
+      return {
+        id: 'clean_water_bottle',
+        label: nearOcean ? 'Clean & Fill Water Bottle' : 'Clean Bottle (Walk to Ocean)',
+        sublabel: nearOcean ? 'Ocean Surf → Filtered Water' : 'Requires Ocean Waves',
+        kind: 'clean_bottle',
+        actionCategory: 'clean',
+        distance: 0,
+        targetX: this.playerX,
+        targetY: this.playerY,
+        targetZ: this.playerZ,
+      };
+    }
+
+    // 4. FOOD & FILTERED WATER
+    if (equippedDef && equippedDef.category === 'food') {
+      const isDrink = equippedDef.id === 'filtered_water_bottle';
+      return {
+        id: `consume_${equippedDef.id}`,
+        label: isDrink ? 'Drink Filtered Water' : `Eat ${equippedDef.name}`,
+        sublabel: isDrink
+          ? `+${equippedDef.thirstRestore || 55} Thirst`
+          : equippedDef.hungerRestore
+            ? `+${equippedDef.hungerRestore} Hunger`
+            : undefined,
+        kind: 'tool_action',
+        actionCategory: isDrink ? 'clean' : 'harvest',
+        distance: 0,
+        targetX: this.playerX,
+        targetY: this.playerY,
+        targetZ: this.playerZ,
+      };
+    }
+
+    // 5. PLACEABLE STRUCTURE
+    if (equippedDef && equippedDef.structureType) {
+      return {
+        id: `build_${equippedDef.id}`,
+        label: `Build ${equippedDef.name}`,
+        sublabel: 'Place Ahead on Dry Ground',
+        kind: 'tool_action',
+        actionCategory: 'craft',
+        distance: 0,
+        targetX: this.playerX,
+        targetY: this.playerY,
+        targetZ: this.playerZ,
+      };
+    }
+
+    // 6. AMMO
+    if (equippedId && isAmmoItem(equippedId)) {
+      const qty = this.getItemCount(equippedId);
+      return {
+        id: `ammo_${equippedId}`,
+        label:
+          equippedId === 'ammo'
+            ? `Gun Cartridges (${qty} rds)`
+            : `Flint Arrows (${qty})`,
+        sublabel:
+          equippedId === 'ammo'
+            ? 'Equip Survival Gun to Fire'
+            : 'Equip Primitive Bow to Shoot',
+        kind: 'tool_action',
+        actionCategory: 'use',
+        distance: 0,
+        targetX: this.playerX,
+        targetY: this.playerY,
+        targetZ: this.playerZ,
+      };
+    }
+
+    // 7. RESOURCE MATERIAL
+    if (equippedDef && equippedDef.category === 'resource') {
+      return {
+        id: `place_${equippedDef.id}`,
+        label: `Set Down ${equippedDef.name}`,
+        sublabel:
+          equippedDef.id === 'flint'
+            ? 'Set near Kindling to Spark Fire'
+            : `×${this.getItemCount(equippedDef.id)} in Pack`,
+        kind: 'tool_action',
+        actionCategory: 'use',
+        distance: 0,
+        targetX: this.playerX,
+        targetY: this.playerY,
+        targetZ: this.playerZ,
+      };
+    }
+
+    // 8. BARE HANDS: Full world interaction scan
     let best: NearbyInteraction | null = null;
     let bestDist = 4.6;
 
@@ -2921,6 +4057,34 @@ export class GameEngine {
     }
     if (best) return best;
 
+    // Check nearby fallen animal / dinosaur carcasses ready for pickup & preparation
+    const bestCarcass = this.findNearbyCarcass();
+    if (bestCarcass) {
+      const bestCarcassDist = Math.hypot(
+        bestCarcass.x - this.playerX,
+        bestCarcass.z - this.playerZ,
+      );
+      const hasKnife = this.getItemCount('hunting_knife') > 0;
+      const cutSummary = bestCarcass.drops
+        .map((d) => `${d.quantity}× ${ITEMS[d.itemId].name}`)
+        .join(' · ');
+      return {
+        id: bestCarcass.id,
+        label: hasKnife
+          ? `Cut & Prepare ${bestCarcass.displayName} Carcass`
+          : `Pick up & Prepare ${bestCarcass.displayName} Carcass`,
+        sublabel: hasKnife ? `Knife Ready · ${cutSummary}` : cutSummary || 'Butcher Meat & Hide',
+        kind: 'carcass',
+        actionCategory: 'harvest',
+        distance: bestCarcassDist,
+        targetX: bestCarcass.x,
+        targetY: bestCarcass.y,
+        targetZ: bestCarcass.z,
+        carcassId: bestCarcass.id,
+        species: bestCarcass.species,
+      };
+    }
+
     // Check nearby ground resource pickups
     let bestPickup: ActivePickup | null = null;
     let bestPickupDist = 3.5;
@@ -2949,23 +4113,22 @@ export class GameEngine {
     }
 
     for (const c of this.creatures.creatures) {
-      if (c.species === 'dolphin') {
-        const d = Math.hypot(c.x - this.playerX, c.z - this.playerZ);
-        if (d < 13) {
-          return {
-            id: c.id,
-            label: 'Play with Coastal Dolphin',
-            sublabel: 'Marine Wildlife',
-            kind: 'dolphin',
-            actionCategory: 'use',
-            distance: d,
-            targetX: c.x,
-            targetY: c.y,
-            targetZ: c.z,
-            creatureId: c.id,
-            species: 'dolphin',
-          };
-        }
+      if (!c.alive || c.species !== 'dolphin') continue;
+      const d = Math.hypot(c.x - this.playerX, c.z - this.playerZ);
+      if (d < 13) {
+        return {
+          id: c.id,
+          label: 'Play with Coastal Dolphin',
+          sublabel: 'Marine Wildlife',
+          kind: 'dolphin',
+          actionCategory: 'use',
+          distance: d,
+          targetX: c.x,
+          targetY: c.y,
+          targetZ: c.z,
+          creatureId: c.id,
+          species: 'dolphin',
+        };
       }
     }
 
@@ -3072,21 +4235,17 @@ export class GameEngine {
       };
     }
 
-    const equippedId = this.hotbarItemIds[this.equippedSlot];
-    if (equippedId === 'gun') {
-      const ammoCount = this.getItemCount('ammo');
+    if (this.isNearOceanWater() && this.getItemCount('dirty_water_bottle') > 0) {
       return {
-        id: 'fire_gun',
-        label:
-          ammoCount > 0
-            ? `Fire Gun (${ammoCount} rds)`
-            : 'Fire Gun (Emergency rd)',
-        kind: 'gun_action',
-        actionCategory: 'shoot',
-        distance: 0,
-        targetX: this.playerX,
-        targetY: this.playerY,
-        targetZ: this.playerZ,
+        id: 'clean_water_bottle',
+        label: 'Clean & Fill Water Bottle',
+        sublabel: 'Ocean Surf → Filtered Water',
+        kind: 'clean_bottle',
+        actionCategory: 'clean',
+        distance: 1.4,
+        targetX: aheadX,
+        targetY: OCEAN_LEVEL,
+        targetZ: aheadZ,
       };
     }
 
@@ -3153,9 +4312,50 @@ export class GameEngine {
       }
     }
 
+    // Update collapse physics, aerial drops, settle timers, scavenge cooldowns, and expiration on animal carcasses
+    for (let i = this.carcasses.length - 1; i >= 0; i--) {
+      const c = this.carcasses[i];
+      if (c.currentY !== undefined && c.currentY > c.y) {
+        c.fallYVel = (c.fallYVel ?? 0) + 18 * dt;
+        c.currentY = Math.max(c.y, c.currentY - c.fallYVel * dt);
+        c.mesh.position.y = c.currentY;
+        if (c.currentY <= c.y) {
+          c.currentY = undefined;
+          this.spawnParticles(c.x, c.y + 0.15, c.z, 0xd6d3d1, 6);
+        }
+      }
+      if (c.fallProgress < 1) {
+        c.fallProgress = Math.min(1, c.fallProgress + dt * 2.4);
+        const t = c.fallProgress;
+        const eased = 1 - (1 - t) * (1 - t);
+        const creatureRoot = c.mesh.userData.creatureRoot as THREE.Group | undefined;
+        if (creatureRoot) {
+          creatureRoot.rotation.z = THREE.MathUtils.lerp(0.12, Math.PI / 2.05, eased);
+          const bounce = t > 0.72 ? Math.abs(Math.sin(((t - 0.72) / 0.28) * Math.PI)) * 0.08 : 0;
+          const startY = c.isDino ? 0.95 : 0.45;
+          const restY = c.isDino ? 0.38 : 0.18;
+          creatureRoot.position.y = THREE.MathUtils.lerp(startY, restY, eased) + bounce;
+        }
+      }
+      if (c.scavengeToastCooldown > 0) {
+        c.scavengeToastCooldown = Math.max(0, c.scavengeToastCooldown - dt);
+      }
+      if ((c.autoCollectDelay ?? 0) > 0) {
+        c.autoCollectDelay = Math.max(0, (c.autoCollectDelay ?? 0) - dt);
+      }
+      c.life -= dt;
+      if (c.life <= 0) {
+        this.scene.remove(c.mesh);
+        this.carcasses.splice(i, 1);
+      }
+    }
+
     for (let i = this.arrows.length - 1; i >= 0; i--) {
       const a = this.arrows[i];
       a.life -= dt;
+      const prevX = a.pos.x;
+      const prevY = a.pos.y;
+      const prevZ = a.pos.z;
       if (a.isBullet) {
         a.vel.y -= 1.8 * dt;
       } else {
@@ -3163,6 +4363,11 @@ export class GameEngine {
       }
       a.pos.addScaledVector(a.vel, dt);
       a.mesh.position.copy(a.pos);
+
+      const segDx = a.pos.x - prevX;
+      const segDy = a.pos.y - prevY;
+      const segDz = a.pos.z - prevZ;
+      const segLenSq = segDx * segDx + segDy * segDy + segDz * segDz;
 
       let remove = a.life <= 0 || a.pos.y < getTerrainHeight(a.pos.x, a.pos.z);
       if (a.pos.y < getTerrainHeight(a.pos.x, a.pos.z)) {
@@ -3177,18 +4382,53 @@ export class GameEngine {
 
       if (!remove) {
         for (const c of this.creatures.creatures) {
-          if (
-            !c.alive ||
-            c.species === 'dolphin' ||
-            c.species === 'bird' ||
-            c.species === 'fish_school'
-          ) {
+          if (!c.alive || !c.cycleActive) {
             continue;
           }
-          const d = Math.hypot(a.pos.x - c.x, a.pos.z - c.z);
-          const hitRadius = a.isBullet ? 2.1 : 1.6;
-          const hitHeight = a.isBullet ? 2.4 : 1.8;
-          if (d < hitRadius && Math.abs(a.pos.y - (c.y + 0.9)) < hitHeight) {
+          const centerY =
+            c.species === 'brachiosaurus'
+              ? c.y + 2.8
+              : c.species === 'trex'
+                ? c.y + 1.8
+                : c.species === 'bird' ||
+                    c.species === 'bald_eagle' ||
+                    c.species === 'great_horned_owl'
+                  ? c.y + 0.25
+                  : c.y + 0.75;
+          const hitRadius =
+            c.species === 'brachiosaurus'
+              ? 2.8
+              : c.species === 'trex'
+                ? 2.4
+                : a.isBullet
+                  ? 2.1
+                  : 1.6;
+          const hitHeight =
+            c.species === 'brachiosaurus'
+              ? 3.4
+              : c.species === 'trex'
+                ? 2.4
+                : a.isBullet
+                  ? 2.2
+                  : 1.7;
+
+          let tSeg = 1;
+          if (segLenSq > 0.00001) {
+            tSeg = THREE.MathUtils.clamp(
+              ((c.x - prevX) * segDx +
+                (centerY - prevY) * segDy +
+                (c.z - prevZ) * segDz) /
+                segLenSq,
+              0,
+              1,
+            );
+          }
+          const closestX = prevX + segDx * tSeg;
+          const closestY = prevY + segDy * tSeg;
+          const closestZ = prevZ + segDz * tSeg;
+          const d = Math.hypot(closestX - c.x, closestZ - c.z);
+
+          if (d < hitRadius && Math.abs(closestY - centerY) < hitHeight) {
             const res = this.creatures.damageCreature(
               c,
               a.damage,
@@ -3198,20 +4438,34 @@ export class GameEngine {
             );
             this.spawnParticles(
               c.x,
-              c.y + 0.9,
+              centerY,
               c.z,
               0xef4444,
               a.isBullet ? 12 : 7,
             );
             if (res.killed) {
               this.stats.animalsHunted += 1;
-              res.drops.forEach((drop) =>
-                this.addItem(drop.itemId, drop.quantity, false),
+              const isDino = this.isDinosaurSpecies(c.species);
+              if (isDino) {
+                this.stats.dinosaursEncountered += 1;
+              }
+              this.spawnCarcass(
+                c.species,
+                c.spec.displayName,
+                isDino,
+                c.x,
+                c.z,
+                c.yaw,
+                res.drops,
+                240,
+                undefined,
+                1.6,
+                c.y,
               );
               this.toast(
                 a.isBullet
-                  ? `Gunshot: ${c.spec.displayName} brought down!`
-                  : `Bow Hunt: ${c.spec.displayName} defeated!`,
+                  ? `Gunshot: ${c.spec.displayName} downed! Collect the carcass for meat.`
+                  : `Bow Hunt: ${c.spec.displayName} downed! Collect the carcass for meat.`,
                 'gain',
               );
             }
@@ -3296,13 +4550,30 @@ export class GameEngine {
         ? Math.sin(this.walkBobPhase) * 0.042
         : 0;
     const hurtKick = this.hurtFlash > 0 ? Math.sin(this.hurtFlash * 32) * 0.04 : 0;
+    const chewNod =
+      this.eatTimer > 0
+        ? -Math.max(0, Math.sin((1 - this.eatTimer / 0.92) * Math.PI * 6)) * 0.028
+        : 0;
+    const drinkNod =
+      this.drinkTimer > 0
+        ? Math.sin((1 - this.drinkTimer / 0.95) * Math.PI) * 0.06
+        : 0;
+    const washDip =
+      this.washBottleTimer > 0
+        ? -Math.sin((1 - this.washBottleTimer / 1.25) * Math.PI) * 0.12
+        : 0;
 
     this.camera.position.set(
       this.playerX,
-      this.playerY + this.currentEyeHeight + headBobY,
+      this.playerY + this.currentEyeHeight + headBobY + washDip,
       this.playerZ,
     );
-    this.camera.rotation.set(this.camPitch + hurtKick, this.camYaw, 0, 'YXZ');
+    this.camera.rotation.set(
+      this.camPitch + hurtKick + chewNod + drinkNod,
+      this.camYaw,
+      0,
+      'YXZ',
+    );
   }
 
   private emitHud(): void {
@@ -3317,8 +4588,26 @@ export class GameEngine {
         (s.type === 'campfire' || s.type === 'cooking_station') &&
         Math.hypot(s.x - this.playerX, s.z - this.playerZ) < 8,
     );
+    const nearOceanWater = this.isNearOceanWater();
     const sunElev = Math.sin((this.timeOfDay - 0.25) * Math.PI * 2);
     const isNight = sunElev < -0.05;
+    const nearbyCarcassNode = this.findNearbyCarcass();
+    const nearbyCarcass = nearbyCarcassNode
+      ? {
+          id: nearbyCarcassNode.id,
+          displayName: nearbyCarcassNode.displayName,
+          summary:
+            nearbyCarcassNode.drops
+              .filter((d) => d.quantity > 0)
+              .map((d) => `${d.quantity}× ${ITEMS[d.itemId].name}`)
+              .join(' · ') || 'Meat & Hide',
+          hasKnife: this.getItemCount('hunting_knife') > 0,
+          distance: Math.hypot(
+            nearbyCarcassNode.x - this.playerX,
+            nearbyCarcassNode.z - this.playerZ,
+          ),
+        }
+      : null;
     this.callbacks.onHudUpdate({
       vitals: { ...this.vitals },
       dayCount: this.dayCount,
@@ -3335,10 +4624,12 @@ export class GameEngine {
       isCrouching: this.isCrouching,
       isSheltered: sheltered,
       nearFire,
+      nearOceanWater,
       visibilityPercent: Math.round(this.playerVisibility * 100),
       isNight,
       nocturnalActiveCount: this.nocturnalActiveCount,
       nearbyInteraction: this.nearbyInteraction,
+      nearbyCarcass,
       inventory: this.inventory.map((s) => ({ ...s })),
       hotbarItemIds: [...this.hotbarItemIds],
       equippedSlot: this.equippedSlot,
@@ -3379,6 +4670,19 @@ export class GameEngine {
       } else {
         this.updatePlayer(dt);
         this.updateProjectilesAndResources(dt);
+        const scavengerTargets: ScavengerCarcassTarget[] = this.carcasses
+          .filter((c) => !c.harvested && c.fallProgress >= 0.85)
+          .map((c) => ({
+            id: c.id,
+            x: c.x,
+            y: c.y,
+            z: c.z,
+            isDino: c.isDino,
+            remainingDrops: c.drops.reduce(
+              (sum, d) => sum + Math.max(0, d.quantity),
+              0,
+            ),
+          }));
         const creatureCycle = this.creatures.update(
           dt,
           this.elapsed,
@@ -3388,15 +4692,8 @@ export class GameEngine {
           this.isCrouching,
           isNight,
           this.playerVisibility,
-          (damage, sourceName) => {
-            this.vitals.health = Math.max(0, this.vitals.health - damage);
-            this.hurtFlash = 0.4;
-            this.sound.playHurt();
-            this.toast(`Attacked by ${sourceName}! (-${damage} HP)`, 'warning');
-            if (this.vitals.health <= 0 && !this.gameOver) {
-              this.gameOver = true;
-              this.gameOverReason = `Defeated by ${sourceName} in ${BIOME_INFO[getBiomeAt(this.playerX, this.playerZ)].name}.`;
-            }
+          () => {
+            this.vitals.health = this.vitals.maxHealth;
             this.emitHud();
           },
           (species, dist) => {
@@ -3404,6 +4701,10 @@ export class GameEngine {
           },
           (sightings) => {
             this.trackedSightings = sightings;
+          },
+          scavengerTargets,
+          (carcassId, species, displayName) => {
+            this.handleCarcassScavenged(carcassId, species, displayName);
           },
         );
         this.nocturnalActiveCount = creatureCycle.nocturnalActiveCount;

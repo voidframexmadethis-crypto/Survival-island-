@@ -87,7 +87,95 @@ export function loadGameFromSlot(slotId: string): GameSaveData | null {
   try {
     const raw = window.localStorage.getItem(`${SAVE_SLOT_PREFIX}${slotId}`);
     if (!raw) return null;
-    return JSON.parse(raw) as GameSaveData;
+    const data = JSON.parse(raw) as GameSaveData;
+    if (data && data.player && Array.isArray(data.inventory)) {
+      // Guarantee player always starts with gun, knife, ammo, and starter materials
+      const hasGun = data.inventory.some((s) => s.itemId === 'gun');
+      if (!hasGun) {
+        data.inventory.unshift({ itemId: 'gun', quantity: 1 });
+      }
+      const hasKnife = data.inventory.some((s) => s.itemId === 'hunting_knife');
+      if (!hasKnife) {
+        data.inventory.splice(1, 0, { itemId: 'hunting_knife', quantity: 1 });
+      }
+      const hasAmmo = data.inventory.some((s) => s.itemId === 'ammo');
+      if (!hasAmmo) {
+        data.inventory.push({ itemId: 'ammo', quantity: 60 });
+      } else {
+        const ammoSlot = data.inventory.find((s) => s.itemId === 'ammo');
+        if (ammoSlot && ammoSlot.quantity < 30) {
+          ammoSlot.quantity = 60;
+        }
+      }
+
+      const baselineMaterials: { itemId: GameSaveData['inventory'][number]['itemId']; minQty: number }[] = [
+        { itemId: 'wood', minQty: 4 },
+        { itemId: 'branch', minQty: 4 },
+        { itemId: 'stone', minQty: 4 },
+        { itemId: 'flint', minQty: 3 },
+        { itemId: 'fiber', minQty: 4 },
+        { itemId: 'leaves', minQty: 3 },
+        { itemId: 'grass', minQty: 3 },
+        { itemId: 'clay', minQty: 2 },
+        { itemId: 'metal_ore', minQty: 1 },
+        { itemId: 'hide', minQty: 1 },
+        { itemId: 'rope', minQty: 1 },
+      ];
+      for (const mat of baselineMaterials) {
+        const current = data.inventory
+          .filter((s) => s.itemId === mat.itemId)
+          .reduce((sum, s) => sum + s.quantity, 0);
+        if (current <= 0) {
+          data.inventory.push({ itemId: mat.itemId, quantity: mat.minQty });
+        }
+      }
+
+      const hasBottle = data.inventory.some(
+        (s) =>
+          s.itemId === 'dirty_water_bottle' ||
+          s.itemId === 'filtered_water_bottle',
+      );
+      if (!hasBottle) {
+        data.inventory.push({ itemId: 'dirty_water_bottle', quantity: 1 });
+      }
+
+      if (!Array.isArray(data.player.hotbarItemIds)) {
+        data.player.hotbarItemIds = ['gun', 'hunting_knife', 'ammo', null, 'dirty_water_bottle', null];
+      }
+      if (!data.player.hotbarItemIds.includes('gun')) {
+        const emptyIdx = data.player.hotbarItemIds.indexOf(null);
+        if (emptyIdx !== -1) {
+          data.player.hotbarItemIds[emptyIdx] = 'gun';
+        } else {
+          data.player.hotbarItemIds[0] = 'gun';
+        }
+      }
+      if (!data.player.hotbarItemIds.includes('hunting_knife')) {
+        const emptyIdx = data.player.hotbarItemIds.indexOf(null);
+        if (emptyIdx !== -1) {
+          data.player.hotbarItemIds[emptyIdx] = 'hunting_knife';
+        }
+      }
+      if (
+        !data.player.hotbarItemIds.includes('dirty_water_bottle') &&
+        !data.player.hotbarItemIds.includes('filtered_water_bottle')
+      ) {
+        const emptyIdx = data.player.hotbarItemIds.indexOf(null);
+        if (emptyIdx !== -1) {
+          data.player.hotbarItemIds[emptyIdx] = data.inventory.some(
+            (s) => s.itemId === 'filtered_water_bottle',
+          )
+            ? 'filtered_water_bottle'
+            : 'dirty_water_bottle';
+        }
+      }
+      // Ensure gun is the active equipped slot on start of game
+      const gunIdx = data.player.hotbarItemIds.indexOf('gun');
+      if (gunIdx !== -1) {
+        data.player.equippedSlot = gunIdx;
+      }
+    }
+    return data;
   } catch {
     return null;
   }

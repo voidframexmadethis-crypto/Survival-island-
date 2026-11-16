@@ -27,12 +27,13 @@ import {
   Settings,
   Shield,
   Sun,
+  Swords,
   Thermometer,
   Trophy,
   Utensils,
   Zap,
 } from 'lucide-react';
-import { ITEMS } from '@/game/data/items';
+import { ITEMS, isActiveWeaponItem, isAmmoItem } from '@/game/data/items';
 import { STAGE_1_MISSIONS } from '@/game/data/missions';
 import { GameEngine } from '@/game/engine/GameEngine';
 import {
@@ -82,6 +83,7 @@ export function SurvivalGameClient() {
   const lastLookPos = useRef({ x: 0, y: 0 });
   const pointerDownPos = useRef({ x: 0, y: 0 });
   const pointerDownTime = useRef(0);
+  const toastSeqRef = useRef(0);
 
   const [screen, setScreen] = useState<'menu' | 'playing'>('menu');
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
@@ -101,9 +103,15 @@ export function SurvivalGameClient() {
   }, []);
 
   const pushToast = useCallback((toast: ResourceToast) => {
-    setToasts((prev) => [...prev.slice(-3), toast]);
+    toastSeqRef.current += 1;
+    const uniqueId = `${toast.id}_${toastSeqRef.current}`;
+    const nextToast: ResourceToast = { ...toast, id: uniqueId };
+    setToasts((prev) => [
+      ...prev.filter((t) => t.id !== uniqueId).slice(-3),
+      nextToast,
+    ]);
     window.setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== toast.id));
+      setToasts((prev) => prev.filter((t) => t.id !== uniqueId));
     }, 2800);
   }, []);
 
@@ -215,7 +223,7 @@ export function SurvivalGameClient() {
     if (!engineRef.current) return;
     engineRef.current.unlockAudio();
     engineRef.current.startNewWorldState('slot_1', true);
-    engineRef.current.ensurePlayerHasGun();
+    engineRef.current.ensurePlayerHasGun(true);
     engineRef.current.setMode('playing');
     setActiveModal(null);
     setScreen('playing');
@@ -229,7 +237,7 @@ export function SurvivalGameClient() {
     if (!data) return;
     engineRef.current.unlockAudio();
     engineRef.current.loadFromSave(data);
-    engineRef.current.ensurePlayerHasGun();
+    engineRef.current.ensurePlayerHasGun(true);
     if (data.hudPreferences) {
       const merged: GameSettings = {
         ...settings,
@@ -244,8 +252,8 @@ export function SurvivalGameClient() {
     setActiveModal(null);
     setScreen('playing');
     pushToast({
-      id: 'loaded',
-      text: `Loaded Day ${data.dayCount} Expedition`,
+      id: `loaded_${Date.now()}`,
+      text: `Loaded Day ${data.dayCount} Expedition · Gun, Knife & Supplies Ready`,
       tone: 'info',
     });
   };
@@ -255,7 +263,7 @@ export function SurvivalGameClient() {
     const ok = saveGameToSlot(engineRef.current.exportSaveData(slotId));
     refreshSaves();
     pushToast({
-      id: 'saved_' + Date.now(),
+      id: `saved_${Date.now()}`,
       text: ok ? 'Expedition progress saved' : 'Could not save to storage',
       tone: ok ? 'craft' : 'warning',
     });
@@ -714,46 +722,84 @@ export function SurvivalGameClient() {
             ))}
           </div>
 
-          {/* Bottom-Center Contextual Prompt + Equipped Readout + 6-Slot Quick Hotbar */}
+          {/* Bottom-Center Contextual Prompt + Collect Carcass + Equipped Readout + 6-Slot Quick Hotbar */}
           <div className="flex flex-col items-center gap-1.5 pb-1">
-            {hud.nearbyInteraction && !activeModal && (
-              <button
-                onClick={() => engineRef.current?.triggerPrimaryAction()}
-                className="pointer-events-auto min-h-[44px] px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-xs sm:text-sm shadow-xl flex items-center gap-2 whitespace-nowrap shrink-0"
-              >
-                {hud.nearbyInteraction.actionCategory === 'chop' ? (
-                  <Axe className="w-4 h-4" />
-                ) : hud.nearbyInteraction.actionCategory === 'mine' ? (
-                  <Pickaxe className="w-4 h-4" />
-                ) : hud.nearbyInteraction.actionCategory === 'pickup' ? (
-                  <PackagePlus className="w-4 h-4" />
-                ) : hud.nearbyInteraction.actionCategory === 'craft' ? (
-                  <Hammer className="w-4 h-4" />
-                ) : hud.nearbyInteraction.actionCategory === 'cook' ? (
-                  <Flame className="w-4 h-4" />
-                ) : hud.nearbyInteraction.actionCategory === 'shoot' ? (
-                  <Crosshair className="w-4 h-4" />
-                ) : (
-                  <Hand className="w-4 h-4" />
-                )}
-                <span>
-                  {hud.nearbyInteraction.label}
-                  {hud.nearbyInteraction.sublabel
-                    ? ` (${hud.nearbyInteraction.sublabel})`
-                    : ''}
-                </span>
-                <span className="hidden sm:inline text-[11px] px-1.5 py-0.5 rounded bg-stone-950/20 font-mono-tabular">
-                  E
-                </span>
-              </button>
-            )}
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {hud.nearbyCarcass && !activeModal && (
+                <button
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() =>
+                    engineRef.current?.collectNearbyCarcass(hud.nearbyCarcass!.id)
+                  }
+                  className="pointer-events-auto min-h-[44px] px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-300 border border-emerald-200 text-stone-950 font-bold text-xs sm:text-sm shadow-xl flex items-center gap-2 whitespace-nowrap shrink-0"
+                  title="Collect & prepare this hunted carcass for meat and hide (F)"
+                >
+                  <PackagePlus className="w-4 h-4 shrink-0" />
+                  <span>
+                    Collect {hud.nearbyCarcass.displayName} ({hud.nearbyCarcass.summary})
+                  </span>
+                  <span className="hidden sm:inline text-[11px] px-1.5 py-0.5 rounded bg-stone-950/20 font-mono-tabular">
+                    F
+                  </span>
+                </button>
+              )}
 
-            {/* Current Equipped Item Indicator + Quick Place */}
+              {hud.nearbyInteraction &&
+                !activeModal &&
+                hud.nearbyInteraction.kind !== 'carcass' && (
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => engineRef.current?.triggerPrimaryAction()}
+                    className="pointer-events-auto min-h-[44px] px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-xs sm:text-sm shadow-xl flex items-center gap-2 whitespace-nowrap shrink-0"
+                  >
+                    {hud.nearbyInteraction.actionCategory === 'chop' ? (
+                      <Axe className="w-4 h-4" />
+                    ) : hud.nearbyInteraction.actionCategory === 'mine' ? (
+                      <Pickaxe className="w-4 h-4" />
+                    ) : hud.nearbyInteraction.actionCategory === 'pickup' ? (
+                      <PackagePlus className="w-4 h-4" />
+                    ) : hud.nearbyInteraction.actionCategory === 'craft' ? (
+                      <Hammer className="w-4 h-4" />
+                    ) : hud.nearbyInteraction.actionCategory === 'cook' ? (
+                      <Flame className="w-4 h-4" />
+                    ) : hud.nearbyInteraction.actionCategory === 'shoot' ? (
+                      <Crosshair className="w-4 h-4" />
+                    ) : hud.nearbyInteraction.actionCategory === 'attack' ? (
+                      <Swords className="w-4 h-4" />
+                    ) : hud.nearbyInteraction.actionCategory === 'harvest' ? (
+                      <Utensils className="w-4 h-4" />
+                    ) : hud.nearbyInteraction.actionCategory === 'clean' ? (
+                      <Droplets className="w-4 h-4" />
+                    ) : (
+                      <Hand className="w-4 h-4" />
+                    )}
+                    <span>
+                      {hud.nearbyInteraction.label}
+                      {hud.nearbyInteraction.sublabel
+                        ? ` (${hud.nearbyInteraction.sublabel})`
+                        : ''}
+                    </span>
+                    <span className="hidden sm:inline text-[11px] px-1.5 py-0.5 rounded bg-stone-950/20 font-mono-tabular">
+                      E
+                    </span>
+                  </button>
+                )}
+            </div>
+
+            {/* Current Equipped Item Indicator + Strictly Scoped Quick Actions */}
             {(() => {
-              const eqId = hud.hotbarItemIds[hud.equippedSlot];
+              const eqId =
+                hud.equippedSlot >= 0
+                  ? hud.hotbarItemIds[hud.equippedSlot]
+                  : null;
               const eqDef = eqId && countOf(eqId) > 0 ? ITEMS[eqId] : null;
+              const weaponActive = isActiveWeaponItem(eqDef?.id);
+              const dirtyBottleCount = countOf('dirty_water_bottle');
+              const filteredBottleCount = countOf('filtered_water_bottle');
               return (
-                <div className="pointer-events-auto flex items-center gap-1.5">
+                <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-1.5">
                   <div className="px-3 py-1 rounded-lg bg-stone-950/85 border border-stone-700/75 text-[11px] text-stone-200 flex items-center gap-2 shadow-md">
                     {eqDef ? (
                       <>
@@ -761,7 +807,15 @@ export function SurvivalGameClient() {
                         <span className="font-semibold text-amber-300">
                           {eqDef.name}
                         </span>
-                        {eqDef.preferredResource ? (
+                        {eqDef.id === 'gun' ? (
+                          <span className="text-stone-400 font-mono-tabular">
+                            · DMG {eqDef.attackDamage} · {countOf('ammo')} rds
+                          </span>
+                        ) : eqDef.id === 'primitive_bow' ? (
+                          <span className="text-stone-400 font-mono-tabular">
+                            · DMG {eqDef.attackDamage} · {countOf('arrows')} arrows
+                          </span>
+                        ) : eqDef.preferredResource && !weaponActive ? (
                           <span className="text-stone-400 font-mono-tabular">
                             · {eqDef.preferredResource} ×{eqDef.gatherPower || 1}
                           </span>
@@ -772,29 +826,92 @@ export function SurvivalGameClient() {
                         ) : null}
                       </>
                     ) : (
-                      <span className="text-stone-400">
-                        Equipped: Bare Hands (Slot {hud.equippedSlot + 1})
+                      <span className="text-stone-300 flex items-center gap-1.5">
+                        <Hand className="w-3.5 h-3.5 text-amber-300" />
+                        <span>Bare Hands (Gather, Cook &amp; Carcasses)</span>
                       </span>
                     )}
                   </div>
-                  {eqDef && (
-                    <button
-                      type="button"
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={() => engineRef.current?.placeItemInWorld(eqDef.id)}
-                      className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-[11px] shadow-md flex items-center gap-1 whitespace-nowrap shrink-0"
-                      title={`Place ${eqDef.name} in front of you`}
-                    >
-                      <PackageOpen className="w-3.5 h-3.5" />
-                      <span>{eqDef.structureType ? 'Build' : 'Set Down'}</span>
-                    </button>
-                  )}
+                  {!weaponActive &&
+                    dirtyBottleCount > 0 &&
+                    (eqDef?.id === 'dirty_water_bottle' || !eqDef) && (
+                      <button
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={() => engineRef.current?.cleanAndFilterWaterBottle()}
+                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] shadow-md flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors ${
+                          hud.nearOceanWater
+                            ? 'bg-sky-500 hover:bg-sky-400 text-stone-950'
+                            : 'bg-sky-950/85 hover:bg-sky-900 border border-sky-700/70 text-sky-200'
+                        }`}
+                        title="Clean your water bottle in ocean water and fill it with filtered water"
+                      >
+                        <Droplets className="w-3.5 h-3.5" />
+                        <span>
+                          {hud.nearOceanWater ? 'Clean Water Bottle' : 'Clean Bottle (Ocean)'}
+                        </span>
+                      </button>
+                    )}
+                  {!weaponActive &&
+                    filteredBottleCount > 0 &&
+                    (eqDef?.id === 'filtered_water_bottle' ||
+                      (!eqDef && hud.vitals.thirst < 95)) && (
+                      <button
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={() =>
+                          engineRef.current?.useOrEquipItem('filtered_water_bottle')
+                        }
+                        className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-stone-950 font-bold text-[11px] shadow-md flex items-center gap-1 whitespace-nowrap shrink-0"
+                        title="Drink filtered water (+55 Thirst)"
+                      >
+                        <Droplets className="w-3.5 h-3.5" />
+                        <span>Drink ({filteredBottleCount})</span>
+                      </button>
+                    )}
+                  {!weaponActive &&
+                    eqDef &&
+                    eqDef.category !== 'tool' &&
+                    eqDef.category !== 'equipment' &&
+                    !isAmmoItem(eqDef.id) && (
+                      <button
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={() => engineRef.current?.placeItemInWorld(eqDef.id)}
+                        className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-[11px] shadow-md flex items-center gap-1 whitespace-nowrap shrink-0"
+                        title={`Place ${eqDef.name} in front of you`}
+                      >
+                        <PackageOpen className="w-3.5 h-3.5" />
+                        <span>{eqDef.structureType ? 'Build' : 'Set Down'}</span>
+                      </button>
+                    )}
                 </div>
               );
             })()}
 
-            {/* 6-Slot Hotbar + Dedicated Place Button */}
+            {/* Bare Hands Toggle + 6-Slot Hotbar + Dedicated Place Button */}
             <div className="pointer-events-auto flex items-center gap-1.5 p-1.5 rounded-xl bg-stone-950/88 border border-stone-700/80 shadow-xl">
+              <button
+                type="button"
+                aria-label="Bare Hands"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => engineRef.current?.selectHotbarSlot(-1)}
+                className={`relative w-11 h-11 sm:w-12 sm:h-12 rounded-lg border flex flex-col items-center justify-center transition-colors ${
+                  hud.equippedSlot === -1
+                    ? 'bg-amber-950/75 border-amber-400 text-amber-300'
+                    : 'bg-stone-900 border-stone-800 hover:border-stone-600 text-stone-400'
+                }`}
+                title="Bare Hands (0) — Gather, interact, cook & prepare carcasses"
+              >
+                <span className="absolute top-0.5 left-1 text-[9px] font-mono-tabular text-stone-500">
+                  0
+                </span>
+                <Hand className="w-4 h-4" />
+                <span className="text-[9px] font-semibold leading-none mt-0.5">
+                  Hands
+                </span>
+              </button>
+
               {hud.hotbarItemIds.map((itemId, idx) => {
                 const isSelected = hud.equippedSlot === idx;
                 const qty = itemId ? countOf(itemId) : 0;
@@ -803,9 +920,15 @@ export function SurvivalGameClient() {
                     key={idx}
                     onPointerDown={(e) => e.stopPropagation()}
                     onClick={() => {
-                      engineRef.current?.selectHotbarSlot(idx);
-                      if (itemId && ITEMS[itemId].category === 'food') {
+                      if (
+                        isSelected &&
+                        itemId &&
+                        qty > 0 &&
+                        ITEMS[itemId].category === 'food'
+                      ) {
                         engineRef.current?.useOrEquipItem(itemId);
+                      } else {
+                        engineRef.current?.selectHotbarSlot(idx);
                       }
                     }}
                     className={`relative w-11 h-11 sm:w-12 sm:h-12 rounded-lg border flex flex-col items-center justify-center transition-colors ${
@@ -813,7 +936,15 @@ export function SurvivalGameClient() {
                         ? 'bg-amber-950/75 border-amber-400'
                         : 'bg-stone-900 border-stone-800 hover:border-stone-600'
                     }`}
-                    title={itemId ? ITEMS[itemId].name : `Slot ${idx + 1}`}
+                    title={
+                      itemId && qty > 0
+                        ? `${ITEMS[itemId].name}${
+                            isSelected && ITEMS[itemId].category === 'food'
+                              ? ' (Tap again to consume)'
+                              : ''
+                          }`
+                        : `Empty Slot ${idx + 1}`
+                    }
                   >
                     <span className="absolute top-0.5 left-1 text-[9px] font-mono-tabular text-stone-500">
                       {idx + 1}
@@ -873,7 +1004,9 @@ export function SurvivalGameClient() {
         <InventoryModal
           hud={hud}
           nearTable={nearCraftingTable}
+          nearOceanWater={hud.nearOceanWater}
           onUseOrEquip={(id) => engineRef.current?.useOrEquipItem(id)}
+          onCleanBottle={() => engineRef.current?.cleanAndFilterWaterBottle()}
           onDropItem={(id) => engineRef.current?.dropItem(id, 1)}
           onAssignHotbar={(slotIdx, id) =>
             engineRef.current?.assignHotbarSlot(slotIdx, id)
@@ -891,8 +1024,10 @@ export function SurvivalGameClient() {
         <InventoryModal
           hud={hud}
           nearTable={nearCraftingTable}
+          nearOceanWater={hud.nearOceanWater}
           chestStructureId={activeStationStructureId}
           onUseOrEquip={(id) => engineRef.current?.useOrEquipItem(id)}
+          onCleanBottle={() => engineRef.current?.cleanAndFilterWaterBottle()}
           onDropItem={(id) => engineRef.current?.dropItem(id, 1)}
           onAssignHotbar={(slotIdx, id) =>
             engineRef.current?.assignHotbarSlot(slotIdx, id)
@@ -929,6 +1064,7 @@ export function SurvivalGameClient() {
           onCook={(recipeId) =>
             engineRef.current?.cookRecipe(recipeId, nearCookingStation) || false
           }
+          onEat={(itemId) => engineRef.current?.useOrEquipItem(itemId)}
           onClose={closeModal}
         />
       )}

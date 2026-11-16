@@ -19,7 +19,9 @@ import {
   Feather,
   Fish,
   Flame,
+  FlaskConical,
   Gem,
+  GlassWater,
   Hammer,
   Home,
   Layers,
@@ -137,6 +139,10 @@ export function ItemIcon({
       return <Crosshair {...props} />;
     case 'fishing_rod':
       return <Anchor {...props} />;
+    case 'dirty_bottle':
+      return <FlaskConical {...props} />;
+    case 'filtered_bottle':
+      return <GlassWater {...props} />;
     case 'campfire':
       return <Flame {...props} />;
     case 'bed':

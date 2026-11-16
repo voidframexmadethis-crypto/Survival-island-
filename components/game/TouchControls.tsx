@@ -7,6 +7,7 @@ import {
   Axe,
   Backpack,
   Crosshair,
+  Droplets,
   Flame,
   Footprints,
   Hammer,
@@ -14,6 +15,8 @@ import {
   PackageOpen,
   PackagePlus,
   Pickaxe,
+  Swords,
+  Utensils,
   Zap,
 } from 'lucide-react';
 import { NearbyInteraction } from '@/game/types';
@@ -97,6 +100,12 @@ export function TouchControls({
         return <Flame className="w-7 h-7" />;
       case 'shoot':
         return <Crosshair className="w-7 h-7" />;
+      case 'attack':
+        return <Swords className="w-7 h-7" />;
+      case 'harvest':
+        return <Utensils className="w-7 h-7" />;
+      case 'clean':
+        return <Droplets className="w-7 h-7" />;
       default:
         return <Hand className="w-7 h-7" />;
     }
@@ -118,6 +127,12 @@ export function TouchControls({
         return 'Gather';
       case 'shoot':
         return 'Shoot';
+      case 'attack':
+        return 'Strike';
+      case 'harvest':
+        return 'Prepare';
+      case 'clean':
+        return 'Clean';
       default:
         return 'Act';
     }

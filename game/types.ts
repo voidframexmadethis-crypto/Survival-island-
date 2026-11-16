@@ -73,6 +73,8 @@ export type ItemId =
   | 'primitive_bow'
   | 'arrows'
   | 'fishing_rod'
+  | 'dirty_water_bottle'
+  | 'filtered_water_bottle'
   // Placeable Camp Structures
   | 'campfire'
   | 'sleeping_area'
@@ -207,13 +209,26 @@ export interface SavedResourceNodeState {
 }
 
 export type CreatureSpecies =
-  // Ordinary Island Wildlife
+  // Ordinary Island, Wild & Homestead Wildlife
   | 'deer'
   | 'rabbit'
   | 'wild_boar'
+  | 'pig'
   | 'cattle'
+  | 'horse'
+  | 'sheep'
   | 'jungle_fowl'
   | 'goat'
+  | 'duck'
+  | 'barn_cat'
+  | 'grizzly_bear'
+  | 'gray_wolf'
+  | 'african_lion'
+  | 'bald_eagle'
+  | 'red_fox'
+  | 'saltwater_crocodile'
+  | 'bison'
+  | 'great_horned_owl'
   | 'bird'
   | 'fish_school'
   // Marine Interactive
@@ -231,6 +246,7 @@ export type CreatureTemperament =
   | 'pack_predator'
   | 'defensive_herbivore'
   | 'timid_herbivore'
+  | 'domestic_calm'
   | 'aerial_ambient'
   | 'aquatic_school'
   | 'friendly_marine';
@@ -333,10 +349,24 @@ export interface GameSaveData {
   exploredCells?: number[]; // Indices of 32x32 fog-of-war map cells discovered
   resourceStates?: SavedResourceNodeState[];
   activePickups?: WorldPickupSave[];
+  activeCarcasses?: CarcassSaveData[];
   hudPreferences?: { showCompass: boolean; compactHud: boolean };
   stats: GameStats;
   completedMissionIds: string[];
   discoveredLocations: string[];
+}
+
+export interface CarcassSaveData {
+  id: string;
+  species: CreatureSpecies;
+  displayName: string;
+  isDino: boolean;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  drops: { itemId: ItemId; quantity: number }[];
+  life: number;
 }
 
 export type ActiveModal =
@@ -358,6 +388,7 @@ export interface NearbyInteraction {
   kind:
     | 'resource'
     | 'pickup'
+    | 'carcass'
     | 'water'
     | 'campfire'
     | 'cooking_station'
@@ -370,8 +401,21 @@ export interface NearbyInteraction {
     | 'dolphin'
     | 'fishing'
     | 'expedition_journal'
-    | 'gun_action';
-  actionCategory?: 'chop' | 'mine' | 'gather' | 'pickup' | 'craft' | 'cook' | 'use' | 'shoot';
+    | 'gun_action'
+    | 'clean_bottle'
+    | 'tool_action';
+  actionCategory?:
+    | 'chop'
+    | 'mine'
+    | 'gather'
+    | 'pickup'
+    | 'craft'
+    | 'cook'
+    | 'use'
+    | 'shoot'
+    | 'attack'
+    | 'harvest'
+    | 'clean';
   distance: number;
   targetX: number;
   targetY: number;
@@ -381,6 +425,7 @@ export interface NearbyInteraction {
   species?: CreatureSpecies;
   pickupItemId?: ItemId;
   pickupQuantity?: number;
+  carcassId?: string;
 }
 
 export interface ResourceToast {
@@ -407,10 +452,18 @@ export interface HUDStateSnapshot {
   isCrouching: boolean;
   isSheltered: boolean;
   nearFire: boolean;
+  nearOceanWater: boolean;
   visibilityPercent: number;
   isNight: boolean;
   nocturnalActiveCount: number;
   nearbyInteraction: NearbyInteraction | null;
+  nearbyCarcass: {
+    id: string;
+    displayName: string;
+    summary: string;
+    hasKnife: boolean;
+    distance: number;
+  } | null;
   inventory: InventorySlot[];
   hotbarItemIds: (ItemId | null)[];
   equippedSlot: number;

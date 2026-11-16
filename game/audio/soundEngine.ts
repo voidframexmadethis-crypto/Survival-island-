@@ -589,6 +589,48 @@ export class SoundEngine {
     src.start(now);
   }
 
+  public playPrepareCarcass(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    // 1. Blade slicing butcher carve noise burst
+    const dur = 0.22;
+    const buf = this.ctx.createBuffer(
+      1,
+      Math.floor(this.ctx.sampleRate * dur),
+      this.ctx.sampleRate,
+    );
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      d[i] = (Math.random() * 2 - 1) * Math.sin((i / d.length) * Math.PI);
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(3200, now);
+    filter.frequency.exponentialRampToValueAtTime(1200, now + dur);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.18, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    src.connect(filter);
+    filter.connect(g);
+    g.connect(this.masterGain);
+    src.start(now);
+
+    // 2. Meat harvest chime tone
+    const osc = this.ctx.createOscillator();
+    const oscGain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(260, now + 0.08);
+    osc.frequency.exponentialRampToValueAtTime(440, now + 0.26);
+    oscGain.gain.setValueAtTime(0.14, now + 0.08);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
+    osc.connect(oscGain);
+    oscGain.connect(this.masterGain);
+    osc.start(now + 0.08);
+    osc.stop(now + 0.33);
+  }
+
   public playDrink(): void {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
@@ -606,6 +648,114 @@ export class SoundEngine {
       osc.start(now + i * 0.1);
       osc.stop(now + i * 0.1 + 0.11);
     });
+  }
+
+  public playEat(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    // Two soft chewing crunches + nourishment chime
+    [0, 0.13].forEach((offset) => {
+      if (!this.ctx || !this.masterGain) return;
+      const dur = 0.08;
+      const buf = this.ctx.createBuffer(
+        1,
+        Math.floor(this.ctx.sampleRate * dur),
+        this.ctx.sampleRate,
+      );
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) {
+        d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+      }
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = 1100;
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.14, now + offset);
+      g.gain.exponentialRampToValueAtTime(0.001, now + offset + dur);
+      src.connect(filter);
+      filter.connect(g);
+      g.connect(this.masterGain);
+      src.start(now + offset);
+    });
+  }
+
+  public playWashBottle(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    // Ocean surf slosh + rinse bubbles
+    [0, 0.24].forEach((offset) => {
+      if (!this.ctx || !this.masterGain) return;
+      const dur = 0.22;
+      const buf = this.ctx.createBuffer(
+        1,
+        Math.floor(this.ctx.sampleRate * dur),
+        this.ctx.sampleRate,
+      );
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) {
+        d[i] =
+          (Math.random() * 2 - 1) *
+          Math.sin((i / d.length) * Math.PI) *
+          0.9;
+      }
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(680 + offset * 900, now + offset);
+      bp.frequency.exponentialRampToValueAtTime(1650, now + offset + dur);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.2, now + offset);
+      g.gain.exponentialRampToValueAtTime(0.001, now + offset + dur);
+      src.connect(bp);
+      bp.connect(g);
+      g.connect(this.masterGain);
+      src.start(now + offset);
+    });
+    // Clean filtered water chime
+    [523.25, 659.25, 783.99].forEach((freq, i) => {
+      if (!this.ctx || !this.masterGain) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + 0.48 + i * 0.07);
+      g.gain.setValueAtTime(0.11, now + 0.48 + i * 0.07);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.48 + i * 0.07 + 0.22);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now + 0.48 + i * 0.07);
+      osc.stop(now + 0.48 + i * 0.07 + 0.24);
+    });
+  }
+
+  public playScavengerBite(dist: number, isBird: boolean): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain || dist > 38) return;
+    const volScale = Math.max(0.12, 1 - dist / 38);
+    const now = this.ctx.currentTime;
+    const dur = isBird ? 0.055 : 0.14;
+    const buf = this.ctx.createBuffer(
+      1,
+      Math.floor(this.ctx.sampleRate * dur),
+      this.ctx.sampleRate,
+    );
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = isBird ? 2100 : 620;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.14 * volScale, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(this.masterGain);
+    src.start(now);
   }
 
   public playCreatureCall(species: CreatureSpecies, volumeScale = 1): void {
@@ -646,36 +796,157 @@ export class SoundEngine {
       g.connect(this.masterGain);
       osc.start(now);
       osc.stop(now + 0.26);
-    } else if (species === 'cattle' || species === 'goat') {
+    } else if (species === 'cattle' || species === 'goat' || species === 'sheep') {
       osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(species === 'cattle' ? 135 : 290, now);
-      osc.frequency.linearRampToValueAtTime(species === 'cattle' ? 105 : 240, now + 0.38);
+      const startF = species === 'cattle' ? 132 : species === 'sheep' ? 235 : 310;
+      const endF = species === 'cattle' ? 102 : species === 'sheep' ? 195 : 255;
+      osc.frequency.setValueAtTime(startF, now);
+      osc.frequency.linearRampToValueAtTime(endF, now + 0.38);
       g.gain.setValueAtTime(vol * 0.55, now);
       g.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
       osc.connect(g);
       g.connect(this.masterGain);
       osc.start(now);
       osc.stop(now + 0.44);
-    } else if (species === 'wild_boar') {
+    } else if (species === 'horse') {
       osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(175, now);
-      osc.frequency.exponentialRampToValueAtTime(95, now + 0.18);
-      g.gain.setValueAtTime(vol * 0.65, now);
+      osc.frequency.setValueAtTime(340, now);
+      osc.frequency.exponentialRampToValueAtTime(520, now + 0.14);
+      osc.frequency.exponentialRampToValueAtTime(220, now + 0.46);
+      g.gain.setValueAtTime(vol * 0.52, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.48);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.5);
+    } else if (species === 'wild_boar' || species === 'pig') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(species === 'pig' ? 195 : 175, now);
+      osc.frequency.exponentialRampToValueAtTime(105, now + 0.18);
+      g.gain.setValueAtTime(vol * 0.6, now);
       g.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
       osc.connect(g);
       g.connect(this.masterGain);
       osc.start(now);
       osc.stop(now + 0.21);
-    } else if (species === 'bird' || species === 'jungle_fowl') {
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(920, now);
-      osc.frequency.exponentialRampToValueAtTime(1320, now + 0.11);
-      g.gain.setValueAtTime(vol * 0.45, now);
-      g.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+    } else if (species === 'duck') {
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(480, now);
+      osc.frequency.exponentialRampToValueAtTime(310, now + 0.16);
+      g.gain.setValueAtTime(vol * 0.35, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
       osc.connect(g);
       g.connect(this.masterGain);
       osc.start(now);
-      osc.stop(now + 0.15);
+      osc.stop(now + 0.19);
+    } else if (species === 'barn_cat') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(540, now);
+      osc.frequency.exponentialRampToValueAtTime(760, now + 0.12);
+      osc.frequency.exponentialRampToValueAtTime(490, now + 0.32);
+      g.gain.setValueAtTime(vol * 0.4, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.35);
+    } else if (species === 'bird' || species === 'jungle_fowl') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(species === 'jungle_fowl' ? 680 : 920, now);
+      osc.frequency.exponentialRampToValueAtTime(
+        species === 'jungle_fowl' ? 1050 : 1320,
+        now + 0.14,
+      );
+      g.gain.setValueAtTime(vol * 0.45, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.19);
+    } else if (species === 'grizzly_bear') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(108, now);
+      osc.frequency.exponentialRampToValueAtTime(62, now + 0.55);
+      g.gain.setValueAtTime(vol * 0.82, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.58);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.6);
+    } else if (species === 'gray_wolf') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(290, now);
+      osc.frequency.exponentialRampToValueAtTime(510, now + 0.24);
+      osc.frequency.exponentialRampToValueAtTime(340, now + 0.85);
+      g.gain.setValueAtTime(vol * 0.65, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.9);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.92);
+    } else if (species === 'african_lion') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(128, now);
+      osc.frequency.exponentialRampToValueAtTime(58, now + 0.68);
+      g.gain.setValueAtTime(vol * 0.88, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.72);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.74);
+    } else if (species === 'bald_eagle') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(2150, now);
+      osc.frequency.exponentialRampToValueAtTime(1480, now + 0.28);
+      g.gain.setValueAtTime(vol * 0.42, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.32);
+    } else if (species === 'red_fox') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(760, now);
+      osc.frequency.exponentialRampToValueAtTime(1120, now + 0.08);
+      osc.frequency.exponentialRampToValueAtTime(540, now + 0.2);
+      g.gain.setValueAtTime(vol * 0.48, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.24);
+    } else if (species === 'saltwater_crocodile') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(72, now);
+      osc.frequency.linearRampToValueAtTime(54, now + 0.48);
+      g.gain.setValueAtTime(vol * 0.78, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.52);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.54);
+    } else if (species === 'bison') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(98, now);
+      osc.frequency.exponentialRampToValueAtTime(74, now + 0.42);
+      g.gain.setValueAtTime(vol * 0.68, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.47);
+    } else if (species === 'great_horned_owl') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(420, now);
+      osc.frequency.setValueAtTime(360, now + 0.26);
+      g.gain.setValueAtTime(vol * 0.48, now);
+      g.gain.setValueAtTime(0.001, now + 0.18);
+      g.gain.setValueAtTime(vol * 0.45, now + 0.26);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.52);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.54);
     } else if (species === 'deer' || species === 'parasaurolophus') {
       osc.type = 'triangle';
       osc.frequency.setValueAtTime(240, now);

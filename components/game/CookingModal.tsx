@@ -11,6 +11,7 @@ interface CookingModalProps {
   hud: HUDStateSnapshot;
   atCookingStation: boolean;
   onCook: (recipeId: string) => boolean;
+  onEat?: (itemId: ItemId) => void;
   onClose: () => void;
 }
 
@@ -20,6 +21,7 @@ export function CookingModal({
   hud,
   atCookingStation,
   onCook,
+  onEat,
   onClose,
 }: CookingModalProps) {
   const [cookingRecipe, setCookingRecipe] = useState<CookingRecipe | null>(null);
@@ -231,27 +233,39 @@ export function CookingModal({
                     </div>
                   </div>
 
-                  <button
-                    disabled={!canCook}
-                    onClick={() => setCookingRecipe(recipe)}
-                    className={`min-h-[44px] px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 flex items-center justify-center gap-1.5 ${
-                      canCook
-                        ? 'bg-orange-600 hover:bg-orange-500 text-stone-950'
-                        : 'bg-stone-800 text-stone-500 cursor-not-allowed'
-                    }`}
-                  >
-                    {!stationOk ? (
-                      <>
-                        <Lock className="w-3.5 h-3.5" />
-                        <span>Need Cooking Station</span>
-                      </>
-                    ) : (
-                      <>
-                        <Utensils className="w-3.5 h-3.5" />
-                        <span>Cook ({cookSecs}s)</span>
-                      </>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {onEat && countOf(recipe.resultItemId) > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => onEat(recipe.resultItemId)}
+                        className="min-h-[44px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-stone-950 text-xs font-semibold whitespace-nowrap shrink-0"
+                      >
+                        Eat (×{countOf(recipe.resultItemId)})
+                      </button>
                     )}
-                  </button>
+
+                    <button
+                      disabled={!canCook}
+                      onClick={() => setCookingRecipe(recipe)}
+                      className={`min-h-[44px] px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 flex items-center justify-center gap-1.5 ${
+                        canCook
+                          ? 'bg-orange-600 hover:bg-orange-500 text-stone-950'
+                          : 'bg-stone-800 text-stone-500 cursor-not-allowed'
+                      }`}
+                    >
+                      {!stationOk ? (
+                        <>
+                          <Lock className="w-3.5 h-3.5" />
+                          <span>Need Cooking Station</span>
+                        </>
+                      ) : (
+                        <>
+                          <Utensils className="w-3.5 h-3.5" />
+                          <span>Cook ({cookSecs}s)</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               );
             })

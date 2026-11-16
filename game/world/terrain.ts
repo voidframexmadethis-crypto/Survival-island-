@@ -5,6 +5,12 @@ export const LAKE_CENTER = { x: -14, z: 8, radius: 18, waterY: 2.6 };
 export const WATERFALL_POS = { x: 6, z: -50 };
 export const CAVE_POS = { x: -36, z: -56 };
 export const EXPEDITION_POS = { x: 46, z: -12 };
+export const HOMESTEAD_POS = { x: -24, z: 58 };
+export const FARM_POND_POS = { x: -12, z: 56, radius: 4.4, waterY: 2.95 };
+export const SNOWY_WOODLAND_POS = { x: -24, z: -72 };
+export const AUTUMN_GROVE_POS = { x: 26, z: 22 };
+export const SWAMP_POS = { x: 46, z: 44, radius: 9.0, waterY: 1.55 };
+export const DEAD_OAK_POS = { x: 18, z: 78 };
 export const PLAYER_SPAWN = { x: 0, z: 112 };
 
 export const WORLD_RADIUS = 175;
@@ -159,6 +165,10 @@ export function getWaterLevelAt(x: number, z: number): number {
   if (dLake < LAKE_CENTER.radius + 3) {
     return LAKE_CENTER.waterY;
   }
+  const dSwamp = Math.hypot(x - SWAMP_POS.x, z - SWAMP_POS.z);
+  if (dSwamp < SWAMP_POS.radius + 1.5) {
+    return SWAMP_POS.waterY;
+  }
   const river = getRiverSample(x, z);
   if (river.dist < 8.5) {
     return Math.max(OCEAN_LEVEL, river.waterY);
@@ -252,6 +262,41 @@ export function getTerrainHeight(x: number, z: number): number {
     const channelBlend = 1 - smoothstep(3.2, 9.5, river.dist);
     const targetBed = river.waterY - 1.25;
     h = h * (1 - channelBlend) + targetBed * channelBlend;
+  }
+
+  // Smooth Homestead Barnyard, Sunlit Grassy Pasture & Dusty Paddock terrace
+  const dHomestead = Math.hypot(x - HOMESTEAD_POS.x, z - HOMESTEAD_POS.z);
+  if (dHomestead < 24) {
+    const blend = 1 - smoothstep(13, 24, dHomestead);
+    h = h * (1 - blend) + 3.15 * blend;
+  }
+
+  // Carve shallow muddy farm pond beside the homestead barnyard
+  const dPond = Math.hypot(x - FARM_POND_POS.x, z - FARM_POND_POS.z);
+  if (dPond < FARM_POND_POS.radius + 2.4) {
+    const pondDepth = 1 - smoothstep(FARM_POND_POS.radius - 1.8, FARM_POND_POS.radius + 2.4, dPond);
+    h = h * (1 - pondDepth) + 2.35 * pondDepth;
+  }
+
+  // Smooth Snowy Highland Woodland plateau for Timber Wolves
+  const dSnow = Math.hypot(x - SNOWY_WOODLAND_POS.x, z - SNOWY_WOODLAND_POS.z);
+  if (dSnow < 18) {
+    const snowBlend = 1 - smoothstep(9, 18, dSnow);
+    h = h * (1 - snowBlend) + 12.2 * snowBlend;
+  }
+
+  // Smooth Autumn Forest clearing for Red Fox undergrowth
+  const dAutumn = Math.hypot(x - AUTUMN_GROVE_POS.x, z - AUTUMN_GROVE_POS.z);
+  if (dAutumn < 14) {
+    const autumnBlend = 1 - smoothstep(7, 14, dAutumn);
+    h = h * (1 - autumnBlend) + 3.25 * autumnBlend;
+  }
+
+  // Carve shallow Murky Jungle Swamp lagoon for Saltwater Crocodile
+  const dSwamp = Math.hypot(x - SWAMP_POS.x, z - SWAMP_POS.z);
+  if (dSwamp < SWAMP_POS.radius + 4.0) {
+    const swampBlend = 1 - smoothstep(SWAMP_POS.radius - 2.5, SWAMP_POS.radius + 4.0, dSwamp);
+    h = h * (1 - swampBlend) + 0.85 * swampBlend;
   }
 
   return h;

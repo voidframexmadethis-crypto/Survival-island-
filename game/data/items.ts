@@ -596,6 +596,31 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
     color: '#0ea5e9',
     attackRange: 10,
   },
+  dirty_water_bottle: {
+    id: 'dirty_water_bottle',
+    name: 'Water Bottle (Uncleaned)',
+    category: 'equipment',
+    description:
+      'Salvaged expedition bottle dusted with sand and salt. Wash it in ocean water to rinse, fill, and filter it into safe drinking water.',
+    stackable: true,
+    maxStack: 5,
+    iconKey: 'dirty_bottle',
+    color: '#94a3b8',
+  },
+  filtered_water_bottle: {
+    id: 'filtered_water_bottle',
+    name: 'Filtered Water Bottle',
+    category: 'food',
+    description:
+      'Ocean-rinsed and charcoal-sand filtered drinking bottle filled with crisp, safe hydration.',
+    stackable: true,
+    maxStack: 5,
+    iconKey: 'filtered_bottle',
+    color: '#38bdf8',
+    thirstRestore: 55,
+    staminaRestore: 16,
+    healthRestore: 6,
+  },
 
   // Placeable Camp Structures
   campfire: {
@@ -667,3 +692,18 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
 };
 
 export const ALL_ITEM_IDS = Object.keys(ITEMS) as ItemId[];
+
+export function isActiveWeaponItem(itemId: ItemId | null | undefined): boolean {
+  return (
+    itemId === 'gun' ||
+    itemId === 'primitive_bow' ||
+    itemId === 'hunting_knife' ||
+    itemId === 'wooden_club' ||
+    itemId === 'wooden_spear' ||
+    itemId === 'rope_whip'
+  );
+}
+
+export function isAmmoItem(itemId: ItemId | null | undefined): boolean {
+  return itemId === 'ammo' || itemId === 'arrows';
+}

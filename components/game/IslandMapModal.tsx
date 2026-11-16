@@ -4,10 +4,15 @@ import React, { useEffect, useRef } from 'react';
 import { Compass, MapPin, X } from 'lucide-react';
 import { HUDStateSnapshot } from '@/game/types';
 import {
+  AUTUMN_GROVE_POS,
   BIOME_INFO,
   CAVE_POS,
+  DEAD_OAK_POS,
   EXPEDITION_POS,
+  HOMESTEAD_POS,
   LAKE_CENTER,
+  SNOWY_WOODLAND_POS,
+  SWAMP_POS,
   WATERFALL_POS,
   getBiomeAt,
   getTerrainHeight,
@@ -52,8 +57,23 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
         if (explored) {
           const h = getTerrainHeight(wx, wz);
           const biome = getBiomeAt(wx, wz);
+          const dSnow = Math.hypot(wx - SNOWY_WOODLAND_POS.x, wz - SNOWY_WOODLAND_POS.z);
+          const dAutumn = Math.hypot(wx - AUTUMN_GROVE_POS.x, wz - AUTUMN_GROVE_POS.z);
+          const dSwamp = Math.hypot(wx - SWAMP_POS.x, wz - SWAMP_POS.z);
 
-          if (biome === 'ocean' || h < -0.2) {
+          if (dSwamp < SWAMP_POS.radius + 1.5) {
+            r = 45;
+            g = 62;
+            b = 34;
+          } else if (dSnow < 12.5) {
+            r = 216;
+            g = 226;
+            b = 238;
+          } else if (dAutumn < 10.5) {
+            r = 152;
+            g = 90;
+            b = 44;
+          } else if (biome === 'ocean' || h < -0.2) {
             const depth = Math.max(0, Math.min(1, (-h) / 5));
             r = 12 - depth * 6;
             g = 84 - depth * 35;
@@ -104,7 +124,12 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
     const landmarks = [
       { label: 'Waterfall', pos: WATERFALL_POS, color: '#67e8f9' },
       { label: 'Obsidian Cave', pos: CAVE_POS, color: '#cbd5e1' },
+      { label: 'Snowy Woodland', pos: SNOWY_WOODLAND_POS, color: '#e2e8f0' },
       { label: 'Expedition', pos: EXPEDITION_POS, color: '#fbbf24' },
+      { label: 'Autumn Grove', pos: AUTUMN_GROVE_POS, color: '#f97316' },
+      { label: 'Murky Swamp', pos: SWAMP_POS, color: '#65a30d' },
+      { label: 'Dead Oak Perch', pos: DEAD_OAK_POS, color: '#d6d3d1' },
+      { label: 'Homestead Pasture', pos: HOMESTEAD_POS, color: '#f59e0b' },
       { label: 'Azure Lake', pos: LAKE_CENTER, color: '#2dd4bf' },
     ];
     ctx.font = '600 10px sans-serif';
@@ -133,9 +158,14 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
       if (!isExploredWorld(s.x, s.z)) return;
       const p = toPx(s.x, s.z);
       ctx.fillStyle =
-        s.species === 'trex' || s.species === 'velociraptor'
+        s.species === 'trex' ||
+        s.species === 'velociraptor' ||
+        s.species === 'grizzly_bear' ||
+        s.species === 'gray_wolf' ||
+        s.species === 'african_lion' ||
+        s.species === 'saltwater_crocodile'
           ? '#ef4444'
-          : s.species === 'dolphin'
+          : s.species === 'dolphin' || s.species === 'bald_eagle'
             ? '#38bdf8'
             : '#a3e635';
       ctx.beginPath();
