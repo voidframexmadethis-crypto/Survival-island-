@@ -306,47 +306,130 @@ export function buildIslandWorld(
   }
   scene.add(cloudsGroup);
 
-  // 6. Shipwreck Debris along the Southern Shoreline (near spawn 0, 112)
+  // 6. Hyper-Realistic Shipwreck & Beaching Event with Tiered Interior Zones & Boarding Routes
   const colliders: { x: number; z: number; radius: number; nodeId?: string }[] = [];
   const wreckMat = new THREE.MeshStandardMaterial({
     color: 0x4b3320,
     map: woodTex,
     roughness: 0.9,
   });
+  const tatteredSailMat = new THREE.MeshStandardMaterial({
+    color: 0xd4c5a9,
+    roughness: 0.95,
+    side: THREE.DoubleSide,
+  });
+  const metalWreckMat = new THREE.MeshStandardMaterial({
+    color: 0x292524,
+    roughness: 0.65,
+    metalness: 0.7,
+  });
+  const gemGlowMat = new THREE.MeshStandardMaterial({
+    color: 0x8b5cf6,
+    emissive: 0x7c3aed,
+    emissiveIntensity: 0.9,
+    roughness: 0.2,
+  });
+
   const wreckGroup = new THREE.Group();
-  const hullX = -11;
-  const hullZ = 126;
+  const hullX = -4;
+  const hullZ = 135;
   const hullY = getTerrainHeight(hullX, hullZ);
-  wreckGroup.position.set(hullX, hullY + 0.3, hullZ);
-  wreckGroup.rotation.set(0.18, 0.62, -0.28);
+  wreckGroup.position.set(hullX, OCEAN_LEVEL - 0.2, hullZ);
+  wreckGroup.rotation.set(0.1, 0.35, -0.35); // Realistic 20-degree angle in shallow water
+  wreckGroup.scale.set(2.0, 2.0, 2.0); // Proportional medium-large vessel (~18-22m long)
 
-  const shatteredHull = new THREE.Mesh(new THREE.BoxGeometry(4.2, 2.2, 8.8), wreckMat);
+  // Main Galleon Hull & Splintered Ribs
+  const shatteredHull = new THREE.Mesh(new THREE.BoxGeometry(5.2, 3.0, 12.0), wreckMat);
   shatteredHull.castShadow = true;
-  const snappedMast = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 6.2, 7), wreckMat);
-  snappedMast.position.set(0.4, 2.4, -1.2);
-  snappedMast.rotation.z = 0.55;
-  wreckGroup.add(shatteredHull, snappedMast);
-  scene.add(wreckGroup);
-  colliders.push({ x: hullX, z: hullZ, radius: 3.4 });
+  shatteredHull.receiveShadow = true;
 
-  // Scattered splintered wooden planks, barrels, and ship fragments along the beach
+  // Massive wide-open side breach & hold opening (3-4m wide for walk/swim entry)
+  const sideBreach = new THREE.Mesh(
+    new THREE.BoxGeometry(2.6, 2.2, 1.8),
+    new THREE.MeshBasicMaterial({ color: 0x0c0a09 }),
+  );
+  sideBreach.position.set(-2.5, -0.2, 1.5);
+
+  // Lower Deck Cargo Hold Chests & Barrels
+  const chestMat = new THREE.MeshStandardMaterial({ color: 0x85532a, roughness: 0.8 });
+  const goldLockMat = new THREE.MeshStandardMaterial({ color: 0xeab308, metalness: 0.8, roughness: 0.2 });
+  const cargoChest = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.8, 0.9), chestMat);
+  cargoChest.position.set(-1.0, -0.9, 1.8);
+  const cargoLock = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.1), goldLockMat);
+  cargoLock.position.set(-1.0, -0.8, 2.28);
+
+  // Mid-Deck Armory & Vault (Gem displays & outer space gems)
+  const vaultDesk = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.75, 0.9), wreckMat);
+  vaultDesk.position.set(0.6, 0.2, -1.2);
+  const gemCluster = new THREE.Mesh(new THREE.OctahedronGeometry(0.4, 0), gemGlowMat);
+  gemCluster.position.set(0.6, 0.75, -1.2);
+
+  // Captain's Quarters (Aft Cabin at raised stern with open doorways)
+  const aftCabin = new THREE.Mesh(new THREE.BoxGeometry(4.0, 2.2, 3.6), wreckMat);
+  aftCabin.position.set(0, 1.3, -4.2);
+  const captainDesk = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.6, 0.8), wreckMat);
+  captainDesk.position.set(0, 0.5, -4.2);
+  const captainSafe = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.7), metalWreckMat);
+  captainSafe.position.set(1.4, 0.5, -4.7);
+
+  // Upper Deck Wooden Staircases
+  const deckStair = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1.2, 2.4), wreckMat);
+  deckStair.position.set(0, 0.6, 2.5);
+  deckStair.rotation.x = -0.35;
+
+  // Giant Collapsed Access Bridge (Mainmast ramping from beach directly to upper deck)
+  const accessBridge = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.45, 12.0, 8), wreckMat);
+  accessBridge.position.set(-2.5, 0.6, 6.2);
+  accessBridge.rotation.set(-0.48, 0.25, -0.3);
+  accessBridge.castShadow = true;
+
+  // Multiple Massive Masts & Tattered Sails
+  const mainMast = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.38, 14.0, 8), wreckMat);
+  mainMast.position.set(0, 5.0, 0);
+  mainMast.castShadow = true;
+
+  const tatteredSail = new THREE.Mesh(new THREE.BoxGeometry(4.5, 5.2, 0.1), tatteredSailMat);
+  tatteredSail.position.set(0.5, 4.8, -0.6);
+  tatteredSail.rotation.set(0.2, 0.4, 0.3);
+
+  wreckGroup.add(
+    shatteredHull,
+    sideBreach,
+    cargoChest,
+    cargoLock,
+    vaultDesk,
+    gemCluster,
+    aftCabin,
+    captainDesk,
+    captainSafe,
+    deckStair,
+    accessBridge,
+    mainMast,
+    tatteredSail,
+  );
+  scene.add(wreckGroup);
+  colliders.push({ x: hullX, z: hullZ, radius: 6.0 });
+
+  // Scattered chaotic debris field in water/sand around shipwreck
   const debrisSpots: [number, number, number][] = [
-    [-4.5, 118, 0.4],
-    [4.2, 120, -0.7],
-    [11.5, 123, 1.1],
-    [-16.0, 119, -0.3],
-    [1.8, 125, 0.9],
+    [-6.5, 120, 0.4],
+    [5.2, 122, -0.7],
+    [13.5, 125, 1.1],
+    [-18.0, 121, -0.3],
+    [2.8, 128, 0.9],
+    [-8.2, 132, 1.5],
+    [7.4, 117, -0.5],
   ];
   debrisSpots.forEach(([dx, dz, rot]) => {
     const dy = getTerrainHeight(dx, dz);
-    const plank = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.08, 2.4), wreckMat);
+    const plank = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 2.8), wreckMat);
     plank.position.set(dx, Math.max(OCEAN_LEVEL + 0.05, dy + 0.06), dz);
     plank.rotation.y = rot;
     scene.add(plank);
 
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.78, 9), wreckMat);
-    barrel.position.set(dx + 0.8, Math.max(OCEAN_LEVEL + 0.15, dy + 0.35), dz + 0.5);
-    barrel.rotation.z = Math.PI / 2.6;
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.85, 9), wreckMat);
+    barrel.position.set(dx + 0.9, Math.max(OCEAN_LEVEL + 0.15, dy + 0.35), dz + 0.6);
+    barrel.rotation.z = Math.PI / 2.4;
     barrel.castShadow = true;
     scene.add(barrel);
   });

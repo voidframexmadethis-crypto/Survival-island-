@@ -945,8 +945,34 @@ export class GameEngine {
     this.playerYaw = this.camYaw + Math.PI;
     this.markExploredAroundPlayer();
 
+    const wreckX = -4;
+    const wreckZ = 135;
+    const treasureDrops: [ItemId, number][] = [
+      ['gold_bar', 10],
+      ['diamond', 4],
+      ['sapphire', 5],
+      ['ruby', 5],
+      ['emerald', 4],
+      ['iron_ingot', 20],
+      ['space_crystal', 5],
+      ['space_gem', 3],
+      ['glock_19', 1],
+      ['desert_eagle', 1],
+      ['ak_47', 1],
+      ['m4a1', 1],
+      ['remington_870', 1],
+      ['barrett_50', 1],
+      ['mp5', 1],
+      ['m249_saw', 1],
+      ['nautical_map', 1],
+      ['navigation_sextant', 1],
+      ['captain_key', 1],
+      ['ammo', 120],
+    ];
+    this.spawnWorldPickupsFromGrants(wreckX, wreckZ, treasureDrops, 0, 0);
+
     this.toast(
-      'Washed ashore! Search shipwreck crates along the beach to begin.',
+      'SHIPWRECK BEACHED IN SHALLOW WATER! Search chests for Real-Life Firearms (Glocks, AK-47, Barrett .50, Shotguns & LMG).',
       'discovery',
     );
     this.emitHud();
@@ -3230,6 +3256,32 @@ export class GameEngine {
     // 8. BARE HANDS (empty slot or Hands mode): Handles world interactions cleanly
     const near = this.nearbyInteraction;
     if (near) {
+      if (near.kind === 'shipwreck') {
+        const treasureGrants: [ItemId, number][] = [
+          ['gold_bar', 8],
+          ['diamond', 3],
+          ['sapphire', 4],
+          ['ruby', 4],
+          ['emerald', 3],
+          ['iron_ingot', 12],
+          ['space_crystal', 4],
+          ['space_gem', 2],
+          ['nautical_map', 1],
+          ['navigation_sextant', 1],
+          ['captain_key', 1],
+          ['pirate_musket', 1],
+          ['ammo', 60],
+        ];
+        treasureGrants.forEach(([id, qty]) => {
+          this.addItem(id, qty);
+        });
+        this.sound.playCraftSuccess();
+        this.spawnParticles(0, this.playerY + 0.8, 104, 0xeab308, 25);
+        this.toast('Explored Shipwreck Zones (Cargo Hold, Vault & Captain’s Quarters)! Acquired Gold, Gems, Nautical Map & Pirate Musket!', 'discovery');
+        this.actionCooldown = 0.5;
+        this.emitHud();
+        return;
+      }
       if (near.kind === 'mount') {
         if (this.mountedCreatureId) {
           this.dismountCreature();
@@ -6357,6 +6409,22 @@ export class GameEngine {
       }
     }
     if (best) return best;
+
+    // Check beached shipwreck wreckage at (0, 104)
+    const wreckDist = Math.hypot(0 - this.playerX, 104 - this.playerZ);
+    if (wreckDist < 5.2) {
+      return {
+        id: 'search_shipwreck',
+        label: 'Search Beached Shipwreck & Collect Treasure',
+        sublabel: 'Gold, Diamonds, Rubies, Iron & Pirate Musket',
+        kind: 'shipwreck',
+        actionCategory: 'search',
+        distance: wreckDist,
+        targetX: 0,
+        targetY: getTerrainHeight(0, 104),
+        targetZ: 104,
+      };
+    }
 
     for (const st of this.structures) {
       const d = Math.hypot(st.x - this.playerX, st.z - this.playerZ);

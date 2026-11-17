@@ -157,7 +157,36 @@ export type ItemId =
   | 'glider_wings'
   | 'kinetic_grapple'
   | 'auto_turret'
-  | 'smart_tv';
+  | 'smart_tv'
+  | 'gold_bar'
+  | 'diamond'
+  | 'sapphire'
+  | 'ruby'
+  | 'iron_ingot'
+  | 'space_crystal'
+  | 'pirate_musket'
+  | 'emerald'
+  | 'nautical_map'
+  | 'navigation_sextant'
+  | 'captain_key'
+  | 'space_gem'
+  | 'glock_19'
+  | 'desert_eagle'
+  | 'colt_m1911'
+  | 'magnum_44'
+  | 'remington_870'
+  | 'mossberg_590'
+  | 'sawed_off'
+  | 'mp5'
+  | 'uzi'
+  | 'vector'
+  | 'ak_47'
+  | 'm4a1'
+  | 'scar_h'
+  | 'fn_fal'
+  | 'barrett_50'
+  | 'remington_700'
+  | 'm249_saw';
 
 export type StructuralBlockKind =
   | 'stone_block'
@@ -747,7 +776,8 @@ export interface NearbyInteraction {
     | 'house_shower'
     | 'structural_block'
     | 'kinetic_node'
-    | 'modular_vehicle';
+    | 'modular_vehicle'
+    | 'shipwreck';
   actionCategory?:
     | 'chop'
     | 'mine'
@@ -759,7 +789,8 @@ export interface NearbyInteraction {
     | 'shoot'
     | 'attack'
     | 'harvest'
-    | 'clean';
+    | 'clean'
+    | 'search';
   distance: number;
   targetX: number;
   targetY: number;
