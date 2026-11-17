@@ -1,9 +1,5 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import {
-  CSS3DObject,
-  CSS3DRenderer,
-} from 'three/addons/renderers/CSS3DRenderer.js';
 import { SoundEngine } from '../audio/soundEngine';
 import {
   SmartTvSystem,
@@ -275,6 +271,15 @@ interface ActiveCarcass {
   harvested: boolean;
 }
 
+export interface TvScreenProjection {
+  visible: boolean;
+  cssMatrix3d: string;
+  width: number;
+  height: number;
+  spatialVolume: number;
+  isHouseTv: boolean;
+}
+
 export interface EngineCallbacks {
   onHudUpdate: (snapshot: HUDStateSnapshot) => void;
   onToast: (toast: ResourceToast) => void;
@@ -294,6 +299,7 @@ export interface EngineCallbacks {
     structureId?: string,
   ) => void;
   onYouTubeError?: (videoId: string, errorCode: number) => void;
+  onTvProjectionUpdate?: (projection: TvScreenProjection | null) => void;
 }
 
 function formatTimePhase(t: number): string {
@@ -313,33 +319,24 @@ export class GameEngine {
   private isSoftwareGl = false;
   private isTouchDevice = isMobileOrTouchClient();
   private renderer!: THREE.WebGLRenderer;
-  private cssRenderer!: CSS3DRenderer;
-  private cssScene!: THREE.Scene;
   private scene!: THREE.Scene;
   private envTexture: THREE.Texture | null = null;
   private camera!: THREE.PerspectiveCamera;
   private smartTv!: SmartTvSystem;
-  private tvCssObject: CSS3DObject | null = null;
-  private tvCssWrapper: HTMLDivElement | null = null;
-  private tvYoutubeIframe: HTMLIFrameElement | null = null;
-  private activeYoutubeIframeId = '';
-  private ytIframeReady = false;
-  private lastSentYtPaused: boolean | null = null;
-  private lastSentYtMuted: boolean | null = null;
-  private lastSentYtVolume = -1;
-  private lastTvCssOpacity = '0';
-  private lastTvCssPointer = 'none';
+  private tvProjectionCallback: ((projection: TvScreenProjection | null) => void) | null = null;
+  private lastTvProjVisible = false;
   private tvOccluderMeshes: THREE.Object3D[] = [];
   private tvRaycaster = new THREE.Raycaster();
   private tvIsZoomed = false;
   private tvModalOpen = false;
   private tvInlinePlayerActive = false;
   private tvYouTubeStartSec = 0;
-  private tvMessageListenerBound = false;
   private _tvWorldPos = new THREE.Vector3();
   private _tvWorldQuat = new THREE.Quaternion();
   private _tvForward = new THREE.Vector3();
   private _tvRight = new THREE.Vector3();
+  private _tvUp = new THREE.Vector3();
+  private _tvCorner = new THREE.Vector3();
   private _tvLookTarget = new THREE.Vector3();
   private _tvTmpVec = new THREE.Vector3();
   private _tvToCam = new THREE.Vector3();
@@ -830,23 +827,6 @@ export class GameEngine {
     this.container.innerHTML = '';
     this.container.appendChild(this.renderer.domElement);
 
-    // Persistent CSS3D Layer for rendering live YouTube video directly onto the 3D TV screen
-    this.cssScene = new THREE.Scene();
-    this.cssRenderer = new CSS3DRenderer();
-    this.cssRenderer.setSize(
-      this.container.clientWidth || window.innerWidth,
-      this.container.clientHeight || window.innerHeight,
-    );
-    const cssDom = this.cssRenderer.domElement;
-    cssDom.style.position = 'absolute';
-    cssDom.style.top = '0';
-    cssDom.style.left = '0';
-    cssDom.style.width = '100%';
-    cssDom.style.height = '100%';
-    cssDom.style.pointerEvents = 'none';
-    cssDom.style.zIndex = '2';
-    this.container.appendChild(cssDom);
-
     this.scene = new THREE.Scene();
     this.scene.background = _skyColor;
     this.scene.fog = new THREE.FogExp2(0x7cc4e0, 0.0042);
@@ -966,10 +946,15 @@ export class GameEngine {
       ],
     };
 
-    // Initialize Persistent Native 3D CanvasTexture Smart TV OS & CSS3D YouTube Player
+    // Initialize Persistent Native 3D CanvasTexture Smart TV OS
     this.smartTv = new SmartTvSystem();
     if (this.world.tvScreenMesh && this.world.tvScreenMat) {
-      this.smartTv.attachToMesh(this.world.tvScreenMesh, this.world.tvScreenMat);
+      this.world.overworldGroup.updateMatrixWorld(true);
+      this.smartTv.attachToMesh(
+        this.world.tvScreenMesh,
+        this.world.tvScreenMat,
+        this.world.tvWorldPos,
+      );
       if (this.world.tvScreenMesh.parent) {
         this.world.tvScreenMesh.parent.traverse((obj) => {
           if (obj.userData?.isHouseWall) {
@@ -978,7 +963,6 @@ export class GameEngine {
         });
       }
     }
-    this.initPersistentTvCssPlayer();
     if (this.smartTv.tvGlowLight) {
       this.scene.add(this.smartTv.tvGlowLight);
     }
@@ -1138,7 +1122,6 @@ export class GameEngine {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
-    this.cssRenderer?.setSize(w, h);
   };
 
   private onKeyDown = (e: KeyboardEvent): void => {
@@ -2014,7 +1997,17 @@ export class GameEngine {
       this.smartTv.currentTimestamp = this.tvYouTubeStartSec;
     }
     this.toast(`YouTube on TV: ${title}`, 'info');
+    if (!this.disposed && this.mode !== 'menu') {
+      this.updateCamera();
+      this.syncTvScreenProjection();
+    }
     this.emitHud();
+  }
+
+  public setTvProjectionCallback(
+    cb: ((projection: TvScreenProjection | null) => void) | null,
+  ): void {
+    this.tvProjectionCallback = cb;
   }
 
   public setTvModalOpen(open: boolean): void {
@@ -2024,6 +2017,10 @@ export class GameEngine {
     } else if (this.tvInlinePlayerActive) {
       this.tvInlinePlayerActive = false;
     }
+    if (!this.disposed && this.mode !== 'menu') {
+      this.updateCamera();
+      this.syncTvScreenProjection();
+    }
   }
 
   public setTvInlinePlayerActive(active: boolean, syncTimeSec?: number): void {
@@ -2032,9 +2029,9 @@ export class GameEngine {
       this.smartTv.currentTimestamp = syncTimeSec;
     }
     this.tvInlinePlayerActive = active;
-    if (!active) {
-      this.activeYoutubeIframeId = '';
-      this.syncTvCssOverlay();
+    if (!this.disposed && this.mode !== 'menu') {
+      this.updateCamera();
+      this.syncTvScreenProjection();
     }
   }
 
@@ -2044,263 +2041,169 @@ export class GameEngine {
     this.tvYouTubeStartSec = Math.floor(sec);
   }
 
-  private handleYouTubeWindowMessage = (event: MessageEvent): void => {
-    if (this.disposed) return;
-    if (
-      typeof event.origin !== 'string' ||
-      (!event.origin.includes('youtube.com') &&
-        !event.origin.includes('youtube-nocookie.com'))
-    ) {
+  private emitTvProjection(proj: TvScreenProjection | null): void {
+    const visible = Boolean(proj?.visible);
+    if (!visible && !this.lastTvProjVisible) return;
+    this.lastTvProjVisible = visible;
+    this.tvProjectionCallback?.(proj);
+    this.callbacks.onTvProjectionUpdate?.(proj);
+  }
+
+  private syncTvScreenProjection(): void {
+    const tvTarget = this.resolveNearestTvTarget(false);
+    if (tvTarget) {
+      this.smartTv.setWorldPosition(tvTarget.worldPos);
+    }
+
+    const shouldProjectYouTube =
+      this.smartTv.power &&
+      !this.smartTv.isStopped &&
+      this.smartTv.isUsingYouTube &&
+      Boolean(this.smartTv.youtubeVideoId) &&
+      !this.tvInlinePlayerActive &&
+      this.mode !== 'menu' &&
+      !this.cinematicActive;
+
+    if (!shouldProjectYouTube || !tvTarget) {
+      this.emitTvProjection(null);
       return;
     }
-    let payload: unknown = event.data;
-    if (typeof payload === 'string') {
-      try {
-        payload = JSON.parse(payload);
-      } catch {
+
+    this.camera.updateMatrixWorld();
+    this.camera.matrixWorldInverse.copy(this.camera.matrixWorld).invert();
+    this.camera.getWorldDirection(this._camForward);
+
+    this._tvToCam.subVectors(this.camera.position, tvTarget.worldPos);
+    const facingDot = this._tvToCam.dot(tvTarget.forward);
+    this._tvToTarget.subVectors(tvTarget.worldPos, this.camera.position);
+    const camDist = this._tvToTarget.length();
+    const inFrontOfCam =
+      camDist > 0.05 &&
+      this._tvToTarget.clone().divideScalar(camDist).dot(this._camForward) > 0.12;
+
+    if (facingDot <= 0.06 || !inFrontOfCam || camDist > 22) {
+      this.emitTvProjection(null);
+      return;
+    }
+
+    if (tvTarget.isHouseTv && this.tvOccluderMeshes.length > 0 && camDist > 0.4) {
+      const dir = this._tvToTarget.clone().normalize();
+      this.tvRaycaster.set(this.camera.position, dir);
+      this.tvRaycaster.near = 0.05;
+      this.tvRaycaster.far = camDist - 0.2;
+      const hits = this.tvRaycaster.intersectObjects(this.tvOccluderMeshes, false);
+      if (hits.length > 0) {
+        this.emitTvProjection(null);
         return;
       }
     }
-    if (!payload || typeof payload !== 'object') return;
-    const msg = payload as {
-      event?: string;
-      info?: number | { currentTime?: number };
-    };
-    if (msg.event === 'infoDelivery' && msg.info && typeof msg.info === 'object') {
-      if (
-        typeof msg.info.currentTime === 'number' &&
-        Number.isFinite(msg.info.currentTime)
-      ) {
-        this.smartTv.currentTimestamp = msg.info.currentTime;
-        this.tvYouTubeStartSec = Math.floor(msg.info.currentTime);
+
+    const vw = this.container.clientWidth || window.innerWidth || 1280;
+    const vh = this.container.clientHeight || window.innerHeight || 720;
+    const halfW = tvTarget.isHouseTv ? 0.8 : 0.84;
+    const halfH = tvTarget.isHouseTv ? 0.43 : 0.465;
+    this._tvUp.set(0, 1, 0).applyQuaternion(tvTarget.worldQuat);
+
+    const corners: [number, number][] = [];
+    const signs: [number, number][] = [
+      [-1, 1], // Top-Left
+      [1, 1],  // Top-Right
+      [-1, -1], // Bottom-Left
+      [1, -1],  // Bottom-Right
+    ];
+
+    for (const [sx, sy] of signs) {
+      this._tvCorner
+        .copy(tvTarget.worldPos)
+        .addScaledVector(tvTarget.right, sx * halfW)
+        .addScaledVector(this._tvUp, sy * halfH);
+
+      const depth = this._tvTmpVec
+        .subVectors(this._tvCorner, this.camera.position)
+        .dot(this._camForward);
+      if (depth <= 0.15) {
+        this.emitTvProjection(null);
+        return;
       }
-    } else if (msg.event === 'onError' && typeof msg.info === 'number') {
-      const failedId = this.smartTv.youtubeVideoId;
-      if (failedId && !this.tvInlinePlayerActive) {
-        this.callbacks.onYouTubeError?.(failedId, msg.info);
-      }
+
+      this._tvCorner.project(this.camera);
+      const px = (this._tvCorner.x * 0.5 + 0.5) * vw;
+      const py = (-this._tvCorner.y * 0.5 + 0.5) * vh;
+      corners.push([px, py]);
     }
-  };
 
-  private initPersistentTvCssPlayer(): void {
-    if (!this.tvMessageListenerBound && typeof window !== 'undefined') {
-      window.addEventListener('message', this.handleYouTubeWindowMessage);
-      this.tvMessageListenerBound = true;
-    }
+    const [x0, y0] = corners[0];
+    const [x1, y1] = corners[1];
+    const [x2, y2] = corners[2];
+    const [x3, y3] = corners[3];
 
-    const wrapper = document.createElement('div');
-    wrapper.style.width = '800px';
-    wrapper.style.height = '430px';
-    wrapper.style.backgroundColor = '#000000';
-    wrapper.style.overflow = 'hidden';
-    wrapper.style.position = 'relative';
-    wrapper.style.backfaceVisibility = 'hidden';
-    wrapper.style.opacity = '0';
-    wrapper.style.pointerEvents = 'none';
+    const minX = Math.min(x0, x1, x2, x3);
+    const maxX = Math.max(x0, x1, x2, x3);
+    const minY = Math.min(y0, y1, y2, y3);
+    const maxY = Math.max(y0, y1, y2, y3);
 
-    const iframe = document.createElement('iframe');
-    iframe.style.width = '100%';
-    iframe.style.height = '100%';
-    iframe.style.border = '0';
-    iframe.style.display = 'block';
-    iframe.style.pointerEvents = 'none';
-    iframe.referrerPolicy = 'strict-origin-when-cross-origin';
-    iframe.allow =
-      'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen';
-    iframe.allowFullscreen = true;
-    iframe.src = 'about:blank';
-
-    iframe.addEventListener('load', () => {
-      if (!this.activeYoutubeIframeId || this.disposed) return;
-      this.ytIframeReady = true;
-      try {
-        iframe.contentWindow?.postMessage(
-          JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }),
-          '*',
-        );
-      } catch {
-        // Ignore cross-origin timing
-      }
-      const syncInitialState = () => {
-        if (!this.activeYoutubeIframeId || this.disposed) return;
-        const spatialVol = Math.max(
-          0,
-          Math.min(
-            100,
-            Math.round(this.smartTv.volume * this.smartTv.getSpatialMultiplier() * 100),
-          ),
-        );
-        this.lastSentYtPaused = this.smartTv.isPaused;
-        this.sendYouTubeIframeCommand(
-          this.smartTv.isPaused ? 'pauseVideo' : 'playVideo',
-        );
-        this.lastSentYtMuted = this.smartTv.isMuted;
-        if (this.smartTv.isMuted) {
-          this.sendYouTubeIframeCommand('mute');
-        } else {
-          this.sendYouTubeIframeCommand('unMute');
-          this.sendYouTubeIframeCommand('setVolume', [spatialVol]);
-          this.lastSentYtVolume = spatialVol;
-        }
-      };
-      syncInitialState();
-      window.setTimeout(syncInitialState, 400);
-    });
-
-    wrapper.appendChild(iframe);
-    const cssObj = new CSS3DObject(wrapper);
-    // Keep CSS3DObject.visible=true permanently so CSS3DRenderer never sets display:none on the iframe
-    cssObj.visible = true;
-    this.cssScene.add(cssObj);
-
-    this.tvCssWrapper = wrapper;
-    this.tvYoutubeIframe = iframe;
-    this.tvCssObject = cssObj;
-  }
-
-  private sendYouTubeIframeCommand(func: string, args: unknown[] = []): void {
-    const win = this.tvYoutubeIframe?.contentWindow;
-    if (!win) return;
-    try {
-      win.postMessage(
-        JSON.stringify({
-          event: 'command',
-          func,
-          args,
-        }),
-        '*',
-      );
-    } catch {
-      // Ignore cross-origin timing before iframe finishes loading
-    }
-  }
-
-  private syncTvCssOverlay(): void {
-    if (!this.tvCssObject || !this.tvCssWrapper || !this.tvYoutubeIframe) return;
-
-    const shouldPlayYouTube =
-      this.smartTv.power &&
-      this.smartTv.isUsingYouTube &&
-      Boolean(this.smartTv.youtubeVideoId) &&
-      !this.tvInlinePlayerActive;
-
-    if (!shouldPlayYouTube) {
-      if (this.activeYoutubeIframeId !== '') {
-        this.activeYoutubeIframeId = '';
-        this.ytIframeReady = false;
-        this.tvYoutubeIframe.src = 'about:blank';
-        this.lastSentYtPaused = null;
-        this.lastSentYtMuted = null;
-        this.lastSentYtVolume = -1;
-      }
-      if (this.lastTvCssOpacity !== '0') {
-        this.tvCssWrapper.style.opacity = '0';
-        this.lastTvCssOpacity = '0';
-      }
-      if (this.lastTvCssPointer !== 'none') {
-        this.tvCssWrapper.style.pointerEvents = 'none';
-        this.tvYoutubeIframe.style.pointerEvents = 'none';
-        this.lastTvCssPointer = 'none';
-      }
+    if (
+      maxX < 0 ||
+      minX > vw ||
+      maxY < 0 ||
+      minY > vh ||
+      maxX - minX < 40 ||
+      maxY - minY < 24
+    ) {
+      this.emitTvProjection(null);
       return;
     }
 
-    const targetVideoId = this.smartTv.youtubeVideoId;
-    if (this.activeYoutubeIframeId !== targetVideoId) {
-      this.activeYoutubeIframeId = targetVideoId;
-      this.ytIframeReady = false;
-      this.lastSentYtPaused = null;
-      this.lastSentYtMuted = null;
-      this.lastSentYtVolume = -1;
-      const originParam =
-        typeof window !== 'undefined' && window.location?.origin
-          ? `&origin=${encodeURIComponent(window.location.origin)}`
-          : '';
-      const startParam =
-        this.tvYouTubeStartSec > 0 ? `&start=${this.tvYouTubeStartSec}` : '';
-      this.tvYoutubeIframe.src = `https://www.youtube.com/embed/${targetVideoId}?autoplay=1&rel=0&playsinline=1&enablejsapi=1&modestbranding=1${startParam}${originParam}`;
-      this.tvYoutubeIframe.title = this.smartTv.youtubeTitle || 'YouTube TV';
+    // Verify front-facing winding in screen coordinates
+    const cross = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
+    if (cross <= 10) {
+      this.emitTvProjection(null);
+      return;
     }
 
-    if (this.ytIframeReady) {
-      if (this.lastSentYtPaused !== this.smartTv.isPaused) {
-        this.lastSentYtPaused = this.smartTv.isPaused;
-        this.sendYouTubeIframeCommand(
-          this.smartTv.isPaused ? 'pauseVideo' : 'playVideo',
-        );
-      }
-
-      const spatialVol = Math.max(
-        0,
-        Math.min(
-          100,
-          Math.round(this.smartTv.volume * this.smartTv.getSpatialMultiplier() * 100),
-        ),
-      );
-      if (this.lastSentYtMuted !== this.smartTv.isMuted) {
-        this.lastSentYtMuted = this.smartTv.isMuted;
-        if (this.smartTv.isMuted) {
-          this.sendYouTubeIframeCommand('mute');
-        } else {
-          this.sendYouTubeIframeCommand('unMute');
-          this.sendYouTubeIframeCommand('setVolume', [spatialVol]);
-          this.lastSentYtVolume = spatialVol;
-        }
-      } else if (
-        !this.smartTv.isMuted &&
-        (this.lastSentYtVolume < 0 ||
-          Math.abs(spatialVol - this.lastSentYtVolume) >= 2 ||
-          (spatialVol === 0 && this.lastSentYtVolume !== 0))
-      ) {
-        this.lastSentYtVolume = spatialVol;
-        this.sendYouTubeIframeCommand('setVolume', [spatialVol]);
-      }
+    const refW = 640;
+    const refH = 360;
+    const dx1 = x1 - x3;
+    const dx2 = x2 - x3;
+    const dy1 = y1 - y3;
+    const dy2 = y2 - y3;
+    const det = dx1 * dy2 - dx2 * dy1;
+    if (Math.abs(det) < 1e-3) {
+      this.emitTvProjection(null);
+      return;
     }
 
-    const tvTarget = this.resolveNearestTvTarget(false);
-    let isVisiblyFacing = false;
+    const sxSum = x0 - x1 + x3 - x2;
+    const sySum = y0 - y1 + y3 - y2;
+    const g = (sxSum * dy2 - sySum * dx2) / det;
+    const h = (dx1 * sySum - dy1 * sxSum) / det;
 
-    if (tvTarget && this.mode !== 'menu' && !this.cinematicActive) {
-      this.tvCssObject.position.copy(tvTarget.worldPos);
-      this.tvCssObject.quaternion.copy(tvTarget.worldQuat);
-      this.tvCssObject.scale.set(tvTarget.scaleX, tvTarget.scaleY, 1);
+    const a = (x1 - x0 + g * x1) / refW;
+    const b = (x2 - x0 + h * x2) / refH;
+    const c = x0;
+    const d = (y1 - y0 + g * y1) / refW;
+    const e = (y2 - y0 + h * y2) / refH;
+    const f = y0;
+    const gp = g / refW;
+    const hp = h / refH;
 
-      this._tvToCam.subVectors(this.camera.position, tvTarget.worldPos);
-      const facingDot = this._tvToCam.dot(tvTarget.forward);
+    const cssMatrix3d = `matrix3d(${a.toFixed(6)},${d.toFixed(6)},0,${gp.toFixed(8)},${b.toFixed(6)},${e.toFixed(6)},0,${hp.toFixed(8)},0,0,1,0,${c.toFixed(2)},${f.toFixed(2)},0,1)`;
+    const spatialVolume = Math.max(
+      0,
+      Math.min(
+        100,
+        Math.round(this.smartTv.volume * this.smartTv.getSpatialMultiplier() * 100),
+      ),
+    );
 
-      this.camera.getWorldDirection(this._camForward);
-      this._tvToTarget.subVectors(tvTarget.worldPos, this.camera.position);
-      const camDist = this._tvToTarget.length();
-      const inFrontOfCam =
-        camDist > 0.05 &&
-        this._tvToTarget.divideScalar(camDist).dot(this._camForward) > 0.15;
-
-      if (facingDot > 0.04 && inFrontOfCam && camDist <= 24) {
-        isVisiblyFacing = true;
-        if (tvTarget.isHouseTv && this.tvOccluderMeshes.length > 0 && camDist > 0.4) {
-          this.tvRaycaster.set(this.camera.position, this._tvToTarget);
-          this.tvRaycaster.near = 0.05;
-          this.tvRaycaster.far = camDist - 0.2;
-          const hits = this.tvRaycaster.intersectObjects(this.tvOccluderMeshes, false);
-          if (hits.length > 0) {
-            isVisiblyFacing = false;
-          }
-        }
-      }
-    }
-
-    const nextOpacity = isVisiblyFacing ? '1' : '0';
-    if (this.lastTvCssOpacity !== nextOpacity) {
-      this.tvCssWrapper.style.opacity = nextOpacity;
-      this.lastTvCssOpacity = nextOpacity;
-    }
-
-    const nextPointer = isVisiblyFacing && this.tvModalOpen ? 'auto' : 'none';
-    if (this.lastTvCssPointer !== nextPointer) {
-      this.tvCssWrapper.style.pointerEvents = nextPointer;
-      this.tvYoutubeIframe.style.pointerEvents = nextPointer;
-      this.lastTvCssPointer = nextPointer;
-    }
+    this.emitTvProjection({
+      visible: true,
+      cssMatrix3d,
+      width: refW,
+      height: refH,
+      spatialVolume,
+      isHouseTv: tvTarget.isHouseTv,
+    });
   }
 
   private resolveNearestTvTarget(usePlayerAnchor = false): {
@@ -9533,7 +9436,10 @@ export class GameEngine {
       playerBiome: BIOME_INFO[getBiomeAt(this.playerX, this.playerZ)].name,
     });
     if (this.mode !== 'menu' && !this.cinematicActive) {
-      this.smartTv.updateSpatialAudio(this.playerX, this.playerY, this.playerZ);
+      const audioX = this.tvModalOpen ? this.camera.position.x : this.playerX;
+      const audioY = this.tvModalOpen ? this.camera.position.y : this.playerY;
+      const audioZ = this.tvModalOpen ? this.camera.position.z : this.playerZ;
+      this.smartTv.updateSpatialAudio(audioX, audioY, audioZ);
     }
 
     // Sync placed smart_tv structure materials & standby LEDs with global SmartTvSystem
@@ -9557,9 +9463,8 @@ export class GameEngine {
     }
 
     this.updateCamera();
-    this.syncTvCssOverlay();
+    this.syncTvScreenProjection();
     this.renderer.render(this.scene, this.camera);
-    this.cssRenderer.render(this.cssScene, this.camera);
 
     if (this.isSoftwareGl) {
       this.afterDraw(this.tick);
@@ -13516,21 +13421,7 @@ export class GameEngine {
         }
       }
     });
-    if (this.tvMessageListenerBound && typeof window !== 'undefined') {
-      window.removeEventListener('message', this.handleYouTubeWindowMessage);
-      this.tvMessageListenerBound = false;
-    }
-    if (this.tvYoutubeIframe) {
-      this.tvYoutubeIframe.src = 'about:blank';
-      this.tvYoutubeIframe = null;
-    }
-    if (this.tvCssWrapper) {
-      this.tvCssWrapper.remove();
-      this.tvCssWrapper = null;
-    }
-    if (this.cssRenderer?.domElement) {
-      this.cssRenderer.domElement.remove();
-    }
+    this.tvProjectionCallback = null;
     if (this.smartTv) {
       this.smartTv.dispose();
     }

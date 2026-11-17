@@ -218,6 +218,17 @@ export class SmartTvSystem {
     }
   }
 
+  public setWorldPosition(worldPos: THREE.Vector3): void {
+    this.tvWorldPos.copy(worldPos);
+    if (this.tvGlowLight) {
+      this.tvGlowLight.position.set(
+        this.tvWorldPos.x,
+        this.tvWorldPos.y,
+        this.tvWorldPos.z + 0.45,
+      );
+    }
+  }
+
   public attachToMesh(
     mesh: THREE.Mesh,
     material: THREE.MeshStandardMaterial,
@@ -230,6 +241,7 @@ export class SmartTvSystem {
     if (worldPos) {
       this.tvWorldPos.copy(worldPos);
     } else {
+      mesh.updateWorldMatrix(true, false);
       mesh.getWorldPosition(this.tvWorldPos);
     }
 

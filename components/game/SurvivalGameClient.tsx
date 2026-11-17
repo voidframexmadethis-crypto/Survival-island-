@@ -101,6 +101,10 @@ import { MultiplayerModal } from './MultiplayerModal';
 import { PlaceModal } from './PlaceModal';
 import { TouchControls } from './TouchControls';
 import { TvPlayerModal, YouTubeStreamSelection } from './TvPlayerModal';
+import {
+  PersistentYouTubeOverlay,
+  PersistentYouTubeOverlayHandle,
+} from './PersistentYouTubeOverlay';
 import { VehicleBuilderModal } from './VehicleBuilderModal';
 import { CommandConsoleModal } from './CommandConsoleModal';
 import { DimensionWheelModal } from './DimensionWheelModal';
@@ -146,6 +150,10 @@ export function SurvivalGameClient() {
   const [tvSearchQuery, setTvSearchQuery] = useState('');
   const [tvSearchResults, setTvSearchResults] = useState<YouTubeStreamSelection[]>([]);
   const [tvSearchStatus, setTvSearchStatus] = useState('');
+  const [tvViewMode, setTvViewMode] = useState<'inline' | 'world3d'>('inline');
+  const [tvInlineSlotEl, setTvInlineSlotEl] = useState<HTMLElement | null>(null);
+  const [tvPipDismissed, setTvPipDismissed] = useState(false);
+  const [tvStreamStartSec, setTvStreamStartSec] = useState(0);
   const [youtubeErrorSignal, setYoutubeErrorSignal] = useState<{
     videoId: string;
     code: number;
@@ -153,6 +161,7 @@ export function SurvivalGameClient() {
   } | null>(null);
   const [gamepadConnected, setGamepadConnected] = useState(false);
   const [gamepadJoystickOffset, setGamepadJoystickOffset] = useState({ x: 0, y: 0 });
+  const tvOverlayRef = useRef<PersistentYouTubeOverlayHandle | null>(null);
   const hudRef = useRef<HUDStateSnapshot | null>(null);
   const activeModalRef = useRef<ActiveModal>(null);
   const lastGpKnobRef = useRef({ x: 0, y: 0 });
@@ -168,6 +177,15 @@ export function SurvivalGameClient() {
 
   const handleTvSyncYouTubeTime = useCallback((sec: number) => {
     engineRef.current?.syncTvYouTubeTime(sec);
+  }, []);
+
+  const handleTvYouTubeError = useCallback((videoId: string, errorCode: number) => {
+    ytErrSeqRef.current += 1;
+    setYoutubeErrorSignal({
+      videoId,
+      code: errorCode,
+      seq: ytErrSeqRef.current,
+    });
   }, []);
 
   useEffect(() => {
@@ -425,6 +443,10 @@ export function SurvivalGameClient() {
       },
       onToast: pushToast,
       onOpenStation: (station, structureId) => {
+        if (station === 'tv') {
+          setTvPipDismissed(false);
+          setTvViewMode('inline');
+        }
         setActiveStationStructureId(structureId);
         setActiveModal(station);
         engine.setMode('paused');
@@ -436,6 +458,9 @@ export function SurvivalGameClient() {
           code: errorCode,
           seq: ytErrSeqRef.current,
         });
+      },
+      onTvProjectionUpdate: (proj) => {
+        tvOverlayRef.current?.updateProjection(proj);
       },
     });
     engineRef.current = engine;
@@ -594,6 +619,10 @@ export function SurvivalGameClient() {
   };
 
   const openModal = (modal: ActiveModal, structureId?: string) => {
+    if (modal === 'tv') {
+      setTvPipDismissed(false);
+      setTvViewMode('inline');
+    }
     setActiveStationStructureId(structureId);
     setActiveModal(modal);
     engineRef.current?.setMode('paused');
@@ -1284,7 +1313,7 @@ export function SurvivalGameClient() {
                   <span>Sheltered</span>
                 </div>
               )}
-              {hud.cozyComfort?.active && (
+              {hud.cozyComfort?.active ? (
                 <button
                   type="button"
                   onClick={() => openModal('tv')}
@@ -1294,7 +1323,42 @@ export function SurvivalGameClient() {
                   <Tv className="w-3.5 h-3.5 text-amber-300" />
                   <span>Cozy Base · Watch TV</span>
                 </button>
+              ) : (
+                (hud.gameMode === 'sandbox' ||
+                  (hud.tvState?.isYouTubeActive &&
+                    hud.tvState?.power &&
+                    !hud.tvState?.isStopped)) && (
+                  <button
+                    type="button"
+                    onClick={() => openModal('tv')}
+                    className="pointer-events-auto px-2.5 py-0.5 rounded-lg bg-stone-900/90 hover:bg-stone-800 border border-amber-500/60 text-[11px] font-medium text-amber-200 flex items-center gap-1.5 transition"
+                    title="Open Smart TV Remote"
+                  >
+                    <Tv className="w-3.5 h-3.5 text-amber-300" />
+                    <span>
+                      {hud.tvState?.isYouTubeActive &&
+                      hud.tvState?.power &&
+                      !hud.tvState?.isStopped
+                        ? 'TV Remote'
+                        : 'Smart TV'}
+                    </span>
+                  </button>
+                )
               )}
+              {tvPipDismissed &&
+                hud.tvState?.isYouTubeActive &&
+                hud.tvState?.power &&
+                !hud.tvState?.isStopped && (
+                  <button
+                    type="button"
+                    onClick={() => setTvPipDismissed(false)}
+                    className="pointer-events-auto px-2.5 py-0.5 rounded-lg bg-red-950/90 hover:bg-red-900 border border-red-500/60 text-[11px] font-medium text-red-200 flex items-center gap-1.5 transition"
+                    title="Restore floating YouTube TV screen"
+                  >
+                    <Play className="w-3 h-3 fill-current text-red-300" />
+                    <span>Show TV Screen</span>
+                  </button>
+                )}
               {hud.nearFire && (
                 <div className="px-2.5 py-0.5 rounded-lg bg-orange-950/85 border border-orange-700/60 text-[11px] font-medium text-orange-200 flex items-center gap-1.5">
                   <Flame className="w-3.5 h-3.5" />
@@ -2432,17 +2496,21 @@ export function SurvivalGameClient() {
           onSearchResultsChange={setTvSearchResults}
           searchStatus={tvSearchStatus}
           onSearchStatusChange={setTvSearchStatus}
+          viewMode={tvViewMode}
+          onViewModeChange={setTvViewMode}
+          onInlineSlotChange={setTvInlineSlotEl}
           onSelectChannel={(ch) => engineRef.current?.setTvChannel(ch)}
-          onSelectYouTube={(stream, startSec) =>
+          onSelectYouTube={(stream, startSec) => {
+            setTvPipDismissed(false);
+            setTvStreamStartSec(Math.max(0, Math.floor(startSec ?? 0)));
             engineRef.current?.setTvYouTubeStream(
               stream.videoId,
               stream.title,
               stream.channel,
               startSec,
-            )
-          }
+            );
+          }}
           onInlinePlayerChange={handleTvInlinePlayerChange}
-          onSyncYouTubeTime={handleTvSyncYouTubeTime}
           youtubeErrorSignal={youtubeErrorSignal}
           onTogglePower={() => engineRef.current?.toggleTvPower()}
           onTogglePlayPause={() => engineRef.current?.toggleTvPlayPause()}
@@ -2639,6 +2707,13 @@ export function SurvivalGameClient() {
                 <span>Missions &amp; Goals</span>
               </button>
               <button
+                onClick={() => openModal('tv')}
+                className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <Tv className="w-5 h-5 text-amber-400" />
+                <span>Smart TV</span>
+              </button>
+              <button
                 onClick={() => setActiveModal('settings')}
                 className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
               >
@@ -2758,6 +2833,35 @@ export function SurvivalGameClient() {
           </div>
         </div>
       )}
+      {/* PERSISTENT YOUTUBE TV OVERLAY (Single IFrame across Remote, 3D Wall TV, & Floating PiP) */}
+      <PersistentYouTubeOverlay
+        ref={tvOverlayRef}
+        active={Boolean(
+          screen === 'playing' &&
+            !hud?.cinematicActive &&
+            !hud?.gameOver &&
+            hud?.tvState?.power &&
+            !hud?.tvState?.isStopped &&
+            hud?.tvState?.isYouTubeActive &&
+            hud?.tvState?.youtubeVideoId,
+        )}
+        videoId={hud?.tvState?.youtubeVideoId || ''}
+        title={hud?.tvState?.youtubeTitle || 'YouTube'}
+        isPaused={Boolean(hud?.tvState?.isPaused)}
+        isMuted={Boolean(hud?.tvState?.isMuted)}
+        volume={hud?.tvState?.volume ?? 0.75}
+        spatialVolume={hud?.tvState?.spatialVolume}
+        startSec={tvStreamStartSec}
+        remoteOpen={activeModal === 'tv'}
+        remoteViewMode={tvViewMode}
+        inlineSlotElement={tvInlineSlotEl}
+        pipDismissed={tvPipDismissed}
+        onDismissPip={() => setTvPipDismissed(true)}
+        onOpenRemote={() => openModal('tv')}
+        onTogglePlayPause={() => engineRef.current?.toggleTvPlayPause()}
+        onSyncTime={handleTvSyncYouTubeTime}
+        onYouTubeError={handleTvYouTubeError}
+      />
     </div>
   );
 }

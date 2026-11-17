@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
 import {
   AlertCircle,
@@ -55,11 +55,11 @@ interface YouTubePreset extends YouTubeStreamSelection {
 const VERIFIED_YOUTUBE_PRESETS: YouTubePreset[] = [
   {
     label: 'Lo-Fi Radio',
-    videoId: 'jfKfPfyJRdk',
-    title: 'lofi hip hop radio - beats to relax/study to',
+    videoId: 'n61ULEU7CO0',
+    title: 'Best of lofi hip hop 2021 [beats to relax/study to]',
     channel: 'Lofi Girl',
-    duration: 'LIVE',
-    thumbnail: 'https://i.ytimg.com/vi/jfKfPfyJRdk/hqdefault.jpg',
+    duration: 'VIDEO',
+    thumbnail: 'https://i.ytimg.com/vi/n61ULEU7CO0/hqdefault.jpg',
   },
   {
     label: 'Nature 4K',
@@ -86,12 +86,12 @@ const VERIFIED_YOUTUBE_PRESETS: YouTubePreset[] = [
     thumbnail: 'https://i.ytimg.com/vi/L_LUpnjgPso/hqdefault.jpg',
   },
   {
-    label: 'Gaming',
-    videoId: 'jSJrZU5Xv9k',
-    title: 'Retro Synthwave Arcade & Gaming Mix',
-    channel: 'Synthwave Live',
+    label: 'Synthwave',
+    videoId: '48z-lzkyICo',
+    title: 'BACK TO 1982 [Synthwave - Retrowave Mix]',
+    channel: 'VISION84',
     duration: 'VIDEO',
-    thumbnail: 'https://i.ytimg.com/vi/jSJrZU5Xv9k/hqdefault.jpg',
+    thumbnail: 'https://i.ytimg.com/vi/48z-lzkyICo/hqdefault.jpg',
   },
 ];
 
@@ -140,10 +140,12 @@ interface TvPlayerModalProps {
   onSearchResultsChange?: (results: YouTubeStreamSelection[]) => void;
   searchStatus?: string;
   onSearchStatusChange?: (status: string) => void;
+  viewMode?: 'inline' | 'world3d';
+  onViewModeChange?: (mode: 'inline' | 'world3d') => void;
+  onInlineSlotChange?: (el: HTMLElement | null) => void;
   onSelectChannel: (ch: TvChannelId) => void;
   onSelectYouTube?: (stream: YouTubeStreamSelection, startSec?: number) => void;
   onInlinePlayerChange?: (active: boolean, syncTimeSec?: number) => void;
-  onSyncYouTubeTime?: (sec: number) => void;
   youtubeErrorSignal?: { videoId: string; code: number; seq: number } | null;
   onTogglePower: () => void;
   onTogglePlayPause: () => void;
@@ -181,10 +183,12 @@ export function TvPlayerModal({
   onSearchResultsChange,
   searchStatus: controlledSearchStatus,
   onSearchStatusChange,
+  viewMode: controlledViewMode,
+  onViewModeChange,
+  onInlineSlotChange,
   onSelectChannel,
   onSelectYouTube,
   onInlinePlayerChange,
-  onSyncYouTubeTime,
   youtubeErrorSignal,
   onTogglePower,
   onTogglePlayPause,
@@ -199,7 +203,6 @@ export function TvPlayerModal({
   onClose,
 }: TvPlayerModalProps) {
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const inlineIframeRef = useRef<HTMLIFrameElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
 
   const [localSearchQuery, setLocalSearchQuery] = useState('');
@@ -208,18 +211,14 @@ export function TvPlayerModal({
     YouTubeStreamSelection[]
   >([]);
   const [localSearchStatus, setLocalSearchStatus] = useState<string>('');
-  const [viewMode, setViewMode] = useState<'inline' | 'world3d'>('inline');
+  const [localViewMode, setLocalViewMode] = useState<'inline' | 'world3d'>('inline');
   const [expandedTheater, setExpandedTheater] = useState(false);
-  const [embedStartSec, setEmbedStartSec] = useState(0);
-  const [nocookieVideoId, setNocookieVideoId] = useState<string | null>(null);
   const [restrictedNoticeState, setRestrictedNoticeState] = useState<{
     videoId: string;
     text: string;
   } | null>(null);
 
   const triedFailedIdsRef = useRef<Set<string>>(new Set());
-  const latestInlineTimeRef = useRef(0);
-  const inlineReadyRef = useRef(false);
 
   const searchQuery = controlledSearchQuery ?? localSearchQuery;
   const setSearchQuery = onSearchQueryChange ?? setLocalSearchQuery;
@@ -227,6 +226,8 @@ export function TvPlayerModal({
   const setSearchResults = onSearchResultsChange ?? setLocalSearchResults;
   const searchStatus = controlledSearchStatus ?? localSearchStatus;
   const setSearchStatus = onSearchStatusChange ?? setLocalSearchStatus;
+  const viewMode = controlledViewMode ?? localViewMode;
+  const setViewMode = onViewModeChange ?? setLocalViewMode;
 
   const isPowerOn = tvState ? tvState.power : true;
   const isPaused = tvState?.isPaused ?? false;
@@ -246,9 +247,6 @@ export function TvPlayerModal({
   const activeMeta =
     TV_CHANNELS.find((c) => c.id === activeChannel) || TV_CHANNELS[0];
 
-  const useNocookieDomain = Boolean(
-    youtubeVideoId && nocookieVideoId === youtubeVideoId,
-  );
   const embedRestrictedNotice =
     youtubeVideoId && restrictedNoticeState?.videoId === youtubeVideoId
       ? restrictedNoticeState.text
@@ -261,30 +259,28 @@ export function TvPlayerModal({
     isYouTubeActive &&
     Boolean(youtubeVideoId);
 
-  // Keep engine informed whether the inline modal player owns the YouTube audio/iframe
+  const setInlineSlotRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      onInlineSlotChange?.(el);
+    },
+    [onInlineSlotChange],
+  );
+
+  // Keep engine informed whether the inline modal player owns the YouTube display slot
   useEffect(() => {
-    if (showInlineYouTube) {
-      onInlinePlayerChange?.(true);
-    } else {
-      onInlinePlayerChange?.(false, latestInlineTimeRef.current);
-    }
+    onInlinePlayerChange?.(showInlineYouTube);
   }, [showInlineYouTube, onInlinePlayerChange]);
 
-  // Ensure handoff back to 3D Wall TV whenever modal closes/unmounts
+  // Ensure handoff back to 3D Wall TV / Floating PiP whenever modal closes/unmounts
   useEffect(() => {
     return () => {
-      onInlinePlayerChange?.(false, latestInlineTimeRef.current);
+      onInlineSlotChange?.(null);
+      onInlinePlayerChange?.(false);
     };
-  }, [onInlinePlayerChange]);
-
-  useEffect(() => {
-    inlineReadyRef.current = false;
-  }, [youtubeVideoId, useNocookieDomain]);
+  }, [onInlineSlotChange, onInlinePlayerChange]);
 
   const playYouTubeSelection = useCallback(
     (selection: YouTubeStreamSelection, startSec = 0) => {
-      latestInlineTimeRef.current = startSec;
-      setEmbedStartSec(Math.max(0, Math.floor(startSec)));
       setRestrictedNoticeState(null);
       onSelectYouTube?.(selection, startSec);
     },
@@ -343,122 +339,12 @@ export function TvPlayerModal({
     return () => window.cancelAnimationFrame(rafId);
   }, [onDrawPreview, showInlineYouTube]);
 
-  const sendInlineCommand = useCallback((func: string, args: unknown[] = []) => {
-    const win = inlineIframeRef.current?.contentWindow;
-    if (!win) return;
-    try {
-      win.postMessage(
-        JSON.stringify({
-          event: 'command',
-          func,
-          args,
-        }),
-        '*',
-      );
-    } catch {
-      // Ignore cross-origin timing before iframe finishes loading
-    }
-  }, []);
-
-  // Sync Play/Pause, Mute & Volume with the inline YouTube iframe
-  useEffect(() => {
-    if (!showInlineYouTube || !inlineReadyRef.current) return;
-    sendInlineCommand(isPaused ? 'pauseVideo' : 'playVideo');
-    const volPct = Math.max(0, Math.min(100, Math.round(volume * 100)));
-    if (isMuted) {
-      sendInlineCommand('mute');
-    } else {
-      sendInlineCommand('unMute');
-      sendInlineCommand('setVolume', [volPct]);
-    }
-  }, [showInlineYouTube, isPaused, isMuted, volume, sendInlineCommand]);
-
-  // Listen for YouTube inline iframe telemetry & errors
-  useEffect(() => {
-    if (!showInlineYouTube) return;
-    const onMessage = (event: MessageEvent) => {
-      if (
-        typeof event.origin !== 'string' ||
-        (!event.origin.includes('youtube.com') &&
-          !event.origin.includes('youtube-nocookie.com'))
-      ) {
-        return;
-      }
-      if (
-        inlineIframeRef.current?.contentWindow &&
-        event.source !== inlineIframeRef.current.contentWindow
-      ) {
-        return;
-      }
-      let payload: unknown = event.data;
-      if (typeof payload === 'string') {
-        try {
-          payload = JSON.parse(payload);
-        } catch {
-          return;
-        }
-      }
-      if (!payload || typeof payload !== 'object') return;
-      const msg = payload as {
-        event?: string;
-        info?: number | { currentTime?: number };
-      };
-      if (
-        msg.event === 'infoDelivery' &&
-        msg.info &&
-        typeof msg.info === 'object' &&
-        typeof msg.info.currentTime === 'number' &&
-        Number.isFinite(msg.info.currentTime)
-      ) {
-        latestInlineTimeRef.current = msg.info.currentTime;
-        onSyncYouTubeTime?.(msg.info.currentTime);
-      } else if (msg.event === 'onError' && typeof msg.info === 'number') {
-        if (msg.info === 153 && !useNocookieDomain) {
-          setNocookieVideoId(youtubeVideoId);
-          return;
-        }
-        tryNextPlayableResult(youtubeVideoId, msg.info);
-      }
-    };
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, [
-    showInlineYouTube,
-    youtubeVideoId,
-    useNocookieDomain,
-    onSyncYouTubeTime,
-    tryNextPlayableResult,
-  ]);
-
-  const inlineEmbedUrl = useMemo(() => {
-    if (!youtubeVideoId) return 'about:blank';
-    const host = useNocookieDomain
-      ? 'https://www.youtube-nocookie.com'
-      : 'https://www.youtube.com';
-    const params = new URLSearchParams({
-      autoplay: isPaused ? '0' : '1',
-      rel: '0',
-      playsinline: '1',
-      enablejsapi: '1',
-      modestbranding: '1',
-    });
-    if (embedStartSec > 0) {
-      params.set('start', String(embedStartSec));
-    }
-    if (typeof window !== 'undefined' && window.location?.origin) {
-      params.set('origin', window.location.origin);
-    }
-    return `${host}/embed/${youtubeVideoId}?${params.toString()}`;
-  }, [youtubeVideoId, useNocookieDomain, isPaused, embedStartSec]);
-
   const handleToggleViewMode = () => {
     if (viewMode === 'inline') {
-      onInlinePlayerChange?.(false, latestInlineTimeRef.current);
+      onInlinePlayerChange?.(false);
       setViewMode('world3d');
       setExpandedTheater(false);
     } else {
-      setEmbedStartSec(Math.max(0, Math.floor(currentTime)));
-      latestInlineTimeRef.current = currentTime;
       setViewMode('inline');
     }
   };
@@ -669,7 +555,6 @@ export function TvPlayerModal({
                     type="button"
                     onClick={() => {
                       if (viewMode !== 'inline') {
-                        setEmbedStartSec(Math.max(0, Math.floor(currentTime)));
                         setViewMode('inline');
                       }
                       setExpandedTheater((v) => !v);
@@ -695,42 +580,15 @@ export function TvPlayerModal({
 
             <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-stone-700/80 bg-black shadow-inner">
               {showInlineYouTube ? (
-                <iframe
-                  key={`${youtubeVideoId}_${useNocookieDomain ? 'nc' : 'yt'}`}
-                  ref={inlineIframeRef}
-                  src={inlineEmbedUrl}
-                  title={youtubeTitle || 'YouTube TV Player'}
-                  className="w-full h-full border-0 block"
-                  referrerPolicy="strict-origin-when-cross-origin"
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
-                  allowFullScreen
-                  onLoad={() => {
-                    inlineReadyRef.current = true;
-                    try {
-                      inlineIframeRef.current?.contentWindow?.postMessage(
-                        JSON.stringify({
-                          event: 'listening',
-                          id: 2,
-                          channel: 'widget',
-                        }),
-                        '*',
-                      );
-                    } catch {
-                      // Ignore cross-origin timing
-                    }
-                    const volPct = Math.max(
-                      0,
-                      Math.min(100, Math.round(volume * 100)),
-                    );
-                    if (isMuted) {
-                      sendInlineCommand('mute');
-                    } else {
-                      sendInlineCommand('unMute');
-                      sendInlineCommand('setVolume', [volPct]);
-                    }
-                    sendInlineCommand(isPaused ? 'pauseVideo' : 'playVideo');
-                  }}
-                />
+                <div
+                  ref={setInlineSlotRef}
+                  data-testid="tv-inline-video-slot"
+                  className="w-full h-full bg-black flex items-center justify-center"
+                >
+                  <span className="text-[11px] text-stone-500 font-mono-tabular">
+                    Connecting TV Video Stream...
+                  </span>
+                </div>
               ) : isPowerOn && isYouTubeActive && youtubeVideoId && !isStopped ? (
                 <div className="relative w-full h-full bg-stone-950">
                   <Image
@@ -1185,10 +1043,12 @@ export function TvPlayerModal({
           <button
             type="button"
             onClick={onClose}
+            aria-label="Exit Remote"
+            title="Exit remote and keep video playing on screen"
             className="w-full min-h-[44px] px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
-            <span>Hide Remote (Keep TV Playing on 3D Wall)</span>
+            <span>Exit Remote (Keep Video Playing)</span>
           </button>
         </div>
       </div>
