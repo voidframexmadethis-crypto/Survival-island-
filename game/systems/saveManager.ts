@@ -1,14 +1,85 @@
-import { GameSaveData, GameSettings, SaveSlotSummary } from '../types';
+import {
+  DrawDistanceTier,
+  GameSaveData,
+  GameSettings,
+  GraphicsPreset,
+  SaveSlotSummary,
+} from '../types';
 
 const SAVE_INDEX_KEY = 'survival_island_lost_world_saves_v1';
 const SAVE_SLOT_PREFIX = 'survival_island_slot_v1_';
 const SETTINGS_KEY = 'survival_island_settings_v1';
 
+export interface GraphicsPresetProfile {
+  graphicsQuality: 'balanced' | 'high';
+  graphicsPreset: GraphicsPreset;
+  shadowsEnabled: boolean;
+  waterReflectionsEnabled: boolean;
+  particlesEnabled: boolean;
+  drawDistance: DrawDistanceTier;
+  dynamicAutoFps: boolean;
+}
+
+export const GRAPHICS_PRESET_PROFILES: Record<GraphicsPreset, GraphicsPresetProfile> = {
+  ultra: {
+    graphicsQuality: 'high',
+    graphicsPreset: 'ultra',
+    shadowsEnabled: true,
+    waterReflectionsEnabled: true,
+    particlesEnabled: true,
+    drawDistance: 'far',
+    dynamicAutoFps: true,
+  },
+  balanced: {
+    graphicsQuality: 'balanced',
+    graphicsPreset: 'balanced',
+    shadowsEnabled: true,
+    waterReflectionsEnabled: true,
+    particlesEnabled: true,
+    drawDistance: 'medium',
+    dynamicAutoFps: true,
+  },
+  performance: {
+    graphicsQuality: 'balanced',
+    graphicsPreset: 'performance',
+    shadowsEnabled: false,
+    waterReflectionsEnabled: false,
+    particlesEnabled: false,
+    drawDistance: 'near',
+    dynamicAutoFps: true,
+  },
+};
+
+export function isMobileOrTouchClient(): boolean {
+  if (typeof window === 'undefined') return false;
+  return (
+    'ontouchstart' in window ||
+    navigator.maxTouchPoints > 0 ||
+    window.matchMedia?.('(pointer: coarse)')?.matches === true
+  );
+}
+
+export function getPresetSettings(
+  current: GameSettings,
+  preset: GraphicsPreset,
+): GameSettings {
+  return {
+    ...current,
+    ...GRAPHICS_PRESET_PROFILES[preset],
+  };
+}
+
 export const DEFAULT_SETTINGS: GameSettings = {
   masterVolume: 0.7,
   sfxEnabled: true,
   ambienceEnabled: true,
-  graphicsQuality: 'high',
+  graphicsQuality: 'balanced',
+  graphicsPreset: 'balanced',
+  shadowsEnabled: true,
+  waterReflectionsEnabled: true,
+  particlesEnabled: true,
+  drawDistance: 'medium',
+  dynamicAutoFps: true,
   touchControlsMode: 'auto',
   cameraSensitivity: 1.0,
   invertCameraY: false,
@@ -16,14 +87,40 @@ export const DEFAULT_SETTINGS: GameSettings = {
   compactHud: false,
 };
 
+export function getDefaultSettingsForDevice(): GameSettings {
+  const defaultPreset: GraphicsPreset = isMobileOrTouchClient() ? 'balanced' : 'ultra';
+  return {
+    ...DEFAULT_SETTINGS,
+    ...GRAPHICS_PRESET_PROFILES[defaultPreset],
+  };
+}
+
 export function loadSettings(): GameSettings {
-  if (typeof window === 'undefined') return DEFAULT_SETTINGS;
+  const base = getDefaultSettingsForDevice();
+  if (typeof window === 'undefined') return base;
   try {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return DEFAULT_SETTINGS;
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    if (!raw) return base;
+    const parsed = JSON.parse(raw) as Partial<GameSettings>;
+    const merged: GameSettings = { ...base, ...parsed };
+    if (!parsed.graphicsPreset) {
+      const derived: GraphicsPreset =
+        parsed.graphicsQuality === 'high' ? 'ultra' : 'balanced';
+      merged.graphicsPreset = derived;
+      const prof = GRAPHICS_PRESET_PROFILES[derived];
+      if (parsed.shadowsEnabled === undefined) merged.shadowsEnabled = prof.shadowsEnabled;
+      if (parsed.waterReflectionsEnabled === undefined) {
+        merged.waterReflectionsEnabled = prof.waterReflectionsEnabled;
+      }
+      if (parsed.particlesEnabled === undefined) {
+        merged.particlesEnabled = prof.particlesEnabled;
+      }
+      if (parsed.drawDistance === undefined) merged.drawDistance = prof.drawDistance;
+    }
+    if (merged.dynamicAutoFps === undefined) merged.dynamicAutoFps = true;
+    return merged;
   } catch {
-    return DEFAULT_SETTINGS;
+    return base;
   }
 }
 

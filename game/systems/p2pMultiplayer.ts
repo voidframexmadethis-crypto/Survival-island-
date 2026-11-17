@@ -123,6 +123,21 @@ export class P2PMultiplayerManager {
   public pvpEnabled = true;
   public statusMessage = 'Offline · Play solo or host/join a P2P Island Room';
 
+  public micMuted = false;
+  public micEnabled = false;
+  public voiceMode: 'party' | 'proximity' = 'party';
+  public localSpeaking = false;
+  public speakingPeers = new Set<string>();
+  private localAudioStream: MediaStream | null = null;
+  private audioContext: AudioContext | null = null;
+  private localAnalyser: AnalyserNode | null = null;
+  private remoteAudioElements = new Map<string, HTMLAudioElement>();
+  private remoteAnalysers = new Map<string, AnalyserNode>();
+  private remoteGains = new Map<string, GainNode>();
+  private remoteSourceStreams = new Map<string, MediaStream>();
+  private localPosition = { x: 0, y: 0, z: 112 };
+  private voiceCheckTimer: number | null = null;
+
   private peers = new Map<string, PeerConnectionEntry>();
   private broadcastChannel: BroadcastChannel | null = null;
   private pollTimer: number | null = null;
@@ -150,6 +165,227 @@ export class P2PMultiplayerManager {
     this.callbacks.onStatusChanged();
   }
 
+  private ensureAudioContext(): AudioContext | null {
+    if (typeof window === 'undefined') return null;
+    if (!this.audioContext) {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      if (AudioCtx) {
+        this.audioContext = new AudioCtx();
+      }
+    }
+    if (this.audioContext && this.audioContext.state === 'suspended') {
+      this.audioContext.resume().catch(() => {});
+    }
+    return this.audioContext;
+  }
+
+  public async initMicrophone(): Promise<boolean> {
+    if (typeof window === 'undefined' || !navigator.mediaDevices?.getUserMedia) return false;
+    try {
+      const hasLiveStream = Boolean(
+        this.localAudioStream &&
+          this.localAudioStream.getAudioTracks().some((t) => t.readyState === 'live'),
+      );
+      let stream = this.localAudioStream;
+      if (!hasLiveStream || !stream) {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+        this.localAudioStream = stream;
+      }
+
+      this.micEnabled = true;
+      this.micMuted = false;
+      for (const track of stream.getTracks()) {
+        track.enabled = true;
+      }
+
+      const ctx = this.ensureAudioContext();
+      if (ctx && !this.localAnalyser) {
+        const source = ctx.createMediaStreamSource(stream);
+        this.localAnalyser = ctx.createAnalyser();
+        this.localAnalyser.fftSize = 256;
+        source.connect(this.localAnalyser);
+      }
+
+      for (const [peerId, entry] of this.peers.entries()) {
+        const pc = entry.pc;
+        if (!pc) continue;
+        const existingTracks = new Set(
+          pc
+            .getSenders()
+            .map((s) => s.track)
+            .filter((t): t is MediaStreamTrack => Boolean(t)),
+        );
+        let addedTrack = false;
+        for (const track of stream.getTracks()) {
+          if (!existingTracks.has(track)) {
+            pc.addTrack(track, stream);
+            addedTrack = true;
+          }
+        }
+        if (addedTrack && this.roomCode && pc.signalingState === 'stable') {
+          pc.createOffer()
+            .then((offer) => pc.setLocalDescription(offer))
+            .then(() => {
+              if (!this.roomCode || !pc.localDescription) return;
+              return fetch('/api/p2p', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  action: 'signal',
+                  roomCode: this.roomCode,
+                  fromId: this.localPeerId,
+                  toId: peerId,
+                  signal: { type: 'sdp', sdp: pc.localDescription },
+                }),
+              });
+            })
+            .catch(() => {});
+        }
+      }
+
+      this.startVoiceCheck();
+      this.callbacks.onStatusChanged();
+      return true;
+    } catch {
+      this.micEnabled = false;
+      this.callbacks.onStatusChanged();
+      return false;
+    }
+  }
+
+  public toggleMicMute(): boolean {
+    if (!this.localAudioStream || !this.micEnabled) {
+      this.micMuted = false;
+      void this.initMicrophone();
+      this.callbacks.onStatusChanged();
+      return this.micMuted;
+    }
+    this.micMuted = !this.micMuted;
+    for (const track of this.localAudioStream.getTracks()) {
+      track.enabled = !this.micMuted;
+    }
+    if (this.micMuted && this.localSpeaking) {
+      this.localSpeaking = false;
+    }
+    this.callbacks.onStatusChanged();
+    return this.micMuted;
+  }
+
+  public setVoiceMode(mode: 'party' | 'proximity'): void {
+    this.voiceMode = mode;
+    this.updateProximityGains();
+    this.callbacks.onStatusChanged();
+  }
+
+  public updatePlayerPosition(x: number, y: number, z: number): void {
+    this.localPosition = { x, y, z };
+    this.updateProximityGains();
+  }
+
+  private updateProximityGains(): void {
+    for (const [peerId, gainNode] of this.remoteGains.entries()) {
+      const entry = this.peers.get(peerId);
+      if (!gainNode || !this.audioContext) continue;
+      if (this.voiceMode === 'party' || !entry) {
+        gainNode.gain.setTargetAtTime(1.0, this.audioContext.currentTime, 0.1);
+      } else {
+        const dist = Math.hypot(this.localPosition.x - entry.x, this.localPosition.z - entry.z);
+        const gain = Math.max(0, Math.min(1.0, 1 - dist / 28));
+        gainNode.gain.setTargetAtTime(gain, this.audioContext.currentTime, 0.1);
+      }
+    }
+  }
+
+  private startVoiceCheck(): void {
+    if (this.voiceCheckTimer !== null) return;
+    const dataArray = new Uint8Array(128);
+    this.voiceCheckTimer = window.setInterval(() => {
+      if (this.localAnalyser && !this.micMuted && this.localAudioStream) {
+        this.localAnalyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+        const avg = sum / dataArray.length;
+        const speaking = avg > 12;
+        if (speaking !== this.localSpeaking) {
+          this.localSpeaking = speaking;
+          this.callbacks.onStatusChanged();
+        }
+      } else if (this.localSpeaking) {
+        this.localSpeaking = false;
+        this.callbacks.onStatusChanged();
+      }
+
+      let changed = false;
+      for (const [peerId, analyser] of this.remoteAnalysers.entries()) {
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+        const avg = sum / dataArray.length;
+        const speaking = avg > 12;
+        const wasSpeaking = this.speakingPeers.has(peerId);
+        if (speaking && !wasSpeaking) {
+          this.speakingPeers.add(peerId);
+          changed = true;
+        } else if (!speaking && wasSpeaking) {
+          this.speakingPeers.delete(peerId);
+          changed = true;
+        }
+      }
+      if (changed) {
+        this.callbacks.onStatusChanged();
+      }
+    }, 150);
+  }
+
+  private attachRemoteAudio(peerId: string, stream: MediaStream): void {
+    if (typeof window === 'undefined') return;
+    if (this.remoteSourceStreams.get(peerId) === stream) return;
+    this.remoteSourceStreams.set(peerId, stream);
+
+    let audioEl = this.remoteAudioElements.get(peerId);
+    if (!audioEl) {
+      audioEl = document.createElement('audio');
+      audioEl.autoplay = true;
+      audioEl.setAttribute('playsinline', 'true');
+      document.body.appendChild(audioEl);
+      this.remoteAudioElements.set(peerId, audioEl);
+    }
+    audioEl.srcObject = stream;
+
+    const ctx = this.ensureAudioContext();
+    if (ctx) {
+      // Mute raw <audio> element output when routed through Web Audio GainNode to prevent double playback and enable Proximity attenuation
+      audioEl.muted = true;
+      try {
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        const gainNode = ctx.createGain();
+        source.connect(analyser);
+        analyser.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        this.remoteAnalysers.set(peerId, analyser);
+        this.remoteGains.set(peerId, gainNode);
+        this.updateProximityGains();
+        this.startVoiceCheck();
+      } catch {
+        audioEl.muted = false;
+        audioEl.play().catch(() => {});
+      }
+    } else {
+      audioEl.play().catch(() => {});
+    }
+  }
+
   public getStatusSnapshot(): MultiplayerStatusSnapshot {
     const peerList: MultiplayerPeerInfo[] = [];
     for (const p of this.peers.values()) {
@@ -173,6 +409,11 @@ export class P2PMultiplayerManager {
       peers: peerList,
       pvpEnabled: this.pvpEnabled,
       statusMessage: this.statusMessage,
+      micMuted: this.micMuted,
+      micEnabled: this.micEnabled,
+      voiceMode: this.voiceMode,
+      localSpeaking: this.localSpeaking,
+      speakingPeers: Array.from(this.speakingPeers),
     };
   }
 
@@ -197,6 +438,8 @@ export class P2PMultiplayerManager {
       this.connected = true;
       this.statusMessage = `Hosting Island Room ${this.roomCode}`;
       this.startRoomTransport();
+      this.ensureAudioContext();
+      void this.initMicrophone();
       this.callbacks.onStatusChanged();
       return this.roomCode;
     } catch {
@@ -207,6 +450,8 @@ export class P2PMultiplayerManager {
       this.connected = true;
       this.statusMessage = `Hosting Local Tab Room ${localCode}`;
       this.startBroadcastChannel();
+      this.ensureAudioContext();
+      void this.initMicrophone();
       this.callbacks.onStatusChanged();
       return localCode;
     }
@@ -241,6 +486,8 @@ export class P2PMultiplayerManager {
       this.connected = true;
       this.statusMessage = `Joined Island Room ${this.roomCode}`;
       this.startRoomTransport();
+      this.ensureAudioContext();
+      void this.initMicrophone();
 
       const peers: { peerId: string; name: string }[] = data.peers || [];
       for (const p of peers) {
@@ -256,9 +503,25 @@ export class P2PMultiplayerManager {
       this.connected = true;
       this.statusMessage = `Joined Local Tab Room ${code}`;
       this.startBroadcastChannel();
+      this.ensureAudioContext();
+      void this.initMicrophone();
       this.callbacks.onStatusChanged();
       return true;
     }
+  }
+
+  private cleanupPeerAudio(peerId: string): void {
+    const audioEl = this.remoteAudioElements.get(peerId);
+    if (audioEl) {
+      audioEl.pause();
+      audioEl.srcObject = null;
+      audioEl.remove();
+      this.remoteAudioElements.delete(peerId);
+    }
+    this.remoteAnalysers.delete(peerId);
+    this.remoteGains.delete(peerId);
+    this.remoteSourceStreams.delete(peerId);
+    this.speakingPeers.delete(peerId);
   }
 
   public leaveRoom(): void {
@@ -270,6 +533,10 @@ export class P2PMultiplayerManager {
     if (this.relayFlushTimer !== null) {
       window.clearTimeout(this.relayFlushTimer);
       this.relayFlushTimer = null;
+    }
+    if (this.voiceCheckTimer !== null) {
+      window.clearInterval(this.voiceCheckTimer);
+      this.voiceCheckTimer = null;
     }
     if (this.broadcastChannel) {
       try {
@@ -290,8 +557,19 @@ export class P2PMultiplayerManager {
       } catch {
         // Ignore cleanup errors
       }
+      this.cleanupPeerAudio(pid);
       this.callbacks.onPeerLeft(pid);
     }
+    if (this.localAudioStream) {
+      for (const track of this.localAudioStream.getTracks()) {
+        track.stop();
+      }
+      this.localAudioStream = null;
+    }
+    this.localAnalyser = null;
+    this.localSpeaking = false;
+    this.micEnabled = false;
+    this.speakingPeers.clear();
     this.peers.clear();
     this.relayQueue = [];
     this.connected = false;
@@ -549,6 +827,19 @@ export class P2PMultiplayerManager {
       const pc = new RTCPeerConnection({ iceServers: [] });
       entry.pc = pc;
 
+      if (this.localAudioStream) {
+        for (const track of this.localAudioStream.getTracks()) {
+          pc.addTrack(track, this.localAudioStream);
+        }
+      }
+
+      pc.ontrack = (event) => {
+        const stream = event.streams[0];
+        if (stream) {
+          this.attachRemoteAudio(peerId, stream);
+        }
+      };
+
       pc.onicecandidate = (e) => {
         if (e.candidate && this.roomCode) {
           fetch('/api/p2p', {
@@ -667,6 +958,7 @@ export class P2PMultiplayerManager {
     } catch {
       // Ignore
     }
+    this.cleanupPeerAudio(peerId);
     this.peers.delete(peerId);
     this.callbacks.onPeerLeft(peerId);
     this.callbacks.onStatusChanged();

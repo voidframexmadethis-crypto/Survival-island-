@@ -407,6 +407,23 @@ export function createPortalVortexMesh(portal: PortalLinkState): PortalVortexHan
   };
 }
 
+export function disposePortalVortex(handle: PortalVortexHandle): void {
+  handle.group.parent?.remove(handle.group);
+  handle.group.traverse((obj) => {
+    if (obj instanceof THREE.Mesh || obj instanceof THREE.Points) {
+      obj.geometry?.dispose();
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const m of mats) {
+        if (!m) continue;
+        if ('map' in m && m.map instanceof THREE.Texture) {
+          m.map.dispose();
+        }
+        m.dispose();
+      }
+    }
+  });
+}
+
 function buildCrystalNodeMesh(colorHex: number, scale = 1): THREE.Group {
   const g = new THREE.Group();
   const baseMat = new THREE.MeshStandardMaterial({
@@ -721,6 +738,8 @@ export function buildDimensionWorld(
     root.add(lavaMesh);
   }
 
+  const dimDummy = new THREE.Object3D();
+
   // Realm-specific atmosphere & landmarks
   if (dim === 'space') {
     // Deep cosmic 360 starfield + nebula orbs + asteroid undersides
@@ -742,7 +761,7 @@ export function buildDimensionWorld(
     );
     root.add(animatedPoints);
 
-    // Floating ringed exoplanet in sky + rock undersides under pads
+    // Floating ringed exoplanet in sky + batched rock undersides under pads
     const planet = new THREE.Group();
     planet.position.set(110, 68, -120);
     const pCore = new THREE.Mesh(
@@ -758,14 +777,17 @@ export function buildDimensionWorld(
     root.add(planet);
     animatedSpins.push(planet);
 
-    for (const pad of SPACE_ASTEROID_PADS) {
-      const rockUnder = new THREE.Mesh(
-        new THREE.ConeGeometry(pad.radius * 0.92, pad.radius * 0.85, 10),
-        new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.92 }),
-      );
-      rockUnder.rotation.x = Math.PI;
-      rockUnder.position.set(pad.x, pad.y - pad.radius * 0.45, pad.z);
-      root.add(rockUnder);
+    const asteroidRockMesh = new THREE.InstancedMesh(
+      new THREE.ConeGeometry(1, 1, 10),
+      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.92 }),
+      SPACE_ASTEROID_PADS.length,
+    );
+    SPACE_ASTEROID_PADS.forEach((pad, idx) => {
+      dimDummy.position.set(pad.x, pad.y - pad.radius * 0.45, pad.z);
+      dimDummy.rotation.set(Math.PI, 0, 0);
+      dimDummy.scale.set(pad.radius * 0.92, pad.radius * 0.85, pad.radius * 0.92);
+      dimDummy.updateMatrix();
+      asteroidRockMesh.setMatrixAt(idx, dimDummy.matrix);
 
       if (Math.hypot(pad.x, pad.z) > 12) {
         const nodeMesh = buildCrystalNodeMesh(0x8b5cf6, 1.35);
@@ -784,7 +806,10 @@ export function buildDimensionWorld(
           mesh: nodeMesh,
         });
       }
-    }
+    });
+    asteroidRockMesh.instanceMatrix.needsUpdate = true;
+    asteroidRockMesh.computeBoundingSphere();
+    root.add(asteroidRockMesh);
   }
 
   if (dim === 'nether') {
@@ -804,8 +829,9 @@ export function buildDimensionWorld(
     );
     root.add(animatedPoints);
 
-    // Jagged Obsidian Spires
+    // Jagged Obsidian Spires (1 InstancedMesh)
     const spireMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.55, metalness: 0.4 });
+    const spireMatrices: THREE.Matrix4[] = [];
     for (let i = 0; i < 24; i++) {
       const angle = (i / 24) * Math.PI * 2 + rand() * 0.2;
       const dist = 16 + rand() * 68;
@@ -813,11 +839,21 @@ export function buildDimensionWorld(
       const sz = Math.sin(angle) * dist;
       const sy = getDimensionTerrainHeight('nether', sx, sz);
       if (sy < 0.3) continue;
+      const r = 2.2 + rand() * 1.5;
       const h = 7 + rand() * 14;
-      const spire = new THREE.Mesh(new THREE.ConeGeometry(2.2 + rand() * 1.5, h, 5), spireMat);
-      spire.position.set(sx, sy + h * 0.45, sz);
-      root.add(spire);
+      dimDummy.position.set(sx, sy + h * 0.45, sz);
+      dimDummy.rotation.set(0, 0, 0);
+      dimDummy.scale.set(r, h, r);
+      dimDummy.updateMatrix();
+      spireMatrices.push(dimDummy.matrix.clone());
       colliders.push({ x: sx, z: sz, radius: 1.9 });
+    }
+    if (spireMatrices.length > 0) {
+      const spireInst = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 5), spireMat, spireMatrices.length);
+      spireMatrices.forEach((m, idx) => spireInst.setMatrixAt(idx, m));
+      spireInst.instanceMatrix.needsUpdate = true;
+      spireInst.computeBoundingSphere();
+      root.add(spireInst);
     }
 
     // Hellfire Nether Ember Harvestables + Inferno Blade Relic Shrine
@@ -867,37 +903,52 @@ export function buildDimensionWorld(
       roughness: 0.35,
       metalness: 0.5,
     });
-    // Solid Gold Temple Ruins + Golden Palms
+    // Solid Gold Temple Ruins + Golden Palms (3 InstancedMeshes instead of 112)
+    const colInst = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.95, 1.15, 7.5, 10), goldMat, 16);
+    const trunkInst = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.28, 0.44, 6.2, 8), goldMat, 16);
+    const frondInst = new THREE.InstancedMesh(new THREE.ConeGeometry(0.7, 3.2, 5), palmLeafMat, 16 * 5);
+    const frondPivot = new THREE.Object3D();
+    const frondChild = new THREE.Object3D();
+    frondPivot.add(frondChild);
+    let frondIdx = 0;
+
     for (let i = 0; i < 16; i++) {
       const a = (i / 16) * Math.PI * 2;
       const dist = i % 2 === 0 ? 18 : 38;
       const gx = Math.cos(a) * dist;
       const gz = Math.sin(a) * dist;
       const gy = getDimensionTerrainHeight('gold', gx, gz);
-      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 1.15, 7.5, 10), goldMat);
-      col.position.set(gx, gy + 3.6, gz);
-      root.add(col);
+      dimDummy.position.set(gx, gy + 3.6, gz);
+      dimDummy.rotation.set(0, 0, 0);
+      dimDummy.scale.set(1, 1, 1);
+      dimDummy.updateMatrix();
+      colInst.setMatrixAt(i, dimDummy.matrix);
       colliders.push({ x: gx, z: gz, radius: 1.1 });
 
-      // Golden Palm nearby
       const px = gx + Math.cos(a + 0.3) * 9;
       const pz = gz + Math.sin(a + 0.3) * 9;
       const py = getDimensionTerrainHeight('gold', px, pz);
-      const palm = new THREE.Group();
-      palm.position.set(px, py, pz);
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.44, 6.2, 8), goldMat);
-      trunk.position.y = 3.1;
-      palm.add(trunk);
-      for (let f = 0; f < 5; f++) {
-        const frond = new THREE.Mesh(new THREE.ConeGeometry(0.7, 3.2, 5), palmLeafMat);
-        frond.position.set(0, 6.2, 0);
-        frond.rotation.z = 1.05;
-        frond.rotation.y = (f / 5) * Math.PI * 2;
-        palm.add(frond);
-      }
-      root.add(palm);
+      dimDummy.position.set(px, py + 3.1, pz);
+      dimDummy.updateMatrix();
+      trunkInst.setMatrixAt(i, dimDummy.matrix);
       colliders.push({ x: px, z: pz, radius: 0.6 });
+
+      frondPivot.position.set(px, py, pz);
+      frondPivot.updateMatrixWorld(true);
+      for (let f = 0; f < 5; f++) {
+        frondChild.position.set(0, 6.2, 0);
+        frondChild.rotation.set(0, (f / 5) * Math.PI * 2, 1.05);
+        frondChild.updateMatrixWorld(true);
+        frondInst.setMatrixAt(frondIdx++, frondChild.matrixWorld);
+      }
     }
+    colInst.instanceMatrix.needsUpdate = true;
+    colInst.computeBoundingSphere();
+    trunkInst.instanceMatrix.needsUpdate = true;
+    trunkInst.computeBoundingSphere();
+    frondInst.instanceMatrix.needsUpdate = true;
+    frondInst.computeBoundingSphere();
+    root.add(colInst, trunkInst, frondInst);
 
     // Treasure Vault Pedestals with Gold Bars
     [
@@ -940,6 +991,7 @@ export function buildDimensionWorld(
       roughness: 0.12,
       metalness: 0.35,
     });
+    const pillarInst = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.9, 1.4, 1, 6), pillarMat, 22);
     for (let i = 0; i < 22; i++) {
       const a = (i / 22) * Math.PI * 2;
       const dist = 16 + (i % 3) * 18;
@@ -947,12 +999,16 @@ export function buildDimensionWorld(
       const dz = Math.sin(a) * dist;
       const dy = getDimensionTerrainHeight('diamond', dx, dz);
       const h = 9 + (i % 4) * 3.5;
-      const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.4, h, 6), pillarMat);
-      pillar.position.set(dx, dy + h * 0.45, dz);
-      pillar.rotation.z = (rand() - 0.5) * 0.25;
-      root.add(pillar);
+      dimDummy.position.set(dx, dy + h * 0.45, dz);
+      dimDummy.rotation.set(0, 0, (rand() - 0.5) * 0.25);
+      dimDummy.scale.set(1, h, 1);
+      dimDummy.updateMatrix();
+      pillarInst.setMatrixAt(i, dimDummy.matrix);
       colliders.push({ x: dx, z: dz, radius: 1.35 });
     }
+    pillarInst.instanceMatrix.needsUpdate = true;
+    pillarInst.computeBoundingSphere();
+    root.add(pillarInst);
 
     const dSpots: [number, number, boolean][] = [
       [0, -24, true],
@@ -1050,7 +1106,7 @@ export function buildDimensionWorld(
       });
     });
 
-    // Bioluminescent Alien Flora
+    // Bioluminescent Alien Flora (2 InstancedMeshes instead of 48)
     const stalkMat = new THREE.MeshStandardMaterial({ color: 0x4c1d95, roughness: 0.6 });
     const capMat = new THREE.MeshStandardMaterial({
       color: 0x2dd4bf,
@@ -1058,6 +1114,12 @@ export function buildDimensionWorld(
       emissiveIntensity: 1.2,
       roughness: 0.28,
     });
+    const stemInst = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.22, 0.38, 1, 8), stalkMat, 24);
+    const capInst = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(1.45, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.5),
+      capMat,
+      24,
+    );
     for (let i = 0; i < 24; i++) {
       const a = rand() * Math.PI * 2;
       const d = 14 + rand() * 68;
@@ -1065,22 +1127,32 @@ export function buildDimensionWorld(
       const fz = Math.sin(a) * d;
       const fy = getDimensionTerrainHeight('alien', fx, fz);
       const h = 3.2 + rand() * 3.8;
-      const flora = new THREE.Group();
-      flora.position.set(fx, fy, fz);
-      const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.38, h, 8), stalkMat);
-      stem.position.y = h * 0.5;
-      const cap = new THREE.Mesh(new THREE.SphereGeometry(1.45, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.5), capMat);
-      cap.position.y = h;
-      flora.add(stem, cap);
-      root.add(flora);
+      dimDummy.position.set(fx, fy + h * 0.5, fz);
+      dimDummy.rotation.set(0, 0, 0);
+      dimDummy.scale.set(1, h, 1);
+      dimDummy.updateMatrix();
+      stemInst.setMatrixAt(i, dimDummy.matrix);
+
+      dimDummy.position.set(fx, fy + h, fz);
+      dimDummy.scale.set(1, 1, 1);
+      dimDummy.updateMatrix();
+      capInst.setMatrixAt(i, dimDummy.matrix);
       colliders.push({ x: fx, z: fz, radius: 0.55 });
     }
+    stemInst.instanceMatrix.needsUpdate = true;
+    stemInst.computeBoundingSphere();
+    capInst.instanceMatrix.needsUpdate = true;
+    capInst.computeBoundingSphere();
+    root.add(stemInst, capInst);
   }
 
   // Secondary Islands (Arctic Frost, Volcanic Badlands, Tropical Jungle)
   if (dim === 'island_arctic') {
     const snowPineMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.72 });
     const trunkMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.88 });
+    const trunkMats: THREE.Matrix4[] = [];
+    const cone1Mats: THREE.Matrix4[] = [];
+    const cone2Mats: THREE.Matrix4[] = [];
     for (let i = 0; i < 26; i++) {
       const a = rand() * Math.PI * 2;
       const d = 16 + rand() * 68;
@@ -1088,17 +1160,33 @@ export function buildDimensionWorld(
       const pz = Math.sin(a) * d;
       const py = getDimensionTerrainHeight(dim, px, pz);
       if (py < OCEAN_LEVEL + 0.5) continue;
-      const pine = new THREE.Group();
-      pine.position.set(px, py, pz);
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.36, 3.2, 7), trunkMat);
-      trunk.position.y = 1.6;
-      const cone1 = new THREE.Mesh(new THREE.ConeGeometry(2.1, 3.8, 8), snowPineMat);
-      cone1.position.y = 3.6;
-      const cone2 = new THREE.Mesh(new THREE.ConeGeometry(1.4, 2.8, 8), snowPineMat);
-      cone2.position.y = 5.4;
-      pine.add(trunk, cone1, cone2);
-      root.add(pine);
+      dimDummy.rotation.set(0, 0, 0);
+      dimDummy.scale.set(1, 1, 1);
+      dimDummy.position.set(px, py + 1.6, pz);
+      dimDummy.updateMatrix();
+      trunkMats.push(dimDummy.matrix.clone());
+      dimDummy.position.set(px, py + 3.6, pz);
+      dimDummy.updateMatrix();
+      cone1Mats.push(dimDummy.matrix.clone());
+      dimDummy.position.set(px, py + 5.4, pz);
+      dimDummy.updateMatrix();
+      cone2Mats.push(dimDummy.matrix.clone());
       colliders.push({ x: px, z: pz, radius: 0.65 });
+    }
+    if (trunkMats.length > 0) {
+      const tInst = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.24, 0.36, 3.2, 7), trunkMat, trunkMats.length);
+      const c1Inst = new THREE.InstancedMesh(new THREE.ConeGeometry(2.1, 3.8, 8), snowPineMat, cone1Mats.length);
+      const c2Inst = new THREE.InstancedMesh(new THREE.ConeGeometry(1.4, 2.8, 8), snowPineMat, cone2Mats.length);
+      trunkMats.forEach((m, idx) => tInst.setMatrixAt(idx, m));
+      cone1Mats.forEach((m, idx) => c1Inst.setMatrixAt(idx, m));
+      cone2Mats.forEach((m, idx) => c2Inst.setMatrixAt(idx, m));
+      tInst.instanceMatrix.needsUpdate = true;
+      c1Inst.instanceMatrix.needsUpdate = true;
+      c2Inst.instanceMatrix.needsUpdate = true;
+      tInst.computeBoundingSphere();
+      c1Inst.computeBoundingSphere();
+      c2Inst.computeBoundingSphere();
+      root.add(tInst, c1Inst, c2Inst);
     }
     const cNode = buildCrystalNodeMesh(0x38bdf8, 1.3);
     const cy = getDimensionTerrainHeight(dim, 22, -18);
@@ -1124,6 +1212,7 @@ export function buildDimensionWorld(
   if (dim === 'island_volcanic') {
     const basaltMat = new THREE.MeshStandardMaterial({ color: 0x292524, roughness: 0.85 });
     const ventMat = new THREE.MeshStandardMaterial({ color: 0xf97316, emissive: 0xdc2626, emissiveIntensity: 1.5 });
+    const rockMatrices: THREE.Matrix4[] = [];
     for (let i = 0; i < 20; i++) {
       const a = (i / 20) * Math.PI * 2;
       const d = 18 + rand() * 58;
@@ -1131,10 +1220,20 @@ export function buildDimensionWorld(
       const vz = Math.sin(a) * d;
       const vy = getDimensionTerrainHeight(dim, vx, vz);
       if (vy < OCEAN_LEVEL + 0.5) continue;
-      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(1.8 + rand() * 1.4, 0), basaltMat);
-      rock.position.set(vx, vy + 0.8, vz);
-      root.add(rock);
+      const sc = 1.8 + rand() * 1.4;
+      dimDummy.position.set(vx, vy + 0.8, vz);
+      dimDummy.rotation.set(0, 0, 0);
+      dimDummy.scale.setScalar(sc);
+      dimDummy.updateMatrix();
+      rockMatrices.push(dimDummy.matrix.clone());
       colliders.push({ x: vx, z: vz, radius: 1.65 });
+    }
+    if (rockMatrices.length > 0) {
+      const rockInst = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), basaltMat, rockMatrices.length);
+      rockMatrices.forEach((m, idx) => rockInst.setMatrixAt(idx, m));
+      rockInst.instanceMatrix.needsUpdate = true;
+      rockInst.computeBoundingSphere();
+      root.add(rockInst);
     }
     const ventNode = buildCrystalNodeMesh(0xf97316, 1.3);
     const vy = getDimensionTerrainHeight(dim, -20, 22);
@@ -1165,6 +1264,8 @@ export function buildDimensionWorld(
   if (dim === 'island_jungle') {
     const barkMat = new THREE.MeshStandardMaterial({ color: 0x5c3a21, roughness: 0.9 });
     const leafMat = new THREE.MeshStandardMaterial({ color: 0x16a34a, roughness: 0.72 });
+    const tMats: THREE.Matrix4[] = [];
+    const cMats: THREE.Matrix4[] = [];
     for (let i = 0; i < 28; i++) {
       const a = rand() * Math.PI * 2;
       const d = 16 + rand() * 68;
@@ -1172,16 +1273,28 @@ export function buildDimensionWorld(
       const jz = Math.sin(a) * d;
       const jy = getDimensionTerrainHeight(dim, jx, jz);
       if (jy < OCEAN_LEVEL + 0.6) continue;
-      const tree = new THREE.Group();
-      tree.position.set(jx, jy, jz);
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.52, 5.2, 8), barkMat);
-      trunk.position.y = 2.6;
-      const crown = new THREE.Mesh(new THREE.SphereGeometry(2.6, 10, 8), leafMat);
-      crown.scale.set(1.2, 0.75, 1.2);
-      crown.position.y = 5.4;
-      tree.add(trunk, crown);
-      root.add(tree);
+      dimDummy.rotation.set(0, 0, 0);
+      dimDummy.position.set(jx, jy + 2.6, jz);
+      dimDummy.scale.set(1, 1, 1);
+      dimDummy.updateMatrix();
+      tMats.push(dimDummy.matrix.clone());
+
+      dimDummy.position.set(jx, jy + 5.4, jz);
+      dimDummy.scale.set(1.2, 0.75, 1.2);
+      dimDummy.updateMatrix();
+      cMats.push(dimDummy.matrix.clone());
       colliders.push({ x: jx, z: jz, radius: 0.7 });
+    }
+    if (tMats.length > 0) {
+      const tInst = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.32, 0.52, 5.2, 8), barkMat, tMats.length);
+      const cInst = new THREE.InstancedMesh(new THREE.SphereGeometry(2.6, 10, 8), leafMat, cMats.length);
+      tMats.forEach((m, idx) => tInst.setMatrixAt(idx, m));
+      cMats.forEach((m, idx) => cInst.setMatrixAt(idx, m));
+      tInst.instanceMatrix.needsUpdate = true;
+      cInst.instanceMatrix.needsUpdate = true;
+      tInst.computeBoundingSphere();
+      cInst.computeBoundingSphere();
+      root.add(tInst, cInst);
     }
     const templeCache = buildGoldBarPedestalMesh();
     const ty = getDimensionTerrainHeight(dim, 24, 18);
@@ -1322,4 +1435,25 @@ export function buildDimensionWorld(
     animatedSpins,
     lavaMesh,
   };
+}
+
+export function disposeDimensionWorld(handle: DimensionWorldHandle): void {
+  handle.root.parent?.remove(handle.root);
+  handle.root.traverse((obj) => {
+    if (
+      obj instanceof THREE.Mesh ||
+      obj instanceof THREE.InstancedMesh ||
+      obj instanceof THREE.Points
+    ) {
+      obj.geometry?.dispose();
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const m of mats) {
+        if (!m) continue;
+        if ('map' in m && m.map instanceof THREE.Texture) {
+          m.map.dispose();
+        }
+        m.dispose();
+      }
+    }
+  });
 }

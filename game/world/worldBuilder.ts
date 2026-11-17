@@ -109,6 +109,11 @@ export interface WorldHandles {
   caveCeilings: CaveCeilingCluster[];
   shipwreckChests: ShipwreckChestHandle[];
   overworldGroup: THREE.Group;
+  activateInteractiveNode: (nodeId: string) => ResourceVisualHandle | undefined;
+  restoreBatchedNode: (nodeId: string) => void;
+  setBatchedNodeVisible: (nodeId: string, visible: boolean) => void;
+  setWorldShadowCasting: (enabled: boolean) => void;
+  dispose: () => void;
 }
 
 function seededRand(seed: number): () => number {
@@ -322,27 +327,127 @@ export function buildIslandWorld(
   waterfallFoam.position.set(WATERFALL_POS.x, 2.66, WATERFALL_POS.z + 4.4);
   overworldGroup.add(waterfallFoam);
 
-  // 5. Drifting 3D Tropical Clouds
+  // Track shadow-casting world objects so Graphics Settings can toggle shadows cleanly
+  const shadowCasters: THREE.Object3D[] = [];
+  const disposableGeos: THREE.BufferGeometry[] = [];
+  const disposableMats: THREE.Material[] = [];
+  const disposableTexs: THREE.Texture[] = [
+    groundTex,
+    barkTex,
+    rockTex,
+    leafTex,
+    waterNormalTex,
+    woodTex,
+  ];
+  let shadowsEnabledState = true;
+
+  // Lightweight InstancedMesh batch collector (dramatically reduces draw calls < 100)
+  interface BatchEntry {
+    geo: THREE.BufferGeometry;
+    mat: THREE.Material;
+    castShadow: boolean;
+    receiveShadow: boolean;
+    matrices: THREE.Matrix4[];
+    colors?: THREE.Color[];
+  }
+  interface BatchSlotRef {
+    mesh: THREE.InstancedMesh;
+    index: number;
+    matrix: THREE.Matrix4;
+  }
+  const batchRegistry = new Map<string, BatchEntry>();
+  const pendingNodeSlots = new Map<
+    string,
+    { key: string; index: number; matrix: THREE.Matrix4 }[]
+  >();
+  const builtBatchMeshes = new Map<string, THREE.InstancedMesh>();
+  const nodeBatchSlots = new Map<string, BatchSlotRef[]>();
+
+  const registerGeometry = <T extends THREE.BufferGeometry>(g: T): T => {
+    disposableGeos.push(g);
+    return g;
+  };
+  const registerMaterial = <T extends THREE.Material>(m: T): T => {
+    disposableMats.push(m);
+    return m;
+  };
+
+  const addBatchInstance = (
+    key: string,
+    geo: THREE.BufferGeometry,
+    mat: THREE.Material,
+    matrix: THREE.Matrix4,
+    options?: {
+      castShadow?: boolean;
+      receiveShadow?: boolean;
+      color?: THREE.Color;
+      nodeId?: string;
+    },
+  ) => {
+    let entry = batchRegistry.get(key);
+    if (!entry) {
+      entry = {
+        geo,
+        mat,
+        castShadow: Boolean(options?.castShadow),
+        receiveShadow: Boolean(options?.receiveShadow),
+        matrices: [],
+      };
+      batchRegistry.set(key, entry);
+    }
+    const idx = entry.matrices.length;
+    const matCopy = matrix.clone();
+    entry.matrices.push(matCopy);
+    if (options?.color) {
+      if (!entry.colors) entry.colors = [];
+      while (entry.colors.length < idx) {
+        entry.colors.push(new THREE.Color(0xffffff));
+      }
+      entry.colors.push(options.color.clone());
+    }
+    if (options?.nodeId) {
+      const list = pendingNodeSlots.get(options.nodeId) ?? [];
+      list.push({ key, index: idx, matrix: matCopy });
+      pendingNodeSlots.set(options.nodeId, list);
+    }
+  };
+
+  // 5. Drifting 3D Tropical Clouds (1 InstancedMesh draw call instead of 72)
   const cloudsGroup = new THREE.Group();
-  const cloudMat = new THREE.MeshStandardMaterial({
-    color: 0xf8fafc,
-    roughness: 0.95,
-    transparent: true,
-    opacity: 0.82,
-  });
+  const cloudMat = registerMaterial(
+    new THREE.MeshStandardMaterial({
+      color: 0xf8fafc,
+      roughness: 0.95,
+      transparent: true,
+      opacity: 0.82,
+    }),
+  );
+  const cloudPuffGeo = registerGeometry(new THREE.SphereGeometry(1, 8, 7));
+  const cloudInstanced = new THREE.InstancedMesh(cloudPuffGeo, cloudMat, 18 * 4);
+  const cloudDummy = new THREE.Object3D();
+  let cloudIdx = 0;
   for (let i = 0; i < 18; i++) {
-    const cluster = new THREE.Group();
     const angle = (i / 18) * Math.PI * 2;
     const dist = 50 + rand() * 140;
-    cluster.position.set(Math.cos(angle) * dist, 56 + rand() * 18, Math.sin(angle) * dist);
+    const cx = Math.cos(angle) * dist;
+    const cy = 56 + rand() * 18;
+    const cz = Math.sin(angle) * dist;
     for (let p = 0; p < 4; p++) {
-      const puff = new THREE.Mesh(new THREE.SphereGeometry(5 + rand() * 5, 8, 7), cloudMat);
-      puff.scale.set(1.5, 0.52, 1.1);
-      puff.position.set((p - 1.5) * 5.2, rand() * 1.8, (rand() - 0.5) * 4);
-      cluster.add(puff);
+      const r = 5 + rand() * 5;
+      cloudDummy.position.set(
+        cx + (p - 1.5) * 5.2,
+        cy + rand() * 1.8,
+        cz + (rand() - 0.5) * 4,
+      );
+      cloudDummy.rotation.set(0, 0, 0);
+      cloudDummy.scale.set(r * 1.5, r * 0.52, r * 1.1);
+      cloudDummy.updateMatrix();
+      cloudInstanced.setMatrixAt(cloudIdx++, cloudDummy.matrix);
     }
-    cloudsGroup.add(cluster);
   }
+  cloudInstanced.instanceMatrix.needsUpdate = true;
+  cloudInstanced.computeBoundingSphere();
+  cloudsGroup.add(cloudInstanced);
   overworldGroup.add(cloudsGroup);
 
   // 6. Hyper-Realistic Shipwreck & Beaching Event with Tiered Interior Zones & Boarding Routes
@@ -594,7 +699,7 @@ export function buildIslandWorld(
     ),
   );
 
-  // Scattered chaotic debris field in water/sand around shipwreck
+  // Scattered chaotic debris field in water/sand around shipwreck (batched into 2 InstancedMeshes)
   const debrisSpots: [number, number, number][] = [
     [-6.5, 120, 0.4],
     [5.2, 122, -0.7],
@@ -604,18 +709,24 @@ export function buildIslandWorld(
     [-8.2, 132, 1.5],
     [7.4, 117, -0.5],
   ];
+  const debrisPlankGeo = registerGeometry(new THREE.BoxGeometry(0.5, 0.08, 2.8));
+  const debrisBarrelGeo = registerGeometry(new THREE.CylinderGeometry(0.35, 0.35, 0.85, 9));
+  const batchDummy = new THREE.Object3D();
   debrisSpots.forEach(([dx, dz, rot]) => {
     const dy = getTerrainHeight(dx, dz);
-    const plank = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 2.8), wreckMat);
-    plank.position.set(dx, Math.max(OCEAN_LEVEL + 0.05, dy + 0.06), dz);
-    plank.rotation.y = rot;
-    overworldGroup.add(plank);
+    batchDummy.position.set(dx, Math.max(OCEAN_LEVEL + 0.05, dy + 0.06), dz);
+    batchDummy.rotation.set(0, rot, 0);
+    batchDummy.scale.set(1, 1, 1);
+    batchDummy.updateMatrix();
+    addBatchInstance('debris_plank', debrisPlankGeo, wreckMat, batchDummy.matrix);
 
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.85, 9), wreckMat);
-    barrel.position.set(dx + 0.9, Math.max(OCEAN_LEVEL + 0.15, dy + 0.35), dz + 0.6);
-    barrel.rotation.z = Math.PI / 2.4;
-    barrel.castShadow = true;
-    overworldGroup.add(barrel);
+    batchDummy.position.set(dx + 0.9, Math.max(OCEAN_LEVEL + 0.15, dy + 0.35), dz + 0.6);
+    batchDummy.rotation.set(0, 0, Math.PI / 2.4);
+    batchDummy.scale.set(1, 1, 1);
+    batchDummy.updateMatrix();
+    addBatchInstance('debris_barrel', debrisBarrelGeo, wreckMat, batchDummy.matrix, {
+      castShadow: true,
+    });
   });
 
   // 7. Obsidian Mountain Cavern
@@ -892,6 +1003,8 @@ export function buildIslandWorld(
   yardDirt.receiveShadow = true;
   overworldGroup.add(yardDirt);
 
+  const fencePostUnitGeo = registerGeometry(new THREE.BoxGeometry(0.16, 1.28, 0.16));
+  const fenceRailUnitGeo = registerGeometry(new THREE.BoxGeometry(0.09, 0.1, 1));
   const addFenceSpan = (ax: number, az: number, bx: number, bz: number) => {
     const len = Math.hypot(bx - ax, bz - az);
     const angle = Math.atan2(bx - ax, bz - az);
@@ -901,21 +1014,26 @@ export function buildIslandWorld(
       const px = ax + (bx - ax) * t;
       const pz = az + (bz - az) * t;
       const py = getTerrainHeight(px, pz);
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.28, 0.16), darkBeamMat);
-      post.position.set(px, py + 0.64, pz);
-      post.castShadow = true;
-      overworldGroup.add(post);
+      batchDummy.position.set(px, py + 0.64, pz);
+      batchDummy.rotation.set(0, 0, 0);
+      batchDummy.scale.set(1, 1, 1);
+      batchDummy.updateMatrix();
+      addBatchInstance('paddock_post', fencePostUnitGeo, darkBeamMat, batchDummy.matrix, {
+        castShadow: true,
+      });
       colliders.push({ x: px, z: pz, radius: 0.25 });
     }
     const mx = (ax + bx) / 2;
     const mz = (az + bz) / 2;
     const my = getTerrainHeight(mx, mz);
     [0.52, 0.98].forEach((ry) => {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.1, len), barnWoodMat);
-      rail.position.set(mx, my + ry, mz);
-      rail.rotation.y = angle;
-      rail.castShadow = true;
-      overworldGroup.add(rail);
+      batchDummy.position.set(mx, my + ry, mz);
+      batchDummy.rotation.set(0, angle, 0);
+      batchDummy.scale.set(1, 1, len);
+      batchDummy.updateMatrix();
+      addBatchInstance('paddock_rail', fenceRailUnitGeo, barnWoodMat, batchDummy.matrix, {
+        castShadow: true,
+      });
     });
   };
   // Rustic split-rail fence segments around dusty paddock (open entrance on east side)
@@ -975,11 +1093,15 @@ export function buildIslandWorld(
     overworldGroup.add(mistRing);
   }
 
-  // 2) Snowy Woodland Plateau (Timber Wolves)
-  const snowCapMat = new THREE.MeshStandardMaterial({ color: 0xeef2f6, roughness: 0.88 });
-  const snowCedarLeafMat = new THREE.MeshStandardMaterial({ color: 0x1e4a38, map: leafTex, roughness: 0.85 });
-  const snowBarkMat = new THREE.MeshStandardMaterial({ color: 0x453226, map: barkTex, roughness: 0.94 });
-  const snowBoulderMat = new THREE.MeshStandardMaterial({ color: 0x64748b, map: rockTex, roughness: 0.9 });
+  // 2) Snowy Woodland Plateau (Timber Wolves) - Batched into InstancedMeshes
+  const snowCapMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xeef2f6, roughness: 0.88 }));
+  const snowCedarLeafMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x1e4a38, map: leafTex, roughness: 0.85 }));
+  const snowBarkMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x453226, map: barkTex, roughness: 0.94 }));
+  const snowBoulderMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x64748b, map: rockTex, roughness: 0.9 }));
+  const unitTrunkGeo = registerGeometry(new THREE.CylinderGeometry(0.28, 0.42, 1, 8));
+  const unitConeGeo = registerGeometry(new THREE.ConeGeometry(1, 1, 8));
+  const unitRockGeo = registerGeometry(new THREE.DodecahedronGeometry(1, 1));
+
   const snowTreeOffsets: [number, number, number][] = [
     [-7.5, -5.5, 1.05],
     [7.0, -6.2, 1.15],
@@ -992,23 +1114,24 @@ export function buildIslandWorld(
     const tx = SNOWY_WOODLAND_POS.x + ox;
     const tz = SNOWY_WOODLAND_POS.z + oz;
     const ty = getTerrainHeight(tx, tz);
-    const tree = new THREE.Group();
-    tree.position.set(tx, ty, tz);
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.28 * sc, 0.42 * sc, 4.8 * sc, 8), snowBarkMat);
-    trunk.position.y = 2.4 * sc;
-    trunk.castShadow = true;
-    tree.add(trunk);
+    batchDummy.position.set(tx, ty + 2.4 * sc, tz);
+    batchDummy.rotation.set(0, 0, 0);
+    batchDummy.scale.set(sc, 4.8 * sc, sc);
+    batchDummy.updateMatrix();
+    addBatchInstance('hab_trunk', unitTrunkGeo, snowBarkMat, batchDummy.matrix, { castShadow: true });
     for (let tier = 0; tier < 4; tier++) {
-      const tierY = (2.1 + tier * 1.05) * sc;
+      const tierY = ty + (2.1 + tier * 1.05) * sc;
       const tierR = (2.15 - tier * 0.42) * sc;
-      const bough = new THREE.Mesh(new THREE.ConeGeometry(tierR, 1.55 * sc, 8), snowCedarLeafMat);
-      bough.position.y = tierY;
-      bough.castShadow = true;
-      const snowTop = new THREE.Mesh(new THREE.ConeGeometry(tierR * 0.86, 0.58 * sc, 8), snowCapMat);
-      snowTop.position.y = tierY + 0.48 * sc;
-      tree.add(bough, snowTop);
+      batchDummy.position.set(tx, tierY, tz);
+      batchDummy.scale.set(tierR, 1.55 * sc, tierR);
+      batchDummy.updateMatrix();
+      addBatchInstance('hab_cedar_bough', unitConeGeo, snowCedarLeafMat, batchDummy.matrix, { castShadow: true });
+
+      batchDummy.position.set(tx, tierY + 0.48 * sc, tz);
+      batchDummy.scale.set(tierR * 0.86, 0.58 * sc, tierR * 0.86);
+      batchDummy.updateMatrix();
+      addBatchInstance('hab_snow_cap', unitConeGeo, snowCapMat, batchDummy.matrix);
     }
-    overworldGroup.add(tree);
     colliders.push({ x: tx, z: tz, radius: 0.34 * sc });
   });
   [
@@ -1019,19 +1142,21 @@ export function buildIslandWorld(
     const rx = SNOWY_WOODLAND_POS.x + ox;
     const rz = SNOWY_WOODLAND_POS.z + oz;
     const ry = getTerrainHeight(rx, rz);
-    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(1.05, 1), snowBoulderMat);
-    rock.scale.set(1.25, 0.72, 1.05);
-    rock.position.set(rx, ry + 0.38, rz);
-    rock.castShadow = true;
-    const snowDrift = new THREE.Mesh(new THREE.DodecahedronGeometry(0.86, 1), snowCapMat);
-    snowDrift.scale.set(1.18, 0.35, 0.96);
-    snowDrift.position.set(rx, ry + 0.85, rz);
-    overworldGroup.add(rock, snowDrift);
+    batchDummy.position.set(rx, ry + 0.38, rz);
+    batchDummy.rotation.set(0, 0, 0);
+    batchDummy.scale.set(1.05 * 1.25, 1.05 * 0.72, 1.05 * 1.05);
+    batchDummy.updateMatrix();
+    addBatchInstance('hab_snow_rock', unitRockGeo, snowBoulderMat, batchDummy.matrix, { castShadow: true });
+
+    batchDummy.position.set(rx, ry + 0.85, rz);
+    batchDummy.scale.set(0.86 * 1.18, 0.86 * 0.35, 0.86 * 0.96);
+    batchDummy.updateMatrix();
+    addBatchInstance('hab_snow_drift', unitRockGeo, snowCapMat, batchDummy.matrix);
     colliders.push({ x: rx, z: rz, radius: 1.05 });
   });
 
-  // 3) Rocky Crystal River Bank & Dense Pine Pines (Grizzly Bear territory near (-4, -26))
-  const riverBankRockMat = new THREE.MeshStandardMaterial({ color: 0x706c66, map: rockTex, roughness: 0.85 });
+  // 3) Rocky Crystal River Bank & Dense Pines (Grizzly Bear territory near (-4, -26))
+  const riverBankRockMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x706c66, map: rockTex, roughness: 0.85 }));
   const bankPines: [number, number, number][] = [
     [-11.2, -23.5, 1.1],
     [-10.4, -31.2, 1.25],
@@ -1041,22 +1166,18 @@ export function buildIslandWorld(
   ];
   bankPines.forEach(([px, pz, sc]) => {
     const py = getTerrainHeight(px, pz);
-    const pine = new THREE.Group();
-    pine.position.set(px, py, pz);
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.26 * sc, 0.4 * sc, 5.2 * sc, 8), snowBarkMat);
-    trunk.position.y = 2.6 * sc;
-    trunk.castShadow = true;
-    pine.add(trunk);
+    batchDummy.position.set(px, py + 2.6 * sc, pz);
+    batchDummy.rotation.set(0, 0, 0);
+    batchDummy.scale.set(0.95 * sc, 5.2 * sc, 0.95 * sc);
+    batchDummy.updateMatrix();
+    addBatchInstance('hab_trunk', unitTrunkGeo, snowBarkMat, batchDummy.matrix, { castShadow: true });
     for (let t = 0; t < 4; t++) {
-      const bough = new THREE.Mesh(
-        new THREE.ConeGeometry((2.1 - t * 0.4) * sc, 1.65 * sc, 8),
-        snowCedarLeafMat,
-      );
-      bough.position.y = (2.3 + t * 1.1) * sc;
-      bough.castShadow = true;
-      pine.add(bough);
+      const tr = (2.1 - t * 0.4) * sc;
+      batchDummy.position.set(px, py + (2.3 + t * 1.1) * sc, pz);
+      batchDummy.scale.set(tr, 1.65 * sc, tr);
+      batchDummy.updateMatrix();
+      addBatchInstance('hab_cedar_bough', unitConeGeo, snowCedarLeafMat, batchDummy.matrix, { castShadow: true });
     }
-    overworldGroup.add(pine);
     colliders.push({ x: px, z: pz, radius: 0.34 * sc });
   });
   [
@@ -1066,19 +1187,20 @@ export function buildIslandWorld(
     [-1.5, -33.2, 0.8],
   ].forEach(([rx, rz, sc]) => {
     const ry = getTerrainHeight(rx, rz);
-    const cobble = new THREE.Mesh(new THREE.DodecahedronGeometry(0.85 * sc, 1), riverBankRockMat);
-    cobble.scale.set(1.3, 0.65, 1.1);
-    cobble.position.set(rx, ry + 0.3 * sc, rz);
-    cobble.castShadow = true;
-    overworldGroup.add(cobble);
+    batchDummy.position.set(rx, ry + 0.3 * sc, rz);
+    batchDummy.rotation.set(0, 0, 0);
+    batchDummy.scale.set(0.85 * sc * 1.3, 0.85 * sc * 0.65, 0.85 * sc * 1.1);
+    batchDummy.updateMatrix();
+    addBatchInstance('hab_river_rock', unitRockGeo, riverBankRockMat, batchDummy.matrix, { castShadow: true });
     colliders.push({ x: rx, z: rz, radius: 0.8 * sc });
   });
 
-  // 4) Autumn Forest Grove & Fallen Leaves (Red Fox undergrowth)
+  // 4) Autumn Forest Grove & Fallen Leaves (Batched into 4 InstancedMeshes with instanceColor)
   const autumnColors = [0xd97706, 0xb45309, 0xc2410c, 0xeab308];
-  const autumnLeafMats = autumnColors.map(
-    (col) => new THREE.MeshStandardMaterial({ color: col, map: leafTex, roughness: 0.84 }),
+  const autumnCrownMat = registerMaterial(
+    new THREE.MeshStandardMaterial({ color: 0xffffff, map: leafTex, roughness: 0.84 }),
   );
+  const autumnTint = new THREE.Color();
   const autumnTreeOffsets: [number, number, number][] = [
     [-5.5, -4.8, 1.05],
     [5.8, -3.6, 1.15],
@@ -1089,105 +1211,118 @@ export function buildIslandWorld(
     const ax = AUTUMN_GROVE_POS.x + ox;
     const az = AUTUMN_GROVE_POS.z + oz;
     const ay = getTerrainHeight(ax, az);
-    const tree = new THREE.Group();
-    tree.position.set(ax, ay, az);
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.24 * sc, 0.38 * sc, 3.6 * sc, 8), snowBarkMat);
-    trunk.position.y = 1.8 * sc;
-    trunk.castShadow = true;
-    tree.add(trunk);
-    for (let c = 0; c < 3; c++) {
-      const ca = (c / 3) * Math.PI * 2 + idx;
-      const crown = new THREE.Mesh(
-        new THREE.DodecahedronGeometry(1.55 * sc, 1),
-        autumnLeafMats[(idx + c) % autumnLeafMats.length],
+    batchDummy.position.set(ax, ay + 1.8 * sc, az);
+    batchDummy.rotation.set(0, 0, 0);
+    batchDummy.scale.set(0.9 * sc, 3.6 * sc, 0.9 * sc);
+    batchDummy.updateMatrix();
+    addBatchInstance('hab_trunk', unitTrunkGeo, snowBarkMat, batchDummy.matrix, { castShadow: true });
+    for (let cIdx = 0; cIdx < 3; cIdx++) {
+      const ca = (cIdx / 3) * Math.PI * 2 + idx;
+      batchDummy.position.set(
+        ax + Math.cos(ca) * 0.75 * sc,
+        ay + (3.6 + (cIdx % 2) * 0.65) * sc,
+        az + Math.sin(ca) * 0.75 * sc,
       );
-      crown.scale.set(1.15, 0.78, 1.15);
-      crown.position.set(Math.cos(ca) * 0.75 * sc, (3.6 + (c % 2) * 0.65) * sc, Math.sin(ca) * 0.75 * sc);
-      crown.castShadow = true;
-      tree.add(crown);
+      batchDummy.rotation.set(0, 0, 0);
+      batchDummy.scale.set(1.55 * sc * 1.15, 1.55 * sc * 0.78, 1.55 * sc * 1.15);
+      batchDummy.updateMatrix();
+      autumnTint.setHex(autumnColors[(idx + cIdx) % autumnColors.length]);
+      addBatchInstance('hab_autumn_crown', unitRockGeo, autumnCrownMat, batchDummy.matrix, {
+        castShadow: true,
+        color: autumnTint,
+      });
     }
-    overworldGroup.add(tree);
     colliders.push({ x: ax, z: az, radius: 0.32 * sc });
   });
-  // Undergrowth ferns & fallen autumn leaves on ground
-  const autumnUndergrowthMat = new THREE.MeshStandardMaterial({ color: 0x9a3412, roughness: 0.88 });
+  const autumnUndergrowthMat = registerMaterial(
+    new THREE.MeshStandardMaterial({ color: 0x9a3412, roughness: 0.88 }),
+  );
+  const unitLeafGeo = registerGeometry(new THREE.PlaneGeometry(1, 1));
+  const leafObj = new THREE.Object3D();
   for (let lf = 0; lf < 48; lf++) {
     const la = (lf / 48) * Math.PI * 2 + rand() * 0.5;
     const lr = 1.2 + rand() * 8.5;
     const lx = AUTUMN_GROVE_POS.x + Math.cos(la) * lr;
     const lz = AUTUMN_GROVE_POS.z + Math.sin(la) * lr;
     const ly = getTerrainHeight(lx, lz);
-    const leafPatch = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.28 + rand() * 0.18, 0.2 + rand() * 0.14),
-      autumnLeafMats[lf % autumnLeafMats.length],
-    );
-    leafPatch.rotation.x = -Math.PI / 2;
-    leafPatch.rotation.z = rand() * Math.PI * 2;
-    leafPatch.position.set(lx, ly + 0.03, lz);
-    overworldGroup.add(leafPatch);
+    leafObj.position.set(lx, ly + 0.03, lz);
+    leafObj.rotation.set(-Math.PI / 2, 0, rand() * Math.PI * 2);
+    leafObj.scale.set(0.28 + rand() * 0.18, 0.2 + rand() * 0.14, 1);
+    leafObj.updateMatrix();
+    autumnTint.setHex(autumnColors[lf % autumnColors.length]);
+    addBatchInstance('hab_autumn_leaf', unitLeafGeo, autumnCrownMat, leafObj.matrix, {
+      color: autumnTint,
+    });
   }
+  const unitFrondGeo = registerGeometry(new THREE.ConeGeometry(0.18, 0.82, 4));
+  const frondPivot = new THREE.Object3D();
+  const frondChild = new THREE.Object3D();
+  frondPivot.add(frondChild);
   for (let u = 0; u < 10; u++) {
     const ua = (u / 10) * Math.PI * 2 + 0.3;
     const ur = 3.8 + (u % 3) * 1.9;
     const ux = AUTUMN_GROVE_POS.x + Math.cos(ua) * ur;
     const uz = AUTUMN_GROVE_POS.z + Math.sin(ua) * ur;
     const uy = getTerrainHeight(ux, uz);
-    const bush = new THREE.Group();
-    bush.position.set(ux, uy, uz);
+    frondPivot.position.set(ux, uy, uz);
+    frondPivot.updateMatrixWorld(true);
     for (let f = 0; f < 4; f++) {
-      const frond = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.82, 4), autumnUndergrowthMat);
-      frond.position.y = 0.28;
-      frond.rotation.z = 0.68;
-      frond.rotation.y = (f / 4) * Math.PI * 2;
-      bush.add(frond);
+      frondChild.position.set(0, 0.28, 0);
+      frondChild.rotation.set(0, (f / 4) * Math.PI * 2, 0.68);
+      frondChild.scale.set(1, 1, 1);
+      frondChild.updateMatrixWorld(true);
+      addBatchInstance('hab_autumn_frond', unitFrondGeo, autumnUndergrowthMat, frondChild.matrixWorld);
     }
-    overworldGroup.add(bush);
   }
 
   // 5) Murky Jungle Swamp Lagoon (Saltwater Crocodile territory)
-  const swampWaterMat = new THREE.MeshStandardMaterial({
-    color: 0x2d3b22,
-    normalMap: waterNormalTex,
-    normalScale: new THREE.Vector2(0.25, 0.25),
-    roughness: 0.22,
-    metalness: 0.14,
-    transparent: true,
-    opacity: 0.9,
-  });
-  const swampMudMat = new THREE.MeshStandardMaterial({ color: 0x3b3322, roughness: 0.72 });
+  const swampWaterMat = registerMaterial(
+    new THREE.MeshStandardMaterial({
+      color: 0x2d3b22,
+      normalMap: waterNormalTex,
+      normalScale: new THREE.Vector2(0.25, 0.25),
+      roughness: 0.22,
+      metalness: 0.14,
+      transparent: true,
+      opacity: 0.9,
+    }),
+  );
+  const swampMudMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x3b3322, roughness: 0.72 }));
   const swampBankRing = new THREE.Mesh(
-    new THREE.RingGeometry(SWAMP_POS.radius - 0.8, SWAMP_POS.radius + 2.4, 28),
+    registerGeometry(new THREE.RingGeometry(SWAMP_POS.radius - 0.8, SWAMP_POS.radius + 2.4, 28)),
     swampMudMat,
   );
   swampBankRing.rotation.x = -Math.PI / 2;
   swampBankRing.position.set(SWAMP_POS.x, SWAMP_POS.waterY + 0.03, SWAMP_POS.z);
   swampBankRing.receiveShadow = true;
   const swampWater = new THREE.Mesh(
-    new THREE.CircleGeometry(SWAMP_POS.radius + 0.6, 30),
+    registerGeometry(new THREE.CircleGeometry(SWAMP_POS.radius + 0.6, 30)),
     swampWaterMat,
   );
   swampWater.rotation.x = -Math.PI / 2;
   swampWater.position.set(SWAMP_POS.x, SWAMP_POS.waterY, SWAMP_POS.z);
   overworldGroup.add(swampBankRing, swampWater);
 
-  // Mossy swamp logs & dense jungle reeds along lagoon edge
-  const swampReedMat = new THREE.MeshStandardMaterial({ color: 0x365314, roughness: 0.86 });
+  // Mossy swamp logs & dense jungle reeds along lagoon edge (70 reeds in 1 InstancedMesh)
+  const swampReedMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x365314, roughness: 0.86 }));
+  const unitReedGeo = registerGeometry(new THREE.ConeGeometry(0.06, 1.35, 4));
   for (let r = 0; r < 14; r++) {
     const ra = (r / 14) * Math.PI * 2;
     const rx = SWAMP_POS.x + Math.cos(ra) * (SWAMP_POS.radius - 0.4 + (r % 2) * 1.3);
     const rz = SWAMP_POS.z + Math.sin(ra) * (SWAMP_POS.radius - 0.4 + (r % 2) * 1.3);
     const ry = Math.max(SWAMP_POS.waterY - 0.2, getTerrainHeight(rx, rz));
-    const clump = new THREE.Group();
-    clump.position.set(rx, ry, rz);
     for (let s = 0; s < 5; s++) {
-      const reed = new THREE.Mesh(new THREE.ConeGeometry(0.06, 1.35, 4), swampReedMat);
-      reed.position.set((s - 2) * 0.14, 0.62, ((s % 2) - 0.5) * 0.16);
-      reed.rotation.z = (s - 2) * 0.1;
-      clump.add(reed);
+      batchDummy.position.set(rx + (s - 2) * 0.14, ry + 0.62, rz + ((s % 2) - 0.5) * 0.16);
+      batchDummy.rotation.set(0, 0, (s - 2) * 0.1);
+      batchDummy.scale.set(1, 1, 1);
+      batchDummy.updateMatrix();
+      addBatchInstance('hab_swamp_reed', unitReedGeo, swampReedMat, batchDummy.matrix);
     }
-    overworldGroup.add(clump);
   }
-  const sunkenLog = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.34, 4.4, 8), snowBarkMat);
+  const sunkenLog = new THREE.Mesh(
+    registerGeometry(new THREE.CylinderGeometry(0.28, 0.34, 4.4, 8)),
+    snowBarkMat,
+  );
   sunkenLog.position.set(SWAMP_POS.x - 4.2, SWAMP_POS.waterY + 0.02, SWAMP_POS.z + 3.8);
   sunkenLog.rotation.set(0.06, 0.72, Math.PI / 2);
   overworldGroup.add(sunkenLog);
@@ -1263,44 +1398,77 @@ export function buildIslandWorld(
   const resourceMeshes = new Map<string, THREE.Object3D>();
   const resourceHandles = new Map<string, ResourceVisualHandle>();
 
-  const palmTrunkMat = new THREE.MeshStandardMaterial({ color: 0x855a3c, map: barkTex, roughness: 0.92 });
-  const palmLeafMat = new THREE.MeshStandardMaterial({ color: 0x358f42, map: leafTex, roughness: 0.76 });
-  const jungleTrunkMat = new THREE.MeshStandardMaterial({ color: 0x5c3d28, map: barkTex, roughness: 0.94 });
-  const jungleLeafMat = new THREE.MeshStandardMaterial({ color: 0x227038, map: leafTex, roughness: 0.8 });
-  const banyanTrunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4b34, map: barkTex, roughness: 0.93 });
-  const banyanLeafMat = new THREE.MeshStandardMaterial({ color: 0x1b5e30, map: leafTex, roughness: 0.82 });
-  const cedarTrunkMat = new THREE.MeshStandardMaterial({ color: 0x4f3422, map: barkTex, roughness: 0.95 });
-  const cedarLeafMat = new THREE.MeshStandardMaterial({ color: 0x1f5c3a, map: leafTex, roughness: 0.84 });
-  const heartwoodCutMat = new THREE.MeshStandardMaterial({ color: 0xd4a36a, roughness: 0.78 });
-  const coconutMat = new THREE.MeshStandardMaterial({ color: 0x4b2e19, roughness: 0.85 });
+  const palmTrunkMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x855a3c, map: barkTex, roughness: 0.92 }));
+  const palmLeafMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x358f42, map: leafTex, roughness: 0.76 }));
+  const jungleTrunkMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x5c3d28, map: barkTex, roughness: 0.94 }));
+  const jungleLeafMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x227038, map: leafTex, roughness: 0.8 }));
+  const banyanTrunkMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x6b4b34, map: barkTex, roughness: 0.93 }));
+  const banyanLeafMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x1b5e30, map: leafTex, roughness: 0.82 }));
+  const cedarTrunkMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x4f3422, map: barkTex, roughness: 0.95 }));
+  const cedarLeafMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x1f5c3a, map: leafTex, roughness: 0.84 }));
+  const heartwoodCutMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xd4a36a, roughness: 0.78 }));
+  const coconutMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x4b2e19, roughness: 0.85 }));
 
-  const boulderMat = new THREE.MeshStandardMaterial({ color: 0x7c7670, map: rockTex, roughness: 0.92 });
-  const smallStoneMat = new THREE.MeshStandardMaterial({ color: 0x8b8680, map: rockTex, roughness: 0.88 });
-  const mountainRockMat = new THREE.MeshStandardMaterial({ color: 0x5d5853, map: rockTex, roughness: 0.94 });
-  const flintMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.32, metalness: 0.25 });
-  const oreRockMat = new THREE.MeshStandardMaterial({ color: 0x4a4540, map: rockTex, roughness: 0.9 });
-  const oreVeinMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.28, metalness: 0.82 });
-  const crackMat = new THREE.MeshStandardMaterial({ color: 0x171412, roughness: 0.98 });
+  const boulderMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x7c7670, map: rockTex, roughness: 0.92 }));
+  const smallStoneMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x8b8680, map: rockTex, roughness: 0.88 }));
+  const mountainRockMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x5d5853, map: rockTex, roughness: 0.94 }));
+  const flintMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.32, metalness: 0.25 }));
+  const oreRockMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x4a4540, map: rockTex, roughness: 0.9 }));
+  const oreVeinMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.28, metalness: 0.82 }));
+  const crackMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x171412, roughness: 0.98 }));
 
-  const wheatMat = new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.86 });
-  const sugarcaneMat = new THREE.MeshStandardMaterial({ color: 0x84cc16, roughness: 0.72 });
-  const sugarcaneNodeMat = new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.8 });
-  const grassMat = new THREE.MeshStandardMaterial({ color: 0x65a30d, roughness: 0.88 });
-  const berryBushMat = new THREE.MeshStandardMaterial({ color: 0x15803d, map: leafTex, roughness: 0.85 });
-  const berryFruitMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.45 });
-  const fernMat = new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.84 });
-  const mushroomCapMat = new THREE.MeshStandardMaterial({ color: 0xc27849, roughness: 0.7 });
-  const mushroomStemMat = new THREE.MeshStandardMaterial({ color: 0xe7e5e4, roughness: 0.85 });
-  const clayMat = new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.94 });
-  const sandMoundMat = new THREE.MeshStandardMaterial({ color: 0xfde047, roughness: 0.95 });
+  const wheatMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.86 }));
+  const sugarcaneMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x84cc16, roughness: 0.72 }));
+  const sugarcaneNodeMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.8 }));
+  const grassMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x65a30d, roughness: 0.88 }));
+  const berryBushMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x15803d, map: leafTex, roughness: 0.85 }));
+  const berryFruitMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.45 }));
+  const fernMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.84 }));
+  const mushroomCapMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xc27849, roughness: 0.7 }));
+  const mushroomStemMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xe7e5e4, roughness: 0.85 }));
+  const clayMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.94 }));
+  const sandMoundMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xfde047, roughness: 0.95 }));
 
-  function addRootFlares(parent: THREE.Group, trunkMat: THREE.Material, count: number, spread: number, height: number) {
+  // Shared geometries across all resource nodes (prevents hundreds of redundant GPU buffers)
+  const gCylTaper8 = registerGeometry(new THREE.CylinderGeometry(0.75, 1.0, 1, 8));
+  const gCylTaper6 = registerGeometry(new THREE.CylinderGeometry(0.45, 1.0, 1, 6));
+  const gCylStraight8 = registerGeometry(new THREE.CylinderGeometry(1, 1, 1, 8));
+  const gCylStraight5 = registerGeometry(new THREE.CylinderGeometry(0.75, 1, 1, 5));
+  const gCone4 = registerGeometry(new THREE.ConeGeometry(1, 1, 4));
+  const gCone5 = registerGeometry(new THREE.ConeGeometry(1, 1, 5));
+  const gCone8 = registerGeometry(new THREE.ConeGeometry(1, 1, 8));
+  const gCone10 = registerGeometry(new THREE.ConeGeometry(1, 1, 10));
+  const gDodec0 = registerGeometry(new THREE.DodecahedronGeometry(1, 0));
+  const gDodec1 = registerGeometry(new THREE.DodecahedronGeometry(1, 1));
+  const gSphere7 = registerGeometry(new THREE.SphereGeometry(1, 7, 6));
+  const gOct0 = registerGeometry(new THREE.OctahedronGeometry(1, 0));
+  const gBox1 = registerGeometry(new THREE.BoxGeometry(1, 1, 1));
+  const gCircle8 = registerGeometry(new THREE.CircleGeometry(1, 8));
+
+  interface NodeVisualMeta {
+    kind: ResourceNodeKind;
+    x: number;
+    y: number;
+    z: number;
+    scale: number;
+    yaw: number;
+    lean: number;
+    seed: number;
+  }
+  const nodeMetaMap = new Map<string, NodeVisualMeta>();
+
+  function addRootFlares(
+    parent: THREE.Group,
+    trunkMat: THREE.Material,
+    count: number,
+    spread: number,
+    height: number,
+    nodeRand: () => number,
+  ) {
     for (let r = 0; r < count; r++) {
-      const a = (r / count) * Math.PI * 2 + rand() * 0.35;
-      const root = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.08, 0.22, height, 6),
-        trunkMat,
-      );
+      const a = (r / count) * Math.PI * 2 + nodeRand() * 0.35;
+      const root = new THREE.Mesh(gCylTaper6, trunkMat);
+      root.scale.set(0.22, height, 0.22);
       root.position.set(Math.cos(a) * spread, height * 0.36, Math.sin(a) * spread);
       root.rotation.z = Math.cos(a) * 0.55;
       root.rotation.x = -Math.sin(a) * 0.55;
@@ -1317,10 +1485,8 @@ export function buildIslandWorld(
       [-0.32 * scaleR, 0.42 * scaleR, -0.45 * scaleR, -0.7, 0.2],
     ];
     offsets.forEach(([ox, oy, oz, rz, ry]) => {
-      const crack = new THREE.Mesh(
-        new THREE.BoxGeometry(0.11 * scaleR, 0.56 * scaleR, 0.12 * scaleR),
-        crackMat,
-      );
+      const crack = new THREE.Mesh(gBox1, crackMat);
+      crack.scale.set(0.11 * scaleR, 0.56 * scaleR, 0.12 * scaleR);
       crack.position.set(ox, oy, oz);
       crack.rotation.set(0.3, ry, rz);
       crack.visible = false;
@@ -1330,16 +1496,20 @@ export function buildIslandWorld(
     return cracks;
   }
 
-  function buildNodeMesh(kind: ResourceNodeKind, scale: number): ResourceVisualHandle {
+  function buildNodeMesh(meta: NodeVisualMeta): ResourceVisualHandle {
+    const { kind, scale, lean, seed } = meta;
+    const nodeRand = seededRand(seed);
     const root = new THREE.Group();
 
     if (kind === 'palm_tree') {
       const stumpMesh = new THREE.Group();
-      addRootFlares(stumpMesh, palmTrunkMat, 5, 0.26, 0.52);
-      const stumpBase = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.35, 0.65, 8), palmTrunkMat);
+      addRootFlares(stumpMesh, palmTrunkMat, 5, 0.26, 0.52, nodeRand);
+      const stumpBase = new THREE.Mesh(gCylTaper8, palmTrunkMat);
+      stumpBase.scale.set(0.35, 0.65, 0.35);
       stumpBase.position.y = 0.32;
-      stumpBase.castShadow = true;
-      const stumpTop = new THREE.Mesh(new THREE.CircleGeometry(0.27, 8), heartwoodCutMat);
+      stumpBase.castShadow = shadowsEnabledState;
+      const stumpTop = new THREE.Mesh(gCircle8, heartwoodCutMat);
+      stumpTop.scale.setScalar(0.27);
       stumpTop.rotation.x = -Math.PI / 2;
       stumpTop.position.y = 0.655;
       stumpMesh.add(stumpBase, stumpTop);
@@ -1347,26 +1517,25 @@ export function buildIslandWorld(
 
       const felledPivot = new THREE.Group();
       felledPivot.position.y = 0.62;
-      const lean = (rand() - 0.5) * 0.26;
 
-      // 3-segment curved tropical palm trunk
       let curX = 0;
       let curY = 0;
       for (let s = 0; s < 3; s++) {
         const segH = 1.65;
         const rBot = 0.27 - s * 0.04;
-        const rTop = 0.23 - s * 0.04;
-        const seg = new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBot, segH, 8), palmTrunkMat);
+        const seg = new THREE.Mesh(gCylTaper8, palmTrunkMat);
+        seg.scale.set(rBot, segH, rBot);
         const tilt = lean * (s + 1) * 0.45;
         seg.position.set(curX - Math.sin(tilt) * 0.3, curY + segH * 0.5, 0);
         seg.rotation.z = tilt;
-        seg.castShadow = true;
+        seg.castShadow = shadowsEnabledState;
         felledPivot.add(seg);
         curX -= Math.sin(tilt) * 0.55;
         curY += segH * 0.96;
       }
 
-      const trunkCutBand = new THREE.Mesh(new THREE.CylinderGeometry(0.285, 0.285, 0.22, 8), heartwoodCutMat);
+      const trunkCutBand = new THREE.Mesh(gCylStraight8, heartwoodCutMat);
+      trunkCutBand.scale.set(0.285, 0.22, 0.285);
       trunkCutBand.position.y = 0.14;
       trunkCutBand.visible = false;
       felledPivot.add(trunkCutBand);
@@ -1374,7 +1543,8 @@ export function buildIslandWorld(
       const crown = new THREE.Group();
       crown.position.set(curX, curY, 0);
       for (let c = 0; c < 3; c++) {
-        const coco = new THREE.Mesh(new THREE.SphereGeometry(0.14, 7, 6), coconutMat);
+        const coco = new THREE.Mesh(gSphere7, coconutMat);
+        coco.scale.setScalar(0.14);
         const ca = (c / 3) * Math.PI * 2;
         coco.position.set(Math.cos(ca) * 0.24, -0.18, Math.sin(ca) * 0.24);
         crown.add(coco);
@@ -1383,11 +1553,13 @@ export function buildIslandWorld(
         const a = (f / 7) * Math.PI * 2;
         const frondGroup = new THREE.Group();
         frondGroup.rotation.y = a;
-        const innerFrond = new THREE.Mesh(new THREE.ConeGeometry(0.32, 1.75, 5), palmLeafMat);
+        const innerFrond = new THREE.Mesh(gCone5, palmLeafMat);
+        innerFrond.scale.set(0.32, 1.75, 0.32);
         innerFrond.rotation.z = -Math.PI / 2.6;
         innerFrond.position.set(0.8, 0.14, 0);
-        innerFrond.castShadow = true;
-        const tipFrond = new THREE.Mesh(new THREE.ConeGeometry(0.24, 1.35, 5), palmLeafMat);
+        innerFrond.castShadow = shadowsEnabledState;
+        const tipFrond = new THREE.Mesh(gCone5, palmLeafMat);
+        tipFrond.scale.set(0.24, 1.35, 0.24);
         tipFrond.rotation.z = -Math.PI / 1.75;
         tipFrond.position.set(1.9, -0.22, 0);
         frondGroup.add(innerFrond, tipFrond);
@@ -1407,11 +1579,13 @@ export function buildIslandWorld(
       const baseR = isBanyan ? 0.62 : isCedar ? 0.44 : 0.48;
 
       const stumpMesh = new THREE.Group();
-      addRootFlares(stumpMesh, tMat, isBanyan ? 5 : 4, baseR * 0.95, 0.85);
-      const stumpBase = new THREE.Mesh(new THREE.CylinderGeometry(baseR * 0.88, baseR * 1.12, 0.72, 9), tMat);
+      addRootFlares(stumpMesh, tMat, isBanyan ? 5 : 4, baseR * 0.95, 0.85, nodeRand);
+      const stumpBase = new THREE.Mesh(gCylTaper8, tMat);
+      stumpBase.scale.set(baseR * 1.12, 0.72, baseR * 1.12);
       stumpBase.position.y = 0.36;
-      stumpBase.castShadow = true;
-      const stumpTop = new THREE.Mesh(new THREE.CircleGeometry(baseR * 0.86, 9), heartwoodCutMat);
+      stumpBase.castShadow = shadowsEnabledState;
+      const stumpTop = new THREE.Mesh(gCircle8, heartwoodCutMat);
+      stumpTop.scale.setScalar(baseR * 0.86);
       stumpTop.rotation.x = -Math.PI / 2;
       stumpTop.position.y = 0.725;
       stumpMesh.add(stumpBase, stumpTop);
@@ -1421,68 +1595,60 @@ export function buildIslandWorld(
       felledPivot.position.y = 0.7;
 
       const trunkH = isBanyan ? 4.1 : isCedar ? 5.8 : 4.6;
-      const upperTrunk = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 0.45, baseR * 0.88, trunkH, 9),
-        tMat,
-      );
+      const upperTrunk = new THREE.Mesh(gCylTaper6, tMat);
+      upperTrunk.scale.set(baseR * 0.88, trunkH, baseR * 0.88);
       upperTrunk.position.y = trunkH * 0.5;
-      upperTrunk.castShadow = true;
+      upperTrunk.castShadow = shadowsEnabledState;
       felledPivot.add(upperTrunk);
 
-      const trunkCutBand = new THREE.Mesh(
-        new THREE.CylinderGeometry(baseR * 0.92, baseR * 0.92, 0.28, 9),
-        heartwoodCutMat,
-      );
+      const trunkCutBand = new THREE.Mesh(gCylStraight8, heartwoodCutMat);
+      trunkCutBand.scale.set(baseR * 0.92, 0.28, baseR * 0.92);
       trunkCutBand.position.y = 0.16;
       trunkCutBand.visible = false;
       felledPivot.add(trunkCutBand);
 
       if (isCedar) {
-        // Tiered evergreen cedar boughs & branches
         for (let tier = 0; tier < 4; tier++) {
           const ty = 2.1 + tier * 1.1;
           const tr = 2.25 - tier * 0.44;
-          const bough = new THREE.Mesh(new THREE.ConeGeometry(tr, 1.55, 8), lMat);
+          const bough = new THREE.Mesh(gCone8, lMat);
+          bough.scale.set(tr, 1.55, tr);
           bough.position.y = ty;
-          bough.castShadow = true;
+          bough.castShadow = shadowsEnabledState;
           felledPivot.add(bough);
         }
       } else {
-        // Forking wooden branches + layered organic leaf crowns
         const branchCount = isBanyan ? 4 : 3;
         for (let b = 0; b < branchCount; b++) {
           const ba = (b / branchCount) * Math.PI * 2 + 0.4;
-          const limb = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.2, 2.1, 6), tMat);
+          const limb = new THREE.Mesh(gCylTaper6, tMat);
+          limb.scale.set(0.2, 2.1, 0.2);
           limb.position.set(Math.cos(ba) * 0.7, trunkH - 0.45, Math.sin(ba) * 0.7);
           limb.rotation.z = -Math.cos(ba) * 0.68;
           limb.rotation.x = Math.sin(ba) * 0.68;
-          limb.castShadow = true;
+          limb.castShadow = shadowsEnabledState;
           felledPivot.add(limb);
 
           if (isBanyan) {
-            // Aerial prop root hanging from major limb
-            const prop = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 2.7, 5), tMat);
+            const prop = new THREE.Mesh(gCylStraight5, tMat);
+            prop.scale.set(0.06, 2.7, 0.06);
             prop.position.set(Math.cos(ba) * 1.28, 1.45, Math.sin(ba) * 1.28);
             felledPivot.add(prop);
           }
 
-          const cluster = new THREE.Mesh(
-            new THREE.DodecahedronGeometry(isBanyan ? 1.55 : 1.35, 1),
-            lMat,
-          );
+          const clusterR = isBanyan ? 1.55 : 1.35;
+          const cluster = new THREE.Mesh(gDodec1, lMat);
           cluster.position.set(Math.cos(ba) * 1.25, trunkH + 0.35, Math.sin(ba) * 1.25);
-          cluster.scale.set(1.15, 0.72, 1.15);
-          cluster.castShadow = true;
+          cluster.scale.set(clusterR * 1.15, clusterR * 0.72, clusterR * 1.15);
+          cluster.castShadow = shadowsEnabledState;
           felledPivot.add(cluster);
         }
 
-        const topCrown = new THREE.Mesh(
-          new THREE.DodecahedronGeometry(isBanyan ? 2.15 : 1.85, 1),
-          lMat,
-        );
+        const topR = isBanyan ? 2.15 : 1.85;
+        const topCrown = new THREE.Mesh(gDodec1, lMat);
         topCrown.position.y = trunkH + 0.95;
-        topCrown.scale.set(1.2, 0.74, 1.2);
-        topCrown.castShadow = true;
+        topCrown.scale.set(topR * 1.2, topR * 0.74, topR * 1.2);
+        topCrown.castShadow = shadowsEnabledState;
         felledPivot.add(topCrown);
       }
 
@@ -1494,14 +1660,12 @@ export function buildIslandWorld(
     if (kind === 'small_stone') {
       const rockBody = new THREE.Group();
       for (let i = 0; i < 4; i++) {
-        const s = new THREE.Mesh(
-          new THREE.DodecahedronGeometry(0.28 + (i % 2) * 0.12, 1),
-          smallStoneMat,
-        );
+        const sr = 0.28 + (i % 2) * 0.12;
+        const s = new THREE.Mesh(gDodec1, smallStoneMat);
         const a = (i / 4) * Math.PI * 2;
         s.position.set(Math.cos(a) * 0.28, 0.18, Math.sin(a) * 0.28);
-        s.scale.set(1.15, 0.72, 1.0);
-        s.castShadow = true;
+        s.scale.set(sr * 1.15, sr * 0.72, sr * 1.0);
+        s.castShadow = shadowsEnabledState;
         rockBody.add(s);
       }
       const crackMeshes = addCrackOverlays(rockBody, 0.45);
@@ -1512,13 +1676,15 @@ export function buildIslandWorld(
 
     if (kind === 'stone_boulder') {
       const rockBody = new THREE.Group();
-      const main = new THREE.Mesh(new THREE.DodecahedronGeometry(1.08, 1), boulderMat);
-      main.scale.set(1.18, 0.82, 1.02);
+      const main = new THREE.Mesh(gDodec1, boulderMat);
+      main.scale.set(1.08 * 1.18, 1.08 * 0.82, 1.08 * 1.02);
       main.position.y = 0.62;
-      main.castShadow = true;
-      const side = new THREE.Mesh(new THREE.DodecahedronGeometry(0.58, 0), boulderMat);
+      main.castShadow = shadowsEnabledState;
+      const side = new THREE.Mesh(gDodec0, boulderMat);
+      side.scale.setScalar(0.58);
       side.position.set(0.76, 0.36, 0.45);
-      const chip = new THREE.Mesh(new THREE.DodecahedronGeometry(0.36, 0), smallStoneMat);
+      const chip = new THREE.Mesh(gDodec0, smallStoneMat);
+      chip.scale.setScalar(0.36);
       chip.position.set(-0.72, 0.24, -0.32);
       rockBody.add(main, side, chip);
       const crackMeshes = addCrackOverlays(rockBody, 1.0);
@@ -1529,13 +1695,15 @@ export function buildIslandWorld(
 
     if (kind === 'mountain_rock') {
       const rockBody = new THREE.Group();
-      const peak = new THREE.Mesh(new THREE.DodecahedronGeometry(1.32, 1), mountainRockMat);
-      peak.scale.set(1.15, 1.18, 1.05);
+      const peak = new THREE.Mesh(gDodec1, mountainRockMat);
+      peak.scale.set(1.32 * 1.15, 1.32 * 1.18, 1.32 * 1.05);
       peak.position.y = 0.92;
-      peak.castShadow = true;
-      const shoulder = new THREE.Mesh(new THREE.DodecahedronGeometry(0.78, 0), boulderMat);
+      peak.castShadow = shadowsEnabledState;
+      const shoulder = new THREE.Mesh(gDodec0, boulderMat);
+      shoulder.scale.setScalar(0.78);
       shoulder.position.set(-0.82, 0.48, 0.46);
-      const shelf = new THREE.Mesh(new THREE.DodecahedronGeometry(0.65, 0), mountainRockMat);
+      const shelf = new THREE.Mesh(gDodec0, mountainRockMat);
+      shelf.scale.setScalar(0.65);
       shelf.position.set(0.84, 0.42, -0.35);
       rockBody.add(peak, shoulder, shelf);
       const crackMeshes = addCrackOverlays(rockBody, 1.28);
@@ -1546,15 +1714,16 @@ export function buildIslandWorld(
 
     if (kind === 'flint_outcrop') {
       const rockBody = new THREE.Group();
-      const base = new THREE.Mesh(new THREE.DodecahedronGeometry(0.62, 0), boulderMat);
-      base.scale.set(1.2, 0.55, 1.1);
+      const base = new THREE.Mesh(gDodec0, boulderMat);
+      base.scale.set(0.62 * 1.2, 0.62 * 0.55, 0.62 * 1.1);
       base.position.y = 0.24;
       rockBody.add(base);
       for (let i = 0; i < 4; i++) {
-        const shard = new THREE.Mesh(new THREE.ConeGeometry(0.32, 0.92, 5), flintMat);
+        const shard = new THREE.Mesh(gCone5, flintMat);
+        shard.scale.set(0.32, 0.92, 0.32);
         shard.position.set((i - 1.5) * 0.26, 0.45, ((i % 2) - 0.5) * 0.28);
         shard.rotation.z = (i - 1.5) * 0.28;
-        shard.castShadow = true;
+        shard.castShadow = shadowsEnabledState;
         rockBody.add(shard);
       }
       const crackMeshes = addCrackOverlays(rockBody, 0.72);
@@ -1565,14 +1734,15 @@ export function buildIslandWorld(
 
     if (kind === 'ore_vein') {
       const rockBody = new THREE.Group();
-      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(1.12, 1), oreRockMat);
-      rock.scale.set(1.12, 0.86, 1.0);
+      const rock = new THREE.Mesh(gDodec1, oreRockMat);
+      rock.scale.set(1.12 * 1.12, 1.12 * 0.86, 1.12 * 1.0);
       rock.position.y = 0.65;
-      rock.castShadow = true;
+      rock.castShadow = shadowsEnabledState;
       rockBody.add(rock);
       for (let i = 0; i < 6; i++) {
         const a = (i / 6) * Math.PI * 2;
-        const nugget = new THREE.Mesh(new THREE.OctahedronGeometry(0.24, 0), oreVeinMat);
+        const nugget = new THREE.Mesh(gOct0, oreVeinMat);
+        nugget.scale.setScalar(0.24);
         nugget.position.set(Math.cos(a) * 0.68, 0.72 + (i % 2) * 0.22, Math.sin(a) * 0.64);
         rockBody.add(nugget);
       }
@@ -1584,7 +1754,8 @@ export function buildIslandWorld(
 
     if (kind === 'branch_pile') {
       for (let i = 0; i < 4; i++) {
-        const b = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.06, 1.35, 5), palmTrunkMat);
+        const b = new THREE.Mesh(gCylStraight5, palmTrunkMat);
+        b.scale.set(0.06, 1.35, 0.06);
         b.rotation.z = Math.PI / 2;
         b.rotation.y = i * 0.65;
         b.position.y = 0.08 + i * 0.03;
@@ -1592,42 +1763,47 @@ export function buildIslandWorld(
       }
     } else if (kind === 'wheat_patch') {
       for (let i = 0; i < 9; i++) {
-        const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.052, 1.25, 5), wheatMat);
-        stalk.position.set((rand() - 0.5) * 0.95, 0.62, (rand() - 0.5) * 0.95);
-        stalk.rotation.z = (rand() - 0.5) * 0.22;
+        const stalk = new THREE.Mesh(gCylStraight5, wheatMat);
+        stalk.scale.set(0.052, 1.25, 0.052);
+        stalk.position.set((nodeRand() - 0.5) * 0.95, 0.62, (nodeRand() - 0.5) * 0.95);
+        stalk.rotation.z = (nodeRand() - 0.5) * 0.22;
         root.add(stalk);
       }
     } else if (kind === 'sugarcane_patch') {
       for (let i = 0; i < 5; i++) {
-        const ox = (rand() - 0.5) * 0.65;
-        const oz = (rand() - 0.5) * 0.65;
-        const h = 1.55 + rand() * 0.45;
-        const cane = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, h, 6), sugarcaneMat);
+        const ox = (nodeRand() - 0.5) * 0.65;
+        const oz = (nodeRand() - 0.5) * 0.65;
+        const h = 1.55 + nodeRand() * 0.45;
+        const cane = new THREE.Mesh(gCylTaper6, sugarcaneMat);
+        cane.scale.set(0.055, h, 0.055);
         cane.position.set(ox, h * 0.5, oz);
-        cane.rotation.z = (rand() - 0.5) * 0.14;
-        cane.castShadow = true;
-        const joint = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.06, 6), sugarcaneNodeMat);
+        cane.rotation.z = (nodeRand() - 0.5) * 0.14;
+        const joint = new THREE.Mesh(gCylStraight8, sugarcaneNodeMat);
+        joint.scale.set(0.06, 0.06, 0.06);
         joint.position.set(ox, h * 0.55, oz);
-        const tuft = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.55, 4), sugarcaneNodeMat);
+        const tuft = new THREE.Mesh(gCone4, sugarcaneNodeMat);
+        tuft.scale.set(0.2, 0.55, 0.2);
         tuft.position.set(ox, h + 0.18, oz);
         root.add(cane, joint, tuft);
       }
     } else if (kind === 'grass_tuft') {
       for (let i = 0; i < 8; i++) {
-        const blade = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.85, 4), grassMat);
-        blade.position.set((rand() - 0.5) * 0.6, 0.4, (rand() - 0.5) * 0.6);
-        blade.rotation.z = (rand() - 0.5) * 0.35;
+        const blade = new THREE.Mesh(gCone4, grassMat);
+        blade.scale.set(0.07, 0.85, 0.07);
+        blade.position.set((nodeRand() - 0.5) * 0.6, 0.4, (nodeRand() - 0.5) * 0.6);
+        blade.rotation.z = (nodeRand() - 0.5) * 0.35;
         root.add(blade);
       }
     } else if (kind === 'berry_bush') {
-      const bush = new THREE.Mesh(new THREE.DodecahedronGeometry(0.78, 1), berryBushMat);
+      const bush = new THREE.Mesh(gDodec1, berryBushMat);
       bush.position.y = 0.55;
-      bush.scale.y = 0.82;
-      bush.castShadow = true;
+      bush.scale.set(0.78, 0.78 * 0.82, 0.78);
+      bush.castShadow = shadowsEnabledState;
       root.add(bush);
       for (let i = 0; i < 7; i++) {
         const a = (i / 7) * Math.PI * 2;
-        const berry = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 6), berryFruitMat);
+        const berry = new THREE.Mesh(gSphere7, berryFruitMat);
+        berry.scale.setScalar(0.09);
         berry.position.set(Math.cos(a) * 0.62, 0.55 + (i % 2) * 0.22, Math.sin(a) * 0.62);
         root.add(berry);
       }
@@ -1635,38 +1811,74 @@ export function buildIslandWorld(
       for (let i = 0; i < 4; i++) {
         const mx = (i - 1.5) * 0.24;
         const mz = ((i % 2) - 0.5) * 0.26;
-        const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.26, 6), mushroomStemMat);
+        const stem = new THREE.Mesh(gCylStraight5, mushroomStemMat);
+        stem.scale.set(0.06, 0.26, 0.06);
         stem.position.set(mx, 0.13, mz);
-        const cap = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.14, 7), mushroomCapMat);
+        const cap = new THREE.Mesh(gCone8, mushroomCapMat);
+        cap.scale.set(0.18, 0.14, 0.18);
         cap.position.set(mx, 0.28, mz);
         root.add(stem, cap);
       }
     } else if (kind === 'fiber_fern' || kind === 'plant_cluster') {
       for (let i = 0; i < 5; i++) {
-        const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.25, 1.1, 4), fernMat);
+        const leaf = new THREE.Mesh(gCone4, fernMat);
+        leaf.scale.set(0.25, 1.1, 0.25);
         leaf.position.set(0, 0.35, 0);
         leaf.rotation.z = 0.72;
         leaf.rotation.y = (i / 5) * Math.PI * 2;
         root.add(leaf);
       }
     } else if (kind === 'clay_deposit') {
-      const mound = new THREE.Mesh(new THREE.DodecahedronGeometry(0.75, 1), clayMat);
-      mound.scale.set(1.3, 0.45, 1.1);
+      const mound = new THREE.Mesh(gDodec1, clayMat);
+      mound.scale.set(0.75 * 1.3, 0.75 * 0.45, 0.75 * 1.1);
       mound.position.y = 0.22;
       root.add(mound);
     } else if (kind === 'sand_mound') {
-      const mound = new THREE.Mesh(new THREE.ConeGeometry(0.95, 0.55, 10), sandMoundMat);
+      const mound = new THREE.Mesh(gCone10, sandMoundMat);
+      mound.scale.set(0.95, 0.55, 0.95);
       mound.position.y = 0.26;
       root.add(mound);
     } else {
-      const crate = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.85, 0.95), crateMat);
+      const crate = new THREE.Mesh(gBox1, crateMat);
+      crate.scale.set(0.95, 0.85, 0.95);
       crate.position.y = 0.425;
-      crate.castShadow = true;
+      crate.castShadow = shadowsEnabledState;
       root.add(crate);
     }
 
     root.scale.setScalar(scale);
     return { root };
+  }
+
+  function batchStandingNode(id: string, meta: NodeVisualMeta): void {
+    // Build temporary visual hierarchy once to extract exact world matrices per sub-mesh into InstancedMesh pools
+    const tempHandle = buildNodeMesh(meta);
+    tempHandle.root.position.set(meta.x, meta.y, meta.z);
+    tempHandle.root.rotation.y = meta.yaw;
+    tempHandle.root.updateMatrixWorld(true);
+
+    const noShadowKind =
+      meta.kind === 'wheat_patch' ||
+      meta.kind === 'grass_tuft' ||
+      meta.kind === 'fiber_fern' ||
+      meta.kind === 'plant_cluster' ||
+      meta.kind === 'mushroom_cluster' ||
+      meta.kind === 'branch_pile' ||
+      meta.kind === 'clay_deposit' ||
+      meta.kind === 'sand_mound';
+
+    tempHandle.root.traverse((child) => {
+      if (!(child instanceof THREE.Mesh) || !child.visible) return;
+      const mat = Array.isArray(child.material) ? child.material[0] : child.material;
+      const geoId = child.geometry.uuid;
+      const matId = mat.uuid;
+      const castShadow = !noShadowKind && child.castShadow;
+      const batchKey = `res_${geoId}_${matId}_${castShadow ? 1 : 0}`;
+      addBatchInstance(batchKey, child.geometry, mat, child.matrixWorld, {
+        castShadow,
+        nodeId: id,
+      });
+    });
   }
 
   function addResourceNode(
@@ -1706,12 +1918,12 @@ export function buildIslandWorld(
     };
     resourceNodes.push(node);
 
-    const handle = buildNodeMesh(kind, scale);
-    handle.root.position.set(x, y, z);
-    handle.root.rotation.y = rand() * Math.PI * 2;
-    overworldGroup.add(handle.root);
-    resourceMeshes.set(id, handle.root);
-    resourceHandles.set(id, handle);
+    const yaw = rand() * Math.PI * 2;
+    const lean = (rand() - 0.5) * 0.26;
+    const seed = Math.max(1, Math.floor(rand() * 2147483640));
+    const meta: NodeVisualMeta = { kind, x, y, z, scale, yaw, lean, seed };
+    nodeMetaMap.set(id, meta);
+    batchStandingNode(id, meta);
 
     if (hasCollider) {
       const isTree =
@@ -1787,36 +1999,37 @@ export function buildIslandWorld(
   // GOLDEN WHEATFIELD, LAKE SUGARCANE, FARMER NPC & HILLTOP HOUSE
   // ==========================================================
 
-  // A. Dedicated Golden Wheatfield (WHEATFIELD_POS) with Wooden Fence Border & Open Gate
+  // A. Dedicated Golden Wheatfield (WHEATFIELD_POS) with Wooden Fence Border & Open Gate (batched)
   const wheatY = getTerrainHeight(WHEATFIELD_POS.x, WHEATFIELD_POS.z);
-  const fencePostMat = new THREE.MeshStandardMaterial({ color: 0x7c4d2b, map: woodTex, roughness: 0.88 });
-  const wheatFenceGroup = new THREE.Group();
-  wheatFenceGroup.position.set(WHEATFIELD_POS.x, wheatY, WHEATFIELD_POS.z);
+  const fencePostMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x7c4d2b, map: woodTex, roughness: 0.88 }));
+  const wfPostGeo = registerGeometry(new THREE.CylinderGeometry(0.09, 0.1, 1.15, 6));
+  const wfRailGeo = registerGeometry(new THREE.BoxGeometry(2.15, 0.09, 0.09));
   const wfRadius = 7.4;
   for (let side = 0; side < 4; side++) {
     for (let p = -3; p <= 3; p++) {
-      // Leave generous open gate along South (+Z) and West (-X)
       if ((side === 0 || side === 3) && Math.abs(p) <= 1) continue;
       const offset = p * 2.2;
       const px = side === 0 || side === 1 ? offset : side === 2 ? wfRadius : -wfRadius;
       const pz = side === 2 || side === 3 ? offset : side === 0 ? wfRadius : -wfRadius;
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.1, 1.15, 6), fencePostMat);
-      post.position.set(px, 0.56, pz);
-      post.castShadow = true;
-      wheatFenceGroup.add(post);
+      batchDummy.position.set(WHEATFIELD_POS.x + px, wheatY + 0.56, WHEATFIELD_POS.z + pz);
+      batchDummy.rotation.set(0, 0, 0);
+      batchDummy.scale.set(1, 1, 1);
+      batchDummy.updateMatrix();
+      addBatchInstance('wf_post', wfPostGeo, fencePostMat, batchDummy.matrix, { castShadow: true });
       if (p < 3) {
-        const rail = new THREE.Mesh(new THREE.BoxGeometry(2.15, 0.09, 0.09), fencePostMat);
         if (side >= 2) {
-          rail.rotation.y = Math.PI / 2;
-          rail.position.set(px, 0.82, pz + 1.1);
+          batchDummy.position.set(WHEATFIELD_POS.x + px, wheatY + 0.82, WHEATFIELD_POS.z + pz + 1.1);
+          batchDummy.rotation.set(0, Math.PI / 2, 0);
         } else {
-          rail.position.set(px + 1.1, 0.82, pz);
+          batchDummy.position.set(WHEATFIELD_POS.x + px + 1.1, wheatY + 0.82, WHEATFIELD_POS.z + pz);
+          batchDummy.rotation.set(0, 0, 0);
         }
-        wheatFenceGroup.add(rail);
+        batchDummy.scale.set(1, 1, 1);
+        batchDummy.updateMatrix();
+        addBatchInstance('wf_rail', wfRailGeo, fencePostMat, batchDummy.matrix);
       }
     }
   }
-  overworldGroup.add(wheatFenceGroup);
 
   // 20 Dense Harvestable Wheat Patches inside the Wheatfield (4 rows x 5 cols)
   for (let row = 0; row < 4; row++) {
@@ -1904,23 +2117,25 @@ export function buildIslandWorld(
   colliders.push({ x: FARMER_POS.x - 0.9, z: FARMER_POS.z - 1.9, radius: 0.7 });
   colliders.push({ x: FARMER_POS.x + 0.9, z: FARMER_POS.z - 1.9, radius: 0.7 });
 
-  // 12 Tilled Wooden-Framed Crop Garden Beds right beside the Farmer & Wheatfield
+  // 12 Tilled Wooden-Framed Crop Garden Beds right beside the Farmer & Wheatfield (batched)
   const soilPlots: { x: number; y: number; z: number }[] = [];
-  const bedSoilMat = new THREE.MeshStandardMaterial({ color: 0x4a2e16, roughness: 0.96 });
+  const bedSoilMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x4a2e16, roughness: 0.96 }));
+  const bedRimGeo = registerGeometry(new THREE.BoxGeometry(1.32, 0.14, 1.32));
+  const bedDirtGeo = registerGeometry(new THREE.BoxGeometry(1.14, 0.16, 1.14));
   for (let row = 0; row < 2; row++) {
     for (let col = 0; col < 6; col++) {
       const gx = FARMER_POS.x - 4.0 + col * 1.55;
       const gz = FARMER_POS.z + 3.2 + row * 1.85;
       const gy = getTerrainHeight(gx, gz);
-      const bed = new THREE.Group();
-      bed.position.set(gx, gy, gz);
-      const rim = new THREE.Mesh(new THREE.BoxGeometry(1.32, 0.14, 1.32), counterMat);
-      rim.position.y = 0.06;
-      const dirt = new THREE.Mesh(new THREE.BoxGeometry(1.14, 0.16, 1.14), bedSoilMat);
-      dirt.position.y = 0.07;
-      dirt.receiveShadow = true;
-      bed.add(rim, dirt);
-      overworldGroup.add(bed);
+      batchDummy.position.set(gx, gy + 0.06, gz);
+      batchDummy.rotation.set(0, 0, 0);
+      batchDummy.scale.set(1, 1, 1);
+      batchDummy.updateMatrix();
+      addBatchInstance('bed_rim', bedRimGeo, counterMat, batchDummy.matrix);
+
+      batchDummy.position.set(gx, gy + 0.07, gz);
+      batchDummy.updateMatrix();
+      addBatchInstance('bed_dirt', bedDirtGeo, bedSoilMat, batchDummy.matrix, { receiveShadow: true });
       soilPlots.push({ x: gx, y: gy + 0.15, z: gz });
     }
   }
@@ -2422,6 +2637,117 @@ export function buildIslandWorld(
   pebbleInstanced.computeBoundingSphere();
   overworldGroup.add(pebbleInstanced);
 
+  // Finalize all batched InstancedMeshes with bounding spheres for accurate frustum culling
+  for (const [key, entry] of batchRegistry.entries()) {
+    if (entry.matrices.length === 0) continue;
+    const im = new THREE.InstancedMesh(entry.geo, entry.mat, entry.matrices.length);
+    im.castShadow = entry.castShadow;
+    im.receiveShadow = entry.receiveShadow;
+    for (let i = 0; i < entry.matrices.length; i++) {
+      im.setMatrixAt(i, entry.matrices[i]);
+      if (entry.colors && entry.colors[i]) {
+        im.setColorAt(i, entry.colors[i]);
+      }
+    }
+    im.instanceMatrix.needsUpdate = true;
+    if (im.instanceColor) im.instanceColor.needsUpdate = true;
+    im.computeBoundingSphere();
+    overworldGroup.add(im);
+    builtBatchMeshes.set(key, im);
+    if (entry.castShadow) {
+      shadowCasters.push(im);
+    }
+  }
+
+  for (const [nodeId, pending] of pendingNodeSlots.entries()) {
+    const resolved: BatchSlotRef[] = [];
+    for (const p of pending) {
+      const im = builtBatchMeshes.get(p.key);
+      if (im) {
+        resolved.push({ mesh: im, index: p.index, matrix: p.matrix });
+      }
+    }
+    if (resolved.length > 0) {
+      nodeBatchSlots.set(nodeId, resolved);
+    }
+  }
+  pendingNodeSlots.clear();
+  batchRegistry.clear();
+
+  // Register static shadow-casting meshes (buildings, chests, ship) for runtime shadow toggling
+  overworldGroup.traverse((obj) => {
+    if ((obj instanceof THREE.Mesh || obj instanceof THREE.InstancedMesh) && obj.castShadow) {
+      if (!shadowCasters.includes(obj)) shadowCasters.push(obj);
+    }
+  });
+
+  const zeroMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
+
+  const setBatchedNodeVisible = (nodeId: string, visible: boolean): void => {
+    const slots = nodeBatchSlots.get(nodeId);
+    if (!slots) return;
+    for (let i = 0; i < slots.length; i++) {
+      const s = slots[i];
+      s.mesh.setMatrixAt(s.index, visible ? s.matrix : zeroMatrix);
+      s.mesh.instanceMatrix.needsUpdate = true;
+    }
+  };
+
+  const activateInteractiveNode = (nodeId: string): ResourceVisualHandle | undefined => {
+    const existing = resourceHandles.get(nodeId);
+    if (existing) return existing;
+    const meta = nodeMetaMap.get(nodeId);
+    if (!meta) return undefined;
+    setBatchedNodeVisible(nodeId, false);
+    const handle = buildNodeMesh(meta);
+    handle.root.position.set(meta.x, meta.y, meta.z);
+    handle.root.rotation.y = meta.yaw;
+    overworldGroup.add(handle.root);
+    resourceMeshes.set(nodeId, handle.root);
+    resourceHandles.set(nodeId, handle);
+    return handle;
+  };
+
+  const restoreBatchedNode = (nodeId: string): void => {
+    const existing = resourceHandles.get(nodeId);
+    if (existing) {
+      overworldGroup.remove(existing.root);
+      resourceHandles.delete(nodeId);
+      resourceMeshes.delete(nodeId);
+    }
+    setBatchedNodeVisible(nodeId, true);
+  };
+
+  const setWorldShadowCasting = (enabled: boolean): void => {
+    shadowsEnabledState = enabled;
+    for (let i = 0; i < shadowCasters.length; i++) {
+      shadowCasters[i].castShadow = enabled;
+    }
+    for (const handle of resourceHandles.values()) {
+      handle.root.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.castShadow = enabled;
+        }
+      });
+    }
+  };
+
+  const dispose = (): void => {
+    overworldGroup.traverse((obj) => {
+      if (obj instanceof THREE.Mesh || obj instanceof THREE.InstancedMesh) {
+        obj.geometry?.dispose();
+        if (Array.isArray(obj.material)) {
+          obj.material.forEach((m) => m.dispose());
+        } else {
+          obj.material?.dispose();
+        }
+      }
+    });
+    for (const g of disposableGeos) g.dispose();
+    for (const m of disposableMats) m.dispose();
+    for (const t of disposableTexs) t.dispose();
+  };
+
   return {
     terrainMesh,
     baseTerrainColors,
@@ -2453,5 +2779,10 @@ export function buildIslandWorld(
     caveCeilings,
     shipwreckChests,
     overworldGroup,
+    activateInteractiveNode,
+    restoreBatchedNode,
+    setBatchedNodeVisible,
+    setWorldShadowCasting,
+    dispose,
   };
 }

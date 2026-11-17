@@ -485,7 +485,7 @@ export function createVehicleFromPreset(
     rimColor: rimColors[preset],
     suspensionOffset: suspensionByPreset[preset],
     wheelScale: wheelScaleByPreset[preset],
-    hydraulicHop: preset === 'lowrider',
+    hydraulicHop: preset === 'lowrider' || preset === 'donk',
     trunkBassEnabled: false,
     underglowColor: preset === 'slab' ? '#e879f9' : undefined,
     turboBoost:

@@ -6,6 +6,7 @@ import {
   ArrowDown,
   ArrowDownToLine,
   ArrowUp,
+  AudioLines,
   Axe,
   Backpack,
   Box,
@@ -145,6 +146,20 @@ export function SurvivalGameClient() {
   const [tvSearchQuery, setTvSearchQuery] = useState('');
   const [tvSearchResults, setTvSearchResults] = useState<YouTubeStreamSelection[]>([]);
   const [tvSearchStatus, setTvSearchStatus] = useState('');
+  const [gamepadConnected, setGamepadConnected] = useState(false);
+  const [gamepadJoystickOffset, setGamepadJoystickOffset] = useState({ x: 0, y: 0 });
+  const hudRef = useRef<HUDStateSnapshot | null>(null);
+  const activeModalRef = useRef<ActiveModal>(null);
+  const lastGpKnobRef = useRef({ x: 0, y: 0 });
+  const gamepadConnectedRef = useRef(false);
+
+  useEffect(() => {
+    hudRef.current = hud;
+  }, [hud]);
+
+  useEffect(() => {
+    activeModalRef.current = activeModal;
+  }, [activeModal]);
 
   const refreshSaves = useCallback(() => {
     setSaveSlots(listSaveSlots());
@@ -163,6 +178,195 @@ export function SurvivalGameClient() {
       setToasts((prev) => prev.filter((t) => t.id !== uniqueId));
     }, 2800);
   }, []);
+
+  useEffect(() => {
+    const hasAnyGamepad = () => {
+      const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+      for (const gp of gps) {
+        if (gp && gp.connected) return true;
+      }
+      return false;
+    };
+
+    const onConnected = (e: GamepadEvent) => {
+      gamepadConnectedRef.current = true;
+      setGamepadConnected(true);
+      pushToast({
+        id: `gp_${e.gamepad.index}`,
+        text: `Xbox Controller Connected (${e.gamepad.id.slice(0, 24)})`,
+        tone: 'discovery',
+      });
+    };
+    const onDisconnected = (e: GamepadEvent) => {
+      const anyLeft = hasAnyGamepad();
+      gamepadConnectedRef.current = anyLeft;
+      setGamepadConnected(anyLeft);
+      engineRef.current?.setTouchJoystick(0, 0);
+      engineRef.current?.setAiming(false);
+      engineRef.current?.setGamepadDriveState(0, 0, false);
+      lastGpKnobRef.current = { x: 0, y: 0 };
+      setGamepadJoystickOffset({ x: 0, y: 0 });
+      pushToast({
+        id: `gp_dc_${e.gamepad.index}`,
+        text: 'Xbox Controller Disconnected',
+        tone: 'warning',
+      });
+    };
+    window.addEventListener('gamepadconnected', onConnected as EventListener);
+    window.addEventListener('gamepaddisconnected', onDisconnected as EventListener);
+
+    let animId = 0;
+    const prevButtonStates = new Map<number, boolean>();
+    let wasGamepadActive = false;
+
+    const pollGamepads = () => {
+      const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+      let activeGp: Gamepad | null = null;
+      for (const gp of gamepads) {
+        if (gp && gp.connected) {
+          activeGp = gp;
+          break;
+        }
+      }
+
+      const isNowConnected = Boolean(activeGp);
+      if (isNowConnected !== gamepadConnectedRef.current) {
+        gamepadConnectedRef.current = isNowConnected;
+        setGamepadConnected(isNowConnected);
+      }
+
+      const engine = engineRef.current;
+      const modalOpen = activeModalRef.current;
+      const currentHud = hudRef.current;
+
+      if (activeGp && screen === 'playing' && engine && !currentHud?.gameOver && !currentHud?.cinematicActive) {
+        wasGamepadActive = true;
+        const isPressed = (btnIdx: number) =>
+          Boolean(activeGp?.buttons[btnIdx]?.pressed);
+        const btnValue = (btnIdx: number) =>
+          activeGp?.buttons[btnIdx]?.value ?? (isPressed(btnIdx) ? 1 : 0);
+        const checkEdge = (btnIdx: number, action: () => void) => {
+          const pressed = isPressed(btnIdx);
+          const wasPressed = prevButtonStates.get(btnIdx) || false;
+          if (pressed && !wasPressed) action();
+          prevButtonStates.set(btnIdx, pressed);
+        };
+
+        // Start button toggles Pause modal
+        checkEdge(9, () => {
+          if (activeModalRef.current) {
+            setActiveModal(null);
+            engine.setMode('playing');
+          } else {
+            setActiveModal('pause');
+            engine.setMode('paused');
+          }
+        });
+
+        // If a modal is open, allow B button to close it and reset sticks cleanly
+        if (modalOpen) {
+          checkEdge(1, () => {
+            setActiveModal(null);
+            engine.setMode('playing');
+          });
+          engine.setAiming(false);
+          engine.setGamepadDriveState(0, 0, false);
+          if (lastGpKnobRef.current.x !== 0 || lastGpKnobRef.current.y !== 0) {
+            lastGpKnobRef.current = { x: 0, y: 0 };
+            setGamepadJoystickOffset({ x: 0, y: 0 });
+            engine.setTouchJoystick(0, 0);
+          }
+        } else {
+          // Left Analog Stick (axes[0], axes[1]) with 0.15 deadzone
+          const rawLx = activeGp.axes[0] ?? 0;
+          const rawLy = activeGp.axes[1] ?? 0;
+          const lx = Math.abs(rawLx) > 0.15 ? rawLx : 0;
+          const ly = Math.abs(rawLy) > 0.15 ? rawLy : 0;
+          engine.setTouchJoystick(lx, -ly);
+
+          const knobX = lx * 48;
+          const knobY = ly * 48;
+          if (
+            Math.abs(knobX - lastGpKnobRef.current.x) > 0.25 ||
+            Math.abs(knobY - lastGpKnobRef.current.y) > 0.25 ||
+            (knobX === 0 && knobY === 0 && (lastGpKnobRef.current.x !== 0 || lastGpKnobRef.current.y !== 0))
+          ) {
+            lastGpKnobRef.current = { x: knobX, y: knobY };
+            setGamepadJoystickOffset({ x: knobX, y: knobY });
+          }
+
+          // Right Analog Stick (axes[2], axes[3]) smooth 360° camera look
+          const rawRx = activeGp.axes[2] ?? 0;
+          const rawRy = activeGp.axes[3] ?? 0;
+          const rx = Math.abs(rawRx) > 0.15 ? rawRx : 0;
+          const ry = Math.abs(rawRy) > 0.15 ? rawRy : 0;
+          if (rx !== 0 || ry !== 0) {
+            engine.addCameraLookDelta(rx * 16, ry * 16, false);
+          }
+
+          const isDriving = Boolean(currentHud?.activeVehicle);
+          const ltVal = btnValue(6);
+          const rtVal = btnValue(7);
+
+          if (isDriving) {
+            engine.setAiming(false);
+            engine.setGamepadDriveState(
+              rtVal > 0.12 ? rtVal : 0,
+              ltVal > 0.12 ? ltVal : 0,
+              isPressed(1),
+            );
+          } else {
+            engine.setGamepadDriveState(0, 0, false);
+            engine.setAiming(ltVal > 0.25);
+            if (rtVal > 0.25) {
+              engine.triggerPrimaryAction();
+            }
+          }
+
+          // Face buttons A/B/X/Y & Bumpers LB/RB
+          checkEdge(0, () => engine.triggerJump());
+          checkEdge(1, () => engine.triggerXboxBAction());
+          checkEdge(2, () => engine.triggerXboxXAction());
+          checkEdge(3, () => engine.triggerXboxYAction());
+          checkEdge(4, () => engine.triggerXboxBumper(-1));
+          checkEdge(5, () => engine.triggerXboxBumper(1));
+
+          // D-Pad (12=Up, 13=Down, 14=Left, 15=Right)
+          checkEdge(12, () => {
+            setActiveModal('multiverse');
+            engine.setMode('paused');
+          });
+          checkEdge(13, () => {
+            const muted = engine.toggleMicMute();
+            pushToast({
+              id: `mic_${Date.now()}`,
+              text: muted ? 'Microphone Muted' : 'Microphone Unmuted',
+              tone: muted ? 'warning' : 'craft',
+            });
+          });
+          checkEdge(14, () => engine.triggerXboxDpadLeft());
+          checkEdge(15, () => engine.triggerXboxDpadRight());
+        }
+      } else if (wasGamepadActive) {
+        wasGamepadActive = false;
+        engine?.setTouchJoystick(0, 0);
+        engine?.setAiming(false);
+        engine?.setGamepadDriveState(0, 0, false);
+        lastGpKnobRef.current = { x: 0, y: 0 };
+        setGamepadJoystickOffset({ x: 0, y: 0 });
+      }
+
+      animId = window.requestAnimationFrame(pollGamepads);
+    };
+
+    animId = window.requestAnimationFrame(pollGamepads);
+
+    return () => {
+      window.removeEventListener('gamepadconnected', onConnected as EventListener);
+      window.removeEventListener('gamepaddisconnected', onDisconnected as EventListener);
+      window.cancelAnimationFrame(animId);
+    };
+  }, [screen, pushToast]);
 
   useEffect(() => {
     const id = window.requestAnimationFrame(() => {
@@ -260,6 +464,8 @@ export function SurvivalGameClient() {
           setActiveModal('place');
           engineRef.current?.setMode('paused');
         } else if (e.code === 'KeyM') {
+          engineRef.current?.toggleMicMute();
+        } else if (e.code === 'KeyN') {
           setActiveModal('map');
           engineRef.current?.setMode('paused');
         } else if (e.code === 'KeyJ') {
@@ -926,31 +1132,121 @@ export function SurvivalGameClient() {
               )}
             </div>
 
-            {/* Top-Right HUD Action Triggers / Menu / Exit Car */}
-            <div className="pointer-events-auto flex items-center gap-2">
-              {hud?.seatedLabel ? (
-                <button
-                  type="button"
-                  onClick={() => engineRef.current?.exitVehicle()}
-                  className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-display font-extrabold text-sm shadow-2xl border-2 border-white/50 flex items-center gap-2 transition-all animate-bounce"
-                  style={{ position: 'fixed', top: '16px', right: '16px', zIndex: 9999 }}
-                >
-                  <LogOut className="w-4 h-4" />
-                  <span>EXIT CAR</span>
-                </button>
-              ) : (
+            {/* Top-Right HUD Action Triggers / Menu / Exit Car / Mic Toggle / Xbox Active Speaker Badges */}
+            <div className="pointer-events-auto flex flex-col items-end gap-1.5">
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => {
-                    setActiveModal('menu_drawer');
-                    engineRef.current?.setMode('paused');
+                    const muted = engineRef.current?.toggleMicMute();
+                    pushToast({
+                      id: `mic_${Date.now()}`,
+                      text: muted ? 'Microphone Muted' : 'Microphone Unmuted',
+                      tone: muted ? 'warning' : 'craft',
+                    });
                   }}
-                  className="px-4 py-2 rounded-xl bg-amber-600/90 hover:bg-amber-500 text-stone-950 font-display font-bold text-sm flex items-center gap-2 shadow-lg border border-amber-400/60 transition"
+                  className={`px-3.5 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 shadow-lg transition ${
+                    hud.multiplayerState?.micMuted
+                      ? 'bg-red-950/90 border-red-500 text-red-200'
+                      : hud.multiplayerState?.localSpeaking
+                        ? 'bg-emerald-500 border-emerald-200 text-stone-950 shadow-emerald-500/40 animate-pulse'
+                        : 'bg-emerald-950/90 border-emerald-500/60 text-emerald-200'
+                  }`}
+                  title="Toggle Mic (M or D-Pad Down)"
                 >
-                  <Settings className="w-4 h-4" />
-                  <span>MENU</span>
+                  {hud.multiplayerState?.micMuted ? (
+                    <VolumeX className="w-4 h-4" />
+                  ) : (
+                    <Volume2 className="w-4 h-4" />
+                  )}
+                  <span>
+                    {hud.multiplayerState?.micMuted
+                      ? 'MUTED'
+                      : hud.multiplayerState?.localSpeaking
+                        ? 'SPEAKING'
+                        : 'MIC ON'}
+                  </span>
                 </button>
-              )}
+
+                {hud?.activeVehicle ? (
+                  <button
+                    type="button"
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      engineRef.current?.exitVehicle();
+                    }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      engineRef.current?.exitVehicle();
+                    }}
+                    className="pointer-events-auto px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 active:bg-amber-400 text-stone-950 font-display font-extrabold text-xs sm:text-sm shadow-2xl border-2 border-amber-200 flex items-center gap-1.5 transition cursor-pointer"
+                    style={{ position: 'relative', zIndex: 60 }}
+                    title="Exit Vehicle (E)"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>EXIT CAR [E]</span>
+                  </button>
+                ) : hud?.seatedLabel ? (
+                  <button
+                    type="button"
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      engineRef.current?.standUp();
+                    }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      engineRef.current?.standUp();
+                    }}
+                    className="pointer-events-auto px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-stone-950 font-display font-extrabold text-xs sm:text-sm shadow-2xl border-2 border-sky-200 flex items-center gap-1.5 transition cursor-pointer"
+                    style={{ position: 'relative', zIndex: 60 }}
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>STAND UP</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveModal('menu_drawer');
+                      engineRef.current?.setMode('paused');
+                    }}
+                    className="px-4 py-2 rounded-xl bg-amber-600/90 hover:bg-amber-500 text-stone-950 font-display font-bold text-sm flex items-center gap-2 shadow-lg border border-amber-400/60 transition"
+                  >
+                    <Settings className="w-4 h-4" />
+                    <span>MENU</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Xbox-Style Active Speaker Indicator Stack (HUD Party/Proximity Voice) */}
+              {hud.multiplayerState &&
+                (hud.multiplayerState.localSpeaking ||
+                  (hud.multiplayerState.speakingPeers?.length ?? 0) > 0) && (
+                  <div className="flex flex-col items-end gap-1 pointer-events-none">
+                    {hud.multiplayerState.localSpeaking && (
+                      <div className="px-2.5 py-1 rounded-lg bg-stone-950/90 border border-emerald-400/80 shadow-[0_0_12px_rgba(16,185,129,0.45)] flex items-center gap-1.5 text-xs font-bold text-emerald-300">
+                        <AudioLines className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                        <span>{hud.multiplayerState.playerName}</span>
+                      </div>
+                    )}
+                    {hud.multiplayerState.speakingPeers?.map((pid) => {
+                      const peer = hud.multiplayerState?.peers.find((p) => p.peerId === pid);
+                      return (
+                        <div
+                          key={pid}
+                          className="px-2.5 py-1 rounded-lg bg-stone-950/90 border border-emerald-400/80 shadow-[0_0_12px_rgba(16,185,129,0.45)] flex items-center gap-1.5 text-xs font-bold text-emerald-300"
+                        >
+                          <AudioLines className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                          <span>{peer?.name || 'Survivor'}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
             </div>
           </div>
 
@@ -1134,7 +1430,7 @@ export function SurvivalGameClient() {
             {hud.activeVehicle && !activeModal && (
               <div
                 onPointerDown={(e) => e.stopPropagation()}
-                className="pointer-events-auto w-[min(95vw,600px)] rounded-2xl bg-stone-950/92 border border-amber-500/50 px-3.5 py-2.5 shadow-2xl space-y-2"
+                className="pointer-events-auto relative z-30 w-[min(95vw,600px)] rounded-2xl bg-stone-950/92 border border-amber-500/50 px-3.5 py-2.5 shadow-2xl space-y-2"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
@@ -1175,10 +1471,17 @@ export function SurvivalGameClient() {
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       type="button"
-                      onClick={() =>
-                        engineRef.current?.openVehicleCargo(hud.activeVehicle!.id)
-                      }
-                      className="min-h-[36px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-600 text-stone-100 text-xs font-semibold flex items-center gap-1 transition"
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        engineRef.current?.openVehicleCargo(hud.activeVehicle!.id);
+                      }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        engineRef.current?.openVehicleCargo(hud.activeVehicle!.id);
+                      }}
+                      className="min-h-[36px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-600 text-stone-100 text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
                       title="Vehicle Cargo (F)"
                     >
                       <Box className="w-3.5 h-3.5 text-amber-300" />
@@ -1186,8 +1489,17 @@ export function SurvivalGameClient() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => engineRef.current?.exitVehicle()}
-                      className="min-h-[36px] px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-stone-950 text-xs font-bold flex items-center gap-1 transition"
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        engineRef.current?.exitVehicle();
+                      }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        engineRef.current?.exitVehicle();
+                      }}
+                      className="min-h-[36px] px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 active:bg-amber-400 text-stone-950 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
                       title="Exit Vehicle (E)"
                     >
                       <LogOut className="w-3.5 h-3.5" />
@@ -1200,69 +1512,136 @@ export function SurvivalGameClient() {
                   <div className="flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-stone-800">
                     <span className="text-[10px] font-bold uppercase tracking-wider text-purple-300 flex items-center gap-1 mr-1">
                       <Sparkles className="w-3.5 h-3.5" />
-                      <span>Hydraulics</span>
+                      <span>
+                        {hud.activeVehicle.hydraulicStyle === 'up_down_side'
+                          ? 'DONK Hydraulics (Up / Down / Side)'
+                          : 'Lowrider High-Bounce'}
+                      </span>
                     </span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        engineRef.current?.triggerHydraulicAction('front_hop')
-                      }
-                      className="min-h-[34px] px-2.5 py-1 rounded-lg bg-purple-950/90 hover:bg-purple-700 border border-purple-500/60 text-purple-100 text-[11px] font-bold flex items-center gap-1 transition"
-                    >
-                      <ArrowUp className="w-3.5 h-3.5" />
-                      <span>Front Hop [Space]</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        engineRef.current?.triggerHydraulicAction('rear_hop')
-                      }
-                      className="min-h-[34px] px-2.5 py-1 rounded-lg bg-purple-950/90 hover:bg-purple-700 border border-purple-500/60 text-purple-100 text-[11px] font-bold flex items-center gap-1 transition"
-                    >
-                      <ArrowDown className="w-3.5 h-3.5" />
-                      <span>Rear Hop [Z]</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        engineRef.current?.triggerHydraulicAction('left_tilt')
-                      }
-                      className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
-                        hud.activeVehicle.hydraulicMode === 'left_tilt'
-                          ? 'bg-amber-500 border-amber-300 text-stone-950'
-                          : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
-                      }`}
-                    >
-                      <ChevronLeft className="w-3.5 h-3.5" />
-                      <span>Tilt L [Q]</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        engineRef.current?.triggerHydraulicAction('right_tilt')
-                      }
-                      className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
-                        hud.activeVehicle.hydraulicMode === 'right_tilt'
-                          ? 'bg-amber-500 border-amber-300 text-stone-950'
-                          : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
-                      }`}
-                    >
-                      <span>Tilt R [R]</span>
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        engineRef.current?.triggerHydraulicAction('lock_up')
-                      }
-                      className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
-                        hud.activeVehicle.hydraulicMode === 'lock_up'
-                          ? 'bg-purple-500 border-purple-200 text-stone-950'
-                          : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
-                      }`}
-                    >
-                      Lock-Up [X]
-                    </button>
+                    {hud.activeVehicle.hydraulicStyle === 'up_down_side' ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            engineRef.current?.triggerHydraulicAction('lock_up')
+                          }
+                          className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
+                            hud.activeVehicle.hydraulicMode === 'lock_up'
+                              ? 'bg-sky-500 border-sky-200 text-stone-950'
+                              : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                          }`}
+                        >
+                          <ArrowUp className="w-3.5 h-3.5" />
+                          <span>Up [Space]</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            engineRef.current?.triggerHydraulicAction('drop')
+                          }
+                          className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
+                            hud.activeVehicle.hydraulicMode === 'drop_down'
+                              ? 'bg-sky-500 border-sky-200 text-stone-950'
+                              : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                          }`}
+                        >
+                          <ArrowDown className="w-3.5 h-3.5" />
+                          <span>Down [Z]</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            engineRef.current?.triggerHydraulicAction('left_tilt')
+                          }
+                          className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
+                            hud.activeVehicle.hydraulicMode === 'left_tilt'
+                              ? 'bg-amber-500 border-amber-300 text-stone-950'
+                              : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                          }`}
+                        >
+                          <ChevronLeft className="w-3.5 h-3.5" />
+                          <span>Side L [Q]</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            engineRef.current?.triggerHydraulicAction('right_tilt')
+                          }
+                          className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
+                            hud.activeVehicle.hydraulicMode === 'right_tilt'
+                              ? 'bg-amber-500 border-amber-300 text-stone-950'
+                              : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                          }`}
+                        >
+                          <span>Side R [R]</span>
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            engineRef.current?.triggerHydraulicAction('front_hop')
+                          }
+                          className="min-h-[34px] px-2.5 py-1 rounded-lg bg-purple-950/90 hover:bg-purple-700 border border-purple-500/60 text-purple-100 text-[11px] font-bold flex items-center gap-1 transition"
+                        >
+                          <ArrowUp className="w-3.5 h-3.5" />
+                          <span>Front Hop [Space]</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            engineRef.current?.triggerHydraulicAction('rear_hop')
+                          }
+                          className="min-h-[34px] px-2.5 py-1 rounded-lg bg-purple-950/90 hover:bg-purple-700 border border-purple-500/60 text-purple-100 text-[11px] font-bold flex items-center gap-1 transition"
+                        >
+                          <ArrowDown className="w-3.5 h-3.5" />
+                          <span>Rear Hop [Z]</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            engineRef.current?.triggerHydraulicAction('left_tilt')
+                          }
+                          className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
+                            hud.activeVehicle.hydraulicMode === 'left_tilt'
+                              ? 'bg-amber-500 border-amber-300 text-stone-950'
+                              : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                          }`}
+                        >
+                          <ChevronLeft className="w-3.5 h-3.5" />
+                          <span>Tilt L [Q]</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            engineRef.current?.triggerHydraulicAction('right_tilt')
+                          }
+                          className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
+                            hud.activeVehicle.hydraulicMode === 'right_tilt'
+                              ? 'bg-amber-500 border-amber-300 text-stone-950'
+                              : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                          }`}
+                        >
+                          <span>Tilt R [R]</span>
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            engineRef.current?.triggerHydraulicAction('lock_up')
+                          }
+                          className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
+                            hud.activeVehicle.hydraulicMode === 'lock_up'
+                              ? 'bg-purple-500 border-purple-200 text-stone-950'
+                              : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                          }`}
+                        >
+                          Lock-Up [X]
+                        </button>
+                      </>
+                    )}
                   </div>
                 )}
 
@@ -1858,10 +2237,21 @@ export function SurvivalGameClient() {
         </div>
       )}
 
-      {/* RESPONSIVE TOUCH CONTROLS (iPhone Safari + Toggleable) */}
+      {/* RESPONSIVE TOUCH CONTROLS & XBOX MIRRORED THUMBSTICK */}
       {hud && (
         <TouchControls
-          visible={showTouchControls}
+          visible={
+            showTouchControls ||
+            (gamepadConnected &&
+              settings.touchControlsMode !== 'off' &&
+              screen === 'playing' &&
+              !activeModal &&
+              !hud.gameOver &&
+              !hud.cinematicActive)
+          }
+          gamepadConnected={gamepadConnected}
+          mirroredJoystickOnly={!showTouchControls}
+          gamepadJoystickOffset={gamepadJoystickOffset}
           actionLabel={hud.nearbyInteraction?.label || 'Action'}
           actionCategory={hud.nearbyInteraction?.actionCategory}
           isSprinting={hud.isSprinting}
@@ -2090,6 +2480,9 @@ export function SurvivalGameClient() {
           onUpdateName={(name) => engineRef.current?.setMultiplayerName(name)}
           onTogglePvp={(enabled) => engineRef.current?.setPvpEnabled(enabled)}
           onSendChat={(text) => engineRef.current?.sendMultiplayerChat(text)}
+          onInitMic={() => engineRef.current?.initMicrophone()}
+          onToggleMicMute={() => engineRef.current?.toggleMicMute()}
+          onSetVoiceMode={(mode) => engineRef.current?.setVoiceMode(mode)}
           onClose={closeModal}
         />
       )}

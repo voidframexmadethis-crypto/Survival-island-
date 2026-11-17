@@ -246,14 +246,14 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                     {
                       key: 'lowrider' as VehiclePresetKey,
                       title: '1964 Candy Lowrider',
-                      desc: 'Classic Impala cruiser with whitewall wire rims & 4-corner hydraulic hops/tilts.',
+                      desc: 'Classic Impala cruiser with whitewall wire rims & high-bounce 2-wheel hydraulics.',
                       icon: Sparkles,
                       color: 'border-purple-500/50 bg-purple-500/10 text-purple-400',
                     },
                     {
                       key: 'donk' as VehiclePresetKey,
                       title: '30" Lifted DONK',
-                      desc: '1970s Box Chevy lifted high on 30-inch chrome rims to clear sandbars & rough trails.',
+                      desc: '1970s Box Chevy lifted on 30-inch chrome rims with up/down & side-to-side hydraulics.',
                       icon: Car,
                       color: 'border-sky-500/50 bg-sky-500/10 text-sky-400',
                     },
@@ -561,10 +561,14 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                         <div className="flex items-center justify-between pt-2 border-t border-stone-800">
                           <div>
                             <div className="text-xs font-bold text-stone-200">
-                              Lowrider Hydraulics [Spacebar Hop]
+                              {activeGarageVehicle.preset === 'donk'
+                                ? 'DONK Hydraulics [Up / Down / Side-to-Side]'
+                                : 'Hydraulic Suspension [Bounce / Tilt]'}
                             </div>
                             <div className="text-[11px] text-stone-400">
-                              Bounce front &amp; chassis on demand while cruising
+                              {activeGarageVehicle.preset === 'donk'
+                                ? 'Raise, drop, and tilt left/right on 30-inch rims while staying planted'
+                                : 'Bounce high off the ground with 2-wheel hops & side tilts'}
                             </div>
                           </div>
                           <button

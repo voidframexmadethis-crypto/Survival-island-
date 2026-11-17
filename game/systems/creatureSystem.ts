@@ -1025,6 +1025,7 @@ export interface ActiveCreature {
   tamed?: boolean;
   mounted?: boolean;
   guardMode?: 'follow' | 'guard' | 'stay';
+  rigCastShadow?: boolean;
 }
 
 export interface FootprintMarker {
@@ -1054,11 +1055,83 @@ export class CreatureManager {
   private replenishTimer = 2.5;
   private dynamicSeq = 0;
   private overworldActive = true;
+  private shadowsEnabled = true;
+  private maxDrawDistance = 210;
+  private rigPool = new Map<CreatureSpecies, CreatureRig[]>();
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     this.footprintGeo.rotateX(-Math.PI / 2);
     this.spawnInitialFauna();
+  }
+
+  public setGraphicsOptions(opts: {
+    shadowsEnabled: boolean;
+    maxDrawDistance: number;
+  }): void {
+    this.shadowsEnabled = opts.shadowsEnabled;
+    this.maxDrawDistance = opts.maxDrawDistance;
+    for (const c of this.creatures) {
+      if (!opts.shadowsEnabled) {
+        this.setRigShadow(c, false);
+      }
+    }
+  }
+
+  private setRigShadow(c: ActiveCreature, cast: boolean): void {
+    if (c.rigCastShadow === cast) return;
+    c.rigCastShadow = cast;
+    c.rig.root.traverse((obj) => {
+      if (obj instanceof THREE.Mesh && obj !== c.rig.shadowDisc) {
+        obj.castShadow = cast;
+      }
+    });
+  }
+
+  private acquireWildRig(species: CreatureSpecies): CreatureRig {
+    const bucket = this.rigPool.get(species);
+    if (bucket && bucket.length > 0) {
+      const rig = bucket.pop()!;
+      rig.root.scale.setScalar(1);
+      rig.root.rotation.set(0, 0, 0);
+      return rig;
+    }
+    return createCreatureModel(species);
+  }
+
+  private releaseWildRig(species: CreatureSpecies, rig: CreatureRig): void {
+    rig.root.visible = false;
+    this.scene.remove(rig.root);
+    let bucket = this.rigPool.get(species);
+    if (!bucket) {
+      bucket = [];
+      this.rigPool.set(species, bucket);
+    }
+    if (bucket.length < 6) {
+      bucket.push(rig);
+    } else {
+      this.disposeCreatureRig(rig);
+    }
+  }
+
+  public dispose(): void {
+    for (const c of this.creatures) {
+      this.disposeCreatureRig(c.rig);
+    }
+    this.creatures.length = 0;
+    for (const bucket of this.rigPool.values()) {
+      for (const rig of bucket) {
+        this.disposeCreatureRig(rig);
+      }
+    }
+    this.rigPool.clear();
+    for (const fp of this.footprints) {
+      this.scene.remove(fp.mesh);
+      (fp.mesh.material as THREE.Material).dispose();
+    }
+    this.footprints.length = 0;
+    this.footprintGeo.dispose();
+    this.footprintMat.dispose();
   }
 
   private spawnInitialFauna(): void {
@@ -1359,7 +1432,7 @@ export class CreatureManager {
 
   public spawnWildAnimalAt(species: CreatureSpecies, x: number, z: number): void {
     const spec = SPECIES_SPECS[species];
-    const rig = createCreatureModel(species);
+    const rig = this.acquireWildRig(species);
     const isMarine =
       species === 'dolphin' ||
       species === 'fish_school' ||
@@ -1380,7 +1453,7 @@ export class CreatureManager {
         ? Math.max(OCEAN_LEVEL + 16, getTerrainHeight(x, z) + 16)
         : getTerrainHeight(x, z);
     rig.root.position.set(x, y, z);
-    rig.root.visible = true;
+    rig.root.visible = this.overworldActive;
     const zoneArmor = getCreatureDefaultArmor(species, false);
     attachCreatureArmorPlates(rig, species, zoneArmor);
     this.scene.add(rig.root);
@@ -1842,6 +1915,25 @@ export class CreatureManager {
         nocturnalActiveCount += 1;
       }
 
+      const distToPlayer = Math.hypot(playerX - c.x, playerZ - c.z);
+
+      // Draw-distance frustum/distance culling & >120m AI/animation freeze
+      if (distToPlayer > this.maxDrawDistance) {
+        c.rig.root.visible = false;
+        this.setRigShadow(c, false);
+        continue;
+      }
+      c.rig.root.visible = true;
+
+      if (distToPlayer > 120 && !c.mounted && !c.tamed) {
+        this.setRigShadow(c, false);
+        c.rig.shadowDisc.visible = false;
+        continue;
+      }
+
+      this.setRigShadow(c, this.shadowsEnabled && distToPlayer < 48);
+      c.rig.shadowDisc.visible = distToPlayer < 80;
+
       // Predator & nocturnal owl eye-shine glows in the dark (crocodile eyes stay visible above murky water)
       if (c.rig.eyeGlowMat) {
         if (c.species === 'great_horned_owl') {
@@ -2111,7 +2203,6 @@ export class CreatureManager {
         continue;
       }
 
-      const distToPlayer = Math.hypot(playerX - c.x, playerZ - c.z);
       if (
         distToPlayer < 55 * (0.5 + 0.5 * playerVisibility) &&
         c.species !== 'rabbit' &&
@@ -2556,14 +2647,14 @@ export class CreatureManager {
     if (this.replenishTimer <= 0) {
       this.replenishTimer = 2.2;
 
-      // 1. Prune distant (>112m) or expired dead untamed dynamic wildlife with full GPU disposal
+      // 1. Prune distant (>112m) or expired dead untamed dynamic wildlife back into reusable rig pool
       for (let idx = this.creatures.length - 1; idx >= 0; idx--) {
         const dc = this.creatures[idx];
         if (!dc.id.startsWith('wild_') || dc.tamed || dc.mounted) continue;
         const farAway = Math.hypot(dc.x - playerX, dc.z - playerZ) > 112;
         const deadExpired = !dc.alive && dc.respawnTimer <= 0;
         if (farAway || deadExpired) {
-          this.disposeCreatureRig(dc.rig);
+          this.releaseWildRig(dc.species, dc.rig);
           this.creatures.splice(idx, 1);
         }
       }

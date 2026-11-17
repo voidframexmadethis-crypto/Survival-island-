@@ -11,6 +11,8 @@ import {
   Send,
   ShieldAlert,
   Users,
+  Volume2,
+  VolumeX,
   Wifi,
   X,
 } from 'lucide-react';
@@ -26,6 +28,9 @@ interface MultiplayerModalProps {
   onUpdateName: (name: string) => void;
   onTogglePvp: (enabled: boolean) => void;
   onSendChat: (text: string) => void;
+  onInitMic: () => void;
+  onToggleMicMute: () => void;
+  onSetVoiceMode: (mode: 'party' | 'proximity') => void;
   onClose: () => void;
 }
 
@@ -39,6 +44,9 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
   onUpdateName,
   onTogglePvp,
   onSendChat,
+  onInitMic,
+  onToggleMicMute,
+  onSetVoiceMode,
   onClose,
 }) => {
   const [nameInput, setNameInput] = useState(mpState?.playerName || 'IslandSurvivor');
@@ -165,6 +173,67 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
             )}
           </div>
 
+          {/* Voice Chat Settings */}
+          <div className="p-4 rounded-xl bg-stone-950 border border-stone-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                <Radio className="w-4 h-4" />
+                <span>Microphone Voice Chat (P2P WebRTC)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onInitMic}
+                  className={`px-3 py-1.5 rounded-lg font-bold text-xs ${
+                    mpState?.micEnabled
+                      ? 'bg-emerald-950 border border-emerald-500/60 text-emerald-300'
+                      : 'bg-emerald-600 hover:bg-emerald-500 text-stone-950'
+                  }`}
+                >
+                  {mpState?.micEnabled ? 'Mic Active' : 'Enable Mic'}
+                </button>
+                <button
+                  type="button"
+                  onClick={onToggleMicMute}
+                  className={`px-3 py-1.5 rounded-lg border text-xs font-bold ${
+                    mpState?.micMuted
+                      ? 'bg-red-950 border-red-600 text-red-200'
+                      : 'bg-emerald-950 border-emerald-600 text-emerald-200'
+                  }`}
+                >
+                  {mpState?.micMuted ? 'Muted' : 'Mic On'}
+                </button>
+              </div>
+            </div>
+            <div className="flex items-center justify-between text-xs pt-2 border-t border-stone-800">
+              <span className="text-stone-300">Voice Mode</span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => onSetVoiceMode('party')}
+                  className={`px-3 py-1 rounded-lg font-semibold border ${
+                    (mpState?.voiceMode ?? 'party') === 'party'
+                      ? 'bg-sky-600 border-sky-400 text-stone-950'
+                      : 'bg-stone-900 border-stone-700 text-stone-300'
+                  }`}
+                >
+                  Party Chat (Anywhere)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSetVoiceMode('proximity')}
+                  className={`px-3 py-1 rounded-lg font-semibold border ${
+                    mpState?.voiceMode === 'proximity'
+                      ? 'bg-sky-600 border-sky-400 text-stone-950'
+                      : 'bg-stone-900 border-stone-700 text-stone-300'
+                  }`}
+                >
+                  Proximity Chat (3D Spatial)
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* Callsign */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -288,26 +357,45 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
             </h3>
             <div className="space-y-1.5">
               <div className="p-2.5 rounded-xl bg-stone-950 border border-emerald-500/30 flex items-center justify-between text-xs">
-                <span className="font-bold text-emerald-300">
-                  {mpState?.playerName || nameInput} (You{mpState?.isHost ? ' · Host' : ''})
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-emerald-300">
+                    {mpState?.playerName || nameInput} (You{mpState?.isHost ? ' · Host' : ''})
+                  </span>
+                  {mpState?.localSpeaking && (
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-stone-950 font-bold text-[10px] animate-pulse flex items-center gap-1">
+                      <Volume2 className="w-3 h-3" /> Speaking
+                    </span>
+                  )}
+                </div>
                 <span className="font-mono text-stone-400">Local</span>
               </div>
-              {mpState?.peers.map((p) => (
-                <div
-                  key={p.peerId}
-                  className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 flex items-center justify-between text-xs"
-                >
-                  <span className="font-semibold text-stone-100">{p.name}</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-stone-400">{p.biome}</span>
-                    <span className="px-2 py-0.5 rounded bg-sky-950 border border-sky-700/60 text-sky-300 font-mono flex items-center gap-1">
-                      <Wifi className="w-3 h-3" />
-                      {p.transport.toUpperCase()}
-                    </span>
+              {mpState?.peers.map((p) => {
+                const isSpeaking = mpState?.speakingPeers?.includes(p.peerId);
+                return (
+                  <div
+                    key={p.peerId}
+                    className={`p-2.5 rounded-xl bg-stone-950 border flex items-center justify-between text-xs ${
+                      isSpeaking ? 'border-emerald-500 bg-emerald-950/20' : 'border-stone-800'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-stone-100">{p.name}</span>
+                      {isSpeaking && (
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-stone-950 font-bold text-[10px] animate-pulse flex items-center gap-1">
+                          <Volume2 className="w-3 h-3" /> Speaking
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-stone-400">{p.biome}</span>
+                      <span className="px-2 py-0.5 rounded bg-sky-950 border border-sky-700/60 text-sky-300 font-mono flex items-center gap-1">
+                        <Wifi className="w-3 h-3" />
+                        {p.transport.toUpperCase()}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 

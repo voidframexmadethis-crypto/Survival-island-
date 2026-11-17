@@ -4291,6 +4291,7 @@ export interface RemotePlayerMeshHandle {
   legR: THREE.Group;
   heldGunMesh: THREE.Mesh;
   heldToolMesh: THREE.Mesh;
+  speakerSprite?: THREE.Sprite;
 }
 
 export function createRemotePlayerMesh(
@@ -4386,7 +4387,9 @@ export function createRemotePlayerMesh(
   headGroup.add(cranium, hair, visor);
   bodyGroup.add(headGroup);
 
-  // Floating Nameplate Sprite
+  let speakerSprite: THREE.Sprite | undefined;
+
+  // Floating Nameplate & Active Speaker Sprites
   if (typeof document !== 'undefined') {
     const canvas = document.createElement('canvas');
     canvas.width = 256;
@@ -4414,6 +4417,60 @@ export function createRemotePlayerMesh(
     sprite.position.set(0, 2.25, 0);
     sprite.scale.set(1.5, 0.38, 1);
     group.add(sprite);
+
+    // Xbox-style Glowing Green Audio Wave Active Speaker Badge above nameplate
+    const spCanvas = document.createElement('canvas');
+    spCanvas.width = 160;
+    spCanvas.height = 72;
+    const spCtx = spCanvas.getContext('2d');
+    if (spCtx) {
+      spCtx.shadowColor = '#10b981';
+      spCtx.shadowBlur = 12;
+      spCtx.fillStyle = 'rgba(6, 78, 59, 0.92)';
+      spCtx.beginPath();
+      spCtx.roundRect(14, 10, 132, 52, 26);
+      spCtx.fill();
+      spCtx.shadowBlur = 0;
+      spCtx.strokeStyle = '#34d399';
+      spCtx.lineWidth = 3;
+      spCtx.stroke();
+
+      // Glowing green speaker cone + soundwave bars
+      spCtx.fillStyle = '#34d399';
+      spCtx.beginPath();
+      spCtx.moveTo(40, 28);
+      spCtx.lineTo(50, 28);
+      spCtx.lineTo(62, 18);
+      spCtx.lineTo(62, 54);
+      spCtx.lineTo(50, 44);
+      spCtx.lineTo(40, 44);
+      spCtx.closePath();
+      spCtx.fill();
+
+      // Audio wave bars
+      const bars = [
+        { x: 74, h: 16 },
+        { x: 86, h: 28 },
+        { x: 98, h: 20 },
+        { x: 110, h: 32 },
+        { x: 122, h: 14 },
+      ];
+      spCtx.fillStyle = '#6ee7b7';
+      for (const bar of bars) {
+        spCtx.beginPath();
+        spCtx.roundRect(bar.x, 36 - bar.h / 2, 6, bar.h, 3);
+        spCtx.fill();
+      }
+    }
+    const spTex = new THREE.CanvasTexture(spCanvas);
+    spTex.colorSpace = THREE.SRGBColorSpace;
+    speakerSprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: spTex, transparent: true, depthWrite: false }),
+    );
+    speakerSprite.position.set(0, 2.7, 0);
+    speakerSprite.scale.set(0.76, 0.34, 1);
+    speakerSprite.visible = false;
+    group.add(speakerSprite);
   }
 
   return {
@@ -4426,5 +4483,6 @@ export function createRemotePlayerMesh(
     legR,
     heldGunMesh,
     heldToolMesh,
+    speakerSprite,
   };
 }

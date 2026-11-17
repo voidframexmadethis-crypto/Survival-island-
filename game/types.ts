@@ -348,7 +348,8 @@ export type HydraulicMode =
   | 'rear_hop'
   | 'left_tilt'
   | 'right_tilt'
-  | 'lock_up';
+  | 'lock_up'
+  | 'drop_down';
 
 export interface ActiveVehicleHudState {
   id: string;
@@ -366,6 +367,7 @@ export interface ActiveVehicleHudState {
   canFloat: boolean;
   canFly: boolean;
   hasHydraulics: boolean;
+  hydraulicStyle: 'full_bounce' | 'up_down_side';
   hydraulicMode: HydraulicMode;
   hasTrunkBass: boolean;
   trunkBassOn: boolean;
@@ -738,11 +740,20 @@ export interface GameStats {
   daysSurvived: number;
 }
 
+export type GraphicsPreset = 'ultra' | 'balanced' | 'performance';
+export type DrawDistanceTier = 'near' | 'medium' | 'far';
+
 export interface GameSettings {
   masterVolume: number;
   sfxEnabled: boolean;
   ambienceEnabled: boolean;
   graphicsQuality: 'balanced' | 'high';
+  graphicsPreset?: GraphicsPreset;
+  shadowsEnabled?: boolean;
+  waterReflectionsEnabled?: boolean;
+  particlesEnabled?: boolean;
+  drawDistance?: DrawDistanceTier;
+  dynamicAutoFps?: boolean;
   touchControlsMode: 'auto' | 'always' | 'off';
   cameraSensitivity: number;
   invertCameraY: boolean;
@@ -1169,5 +1180,11 @@ export interface MultiplayerStatusSnapshot {
   pvpEnabled: boolean;
   statusMessage: string;
   chatLog?: { peerId: string; name: string; text: string; time: number }[];
+  micMuted?: boolean;
+  micEnabled?: boolean;
+  voiceMode?: 'party' | 'proximity';
+  localSpeaking?: boolean;
+  speakingPeers?: string[];
 }
+
 

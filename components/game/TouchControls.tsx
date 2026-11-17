@@ -34,6 +34,9 @@ interface TouchControlsProps {
   kickCooldown?: number;
   showReload?: boolean;
   isReloading?: boolean;
+  gamepadConnected?: boolean;
+  mirroredJoystickOnly?: boolean;
+  gamepadJoystickOffset?: { x: number; y: number };
   onJoystickMove: (x: number, y: number) => void;
   onCameraDrag: (dx: number, dy: number) => void;
   onAction: () => void;
@@ -56,6 +59,9 @@ export function TouchControls({
   kickCooldown = 0,
   showReload = false,
   isReloading = false,
+  gamepadConnected = false,
+  mirroredJoystickOnly = false,
+  gamepadJoystickOffset,
   onJoystickMove,
   onCameraDrag,
   onAction,
@@ -212,18 +218,42 @@ export function TouchControls({
           onPointerCancel={handlePointerUp}
           onLostPointerCapture={handlePointerUp}
         >
-          <div
-            className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-amber-500 border-2 border-amber-200 shadow-xl flex items-center justify-center pointer-events-none transition-transform duration-75"
-            style={{
-              transform: `translate(${knobOffset.x}px, ${knobOffset.y}px)`,
-            }}
-          >
-            <Footprints className="w-6 h-6 text-stone-950" />
-          </div>
+          {(() => {
+            const rawX =
+              knobOffset.x !== 0 ? knobOffset.x : (gamepadJoystickOffset?.x ?? 0);
+            const rawY =
+              knobOffset.y !== 0 ? knobOffset.y : (gamepadJoystickOffset?.y ?? 0);
+            const mag = Math.hypot(rawX, rawY);
+            const effectiveX = mag > maxRadius ? (rawX / mag) * maxRadius : rawX;
+            const effectiveY = mag > maxRadius ? (rawY / mag) * maxRadius : rawY;
+            const tiltX = (-effectiveY / maxRadius) * 18;
+            const tiltY = (effectiveX / maxRadius) * 18;
+            const isDeflected = mag > 2;
+            return (
+              <>
+                <div
+                  className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-amber-500 border-2 shadow-xl flex items-center justify-center pointer-events-none ${
+                    isDeflected ? 'border-emerald-300 ring-2 ring-emerald-400/50' : 'border-amber-200'
+                  }`}
+                  style={{
+                    transform: `perspective(180px) translate(${effectiveX.toFixed(1)}px, ${effectiveY.toFixed(1)}px) rotateX(${tiltX.toFixed(1)}deg) rotateY(${tiltY.toFixed(1)}deg)`,
+                  }}
+                >
+                  <Footprints className="w-6 h-6 text-stone-950" />
+                </div>
+                {gamepadConnected && (
+                  <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded bg-stone-950/90 border border-emerald-500/60 text-[9px] font-bold tracking-wider text-emerald-300 uppercase whitespace-nowrap pointer-events-none">
+                    Xbox LS
+                  </span>
+                )}
+              </>
+            );
+          })()}
         </div>
       </div>
 
       {/* MID-LEFT ZONE: Sprint, Crouch & Jump / Vault Arc */}
+      {!mirroredJoystickOnly && (
       <div className="pointer-events-auto absolute bottom-32 left-38 sm:left-50 safe-bottom flex items-end gap-2">
         <button
           type="button"
@@ -272,8 +302,10 @@ export function TouchControls({
           <ArrowUp className="w-6 h-6 sm:w-7 sm:h-7" />
         </button>
       </div>
+      )}
 
       {/* RIGHT ZONE: Lifted & Right-Aligned Action Arc (Clear of Empty Hands & Status Badges) */}
+      {!mirroredJoystickOnly && (
       <div className="pointer-events-auto absolute bottom-40 sm:bottom-36 right-2.5 sm:right-5 safe-bottom flex items-end gap-2.5">
         <div className="flex flex-col items-end gap-2">
           {/* Top row of right-side arc: Quick Backpack, Craft, and Build / Place Toggle */}
@@ -388,6 +420,7 @@ export function TouchControls({
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }

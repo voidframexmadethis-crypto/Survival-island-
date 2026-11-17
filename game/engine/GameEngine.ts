@@ -60,6 +60,7 @@ import {
   DIMENSION_DEFINITIONS,
   getDimensionArrivalPoint,
 } from '../systems/multiverse';
+import { isMobileOrTouchClient } from '../systems/saveManager';
 import {
   P2PMultiplayerManager,
   P2PPacket,
@@ -172,9 +173,20 @@ import {
   ShipwreckChestHandle,
   WorldHandles,
 } from '../world/worldBuilder';
+import {
+  buildDimensionWorld,
+  createPortalVortexMesh,
+  DimensionWorldHandle,
+  disposeDimensionWorld,
+  disposePortalVortex,
+  PortalVortexHandle,
+} from '../world/multiverseModels';
 
 const _vec3A = new THREE.Vector3();
 const _vec3B = new THREE.Vector3();
+const _vec3C = new THREE.Vector3();
+const _vec3D = new THREE.Vector3();
+const _upAxis = new THREE.Vector3(0, 1, 0);
 const _raycaster = new THREE.Raycaster();
 const _ndcCenter = new THREE.Vector2(0, 0);
 const _normalMatrix = new THREE.Matrix3();
@@ -182,9 +194,30 @@ const _hitNormal = new THREE.Vector3();
 const _probeOrigin = new THREE.Vector3();
 const _probeDir = new THREE.Vector3();
 const _probeEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+const _scratchQuat = new THREE.Quaternion();
+const _scratchScale = new THREE.Vector3(1, 1, 1);
+const _scratchMat4 = new THREE.Matrix4();
+const _zeroMat4 = new THREE.Matrix4().makeScale(0, 0, 0);
+const _scratchColorA = new THREE.Color();
+const _skyColor = new THREE.Color(0x7cc4e0);
+const _nightSky = new THREE.Color(0x060b16);
+const _dawnSky = new THREE.Color(0xe76f51);
+const _duskSky = new THREE.Color(0xf4a261);
+const _daySky = new THREE.Color(0x7cc4e0);
+const _stormSky = new THREE.Color(0x334155);
+const _stormDeepSky = new THREE.Color(0x1e293b);
+const _lightningSky = new THREE.Color(0xe2e8f0);
+const _sunOrangeColor = new THREE.Color(0xf97316);
+const _hemiDayColor = new THREE.Color(0xbae6fd);
+const _hemiTwilightColor = new THREE.Color(0xfda4af);
+const _hemiGroundDayColor = new THREE.Color(0x3f4e28);
+const _hemiGroundTwilightColor = new THREE.Color(0x543822);
+const _oceanDayColor = new THREE.Color(0x0b7285);
+const _lakeDayColor = new THREE.Color(0x14b8a6);
 
 const FOG_GRID_SIZE = 32;
 const FOG_WORLD_SPAN = 320;
+const MAX_POOLED_PARTICLES = 192;
 
 interface ArrowProjectile {
   mesh: THREE.Mesh;
@@ -195,10 +228,16 @@ interface ArrowProjectile {
   isBullet?: boolean;
 }
 
-interface HitParticle {
-  mesh: THREE.Mesh;
-  vel: THREE.Vector3;
+interface PooledParticle {
+  active: boolean;
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
   life: number;
+  maxLife: number;
 }
 
 interface ActivePickup {
@@ -271,10 +310,12 @@ export class GameEngine {
   private sound = new SoundEngine();
 
   private isSoftwareGl = false;
+  private isTouchDevice = isMobileOrTouchClient();
   private renderer!: THREE.WebGLRenderer;
   private cssRenderer!: CSS3DRenderer;
   private cssScene!: THREE.Scene;
   private scene!: THREE.Scene;
+  private envTexture: THREE.Texture | null = null;
   private camera!: THREE.PerspectiveCamera;
   private smartTv!: SmartTvSystem;
   private tvCssObject: CSS3DObject | null = null;
@@ -322,9 +363,29 @@ export class GameEngine {
 
   private frameId = 0;
   private disposed = false;
+  private rafPausedByVisibility = false;
   private clock = new THREE.Clock();
   private elapsed = 0;
   private hudSyncTimer = 0;
+
+  // Performance Engine & Dynamic Auto-FPS Guard State
+  private autoFpsTier = 0;
+  private fpsSampleTimer = 0;
+  private fpsSampleFrames = 0;
+  private fpsSampleAccumMs = 0;
+  private lastFramePerfMs = 0;
+  private consecutiveSlowSeconds = 0;
+  private effectiveShadowsEnabled = true;
+  private effectiveShadowMapSize = 1024;
+  private effectiveWaterReflections = true;
+  private effectiveParticleScale = 1.0;
+  private effectiveMaxDrawDistance = 205;
+  private effectiveFogMult = 1.0;
+
+  // Multiverse & Portal Vortex Handles
+  private activeDimensionWorld: DimensionWorldHandle | null = null;
+  private portalHandles = new Map<string, PortalVortexHandle>();
+  private portalWarpCooldown = 0;
 
   // Game Mode & Intro Cinematic
   private mode: 'menu' | 'playing' | 'paused' = 'menu';
@@ -410,6 +471,10 @@ export class GameEngine {
   private joyY = 0;
   private touchSprint = false;
   private touchCrouch = false;
+  private isAiming = false;
+  private gamepadGas = 0;
+  private gamepadBrake = 0;
+  private gamepadHandbrake = false;
 
   // Survival & World State
   private vitals: PlayerVitals = {
@@ -480,15 +545,71 @@ export class GameEngine {
     returnZ: number;
   } | null = null;
 
-  // Dynamic Projectiles, Pickups & Particles
+  // Dynamic Projectiles, Pickups & Pooled VFX (Zero-GC)
   private arrows: ArrowProjectile[] = [];
-  private particles: HitParticle[] = [];
+  private arrowMeshPool: THREE.Mesh[] = [];
+  private bulletMeshPool: THREE.Mesh[] = [];
+  private arrowGeo = new THREE.CylinderGeometry(0.025, 0.025, 0.85, 5);
+  private arrowMat = new THREE.MeshStandardMaterial({ color: 0xe7e5e4 });
+  private bulletGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.42, 6);
+  private bulletMat = new THREE.MeshStandardMaterial({
+    color: 0xfef08a,
+    emissive: 0xf59e0b,
+    emissiveIntensity: 0.9,
+    roughness: 0.2,
+  });
+  private particleInstanced!: THREE.InstancedMesh;
+  private particlePool: PooledParticle[] = [];
+  private particleWriteIdx = 0;
+  private particleGeo = new THREE.BoxGeometry(0.14, 0.14, 0.14);
+  private particleMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  private shellCasingGeo = new THREE.CylinderGeometry(0.014, 0.014, 0.048, 6);
+  private shellCasingMat = new THREE.MeshStandardMaterial({
+    color: 0xfbbf24,
+    metalness: 0.85,
+    roughness: 0.28,
+  });
+  private shellCasingPool: {
+    mesh: THREE.Mesh;
+    active: boolean;
+    pos: THREE.Vector3;
+    vel: THREE.Vector3;
+    rx: number;
+    rz: number;
+    life: number;
+  }[] = [];
+  private shellCasingIdx = 0;
+  private muzzleFlashGeo = new THREE.OctahedronGeometry(0.12, 0);
+  private muzzleFlashMat = new THREE.MeshBasicMaterial({
+    color: 0xfef08a,
+    transparent: true,
+    opacity: 0.92,
+  });
+  private muzzleFlashPool: { mesh: THREE.Mesh; life: number }[] = [];
+  private muzzleFlashIdx = 0;
+  private debrisGeo = new THREE.DodecahedronGeometry(0.12, 0);
+  private debrisMat = new THREE.MeshStandardMaterial({
+    color: 0x78716c,
+    roughness: 0.92,
+  });
+  private debrisMeshPool: THREE.Mesh[] = [];
+  private p2pTracerGeo = new THREE.CylinderGeometry(0.018, 0.018, 1, 5);
+  private p2pTracerMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+  private p2pTracerPool: { mesh: THREE.Mesh; life: number }[] = [];
+  private p2pTracerIdx = 0;
+  private vehicleShadowGeo = new THREE.CircleGeometry(2.15, 14);
+  private vehicleShadowMat = new THREE.MeshBasicMaterial({
+    color: 0x0c0a09,
+    transparent: true,
+    opacity: 0.34,
+    depthWrite: false,
+  });
+  private vehicleShadowDiscs = new Map<string, THREE.Mesh>();
   private pickups: ActivePickup[] = [];
   private carcasses: ActiveCarcass[] = [];
   private pendingTreeDrops = new Map<string, [ItemId, number][]>();
   private shakenTreeDropIds = new Set<string>();
   private nodeById = new Map<string, ResourceNodeState>();
-  private particleGeo = new THREE.BoxGeometry(0.14, 0.14, 0.14);
 
   // Volumetric Terrain Deformation & Structural Integrity Engineering
   private terrainEngine!: VolumetricTerrainEngine;
@@ -595,6 +716,24 @@ export class GameEngine {
   private p2pVehicleSyncAccum = 0;
   private p2pChatLog: { peerId: string; name: string; text: string; time: number }[] = [];
   private hydraulicBounceTimer = 0;
+  private autoParkJobs = new Map<
+    string,
+    {
+      vehicleId: string;
+      targetX: number;
+      targetZ: number;
+      targetYaw: number;
+      bayLabel: string;
+      phase: 'approach' | 'park';
+      speed: number;
+      steerAngle: number;
+      pitchAngle: number;
+      elapsed: number;
+      stuckTimer: number;
+      lastProgressX: number;
+      lastProgressZ: number;
+    }
+  >();
 
   constructor(
     container: HTMLElement,
@@ -652,8 +791,9 @@ export class GameEngine {
     this.isSoftwareGl = this.detectSoftwareGl();
 
     this.renderer = new THREE.WebGLRenderer({
-      antialias: !this.isSoftwareGl,
+      antialias: !this.isSoftwareGl && !this.isTouchDevice,
       powerPreference: 'high-performance',
+      stencil: false,
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -663,7 +803,7 @@ export class GameEngine {
         ? 1
         : Math.min(
             window.devicePixelRatio || 1,
-            this.settings.graphicsQuality === 'high' ? 2 : 1.35,
+            this.isTouchDevice ? 1.5 : 2,
           ),
     );
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
@@ -704,11 +844,12 @@ export class GameEngine {
     this.container.appendChild(cssDom);
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x7cc4e0);
+    this.scene.background = _skyColor;
     this.scene.fog = new THREE.FogExp2(0x7cc4e0, 0.0042);
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.envTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environment = this.envTexture;
     pmrem.dispose();
 
     const aspect =
@@ -871,6 +1012,68 @@ export class GameEngine {
 
     this.creatures = new CreatureManager(this.scene);
 
+    // Pre-allocate Zero-GC VFX Pools (1 InstancedMesh particle batch = 1 draw call)
+    this.vehicleShadowGeo.rotateX(-Math.PI / 2);
+    this.particleInstanced = new THREE.InstancedMesh(
+      this.particleGeo,
+      this.particleMat,
+      MAX_POOLED_PARTICLES,
+    );
+    this.particleInstanced.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.particleInstanced.frustumCulled = false;
+    this.particleInstanced.castShadow = false;
+    this.particleInstanced.receiveShadow = false;
+    _scratchColorA.setHex(0xffffff);
+    for (let i = 0; i < MAX_POOLED_PARTICLES; i++) {
+      this.particleInstanced.setMatrixAt(i, _zeroMat4);
+      this.particleInstanced.setColorAt(i, _scratchColorA);
+      this.particlePool.push({
+        active: false,
+        x: 0,
+        y: 0,
+        z: 0,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        life: 0,
+        maxLife: 0.5,
+      });
+    }
+    this.particleInstanced.instanceMatrix.needsUpdate = true;
+    if (this.particleInstanced.instanceColor) {
+      this.particleInstanced.instanceColor.needsUpdate = true;
+    }
+    this.scene.add(this.particleInstanced);
+
+    for (let i = 0; i < 16; i++) {
+      const mesh = new THREE.Mesh(this.shellCasingGeo, this.shellCasingMat);
+      mesh.visible = false;
+      this.scene.add(mesh);
+      this.shellCasingPool.push({
+        mesh,
+        active: false,
+        pos: new THREE.Vector3(),
+        vel: new THREE.Vector3(),
+        rx: 0,
+        rz: 0,
+        life: 0,
+      });
+    }
+    for (let i = 0; i < 4; i++) {
+      const mesh = new THREE.Mesh(this.muzzleFlashGeo, this.muzzleFlashMat);
+      mesh.visible = false;
+      this.scene.add(mesh);
+      this.muzzleFlashPool.push({ mesh, life: 0 });
+    }
+    for (let i = 0; i < 12; i++) {
+      const mesh = new THREE.Mesh(this.p2pTracerGeo, this.p2pTracerMat);
+      mesh.visible = false;
+      this.scene.add(mesh);
+      this.p2pTracerPool.push({ mesh, life: 0 });
+    }
+
+    this.applyGraphicsProfile();
+
     if (!this.isSoftwareGl) {
       this.renderer.compile(this.scene, this.camera);
     }
@@ -892,6 +1095,24 @@ export class GameEngine {
   private onVisibilityChange = (): void => {
     if (document.hidden) {
       this.clearMovementInputs();
+      this.rafPausedByVisibility = true;
+      cancelAnimationFrame(this.frameId);
+      clearTimeout(this.frameId);
+      this.frameId = 0;
+      this.clock.stop();
+    } else if (this.rafPausedByVisibility && !this.disposed) {
+      this.rafPausedByVisibility = false;
+      this.clock.start();
+      this.clock.getDelta();
+      this.lastFramePerfMs = performance.now();
+      this.fpsSampleTimer = 0;
+      this.fpsSampleFrames = 0;
+      this.fpsSampleAccumMs = 0;
+      if (this.isSoftwareGl) {
+        this.afterDraw(this.tick);
+      } else {
+        this.frameId = requestAnimationFrame(this.tick);
+      }
     }
   };
 
@@ -900,6 +1121,10 @@ export class GameEngine {
     this.joyX = 0;
     this.joyY = 0;
     this.touchSprint = false;
+    this.isAiming = false;
+    this.gamepadGas = 0;
+    this.gamepadBrake = 0;
+    this.gamepadHandbrake = false;
   }
 
   private onResize = (): void => {
@@ -917,6 +1142,11 @@ export class GameEngine {
     const keyLower = e.key ? e.key.toLowerCase() : '';
     if (keyLower) this.keys[`key_${keyLower}`] = true;
     this.sound.unlock();
+    if (this.activeVehicleId && !this.gameOver && (e.code === 'KeyE' || keyLower === 'e')) {
+      e.preventDefault();
+      this.exitVehicle();
+      return;
+    }
     if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) {
       if (this.cinematicActive && e.code === 'Space') {
         e.preventDefault();
@@ -938,9 +1168,7 @@ export class GameEngine {
     const activeVehicle = this.activeVehicleId
       ? this.vehicles.find((v) => v.id === this.activeVehicleId)
       : undefined;
-    const activeHasHyd = Boolean(
-      activeVehicle && (activeVehicle.hydraulicHop || activeVehicle.preset === 'lowrider'),
-    );
+    const activeHasHyd = this.vehicleHasHydraulics(activeVehicle);
     const activeHasBass = Boolean(
       activeVehicle &&
         (activeVehicle.preset === 'slab' || activeVehicle.trunkBassEnabled !== undefined),
@@ -976,7 +1204,11 @@ export class GameEngine {
       }
     } else if (e.code === 'KeyC' || e.code === 'ControlLeft') {
       if (this.activeVehicleId) {
-        this.vehicleDescendHold = true;
+        if (activeHasHyd && !computeVehicleSpecs(activeVehicle!.modules).canFly) {
+          this.triggerHydraulicAction('drop');
+        } else {
+          this.vehicleDescendHold = true;
+        }
       } else {
         this.isCrouching = !this.isCrouching;
         this.touchCrouch = this.isCrouching;
@@ -1082,13 +1314,118 @@ export class GameEngine {
   public updateSettings(settings: GameSettings): void {
     this.settings = settings;
     this.sound.configure(settings);
-    if (this.renderer && !this.isSoftwareGl) {
-      this.renderer.setPixelRatio(
-        Math.min(
-          window.devicePixelRatio || 1,
-          settings.graphicsQuality === 'high' ? 2 : 1.35,
-        ),
-      );
+    this.autoFpsTier = 0;
+    this.consecutiveSlowSeconds = 0;
+    this.fpsSampleTimer = 0;
+    this.fpsSampleFrames = 0;
+    this.fpsSampleAccumMs = 0;
+    this.applyGraphicsProfile();
+  }
+
+  private applyGraphicsProfile(): void {
+    if (!this.renderer || !this.scene || !this.camera) return;
+
+    const preset =
+      this.settings.graphicsPreset ??
+      (this.settings.graphicsQuality === 'high' ? 'ultra' : 'balanced');
+
+    let shadowsOn =
+      this.settings.shadowsEnabled !== false && !this.isSoftwareGl;
+    if (this.autoFpsTier >= 1) {
+      shadowsOn = false;
+    }
+
+    const shadowMapSize = preset === 'ultra' ? 1024 : 512;
+    let dpr = 1;
+    if (!this.isSoftwareGl) {
+      const nativeDpr = window.devicePixelRatio || 1;
+      if (this.autoFpsTier >= 2 || preset === 'performance') {
+        dpr = 1;
+      } else if (this.isTouchDevice) {
+        dpr = Math.min(nativeDpr, 1.5);
+      } else if (preset === 'balanced') {
+        dpr = Math.min(nativeDpr, 1.5);
+      } else {
+        dpr = Math.min(nativeDpr, 2);
+      }
+    }
+
+    const waterRefl =
+      this.settings.waterReflectionsEnabled !== false && !this.isSoftwareGl;
+    const particlesOn = this.settings.particlesEnabled !== false;
+    this.effectiveParticleScale = !particlesOn
+      ? 0
+      : this.autoFpsTier >= 2 || preset === 'performance'
+        ? 0.45
+        : preset === 'balanced'
+          ? 0.75
+          : 1.0;
+
+    let distTier =
+      this.settings.drawDistance ??
+      (preset === 'ultra' ? 'far' : preset === 'performance' ? 'near' : 'medium');
+    if (this.autoFpsTier >= 3) {
+      distTier = 'near';
+    }
+
+    const cullDist = distTier === 'near' ? 128 : distTier === 'far' ? 310 : 205;
+    const camFar = distTier === 'near' ? 230 : distTier === 'far' ? 450 : 330;
+    this.effectiveFogMult = distTier === 'near' ? 1.45 : distTier === 'far' ? 0.78 : 1.0;
+    this.effectiveMaxDrawDistance = cullDist;
+    this.effectiveShadowsEnabled = shadowsOn;
+    this.effectiveWaterReflections = waterRefl;
+
+    this.renderer.setPixelRatio(dpr);
+    this.renderer.shadowMap.enabled = shadowsOn;
+    if (this.sunLight) {
+      this.sunLight.castShadow = shadowsOn;
+      if (this.effectiveShadowMapSize !== shadowMapSize) {
+        this.effectiveShadowMapSize = shadowMapSize;
+        this.sunLight.shadow.mapSize.set(shadowMapSize, shadowMapSize);
+        if (this.sunLight.shadow.map) {
+          this.sunLight.shadow.map.dispose();
+          (this.sunLight.shadow.map as unknown) = null;
+        }
+      }
+      this.renderer.shadowMap.needsUpdate = true;
+    }
+
+    if (this.camera.far !== camFar) {
+      this.camera.far = camFar;
+      this.camera.updateProjectionMatrix();
+    }
+
+    this.scene.environment = waterRefl ? this.envTexture : null;
+    if (this.world) {
+      this.world.setWorldShadowCasting(shadowsOn);
+      const waterMats = [
+        this.world.oceanMesh?.material,
+        this.world.lakeMesh?.material,
+      ];
+      for (const m of waterMats) {
+        if (m instanceof THREE.MeshStandardMaterial) {
+          m.envMapIntensity = waterRefl ? 1.0 : 0.0;
+          m.roughness = waterRefl ? 0.14 : 0.45;
+          m.metalness = waterRefl ? 0.32 : 0.08;
+        }
+      }
+    }
+
+    this.creatures?.setGraphicsOptions({
+      shadowsEnabled: shadowsOn,
+      maxDrawDistance: cullDist,
+    });
+
+    for (const [vid, vh] of this.vehicleMeshes.entries()) {
+      vh.root.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.castShadow = shadowsOn;
+        }
+      });
+      const disc = this.vehicleShadowDiscs.get(vid);
+      if (disc) {
+        disc.visible = !shadowsOn;
+      }
     }
   }
 
@@ -1105,6 +1442,163 @@ export class GameEngine {
     this.touchCrouch = active;
     this.isCrouching = active;
     this.emitHud();
+  }
+
+  public setAiming(active: boolean): void {
+    this.isAiming = active;
+  }
+
+  public setGamepadDriveState(
+    gas: number,
+    brake: number,
+    handbrake: boolean,
+  ): void {
+    this.gamepadGas = THREE.MathUtils.clamp(gas, 0, 1);
+    this.gamepadBrake = THREE.MathUtils.clamp(brake, 0, 1);
+    this.gamepadHandbrake = handbrake;
+  }
+
+  public triggerXboxBAction(): void {
+    this.sound.unlock();
+    if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
+    if (this.activeVehicleId) {
+      const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
+      if (av && this.vehicleHasHydraulics(av)) {
+        this.triggerHydraulicAction('rear_hop');
+      }
+      return;
+    }
+    this.setTouchCrouch(!this.isCrouching);
+  }
+
+  public triggerXboxXAction(): void {
+    this.sound.unlock();
+    if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
+    if (this.activeVehicleId) {
+      const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
+      if (av && this.vehicleHasHydraulics(av)) {
+        this.triggerHydraulicAction('lock_up');
+      }
+      return;
+    }
+
+    const near = this.nearbyInteraction;
+    const isInteractableWorldObject = Boolean(
+      near &&
+        near.kind !== 'gun_action' &&
+        near.kind !== 'tool_action',
+    );
+    if (isInteractableWorldObject) {
+      if (near?.kind === 'carcass') {
+        this.collectNearbyCarcass();
+        return;
+      }
+      this.triggerPrimaryAction();
+      return;
+    }
+
+    const eqId = this.getEquippedItemId();
+    if (eqId && isFirearmItem(eqId)) {
+      this.reloadEquippedWeapon();
+      return;
+    }
+
+    this.triggerPrimaryAction();
+  }
+
+  public triggerXboxYAction(): void {
+    this.sound.unlock();
+    if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
+    if (this.activeVehicleId) {
+      this.exitVehicle();
+      return;
+    }
+    if (this.seatedState) {
+      this.standUp();
+      return;
+    }
+    let nearestVeh: ModularVehicleData | null = null;
+    let bestDist = 6.2;
+    for (const v of this.vehicles) {
+      const d = Math.hypot(v.x - this.playerX, v.z - this.playerZ);
+      if (d < bestDist && Math.abs(v.y - this.playerY) < 4.5) {
+        bestDist = d;
+        nearestVeh = v;
+      }
+    }
+    if (nearestVeh) {
+      this.enterVehicle(nearestVeh.id);
+    } else {
+      this.toast('Move closer to a vehicle to enter (Y)', 'info');
+    }
+  }
+
+  public triggerXboxBumper(dir: -1 | 1): void {
+    this.sound.unlock();
+    if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
+    if (this.activeVehicleId) {
+      const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
+      if (av && this.vehicleHasHydraulics(av)) {
+        this.triggerHydraulicAction(dir < 0 ? 'left_tilt' : 'right_tilt');
+      }
+      return;
+    }
+    this.cycleHotbarSlot(dir);
+  }
+
+  public toggleSmartRadio(): void {
+    this.sound.unlock();
+    this.smartTv?.unlockAudio();
+    if (!this.smartTv.power) {
+      if (this.smartTv.currentChannel === 5) {
+        this.smartTv.setChannel(1);
+      }
+      this.smartTv.togglePower();
+      const meta = this.smartTv.getCurrentChannelMeta();
+      this.toast(`Radio & TV ON: ${meta.badge} · ${meta.name}`, 'discovery');
+    } else if (this.smartTv.isPaused) {
+      this.smartTv.togglePlayPause();
+      const meta = this.smartTv.getCurrentChannelMeta();
+      this.toast(`Radio & TV Resumed: ${meta.name}`, 'info');
+    } else {
+      this.smartTv.togglePower();
+      this.toast('Radio & TV OFF', 'info');
+    }
+    this.emitHud();
+  }
+
+  public triggerXboxDpadLeft(): void {
+    this.sound.unlock();
+    if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
+    if (this.activeVehicleId) {
+      const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
+      if (av && (av.preset === 'slab' || av.trunkBassEnabled !== undefined)) {
+        this.toggleTrunkBass();
+      } else {
+        this.toggleSmartRadio();
+      }
+      return;
+    }
+    const nearBassVeh = this.vehicles.find(
+      (v) =>
+        (v.preset === 'slab' || v.trunkBassEnabled !== undefined) &&
+        Math.hypot(v.x - this.playerX, v.z - this.playerZ) < 8,
+    );
+    if (nearBassVeh) {
+      nearBassVeh.trunkBassEnabled = !nearBassVeh.trunkBassEnabled;
+      this.toast(
+        nearBassVeh.trunkBassEnabled ? 'Trunk Bass ON' : 'Trunk Bass OFF',
+        nearBassVeh.trunkBassEnabled ? 'discovery' : 'info',
+      );
+      this.emitHud();
+      return;
+    }
+    this.toggleSmartRadio();
+  }
+
+  public triggerXboxDpadRight(): void {
+    if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
+    this.toggleSmartRadio();
   }
 
   public addCameraLookDelta(dx: number, dy: number, isTouch = false): void {
@@ -1128,7 +1622,7 @@ export class GameEngine {
     if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
     if (this.activeVehicleId) {
       const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
-      if (av && (av.hydraulicHop || av.preset === 'lowrider')) {
+      if (av && this.vehicleHasHydraulics(av)) {
         this.triggerHydraulicAction('front_hop');
       }
       return;
@@ -1758,7 +2252,7 @@ export class GameEngine {
       const d = Math.hypot(st.x - refX, st.y + 0.95 - refY, st.z - refZ);
       if (d < bestDist) {
         bestDist = d;
-        this._tvWorldQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), st.rotationY);
+        this._tvWorldQuat.setFromAxisAngle(_upAxis, st.rotationY);
         this._tvForward.set(0, 0, 1).applyQuaternion(this._tvWorldQuat);
         this._tvRight.set(1, 0, 0).applyQuaternion(this._tvWorldQuat);
         this._tvWorldPos.set(st.x, st.y + 0.95, st.z).addScaledVector(this._tvForward, 0.06);
@@ -4431,26 +4925,28 @@ export class GameEngine {
   }
 
   private fireArrow(): void {
-    const dir = new THREE.Vector3(0, 0, -1).applyEuler(
-      new THREE.Euler(this.camPitch, this.camYaw, 0, 'YXZ'),
-    );
+    _probeEuler.set(this.camPitch, this.camYaw, 0, 'YXZ');
+    _vec3A.set(0, 0, -1).applyEuler(_probeEuler);
     const start = new THREE.Vector3(
-      this.playerX + dir.x * 0.6,
+      this.playerX + _vec3A.x * 0.6,
       this.playerY + this.currentEyeHeight - 0.1,
-      this.playerZ + dir.z * 0.6,
+      this.playerZ + _vec3A.z * 0.6,
     );
-    const mesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.025, 0.025, 0.85, 5),
-      new THREE.MeshStandardMaterial({ color: 0xe7e5e4 }),
-    );
-    mesh.rotation.x = Math.PI / 2;
+    const mesh =
+      this.arrowMeshPool.pop() ?? new THREE.Mesh(this.arrowGeo, this.arrowMat);
+    mesh.rotation.set(Math.PI / 2, 0, 0);
     mesh.position.copy(start);
+    mesh.visible = true;
     this.scene.add(mesh);
 
     this.arrows.push({
       mesh,
       pos: start,
-      vel: dir.multiplyScalar(28).add(new THREE.Vector3(0, 2.2, 0)),
+      vel: new THREE.Vector3(
+        _vec3A.x * 28,
+        _vec3A.y * 28 + 2.2,
+        _vec3A.z * 28,
+      ),
       life: 2.5,
       damage: 38,
     });
@@ -4592,13 +5088,11 @@ export class GameEngine {
     // Camera recoil kick (upward pitch with smooth spring recovery)
     this.camPitch = Math.min(1.2, this.camPitch + spec.recoil);
 
-    const baseDir = new THREE.Vector3(0, 0, -1).applyEuler(
-      new THREE.Euler(this.camPitch, this.camYaw, 0, 'YXZ'),
-    );
-    const right = new THREE.Vector3(1, 0, 0).applyEuler(
-      new THREE.Euler(0, this.camYaw, 0, 'YXZ'),
-    );
-    const up = new THREE.Vector3().crossVectors(right, baseDir).normalize();
+    _probeEuler.set(this.camPitch, this.camYaw, 0, 'YXZ');
+    _vec3A.set(0, 0, -1).applyEuler(_probeEuler); // baseDir
+    _probeEuler.set(0, this.camYaw, 0, 'YXZ');
+    _vec3B.set(1, 0, 0).applyEuler(_probeEuler); // right
+    _vec3C.crossVectors(_vec3B, _vec3A).normalize(); // up
 
     const barrelScale =
       spec.soundProfile === 'sniper' || spec.soundProfile === 'musket'
@@ -4609,60 +5103,81 @@ export class GameEngine {
           ? 0.86
           : 0.72;
 
-    const start = new THREE.Vector3(
-      this.playerX + baseDir.x * barrelScale + right.x * 0.18,
-      this.playerY + this.currentEyeHeight - 0.14 + baseDir.y * barrelScale,
-      this.playerZ + baseDir.z * barrelScale + right.z * 0.18,
-    );
+    const sx = this.playerX + _vec3A.x * barrelScale + _vec3B.x * 0.18;
+    const sy = this.playerY + this.currentEyeHeight - 0.14 + _vec3A.y * barrelScale;
+    const sz = this.playerZ + _vec3A.z * barrelScale + _vec3B.z * 0.18;
 
-    // Muzzle flash particle burst + smoke
-    this.spawnParticles(start.x, start.y, start.z, 0xffd700, spec.pelletCount > 1 ? 14 : 10);
+    // Pooled muzzle flash + brass shell casing + pooled instanced burst
+    if (this.muzzleFlashPool.length > 0) {
+      const mf = this.muzzleFlashPool[this.muzzleFlashIdx % this.muzzleFlashPool.length];
+      this.muzzleFlashIdx += 1;
+      mf.mesh.position.set(sx, sy, sz);
+      mf.mesh.rotation.set(Math.random() * 3, Math.random() * 3, 0);
+      mf.mesh.scale.setScalar(spec.pelletCount > 1 ? 1.35 : 0.95);
+      mf.mesh.visible = true;
+      mf.life = 0.055;
+    }
+    if (this.shellCasingPool.length > 0 && this.effectiveParticleScale > 0) {
+      const sc = this.shellCasingPool[this.shellCasingIdx % this.shellCasingPool.length];
+      this.shellCasingIdx += 1;
+      sc.active = true;
+      sc.life = 0.9;
+      sc.pos.set(
+        this.playerX + _vec3B.x * 0.24 + _vec3A.x * 0.35,
+        this.playerY + this.currentEyeHeight - 0.14,
+        this.playerZ + _vec3B.z * 0.24 + _vec3A.z * 0.35,
+      );
+      sc.vel.set(
+        _vec3B.x * (2.2 + Math.random() * 0.8),
+        1.8 + Math.random() * 0.8,
+        _vec3B.z * (2.2 + Math.random() * 0.8),
+      );
+      sc.rx = (Math.random() - 0.5) * 18;
+      sc.rz = (Math.random() - 0.5) * 18;
+      sc.mesh.position.copy(sc.pos);
+      sc.mesh.visible = true;
+    }
+
+    this.spawnParticles(sx, sy, sz, 0xffd700, spec.pelletCount > 1 ? 12 : 8);
     this.spawnParticles(
-      start.x + baseDir.x * 0.1,
-      start.y + 0.04,
-      start.z + baseDir.z * 0.1,
+      sx + _vec3A.x * 0.1,
+      sy + 0.04,
+      sz + _vec3A.z * 0.1,
       0xd4d4d8,
-      4,
+      3,
     );
 
     const bulletLife = Math.max(0.8, spec.range / Math.max(40, spec.muzzleSpeed));
     const pellets = Math.max(1, spec.pelletCount);
+    const widthScale = spec.soundProfile === 'sniper' ? 1.2 : 0.85;
+    const lenScale = spec.soundProfile === 'sniper' ? 1.38 : 0.9;
 
     for (let p = 0; p < pellets; p++) {
-      const pelletDir = baseDir.clone();
+      _vec3D.copy(_vec3A);
       if (spec.spread > 0) {
         const yawSpread = (Math.random() - 0.5) * 2 * spec.spread;
         const pitchSpread = (Math.random() - 0.5) * 2 * spec.spread;
-        pelletDir.addScaledVector(right, yawSpread);
-        pelletDir.addScaledVector(up, pitchSpread);
+        _vec3D.addScaledVector(_vec3B, yawSpread);
+        _vec3D.addScaledVector(_vec3C, pitchSpread);
       }
-      pelletDir.normalize();
+      _vec3D.normalize();
 
-      const bulletMesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(
-          spec.soundProfile === 'sniper' ? 0.024 : 0.017,
-          spec.soundProfile === 'sniper' ? 0.024 : 0.017,
-          spec.soundProfile === 'sniper' ? 0.58 : 0.38,
-          6,
-        ),
-        new THREE.MeshStandardMaterial({
-          color: 0xfef08a,
-          emissive: 0xf59e0b,
-          emissiveIntensity: 0.9,
-          roughness: 0.2,
-        }),
-      );
-      bulletMesh.quaternion.setFromUnitVectors(
-        new THREE.Vector3(0, 1, 0),
-        pelletDir,
-      );
-      bulletMesh.position.copy(start);
+      const bulletMesh =
+        this.bulletMeshPool.pop() ?? new THREE.Mesh(this.bulletGeo, this.bulletMat);
+      bulletMesh.scale.set(widthScale, lenScale, widthScale);
+      bulletMesh.quaternion.setFromUnitVectors(_upAxis, _vec3D);
+      bulletMesh.position.set(sx, sy, sz);
+      bulletMesh.visible = true;
       this.scene.add(bulletMesh);
 
       this.arrows.push({
         mesh: bulletMesh,
-        pos: start.clone(),
-        vel: pelletDir.multiplyScalar(spec.muzzleSpeed),
+        pos: new THREE.Vector3(sx, sy, sz),
+        vel: new THREE.Vector3(
+          _vec3D.x * spec.muzzleSpeed,
+          _vec3D.y * spec.muzzleSpeed,
+          _vec3D.z * spec.muzzleSpeed,
+        ),
         life: bulletLife,
         damage: spec.damage,
         isBullet: true,
@@ -4672,26 +5187,26 @@ export class GameEngine {
     this.p2p?.broadcast({
       type: 'combat_shot',
       peerId: this.p2p.localPeerId,
-      fromX: start.x,
-      fromY: start.y,
-      fromZ: start.z,
-      toX: start.x + baseDir.x * Math.min(48, spec.range),
-      toY: start.y + baseDir.y * Math.min(48, spec.range),
-      toZ: start.z + baseDir.z * Math.min(48, spec.range),
+      fromX: sx,
+      fromY: sy,
+      fromZ: sz,
+      toX: sx + _vec3A.x * Math.min(48, spec.range),
+      toY: sy + _vec3A.y * Math.min(48, spec.range),
+      toZ: sz + _vec3A.z * Math.min(48, spec.range),
       weaponId,
     });
 
     if (this.p2p?.connected && this.p2p.pvpEnabled) {
       const hitDmg = Math.round(spec.damage * (this.modSystem?.tweaks.damageMultiplier ?? 1));
       for (const [peerId, rp] of this.remotePlayers.entries()) {
-        const dVecX = rp.targetX - start.x;
-        const dVecY = rp.targetY + 1.0 - start.y;
-        const dVecZ = rp.targetZ - start.z;
-        const along = dVecX * baseDir.x + dVecY * baseDir.y + dVecZ * baseDir.z;
+        const dVecX = rp.targetX - sx;
+        const dVecY = rp.targetY + 1.0 - sy;
+        const dVecZ = rp.targetZ - sz;
+        const along = dVecX * _vec3A.x + dVecY * _vec3A.y + dVecZ * _vec3A.z;
         if (along > 0.5 && along < spec.range) {
-          const px = start.x + baseDir.x * along - rp.targetX;
-          const py = start.y + baseDir.y * along - (rp.targetY + 1.0);
-          const pz = start.z + baseDir.z * along - rp.targetZ;
+          const px = sx + _vec3A.x * along - rp.targetX;
+          const py = sy + _vec3A.y * along - (rp.targetY + 1.0);
+          const pz = sz + _vec3A.z * along - rp.targetZ;
           if (Math.hypot(px, py, pz) < 0.72) {
             this.p2p.broadcast({
               type: 'player_hit',
@@ -5250,7 +5765,9 @@ export class GameEngine {
           this.spawnParticles(node.x, node.y + 2.4, node.z, 0x22c55e, 6);
         }
       }
-      const mesh = this.world.resourceMeshes.get(node.id);
+      const mesh =
+        this.world.resourceMeshes.get(node.id) ??
+        this.world.activateInteractiveNode(node.id)?.root;
       if (mesh) {
         mesh.rotation.z = 0.06;
         setTimeout(() => {
@@ -5427,20 +5944,27 @@ export class GameEngine {
     colorHex: number,
     count: number,
   ): void {
-    const mat = new THREE.MeshBasicMaterial({ color: colorHex });
-    for (let i = 0; i < count; i++) {
-      const m = new THREE.Mesh(this.particleGeo, mat);
-      m.position.set(x, y, z);
-      this.scene.add(m);
-      this.particles.push({
-        mesh: m,
-        vel: new THREE.Vector3(
-          (Math.random() - 0.5) * 4.5,
-          2.2 + Math.random() * 3.0,
-          (Math.random() - 0.5) * 4.5,
-        ),
-        life: 0.45 + Math.random() * 0.25,
-      });
+    if (this.effectiveParticleScale <= 0 || !this.particleInstanced) return;
+    const scaledCount = Math.max(1, Math.round(count * this.effectiveParticleScale));
+    _scratchColorA.setHex(colorHex);
+    for (let i = 0; i < scaledCount; i++) {
+      const idx = this.particleWriteIdx;
+      this.particleWriteIdx = (this.particleWriteIdx + 1) % MAX_POOLED_PARTICLES;
+      const p = this.particlePool[idx];
+      p.active = true;
+      p.x = x;
+      p.y = y;
+      p.z = z;
+      p.vx = (Math.random() - 0.5) * 4.5;
+      p.vy = 2.2 + Math.random() * 3.0;
+      p.vz = (Math.random() - 0.5) * 4.5;
+      const life = 0.45 + Math.random() * 0.25;
+      p.life = life;
+      p.maxLife = life;
+      this.particleInstanced.setColorAt(idx, _scratchColorA);
+    }
+    if (this.particleInstanced.instanceColor) {
+      this.particleInstanced.instanceColor.needsUpdate = true;
     }
   }
 
@@ -5585,34 +6109,40 @@ export class GameEngine {
     );
     this.moonLight.target.position.set(this.playerX, this.playerY, this.playerZ);
 
+    if (this.currentDimension !== 'overworld') {
+      this.rainPoints.visible = false;
+      this.skyBodies.sunMesh.visible = false;
+      this.skyBodies.moonMesh.visible = false;
+      this.skyBodies.starPoints.visible = false;
+      return;
+    }
+
     const daylight = THREE.MathUtils.clamp((sunElev + 0.16) / 0.65, 0, 1);
     const twilight = Math.max(0, 1 - Math.abs(sunElev - 0.04) * 4.2);
     const isMorning = this.timeOfDay < 0.5;
 
-    const nightSky = new THREE.Color(0x060b16);
-    const dawnSky = new THREE.Color(0xe76f51);
-    const duskSky = new THREE.Color(0xf4a261);
-    const daySky = new THREE.Color(0x7cc4e0);
-    const stormSky = new THREE.Color(0x334155);
-
-    const skyColor = nightSky
-      .clone()
-      .lerp(daySky, daylight)
-      .lerp(isMorning ? dawnSky : duskSky, twilight * 0.62);
+    _skyColor
+      .copy(_nightSky)
+      .lerp(_daySky, daylight)
+      .lerp(isMorning ? _dawnSky : _duskSky, twilight * 0.62);
 
     if (this.weather === 'overcast') {
-      skyColor.lerp(stormSky, 0.45);
+      _skyColor.lerp(_stormSky, 0.45);
     } else if (this.weather === 'rain') {
-      skyColor.lerp(stormSky, 0.65);
+      _skyColor.lerp(_stormSky, 0.65);
     } else if (this.weather === 'storm' || this.cinematicActive) {
-      skyColor.lerp(new THREE.Color(0x1e293b), 0.82);
+      _skyColor.lerp(_stormDeepSky, 0.82);
     }
     if (this.lightningFlash > 0) {
-      skyColor.lerp(new THREE.Color(0xe2e8f0), this.lightningFlash * 0.55);
+      _skyColor.lerp(_lightningSky, this.lightningFlash * 0.55);
     }
 
-    this.scene.background = skyColor;
-    (this.scene.fog as THREE.FogExp2).color.copy(skyColor);
+    if (this.scene.background instanceof THREE.Color) {
+      this.scene.background.copy(_skyColor);
+    } else {
+      this.scene.background = _skyColor;
+    }
+    (this.scene.fog as THREE.FogExp2).color.copy(_skyColor);
 
     const starClearMult =
       this.weather === 'clear'
@@ -5625,7 +6155,7 @@ export class GameEngine {
       this.skyBodies.starMat.opacity > 0.03 && !this.cinematicActive;
     this.skyBodies.starPoints.rotation.y += dt * 0.002;
 
-    // Deeper atmospheric fog at night noticeably shortens player sightlines
+    // Deeper atmospheric fog at night noticeably shortens player sightlines (scaled by Draw Distance)
     const weatherFog =
       this.weather === 'storm' || this.cinematicActive
         ? 0.0085
@@ -5635,7 +6165,7 @@ export class GameEngine {
             ? 0.0048
             : 0.0034;
     (this.scene.fog as THREE.FogExp2).density =
-      weatherFog + (1 - daylight) * 0.0082;
+      (weatherFog + (1 - daylight) * 0.0082) * this.effectiveFogMult;
 
     const weatherDim =
       this.weather === 'storm' || this.cinematicActive
@@ -5653,19 +6183,19 @@ export class GameEngine {
       sunFade * 1.95 * weatherDim + this.lightningFlash * 1.9;
     this.sunLight.color
       .setHex(0xfff1d6)
-      .lerp(new THREE.Color(0xf97316), twilight * 0.52);
+      .lerp(_sunOrangeColor, twilight * 0.52);
 
     this.moonLight.intensity =
       moonRise * 0.58 * Math.max(0.45, weatherDim);
 
     this.hemiLight.color
       .setHex(0x1e293b)
-      .lerp(new THREE.Color(0xbae6fd), daylight)
-      .lerp(new THREE.Color(0xfda4af), twilight * 0.45);
+      .lerp(_hemiDayColor, daylight)
+      .lerp(_hemiTwilightColor, twilight * 0.45);
     this.hemiLight.groundColor
       .setHex(0x0c1322)
-      .lerp(new THREE.Color(0x3f4e28), daylight)
-      .lerp(new THREE.Color(0x543822), twilight * 0.35);
+      .lerp(_hemiGroundDayColor, daylight)
+      .lerp(_hemiGroundTwilightColor, twilight * 0.35);
     this.hemiLight.intensity =
       (0.24 + daylight * 0.54) * Math.max(0.55, weatherDim) +
       this.lightningFlash * 0.6;
@@ -5677,12 +6207,12 @@ export class GameEngine {
     if (this.world.oceanMesh.material instanceof THREE.MeshStandardMaterial) {
       this.world.oceanMesh.material.color
         .setHex(0x052838)
-        .lerp(new THREE.Color(0x0b7285), daylight);
+        .lerp(_oceanDayColor, daylight);
     }
     if (this.world.lakeMesh.material instanceof THREE.MeshStandardMaterial) {
       this.world.lakeMesh.material.color
         .setHex(0x0a4a4e)
-        .lerp(new THREE.Color(0x14b8a6), daylight);
+        .lerp(_lakeDayColor, daylight);
     }
 
     // Drifting 3D clouds
@@ -6559,37 +7089,32 @@ export class GameEngine {
       }
     }
 
-    // Launch 6 high-velocity gravel & stone chunks along aim vector
+    // Launch 6 high-velocity gravel & stone chunks along aim vector (pooled)
     for (let i = 0; i < 6; i++) {
-      const geo = new THREE.DodecahedronGeometry(0.11 + (i % 2) * 0.04, 0);
-      const mat = new THREE.MeshStandardMaterial({
-        color: i % 2 === 0 ? 0x78716c : 0xa8a29e,
-        roughness: 0.92,
-      });
-      const mesh = new THREE.Mesh(geo, mat);
-      const pos = _probeOrigin
-        .clone()
-        .addScaledVector(_probeDir, 0.8)
-        .add(
-          new THREE.Vector3(
-            (Math.random() - 0.5) * 0.32,
-            (Math.random() - 0.5) * 0.22,
-            (Math.random() - 0.5) * 0.32,
-          ),
-        );
+      const mesh =
+        this.debrisMeshPool.pop() ?? new THREE.Mesh(this.debrisGeo, this.debrisMat);
+      mesh.scale.setScalar(0.9 + (i % 2) * 0.3);
+      const pos = new THREE.Vector3(
+        _probeOrigin.x + _probeDir.x * 0.8 + (Math.random() - 0.5) * 0.32,
+        _probeOrigin.y + _probeDir.y * 0.8 + (Math.random() - 0.5) * 0.22,
+        _probeOrigin.z + _probeDir.z * 0.8 + (Math.random() - 0.5) * 0.32,
+      );
       mesh.position.copy(pos);
+      mesh.visible = true;
       this.scene.add(mesh);
 
-      const spread = new THREE.Vector3(
-        (Math.random() - 0.5) * 0.16,
-        0.08 + (Math.random() - 0.5) * 0.12,
-        (Math.random() - 0.5) * 0.16,
-      );
-      const vel = _probeDir.clone().add(spread).normalize().multiplyScalar(17.5);
+      const sx = (Math.random() - 0.5) * 0.16;
+      const sy = 0.08 + (Math.random() - 0.5) * 0.12;
+      const sz = (Math.random() - 0.5) * 0.16;
+      const vel = _vec3C
+        .copy(_probeDir)
+        .add(_vec3D.set(sx, sy, sz))
+        .normalize()
+        .multiplyScalar(17.5);
       this.debrisProjectiles.push({
         mesh,
         pos,
-        vel,
+        vel: new THREE.Vector3(vel.x, vel.y, vel.z),
         life: 0.95,
       });
     }
@@ -7853,7 +8378,8 @@ export class GameEngine {
       }
     }
 
-    // Gently animate & expire ground pickups
+    // Gently animate & expire ground pickups (with draw-distance culling)
+    const inOverworld = this.currentDimension === 'overworld';
     for (let i = this.pickups.length - 1; i >= 0; i--) {
       const p = this.pickups[i];
       if ((p.autoCollectDelay ?? 0) > 0) {
@@ -7862,9 +8388,13 @@ export class GameEngine {
       p.life -= dt;
       if (p.life <= 0) {
         this.scene.remove(p.mesh);
+        this.disposeObject3D(p.mesh);
         this.pickups.splice(i, 1);
         continue;
       }
+      const pDist = Math.hypot(p.x - this.playerX, p.z - this.playerZ);
+      p.mesh.visible = inOverworld && pDist <= this.effectiveMaxDrawDistance;
+      if (!p.mesh.visible) continue;
       if (p.placedOnGround) {
         p.mesh.position.y = p.y + 0.02;
       } else {
@@ -7876,6 +8406,10 @@ export class GameEngine {
     // Update collapse physics, aerial drops, settle timers, scavenge cooldowns, and expiration on animal carcasses
     for (let i = this.carcasses.length - 1; i >= 0; i--) {
       const c = this.carcasses[i];
+      c.mesh.visible =
+        inOverworld &&
+        Math.hypot(c.x - this.playerX, c.z - this.playerZ) <=
+          this.effectiveMaxDrawDistance;
       if (c.currentY !== undefined && c.currentY > c.y) {
         c.fallYVel = (c.fallYVel ?? 0) + 18 * dt;
         c.currentY = Math.max(c.y, c.currentY - c.fallYVel * dt);
@@ -7907,6 +8441,7 @@ export class GameEngine {
       c.life -= dt;
       if (c.life <= 0) {
         this.scene.remove(c.mesh);
+        this.disposeObject3D(c.mesh);
         this.carcasses.splice(i, 1);
       }
     }
@@ -8002,14 +8537,18 @@ export class GameEngine {
       }
 
       if (remove) {
+        a.mesh.visible = false;
         this.scene.remove(a.mesh);
-        a.mesh.geometry.dispose();
-        (a.mesh.material as THREE.Material).dispose();
+        if (a.isBullet) {
+          if (this.bulletMeshPool.length < 32) this.bulletMeshPool.push(a.mesh);
+        } else {
+          if (this.arrowMeshPool.length < 16) this.arrowMeshPool.push(a.mesh);
+        }
         this.arrows.splice(i, 1);
       }
     }
 
-    // Update kicked rock/gravel debris projectiles (blind enemies on face hit & knock cave fissures!)
+    // Update kicked rock/gravel debris projectiles (pooled reuse)
     for (let i = this.debrisProjectiles.length - 1; i >= 0; i--) {
       const dp = this.debrisProjectiles[i];
       dp.life -= dt;
@@ -8064,9 +8603,9 @@ export class GameEngine {
       }
 
       if (removeDebris) {
+        dp.mesh.visible = false;
         this.scene.remove(dp.mesh);
-        dp.mesh.geometry.dispose();
-        (dp.mesh.material as THREE.Material).dispose();
+        if (this.debrisMeshPool.length < 18) this.debrisMeshPool.push(dp.mesh);
         this.debrisProjectiles.splice(i, 1);
       }
     }
@@ -8152,20 +8691,80 @@ export class GameEngine {
       }
     }
 
-    for (let i = this.particles.length - 1; i >= 0; i--) {
-      const p = this.particles[i];
-      p.life -= dt;
-      p.vel.y -= 12 * dt;
-      p.mesh.position.addScaledVector(p.vel, dt);
-      p.mesh.scale.setScalar(Math.max(0.1, p.life * 2));
-      if (p.life <= 0) {
-        this.scene.remove(p.mesh);
-        this.particles.splice(i, 1);
+    // Step Pooled Instanced Particles (Zero-GC, 1 draw call)
+    if (this.particleInstanced) {
+      let anyParticleDirty = false;
+      for (let i = 0; i < MAX_POOLED_PARTICLES; i++) {
+        const p = this.particlePool[i];
+        if (!p.active) continue;
+        anyParticleDirty = true;
+        p.life -= dt;
+        if (p.life <= 0) {
+          p.active = false;
+          this.particleInstanced.setMatrixAt(i, _zeroMat4);
+          continue;
+        }
+        p.vy -= 12 * dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.z += p.vz * dt;
+        const sc = Math.max(0.1, p.life * 2);
+        _vec3A.set(p.x, p.y, p.z);
+        _scratchQuat.identity();
+        _scratchScale.setScalar(sc);
+        _scratchMat4.compose(_vec3A, _scratchQuat, _scratchScale);
+        this.particleInstanced.setMatrixAt(i, _scratchMat4);
       }
+      if (anyParticleDirty) {
+        this.particleInstanced.instanceMatrix.needsUpdate = true;
+      }
+    }
+
+    // Step Pooled Brass Shell Casings, Muzzle Flashes & P2P Tracers
+    for (const sc of this.shellCasingPool) {
+      if (!sc.active) continue;
+      sc.life -= dt;
+      if (sc.life <= 0) {
+        sc.active = false;
+        sc.mesh.visible = false;
+        continue;
+      }
+      sc.vel.y -= 15 * dt;
+      sc.pos.addScaledVector(sc.vel, dt);
+      const gy = getTerrainHeight(sc.pos.x, sc.pos.z) + 0.02;
+      if (sc.pos.y <= gy) {
+        sc.pos.y = gy;
+        sc.vel.y = Math.abs(sc.vel.y) * 0.25;
+        sc.vel.x *= 0.65;
+        sc.vel.z *= 0.65;
+      }
+      sc.mesh.position.copy(sc.pos);
+      sc.mesh.rotation.x += sc.rx * dt;
+      sc.mesh.rotation.z += sc.rz * dt;
+    }
+    for (const mf of this.muzzleFlashPool) {
+      if (mf.life <= 0) continue;
+      mf.life -= dt;
+      if (mf.life <= 0) mf.mesh.visible = false;
+    }
+    for (const tr of this.p2pTracerPool) {
+      if (tr.life <= 0) continue;
+      tr.life -= dt;
+      if (tr.life <= 0) tr.mesh.visible = false;
     }
   }
 
   private updateCamera(): void {
+    const targetFov =
+      this.mode === 'playing' && this.isAiming && !this.activeVehicleId ? 52 : 68;
+    if (Math.abs(this.camera.fov - targetFov) > 0.02) {
+      this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, 0.22);
+      if (Math.abs(this.camera.fov - targetFov) <= 0.05) {
+        this.camera.fov = targetFov;
+      }
+      this.camera.updateProjectionMatrix();
+    }
+
     if (this.mode === 'menu') {
       this.handsRig.root.visible = false;
       const angle = this.elapsed * 0.14;
@@ -8444,7 +9043,8 @@ export class GameEngine {
           airborne,
           canFloat: specs.canFloat,
           canFly: specs.canFly,
-          hasHydraulics: Boolean(av.hydraulicHop || av.preset === 'lowrider'),
+          hasHydraulics: this.vehicleHasHydraulics(av),
+          hydraulicStyle: this.isDonkHydraulicVehicle(av) ? 'up_down_side' : 'full_bounce',
           hydraulicMode: this.hydraulicMode,
           hasTrunkBass: av.preset === 'slab' || av.trunkBassEnabled !== undefined,
           trunkBassOn: Boolean(av.trunkBassEnabled),
@@ -8622,9 +9222,56 @@ export class GameEngine {
   }
 
   private tick = (): void => {
-    if (this.disposed) return;
+    if (this.disposed || document.hidden || this.rafPausedByVisibility) return;
+    const nowPerf = performance.now();
+    const rawFrameMs =
+      this.lastFramePerfMs > 0 ? nowPerf - this.lastFramePerfMs : 16.6;
+    this.lastFramePerfMs = nowPerf;
     const dt = Math.min(0.05, this.clock.getDelta());
     this.elapsed += dt;
+
+    if (this.portalWarpCooldown > 0) {
+      this.portalWarpCooldown = Math.max(0, this.portalWarpCooldown - dt);
+    }
+
+    // Dynamic Auto-FPS Guard: detects sustained <55 FPS (>18ms avg over 3s) and steps down GPU load cleanly
+    if (
+      this.mode === 'playing' &&
+      !this.gameOver &&
+      !this.cinematicActive &&
+      !this.isSoftwareGl &&
+      this.settings.dynamicAutoFps !== false &&
+      this.autoFpsTier < 3
+    ) {
+      const clampedMs = Math.min(100, Math.max(1, rawFrameMs));
+      this.fpsSampleAccumMs += clampedMs;
+      this.fpsSampleFrames += 1;
+      this.fpsSampleTimer += dt;
+      if (this.fpsSampleTimer >= 1.0) {
+        const avgMs = this.fpsSampleAccumMs / Math.max(1, this.fpsSampleFrames);
+        if (avgMs > 18.0) {
+          this.consecutiveSlowSeconds += 1;
+        } else {
+          this.consecutiveSlowSeconds = 0;
+        }
+        this.fpsSampleTimer = 0;
+        this.fpsSampleFrames = 0;
+        this.fpsSampleAccumMs = 0;
+
+        if (this.consecutiveSlowSeconds >= 3) {
+          this.consecutiveSlowSeconds = 0;
+          this.autoFpsTier = Math.min(3, this.autoFpsTier + 1);
+          this.applyGraphicsProfile();
+          const msg =
+            this.autoFpsTier === 1
+              ? 'Auto-FPS Guard: Disabled dynamic shadows to hold 60 FPS'
+              : this.autoFpsTier === 2
+                ? 'Auto-FPS Guard: Reduced resolution & particles to hold 60 FPS'
+                : 'Auto-FPS Guard: Shortened draw distance to hold 60 FPS';
+          this.toast(msg, 'info');
+        }
+      }
+    }
 
     this.modSystem?.tick(dt);
     this.updateMultiplayer(dt);
@@ -8644,48 +9291,90 @@ export class GameEngine {
       } else {
         this.updatePlayer(dt);
         this.updateProjectilesAndResources(dt);
-        this.updateStructuralAndTerrainSystems(dt);
-        this.updateKineticNetwork(dt);
+        if (this.currentDimension === 'overworld') {
+          this.updateStructuralAndTerrainSystems(dt);
+          this.updateKineticNetwork(dt);
+        }
         this.updateVehicles(dt);
         this.updateBuildPreview();
-        const scavengerTargets: ScavengerCarcassTarget[] = this.carcasses
-          .filter((c) => !c.harvested && c.fallProgress >= 0.85)
-          .map((c) => ({
-            id: c.id,
-            x: c.x,
-            y: c.y,
-            z: c.z,
-            isDino: c.isDino,
-            remainingDrops: c.drops.reduce(
-              (sum, d) => sum + Math.max(0, d.quantity),
-              0,
-            ),
-          }));
-        const creatureCycle = this.creatures.update(
-          dt,
-          this.elapsed,
-          this.playerX,
-          this.playerZ,
-          this.isSprinting,
-          this.isCrouching,
-          isNight,
-          this.playerVisibility,
-          () => {
-            this.vitals.health = this.vitals.maxHealth;
-            this.emitHud();
-          },
-          (species, dist) => {
-            this.sound.playCreatureCall(species, Math.max(0.2, 1 - dist / 50));
-          },
-          (sightings) => {
-            this.trackedSightings = sightings;
-          },
-          scavengerTargets,
-          (carcassId, species, displayName) => {
-            this.handleCarcassScavenged(carcassId, species, displayName);
-          },
-        );
-        this.nocturnalActiveCount = creatureCycle.nocturnalActiveCount;
+
+        // Update active dimension animations & portal vortices
+        if (this.activeDimensionWorld) {
+          for (const spinObj of this.activeDimensionWorld.animatedSpins) {
+            spinObj.rotation.y += dt * 0.9;
+          }
+          if (this.activeDimensionWorld.animatedPoints) {
+            this.activeDimensionWorld.animatedPoints.rotation.y += dt * 0.04;
+          }
+        }
+        this.updateActivePortals(dt);
+
+        // Distance culling for overworld placed structures & structural blocks
+        const inOverworld = this.currentDimension === 'overworld';
+        for (const st of this.structures) {
+          const vis = this.structureVisuals.get(st.id);
+          if (vis) {
+            vis.group.visible =
+              inOverworld &&
+              Math.hypot(st.x - this.playerX, st.z - this.playerZ) <=
+                this.effectiveMaxDrawDistance;
+          }
+        }
+        for (const blk of this.structuralBlocks) {
+          const mesh = this.structuralMeshes.get(blk.id);
+          if (mesh) {
+            mesh.visible =
+              inOverworld &&
+              Math.hypot(blk.x - this.playerX, blk.z - this.playerZ) <=
+                this.effectiveMaxDrawDistance;
+          }
+        }
+
+        let nocturnalActiveCount = 0;
+        if (inOverworld) {
+          const scavengerTargets: ScavengerCarcassTarget[] = [];
+          for (const c of this.carcasses) {
+            if (!c.harvested && c.fallProgress >= 0.85) {
+              scavengerTargets.push({
+                id: c.id,
+                x: c.x,
+                y: c.y,
+                z: c.z,
+                isDino: c.isDino,
+                remainingDrops: c.drops.reduce(
+                  (sum, d) => sum + Math.max(0, d.quantity),
+                  0,
+                ),
+              });
+            }
+          }
+          const creatureCycle = this.creatures.update(
+            dt,
+            this.elapsed,
+            this.playerX,
+            this.playerZ,
+            this.isSprinting,
+            this.isCrouching,
+            isNight,
+            this.playerVisibility,
+            () => {
+              this.vitals.health = this.vitals.maxHealth;
+              this.emitHud();
+            },
+            (species, dist) => {
+              this.sound.playCreatureCall(species, Math.max(0.2, 1 - dist / 50));
+            },
+            (sightings) => {
+              this.trackedSightings = sightings;
+            },
+            scavengerTargets,
+            (carcassId, species, displayName) => {
+              this.handleCarcassScavenged(carcassId, species, displayName);
+            },
+          );
+          nocturnalActiveCount = creatureCycle.nocturnalActiveCount;
+        }
+        this.nocturnalActiveCount = nocturnalActiveCount;
 
         this.hudSyncTimer += dt;
         if (this.hudSyncTimer >= 0.12) {
@@ -8718,7 +9407,7 @@ export class GameEngine {
     }
 
     // Subtle idle life for Farmer NPC & glowing TV screen inside the Hilltop House
-    if (this.world.farmerNpcGroup) {
+    if (this.world.farmerNpcGroup && this.currentDimension === 'overworld') {
       const distFarmer = Math.hypot(
         this.world.farmerNpcPos.x - this.playerX,
         this.world.farmerNpcPos.z - this.playerZ,
@@ -9013,9 +9702,8 @@ export class GameEngine {
     }
 
     if (!snapped) {
-      const dir = _vec3A.set(0, 0, -1).applyEuler(
-        new THREE.Euler(this.camPitch, this.camYaw, 0, 'YXZ'),
-      );
+      _probeEuler.set(this.camPitch, this.camYaw, 0, 'YXZ');
+      const dir = _vec3A.set(0, 0, -1).applyEuler(_probeEuler);
       let hitX = this.playerX + dir.x * 3.8;
       let hitY = getTerrainHeight(hitX, this.playerZ + dir.z * 3.8);
       let hitZ = this.playerZ + dir.z * 3.8;
@@ -9267,9 +9955,8 @@ export class GameEngine {
   }
 
   private useExcavatorShovel(): void {
-    const dir = _vec3A.set(0, 0, -1).applyEuler(
-      new THREE.Euler(this.camPitch, this.camYaw, 0, 'YXZ'),
-    );
+    _probeEuler.set(this.camPitch, this.camYaw, 0, 'YXZ');
+    const dir = _vec3A.set(0, 0, -1).applyEuler(_probeEuler);
     let tx = this.playerX + dir.x * 2.8;
     let tz = this.playerZ + dir.z * 2.8;
     const startY = this.playerY + this.currentEyeHeight;
@@ -9304,16 +9991,18 @@ export class GameEngine {
     if (this.getItemCount('powder_keg') <= 0) return false;
     this.removeItem('powder_keg', 1);
 
-    const dir = new THREE.Vector3(0, 0, -1).applyEuler(
-      new THREE.Euler(this.camPitch, this.camYaw, 0, 'YXZ'),
-    );
+    _probeEuler.set(this.camPitch, this.camYaw, 0, 'YXZ');
+    const dir = _vec3A.set(0, 0, -1).applyEuler(_probeEuler);
     const start = new THREE.Vector3(
       this.playerX + dir.x * 0.8,
       this.playerY + this.currentEyeHeight - 0.15,
       this.playerZ + dir.z * 0.8,
     );
-    const vel = dir.multiplyScalar(13.5);
-    vel.y += 4.2;
+    const vel = new THREE.Vector3(
+      dir.x * 13.5,
+      dir.y * 13.5 + 4.2,
+      dir.z * 13.5,
+    );
 
     const mesh = createPowderKegMesh();
     mesh.position.copy(start);
@@ -9632,6 +10321,8 @@ export class GameEngine {
       this.disposeObject3D(vh.root);
     });
     this.vehicleMeshes.clear();
+    this.vehicleShadowDiscs.clear();
+    this.autoParkJobs.clear();
     this.vehicles = [];
     this.activeVehicleId = null;
     this.selectedCargoVehicleId = null;
@@ -9804,8 +10495,8 @@ export class GameEngine {
 
     for (const link of this.beltLinks) {
       const span = createBeltSpanMesh(
-        new THREE.Vector3(link.fromX, link.fromY, link.fromZ),
-        new THREE.Vector3(link.toX, link.toY, link.toZ),
+        _vec3A.set(link.fromX, link.fromY, link.fromZ),
+        _vec3B.set(link.toX, link.toY, link.toZ),
       );
       this.scene.add(span.group);
       this.beltSpanMeshes.push(span);
@@ -9828,9 +10519,8 @@ export class GameEngine {
     z: number;
     rotationY: number;
   } {
-    const dir = _vec3A.set(0, 0, -1).applyEuler(
-      new THREE.Euler(this.camPitch, this.camYaw, 0, 'YXZ'),
-    );
+    _probeEuler.set(this.camPitch, this.camYaw, 0, 'YXZ');
+    const dir = _vec3A.set(0, 0, -1).applyEuler(_probeEuler);
     let tx = this.playerX + dir.x * 3.6;
     let tz = this.playerZ + dir.z * 3.6;
     let ty = getTerrainHeight(tx, tz);
@@ -10084,9 +10774,15 @@ export class GameEngine {
     for (const kn of this.kineticNodes) {
       const handles = this.kineticMeshes.get(kn.id);
       if (!handles) continue;
+      const dPlayer = Math.hypot(kn.x - this.playerX, kn.z - this.playerZ);
+      handles.root.visible =
+        this.currentDimension === 'overworld' &&
+        dPlayer <= this.effectiveMaxDrawDistance;
+      if (!handles.root.visible) continue;
+      if (dPlayer > 120) continue;
 
       const omega = (kn.rpm * Math.PI * 2) / 60;
-      if (Math.abs(kn.rpm) >= 8 && Math.hypot(kn.x - this.playerX, kn.z - this.playerZ) < 16) {
+      if (Math.abs(kn.rpm) >= 8 && dPlayer < 16) {
         anySpinningNear = true;
       }
 
@@ -10146,7 +10842,7 @@ export class GameEngine {
         (kn.kind === 'steam_boiler' || (kn.kind === 'steam_engine' && kn.active)) &&
         this.mode === 'playing' &&
         Math.random() < dt * 3.5 &&
-        Math.hypot(kn.x - this.playerX, kn.z - this.playerZ) < 42
+        dPlayer < 42
       ) {
         this.spawnParticles(kn.x, kn.y + (kn.kind === 'steam_boiler' ? 3.5 : 1.25), kn.z, 0xe2e8f0, 1);
       }
@@ -10164,7 +10860,7 @@ export class GameEngine {
             kn.cycleProgress -= 1;
             if (kn.storedOutputCount < 16) {
               kn.storedOutputCount += 1;
-              if (Math.hypot(kn.x - this.playerX, kn.z - this.playerZ) < 35) {
+              if (dPlayer < 35) {
                 this.spawnParticles(kn.x, kn.y + 1.15, kn.z, 0x38bdf8, 8);
                 this.sound.playKineticGearTick();
               }
@@ -10182,6 +10878,8 @@ export class GameEngine {
     // Animate physical valley-crossing twin-belt cleats
     for (let bIdx = 0; bIdx < this.beltSpanMeshes.length; bIdx++) {
       const bm = this.beltSpanMeshes[bIdx];
+      bm.group.visible = this.currentDimension === 'overworld';
+      if (!bm.group.visible) continue;
       const link = this.beltLinks[bIdx];
       const rpm = link ? link.rpm : 0;
       const speed = Math.abs(rpm) < 4 ? 0 : (rpm / 42) * 0.28;
@@ -10204,6 +10902,14 @@ export class GameEngine {
     this.updateKineticTargetProbe();
   }
 
+  private attachVehicleShadowDisc(vehicleId: string, root: THREE.Group): void {
+    const disc = new THREE.Mesh(this.vehicleShadowGeo, this.vehicleShadowMat);
+    disc.position.y = 0.05;
+    disc.visible = !this.effectiveShadowsEnabled;
+    root.add(disc);
+    this.vehicleShadowDiscs.set(vehicleId, disc);
+  }
+
   private spawnVehicleInstance(v: ModularVehicleData): void {
     const built = createModularVehicleMesh(v);
     built.root.position.set(v.x, v.y, v.z);
@@ -10211,6 +10917,12 @@ export class GameEngine {
     for (const sw of built.steerWheels) {
       sw.rotation.order = 'YXZ';
     }
+    built.root.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        obj.castShadow = this.effectiveShadowsEnabled;
+      }
+    });
+    this.attachVehicleShadowDisc(v.id, built.root);
     this.scene.add(built.root);
     this.vehicleMeshes.set(v.id, built);
     this.vehicles.push(v);
@@ -10286,6 +10998,10 @@ export class GameEngine {
         for (const sw of rebuilt.steerWheels) {
           sw.rotation.order = 'YXZ';
         }
+        rebuilt.root.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) obj.castShadow = this.effectiveShadowsEnabled;
+        });
+        this.attachVehicleShadowDisc(existing.id, rebuilt.root);
         this.scene.add(rebuilt.root);
         this.vehicleMeshes.set(existing.id, rebuilt);
         this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle: existing });
@@ -10378,6 +11094,7 @@ export class GameEngine {
     if (this.activeVehicleId === vehicleId) {
       this.exitVehicle();
     }
+    this.autoParkJobs.delete(vehicleId);
     const idx = this.vehicles.findIndex((v) => v.id === vehicleId);
     if (idx === -1) return;
     const v = this.vehicles[idx];
@@ -10387,6 +11104,7 @@ export class GameEngine {
       this.scene.remove(mesh.root);
       this.disposeObject3D(mesh.root);
       this.vehicleMeshes.delete(vehicleId);
+      this.vehicleShadowDiscs.delete(vehicleId);
     }
     for (const c of v.cargoItems) {
       this.addItem(c.itemId, c.quantity, false);
@@ -10400,6 +11118,10 @@ export class GameEngine {
   public enterVehicle(vehicleId: string): boolean {
     const v = this.vehicles.find((x) => x.id === vehicleId);
     if (!v) return false;
+    if (this.activeVehicleId && this.activeVehicleId !== vehicleId) {
+      this.exitVehicle();
+    }
+    this.autoParkJobs.delete(vehicleId);
     this.seatedState = null;
     this.activeVehicleId = v.id;
     this.vehicleForwardSpeed = 0;
@@ -10418,12 +11140,12 @@ export class GameEngine {
     const specs = computeVehicleSpecs(v.modules);
     this.sound.playSteamHiss();
     const extraHint =
-      v.hydraulicHop || v.preset === 'lowrider'
-        ? ' · [Space/Z/Q/R/X] 4-Corner Hydraulics'
-        : v.preset === 'slab' || v.trunkBassEnabled !== undefined
-          ? ' · [T] Trunk Bass System'
-          : v.preset === 'donk'
-            ? ' · 30" High-Clearance Suspension'
+      v.preset === 'donk'
+        ? ' · [Space/Z/Q/R] Hydraulics (Up / Down / Side-to-Side)'
+        : this.vehicleHasHydraulics(v)
+          ? ' · [Space/Z/Q/R/X] High-Bounce 2-Wheel Hydraulics'
+          : v.preset === 'slab' || v.trunkBassEnabled !== undefined
+            ? ' · [T] Trunk Bass System'
             : '';
     this.toast(
       `Piloting ${v.name} (${specs.craftClass}) · WASD Drive${extraHint} · [E] Exit · [F] Cargo`,
@@ -10433,31 +11155,148 @@ export class GameEngine {
     return true;
   }
 
+  private isDonkHydraulicVehicle(v?: ModularVehicleData | null): boolean {
+    return Boolean(v && v.preset === 'donk');
+  }
+
+  private vehicleHasHydraulics(v?: ModularVehicleData | null): boolean {
+    return Boolean(
+      v && (v.hydraulicHop || v.preset === 'lowrider' || v.preset === 'donk'),
+    );
+  }
+
+  private resolveGarageSlot(v: ModularVehicleData): {
+    x: number;
+    z: number;
+    yaw: number;
+    label: string;
+  } {
+    const slots = [
+      { x: VEHICLE_GARAGE_POS.x - 6.0, z: VEHICLE_GARAGE_POS.z + 0.6, yaw: 0, label: 'Bay A' },
+      { x: VEHICLE_GARAGE_POS.x, z: VEHICLE_GARAGE_POS.z + 0.6, yaw: 0, label: 'Bay B' },
+      { x: VEHICLE_GARAGE_POS.x + 6.0, z: VEHICLE_GARAGE_POS.z + 0.6, yaw: 0, label: 'Bay C' },
+      { x: VEHICLE_GARAGE_POS.x + 13.0, z: VEHICLE_GARAGE_POS.z + 5.2, yaw: 0, label: 'Apron' },
+      { x: VEHICLE_GARAGE_POS.x - 13.0, z: VEHICLE_GARAGE_POS.z + 5.2, yaw: 0, label: 'West Apron' },
+    ];
+    let preferredIdx = 3;
+    if (v.id === 'veh_starter_lowrider' || v.preset === 'lowrider') preferredIdx = 0;
+    else if (v.id === 'veh_starter_donk' || v.preset === 'donk') preferredIdx = 1;
+    else if (v.id === 'veh_starter_slab' || v.preset === 'slab') preferredIdx = 2;
+    else if (v.id === 'veh_starter_rover' || v.preset === 'expedition_rover') preferredIdx = 3;
+
+    const isOccupied = (slot: { x: number; z: number }) =>
+      this.vehicles.some(
+        (other) =>
+          other.id !== v.id && Math.hypot(other.x - slot.x, other.z - slot.z) < 2.8,
+      );
+
+    if (!isOccupied(slots[preferredIdx])) {
+      return slots[preferredIdx];
+    }
+    for (const s of slots) {
+      if (!isOccupied(s)) return s;
+    }
+    return slots[preferredIdx];
+  }
+
   public exitVehicle(): void {
     if (!this.activeVehicleId) return;
     const v = this.vehicles.find((x) => x.id === this.activeVehicleId);
+    const exitSpeed = this.vehicleForwardSpeed;
     this.activeVehicleId = null;
     this.vehicleForwardSpeed = 0;
     this.vehicleAltitudeVel = 0;
     this.vehicleAscendHold = false;
     this.vehicleDescendHold = false;
+    this.vehicleVisualPitch = 0;
+    this.vehicleVisualRoll = 0;
+    this.gamepadGas = 0;
+    this.gamepadBrake = 0;
+    this.gamepadHandbrake = false;
     this.hydraulicMode = 'level';
     this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.trunkBassPulse = 0;
     this.sound.stopTrunkBass();
+    try {
+      if (typeof document !== 'undefined' && document.pointerLockElement) {
+        document.exitPointerLock();
+      }
+    } catch {
+      // Ignore pointer lock release errors
+    }
+
     if (v) {
       const sideX = Math.cos(v.yaw);
       const sideZ = -Math.sin(v.yaw);
-      this.playerX = v.x + sideX * 2.3;
-      this.playerZ = v.z + sideZ * 2.3;
+      this.playerX = v.x + sideX * 2.5;
+      this.playerZ = v.z + sideZ * 2.5;
       this.playerY = Math.max(
         getTerrainHeight(this.playerX, this.playerZ),
         this.getStructuralSurfaceY(this.playerX, this.playerZ, v.y + 1.5),
       );
       this.playerVelY = 0;
       this.grounded = true;
-      this.toast(`Exited ${v.name}`, 'info');
+
+      const specs = computeVehicleSpecs(v.modules);
+      const isPureWatercraft =
+        specs.canFloat && !specs.canFly && specs.wheelCount === 0;
+      if (!isPureWatercraft) {
+        const slot = this.resolveGarageSlot(v);
+        const distToSlot = Math.hypot(v.x - slot.x, v.z - slot.z);
+        if (distToSlot <= 1.65) {
+          v.x = slot.x;
+          v.z = slot.z;
+          v.y = getTerrainHeight(v.x, v.z) + 0.14;
+          v.vx = 0;
+          v.vy = 0;
+          v.vz = 0;
+          v.yaw = slot.yaw;
+          const vh = this.vehicleMeshes.get(v.id);
+          if (vh) {
+            vh.root.position.set(v.x, v.y, v.z);
+            vh.root.rotation.set(0, v.yaw, 0);
+            vh.chassisGroup.rotation.set(0, 0, 0);
+            for (const wc of vh.wheelCorners) {
+              wc.obj.position.y = wc.baseY;
+            }
+          }
+          const shadowDisc = this.vehicleShadowDiscs.get(v.id);
+          if (shadowDisc) {
+            shadowDisc.position.y = 0.05;
+            shadowDisc.scale.set(1, 1, 1);
+          }
+          this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle: v });
+          this.toast(`Exited ${v.name} (Garage ${slot.label})`, 'info');
+        } else {
+          const alreadyInGarageCorridor =
+            Math.abs(v.x - VEHICLE_GARAGE_POS.x) <= 15 &&
+            v.z >= VEHICLE_GARAGE_POS.z - 5 &&
+            v.z <= VEHICLE_GARAGE_POS.z + 10.5;
+          this.autoParkJobs.set(v.id, {
+            vehicleId: v.id,
+            targetX: slot.x,
+            targetZ: slot.z,
+            targetYaw: slot.yaw,
+            bayLabel: slot.label,
+            phase: alreadyInGarageCorridor ? 'park' : 'approach',
+            speed: THREE.MathUtils.clamp(exitSpeed * 0.45, -3, 6),
+            steerAngle: 0,
+            pitchAngle: 0,
+            elapsed: 0,
+            stuckTimer: 0,
+            lastProgressX: v.x,
+            lastProgressZ: v.z,
+          });
+          this.sound.playSteamHiss();
+          this.toast(
+            `Exited ${v.name} — auto-driving to Garage ${slot.label}!`,
+            'info',
+          );
+        }
+      } else {
+        this.toast(`Exited ${v.name}`, 'info');
+      }
     }
     this.emitHud();
   }
@@ -10467,52 +11306,98 @@ export class GameEngine {
   ): void {
     if (!this.activeVehicleId || this.mode !== 'playing' || this.gameOver) return;
     const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
-    if (!av || !(av.hydraulicHop || av.preset === 'lowrider')) return;
+    if (!av || !this.vehicleHasHydraulics(av)) return;
 
     this.sound.unlock();
+    const isDonk = this.isDonkHydraulicVehicle(av);
+
+    // DONK hydraulics can ONLY go Up, Down, and Side-to-Side (no wheelie hops or leaving ground)
+    if (isDonk) {
+      if (action === 'front_hop' || action === 'lock_up') {
+        this.hydraulicMode = this.hydraulicMode === 'lock_up' ? 'level' : 'lock_up';
+        if (this.hydraulicMode === 'lock_up') {
+          this.hydVel.fl += 3.6;
+          this.hydVel.fr += 3.6;
+          this.hydVel.rl += 3.6;
+          this.hydVel.rr += 3.6;
+        }
+        this.sound.playHydraulicHop('lock');
+      } else if (action === 'rear_hop' || action === 'drop') {
+        this.hydraulicMode = this.hydraulicMode === 'drop_down' ? 'level' : 'drop_down';
+        if (this.hydraulicMode === 'drop_down') {
+          this.hydVel.fl -= 3.2;
+          this.hydVel.fr -= 3.2;
+          this.hydVel.rl -= 3.2;
+          this.hydVel.rr -= 3.2;
+        }
+        this.sound.playHydraulicHop('tilt');
+      } else if (action === 'left_tilt') {
+        this.hydraulicMode = this.hydraulicMode === 'left_tilt' ? 'level' : 'left_tilt';
+        this.sound.playHydraulicHop('tilt');
+      } else if (action === 'right_tilt') {
+        this.hydraulicMode = this.hydraulicMode === 'right_tilt' ? 'level' : 'right_tilt';
+        this.sound.playHydraulicHop('tilt');
+      }
+      this.emitHud();
+      return;
+    }
+
+    // Lowrider & custom hydraulic builds: bounce high above the ground with two wheels coming off the ground
     const floorY = Math.max(
       getTerrainHeight(av.x, av.z),
       this.getStructuralSurfaceY(av.x, av.z, av.y + 0.8),
     );
-    const groundedOnSurface = av.y <= floorY + 0.45;
+    const nearGround = av.y <= floorY + 1.15;
 
     if (action === 'front_hop') {
       this.hydraulicMode = 'front_hop';
-      this.hydVel.fl = 7.4;
-      this.hydVel.fr = 7.4;
-      this.hydVel.rl -= 1.2;
-      this.hydVel.rr -= 1.2;
-      if (groundedOnSurface) av.vy = Math.max(av.vy, 3.6);
-      this.hydraulicBounceTimer = 0.35;
+      this.hydVel.fl = 15.5;
+      this.hydVel.fr = 15.5;
+      this.hydVel.rl = Math.min(this.hydVel.rl, -2.4);
+      this.hydVel.rr = Math.min(this.hydVel.rr, -2.4);
+      if (nearGround) {
+        av.vy = av.y <= floorY + 0.35 ? 7.8 : Math.min(9.6, Math.max(av.vy + 4.4, 7.2));
+      }
+      this.hydraulicBounceTimer = 0.55;
       this.sound.playHydraulicHop('hop');
-      this.spawnParticles(av.x, av.y + 0.35, av.z, 0xfbbf24, 6);
+      this.spawnParticles(av.x, av.y + 0.35, av.z, 0xfbbf24, 9);
     } else if (action === 'rear_hop') {
       this.hydraulicMode = 'rear_hop';
-      this.hydVel.rl = 7.4;
-      this.hydVel.rr = 7.4;
-      this.hydVel.fl -= 1.2;
-      this.hydVel.fr -= 1.2;
-      if (groundedOnSurface) av.vy = Math.max(av.vy, 3.3);
-      this.hydraulicBounceTimer = 0.35;
+      this.hydVel.rl = 15.5;
+      this.hydVel.rr = 15.5;
+      this.hydVel.fl = Math.min(this.hydVel.fl, -2.4);
+      this.hydVel.fr = Math.min(this.hydVel.fr, -2.4);
+      if (nearGround) {
+        av.vy = av.y <= floorY + 0.35 ? 7.4 : Math.min(9.2, Math.max(av.vy + 4.2, 6.8));
+      }
+      this.hydraulicBounceTimer = 0.55;
       this.sound.playHydraulicHop('hop');
-      this.spawnParticles(av.x, av.y + 0.35, av.z, 0xfbbf24, 6);
+      this.spawnParticles(av.x, av.y + 0.35, av.z, 0xfbbf24, 9);
     } else if (action === 'left_tilt') {
       this.hydraulicMode = this.hydraulicMode === 'left_tilt' ? 'level' : 'left_tilt';
+      if (this.hydraulicMode === 'left_tilt') {
+        this.hydVel.fr += 6.2;
+        this.hydVel.rr += 6.2;
+      }
       this.sound.playHydraulicHop('tilt');
     } else if (action === 'right_tilt') {
       this.hydraulicMode = this.hydraulicMode === 'right_tilt' ? 'level' : 'right_tilt';
+      if (this.hydraulicMode === 'right_tilt') {
+        this.hydVel.fl += 6.2;
+        this.hydVel.rl += 6.2;
+      }
       this.sound.playHydraulicHop('tilt');
     } else if (action === 'lock_up') {
       this.hydraulicMode = this.hydraulicMode === 'lock_up' ? 'level' : 'lock_up';
       if (this.hydraulicMode === 'lock_up') {
-        this.hydVel.fl += 3.2;
-        this.hydVel.fr += 3.2;
-        this.hydVel.rl += 3.2;
-        this.hydVel.rr += 3.2;
+        this.hydVel.fl += 4.6;
+        this.hydVel.fr += 4.6;
+        this.hydVel.rl += 4.6;
+        this.hydVel.rr += 4.6;
       }
       this.sound.playHydraulicHop('lock');
     } else {
-      this.hydraulicMode = 'level';
+      this.hydraulicMode = this.hydraulicMode === 'drop_down' ? 'level' : 'drop_down';
       this.sound.playHydraulicHop('tilt');
     }
     this.emitHud();
@@ -10640,7 +11525,7 @@ export class GameEngine {
     if (this.keys['KeyD'] || this.keys['key_d'] || this.keys['ArrowRight']) moveRight += 1;
     if (this.keys['KeyA'] || this.keys['key_a'] || this.keys['ArrowLeft']) moveRight -= 1;
     moveRight += this.joyX;
-    moveForward += this.joyY;
+    moveForward += this.joyY + this.gamepadGas - this.gamepadBrake;
     moveForward = THREE.MathUtils.clamp(moveForward, -1, 1);
     moveRight = THREE.MathUtils.clamp(moveRight, -1, 1);
 
@@ -10666,7 +11551,7 @@ export class GameEngine {
     const isHighClearance =
       v.preset === 'donk' ||
       ((v.suspensionOffset ?? 0) >= 0.32 && (v.wheelScale ?? 1) >= 1.3);
-    const hasHyd = Boolean(v.hydraulicHop || v.preset === 'lowrider');
+    const hasHyd = this.vehicleHasHydraulics(v);
     const isInWater = surfY < waterY - (isHighClearance ? 1.5 : 0.28) && v.y <= waterY + 0.5;
     const airborne = specs.canFly && (this.vehicleAscendHold || v.y > Math.max(surfY, waterY) + 0.55);
 
@@ -10679,7 +11564,7 @@ export class GameEngine {
           : specs.topLandSpeed * boostMult * fuelMult) * vSpeedMult;
 
     // Braking / Throttle
-    if (!specs.canFly && !hasHyd && this.vehicleAscendHold) {
+    if (this.gamepadHandbrake || (!specs.canFly && !hasHyd && this.vehicleAscendHold)) {
       this.vehicleForwardSpeed = THREE.MathUtils.damp(this.vehicleForwardSpeed, 0, 9, dt);
     } else if (Math.abs(moveForward) > 0.08) {
       const targetSpd =
@@ -10881,27 +11766,39 @@ export class GameEngine {
     this.trunkBassPulse = this.sound.updateTrunkBass(bassActive, dt);
 
     // Solve 4-corner hydraulic spring-damper physics for active vehicle
-    const activeHasHyd = Boolean(
-      activeV && (activeV.hydraulicHop || activeV.preset === 'lowrider'),
-    );
-    const targets =
-      !activeHasHyd || this.hydraulicMode === 'level' || this.hydraulicMode === 'front_hop' || this.hydraulicMode === 'rear_hop'
-        ? { fl: 0, fr: 0, rl: 0, rr: 0 }
-        : this.hydraulicMode === 'lock_up'
-          ? { fl: 0.52, fr: 0.52, rl: 0.52, rr: 0.52 }
+    const activeHasHyd = this.vehicleHasHydraulics(activeV);
+    const activeIsDonk = this.isDonkHydraulicVehicle(activeV);
+    const targets = !activeHasHyd
+      ? { fl: 0, fr: 0, rl: 0, rr: 0 }
+      : this.hydraulicMode === 'lock_up'
+        ? activeIsDonk
+          ? { fl: 0.62, fr: 0.62, rl: 0.62, rr: 0.62 }
+          : { fl: 0.78, fr: 0.78, rl: 0.78, rr: 0.78 }
+        : this.hydraulicMode === 'drop_down'
+          ? activeIsDonk
+            ? { fl: -0.22, fr: -0.22, rl: -0.22, rr: -0.22 }
+            : { fl: -0.14, fr: -0.14, rl: -0.14, rr: -0.14 }
           : this.hydraulicMode === 'left_tilt'
-            ? { fl: -0.06, fr: 0.56, rl: -0.06, rr: 0.56 }
-            : { fl: 0.56, fr: -0.06, rl: 0.56, rr: -0.06 };
+            ? activeIsDonk
+              ? { fl: -0.16, fr: 0.56, rl: -0.16, rr: 0.56 }
+              : { fl: -0.1, fr: 0.96, rl: -0.1, rr: 0.96 }
+            : this.hydraulicMode === 'right_tilt'
+              ? activeIsDonk
+                ? { fl: 0.56, fr: -0.16, rl: 0.56, rr: -0.16 }
+                : { fl: 0.96, fr: -0.1, rl: 0.96, rr: -0.1 }
+              : { fl: 0, fr: 0, rl: 0, rr: 0 };
 
-    const stiffness = 92;
-    const damping = 8.4;
+    const stiffness = activeIsDonk ? 78 : 88;
+    const damping = activeIsDonk ? 9.5 : 7.0;
+    const minClamp = activeIsDonk ? -0.26 : -0.2;
+    const maxClamp = activeIsDonk ? 0.72 : 1.55;
     (['fl', 'fr', 'rl', 'rr'] as const).forEach((c) => {
       const accel = (targets[c] - this.hydCorners[c]) * stiffness - this.hydVel[c] * damping;
       this.hydVel[c] += accel * dt;
       this.hydCorners[c] = THREE.MathUtils.clamp(
         this.hydCorners[c] + this.hydVel[c] * dt,
-        -0.16,
-        0.92,
+        minClamp,
+        maxClamp,
       );
     });
 
@@ -10909,20 +11806,32 @@ export class GameEngine {
       const specs = computeVehicleSpecs(v.modules);
       const handles = this.vehicleMeshes.get(v.id);
       const isActive = v.id === this.activeVehicleId;
+      const autoJob = !isActive ? this.autoParkJobs.get(v.id) : undefined;
 
       if (!isActive) {
-        const surf = Math.max(
-          getTerrainHeight(v.x, v.z),
-          this.getStructuralSurfaceY(v.x, v.z, v.y + 0.8),
-        );
-        const water = getWaterLevelAt(v.x, v.z);
-        const restY = specs.canFloat ? Math.max(surf, water - 0.14) : surf;
-        v.y = THREE.MathUtils.damp(v.y, restY, 6, dt);
-        v.vx = 0;
-        v.vz = 0;
+        if (autoJob) {
+          this.stepAutoParkVehicle(v, specs, autoJob, dt);
+        } else {
+          const surf = Math.max(
+            getTerrainHeight(v.x, v.z),
+            this.getStructuralSurfaceY(v.x, v.z, v.y + 0.8),
+          );
+          const water = getWaterLevelAt(v.x, v.z);
+          const restY = specs.canFloat ? Math.max(surf, water - 0.14) : surf;
+          v.y = THREE.MathUtils.damp(v.y, restY, 6, dt);
+          v.vx = 0;
+          v.vz = 0;
+        }
       }
 
       if (!handles) continue;
+      const distV = Math.hypot(v.x - this.playerX, v.z - this.playerZ);
+      handles.root.visible =
+        isActive ||
+        (this.currentDimension === 'overworld' &&
+          distV <= this.effectiveMaxDrawDistance);
+      if (!handles.root.visible) continue;
+
       handles.root.position.set(v.x, v.y, v.z);
       handles.root.rotation.order = 'YXZ';
       if (isActive) {
@@ -10931,9 +11840,25 @@ export class GameEngine {
           v.yaw,
           this.vehicleVisualRoll,
         );
+      } else if (autoJob) {
+        handles.root.rotation.set(autoJob.pitchAngle, v.yaw, 0);
       } else {
         handles.root.rotation.set(0, v.yaw, 0);
       }
+
+      const shadowDisc = this.vehicleShadowDiscs.get(v.id);
+      if (shadowDisc && shadowDisc.visible) {
+        const groundSurf = Math.max(
+          getTerrainHeight(v.x, v.z),
+          this.getStructuralSurfaceY(v.x, v.z, v.y + 0.8),
+        );
+        const airGap = Math.max(0, v.y - groundSurf);
+        shadowDisc.position.y = Math.min(0.05, groundSurf - v.y + 0.05);
+        const s = Math.max(0.55, 1 - airGap * 0.14);
+        shadowDisc.scale.set(s, 1, s);
+      }
+
+      if (!isActive && !autoJob && distV > 120) continue;
 
       // Base chassis ride height + 4-corner hydraulic heave/pitch/roll + SLAB sub-bass rattle
       const isCustomShowCar =
@@ -10951,16 +11876,23 @@ export class GameEngine {
       if (isActive && activeHasHyd) {
         const { fl, fr, rl, rr } = this.hydCorners;
         const avgHeave = (fl + fr + rl + rr) * 0.25;
-        const hydPitch = ((rl + rr) - (fl + fr)) * 0.14;
-        const hydRoll = ((fl + rl) - (fr + rr)) * 0.19;
-        handles.chassisGroup.position.y = baseBodyY + avgHeave + showBassPulse * 0.025;
+        const hydPitch = activeIsDonk ? 0 : ((rl + rr) - (fl + fr)) * 0.21;
+        const hydRoll = ((fr + rr) - (fl + rl)) * (activeIsDonk ? 0.16 : 0.24);
+        handles.chassisGroup.position.y =
+          Math.max(0.18, baseBodyY + avgHeave) + showBassPulse * 0.025;
         handles.chassisGroup.rotation.x = hydPitch;
         handles.chassisGroup.rotation.z = hydRoll;
+        const minCorner = Math.min(fl, fr, rl, rr);
         for (const wc of handles.wheelCorners) {
-          const cornerH = this.hydCorners[wc.corner];
-          // Wheels stay planted on ground under low suspension displacement and droop slightly during high hops/three-wheeling
-          const droop = cornerH > 0.34 ? (cornerH - 0.34) * 0.45 : Math.max(0, cornerH * 0.08);
-          wc.obj.position.y = wc.baseY + droop;
+          if (activeIsDonk) {
+            // DONK keeps all 4 wheels planted while body moves up/down/side-to-side
+            wc.obj.position.y = wc.baseY;
+          } else {
+            // Lowrider lifts the two active wheels cleanly off the ground during hops and side tilts
+            const cornerH = this.hydCorners[wc.corner];
+            const relativeLift = Math.max(0, cornerH - minCorner - 0.05);
+            wc.obj.position.y = wc.baseY + relativeLift * 0.85;
+          }
         }
       } else {
         handles.chassisGroup.position.y = baseBodyY + showBassPulse * 0.032;
@@ -10989,20 +11921,25 @@ export class GameEngine {
       }
 
       const wheelRadius = 0.42 * (v.wheelScale ?? 1.0);
-      const spd = isActive ? this.vehicleForwardSpeed : 0;
+      const spd = isActive
+        ? this.vehicleForwardSpeed
+        : autoJob
+          ? autoJob.speed
+          : 0;
       const wheelRoll = (spd / wheelRadius) * dt;
       for (const w of handles.wheels) {
         w.rotation.x += wheelRoll;
       }
-      if (isActive) {
+      if (isActive || autoJob) {
+        const steerVal = isActive ? this.vehicleSteerAngle : (autoJob?.steerAngle ?? 0);
         for (const sw of handles.steerWheels) {
-          sw.rotation.y = this.vehicleSteerAngle;
+          sw.rotation.y = steerVal;
         }
         for (const r of handles.rudders) {
-          r.rotation.y = -this.vehicleSteerAngle * 1.1;
+          r.rotation.y = -steerVal * 1.1;
         }
         if (handles.helmWheel) {
-          handles.helmWheel.rotation.z = this.vehicleSteerAngle * 2.2;
+          handles.helmWheel.rotation.z = steerVal * 2.2;
         }
       }
 
@@ -11025,6 +11962,10 @@ export class GameEngine {
   public spawnCustomVehicle(vehicle: ModularVehicleData): void {
     this.vehicles.push(vehicle);
     const handles = createModularVehicleMesh(vehicle);
+    handles.root.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) obj.castShadow = this.effectiveShadowsEnabled;
+    });
+    this.attachVehicleShadowDisc(vehicle.id, handles.root);
     this.vehicleMeshes.set(vehicle.id, handles);
     this.scene.add(handles.root);
     this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle });
@@ -11065,6 +12006,10 @@ export class GameEngine {
     for (const sw of rebuilt.steerWheels) {
       sw.rotation.order = 'YXZ';
     }
+    rebuilt.root.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) obj.castShadow = this.effectiveShadowsEnabled;
+    });
+    this.attachVehicleShadowDisc(v.id, rebuilt.root);
     this.scene.add(rebuilt.root);
     this.vehicleMeshes.set(v.id, rebuilt);
     this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle: v });
@@ -11075,9 +12020,218 @@ export class GameEngine {
     return true;
   }
 
+  private stepAutoParkVehicle(
+    v: ModularVehicleData,
+    specs: ReturnType<typeof computeVehicleSpecs>,
+    job: {
+      vehicleId: string;
+      targetX: number;
+      targetZ: number;
+      targetYaw: number;
+      bayLabel: string;
+      phase: 'approach' | 'park';
+      speed: number;
+      steerAngle: number;
+      pitchAngle: number;
+      elapsed: number;
+      stuckTimer: number;
+      lastProgressX: number;
+      lastProgressZ: number;
+    },
+    dt: number,
+  ): void {
+    job.elapsed += dt;
+
+    const apronX = job.targetX;
+    const apronZ = job.targetZ + 9.2;
+    if (job.phase === 'approach') {
+      const distApron = Math.hypot(apronX - v.x, apronZ - v.z);
+      const alreadyInGarageCorridor =
+        Math.abs(v.x - VEHICLE_GARAGE_POS.x) <= 15 &&
+        v.z >= VEHICLE_GARAGE_POS.z - 5 &&
+        v.z <= VEHICLE_GARAGE_POS.z + 10.5;
+      if (distApron < 3.0 || alreadyInGarageCorridor) {
+        job.phase = 'park';
+      }
+    }
+
+    const wx = job.phase === 'approach' ? apronX : job.targetX;
+    const wz = job.phase === 'approach' ? apronZ : job.targetZ;
+    const dx = wx - v.x;
+    const dz = wz - v.z;
+    const dist = Math.hypot(dx, dz);
+
+    if ((job.phase === 'park' && dist < 0.35) || job.elapsed > 36) {
+      v.x = job.targetX;
+      v.z = job.targetZ;
+      v.yaw = job.targetYaw;
+      v.vx = 0;
+      v.vy = 0;
+      v.vz = 0;
+      v.y = getTerrainHeight(v.x, v.z) + 0.14;
+      job.speed = 0;
+      job.steerAngle = 0;
+      job.pitchAngle = 0;
+      this.autoParkJobs.delete(v.id);
+      this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle: v });
+      this.sound.playWeldSnap();
+      this.toast(`${v.name} auto-parked in Garage ${job.bayLabel}`, 'info');
+      return;
+    }
+
+    const curFwdX = Math.sin(v.yaw);
+    const curFwdZ = Math.cos(v.yaw);
+    const dotToTarget =
+      (dx / Math.max(0.01, dist)) * curFwdX + (dz / Math.max(0.01, dist)) * curFwdZ;
+    const backingIntoBay = job.phase === 'park' && dist < 11.5 && dotToTarget < 0.15;
+
+    let desiredDirX = dx;
+    let desiredDirZ = dz;
+    if (job.phase === 'approach') {
+      for (const col of this.world.colliders) {
+        if (col.radius < 0.9) continue;
+        if (
+          Math.abs(col.x - VEHICLE_GARAGE_POS.x) < 14 &&
+          Math.abs(col.z - VEHICLE_GARAGE_POS.z) < 9
+        ) {
+          continue;
+        }
+        const ox = col.x - v.x;
+        const oz = col.z - v.z;
+        const od = Math.hypot(ox, oz);
+        const avoidR = col.radius + 3.8;
+        if (od < avoidR + 4.5 && od > 0.05) {
+          const fwdDot = (ox / od) * curFwdX + (oz / od) * curFwdZ;
+          if (fwdDot > 0.1) {
+            const sideSign = curFwdX * oz - curFwdZ * ox >= 0 ? 1 : -1;
+            const push = ((avoidR + 4.5 - od) / (avoidR + 4.5)) * 12;
+            desiredDirX += -curFwdZ * sideSign * push;
+            desiredDirZ += curFwdX * sideSign * push;
+          }
+        }
+      }
+      for (const other of this.vehicles) {
+        if (other.id === v.id) continue;
+        const ox = other.x - v.x;
+        const oz = other.z - v.z;
+        const od = Math.hypot(ox, oz);
+        if (od < 5.5 && od > 0.05) {
+          const fwdDot = (ox / od) * curFwdX + (oz / od) * curFwdZ;
+          if (fwdDot > 0.15) {
+            const sideSign = curFwdX * oz - curFwdZ * ox >= 0 ? 1 : -1;
+            desiredDirX += -curFwdZ * sideSign * 6;
+            desiredDirZ += curFwdX * sideSign * 6;
+          }
+        }
+      }
+    }
+
+    const rawDesiredYaw = backingIntoBay
+      ? Math.atan2(-dx, -dz)
+      : Math.atan2(desiredDirX, desiredDirZ);
+    const yawErr = Math.atan2(
+      Math.sin(rawDesiredYaw - v.yaw),
+      Math.cos(rawDesiredYaw - v.yaw),
+    );
+
+    const maxCruise = Math.min(14.5, Math.max(8.5, specs.topLandSpeed * 0.85));
+    const targetSpeed = backingIntoBay
+      ? -THREE.MathUtils.clamp(dist * 1.4, 2.4, 5.2)
+      : job.phase === 'park'
+        ? THREE.MathUtils.clamp(dist * 1.45, 2.6, 6.2)
+        : Math.abs(yawErr) > 1.1
+          ? maxCruise * 0.48
+          : Math.min(maxCruise, Math.max(4.5, dist * 0.95));
+
+    job.speed = THREE.MathUtils.damp(job.speed, targetSpeed, 5.5, dt);
+
+    const steerNorm = THREE.MathUtils.clamp(yawErr * 1.35, -1, 1);
+    const turnRate = Math.max(1.8, specs.turnRate * 1.25);
+    v.yaw += steerNorm * turnRate * dt;
+
+    if (job.phase === 'park' && dist < 2.2) {
+      const yawToPark = Math.atan2(
+        Math.sin(job.targetYaw - v.yaw),
+        Math.cos(job.targetYaw - v.yaw),
+      );
+      v.yaw += yawToPark * Math.min(1, dt * 4.5);
+    }
+
+    const wheelVisSteer = backingIntoBay ? -steerNorm : steerNorm;
+    job.steerAngle = THREE.MathUtils.damp(
+      job.steerAngle,
+      THREE.MathUtils.clamp(wheelVisSteer * 0.52, -0.52, 0.52),
+      10,
+      dt,
+    );
+
+    const fwdX = Math.sin(v.yaw);
+    const fwdZ = Math.cos(v.yaw);
+    v.vx = fwdX * job.speed;
+    v.vz = fwdZ * job.speed;
+    let nextX = v.x + v.vx * dt;
+    let nextZ = v.z + v.vz * dt;
+
+    for (const col of this.world.colliders) {
+      if (col.radius < 0.9) continue;
+      if (
+        Math.abs(col.x - VEHICLE_GARAGE_POS.x) < 14 &&
+        Math.abs(col.z - VEHICLE_GARAGE_POS.z) < 9
+      ) {
+        continue;
+      }
+      const cdx = nextX - col.x;
+      const cdz = nextZ - col.z;
+      const cd = Math.hypot(cdx, cdz);
+      const minD = col.radius + 1.45;
+      if (cd < minD && cd > 0.01) {
+        nextX = col.x + (cdx / cd) * minD;
+        nextZ = col.z + (cdz / cd) * minD;
+      }
+    }
+
+    v.x = THREE.MathUtils.clamp(nextX, -(PLAYABLE_MAX_RADIUS + 14), PLAYABLE_MAX_RADIUS + 14);
+    v.z = THREE.MathUtils.clamp(nextZ, -(PLAYABLE_MAX_RADIUS + 14), PLAYABLE_MAX_RADIUS + 14);
+
+    job.stuckTimer += dt;
+    if (job.stuckTimer >= 1.2) {
+      const moved = Math.hypot(v.x - job.lastProgressX, v.z - job.lastProgressZ);
+      job.lastProgressX = v.x;
+      job.lastProgressZ = v.z;
+      job.stuckTimer = 0;
+      if (moved < 0.45 && dist > 1.5) {
+        v.yaw += 0.65;
+      }
+    }
+
+    const surf = Math.max(
+      getTerrainHeight(v.x, v.z),
+      this.getStructuralSurfaceY(v.x, v.z, v.y + 0.8),
+    );
+    const water = getWaterLevelAt(v.x, v.z);
+    const restY = Math.max(surf, water - 0.35);
+    v.y = THREE.MathUtils.damp(v.y, restY, 10, dt);
+
+    const sampleFwdY = Math.max(
+      getTerrainHeight(v.x + fwdX * 1.4, v.z + fwdZ * 1.4),
+      this.getStructuralSurfaceY(v.x + fwdX * 1.4, v.z + fwdZ * 1.4, v.y + 0.8),
+    );
+    const sampleBackY = Math.max(
+      getTerrainHeight(v.x - fwdX * 1.4, v.z - fwdZ * 1.4),
+      this.getStructuralSurfaceY(v.x - fwdX * 1.4, v.z - fwdZ * 1.4, v.y + 0.8),
+    );
+    const desiredPitch = THREE.MathUtils.clamp(
+      Math.atan2(sampleBackY - sampleFwdY, 2.8),
+      -0.35,
+      0.35,
+    );
+    job.pitchAngle = THREE.MathUtils.damp(job.pitchAngle, desiredPitch, 8, dt);
+  }
+
   public parkVehicleInGarage(vehicleId: string, bay: 'A' | 'B' | 'C' = 'A'): boolean {
     const v = this.vehicles.find((x) => x.id === vehicleId);
     if (!v) return false;
+    this.autoParkJobs.delete(v.id);
     const offsetX = bay === 'A' ? -6.0 : bay === 'B' ? 0.0 : 6.0;
     const offsetZ = 0.6;
     v.x = VEHICLE_GARAGE_POS.x + offsetX;
@@ -11629,6 +12783,10 @@ export class GameEngine {
         const rebuilt = createModularVehicleMesh(existing);
         rebuilt.root.position.set(existing.x, existing.y, existing.z);
         rebuilt.root.rotation.y = existing.yaw;
+        rebuilt.root.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) obj.castShadow = this.effectiveShadowsEnabled;
+        });
+        this.attachVehicleShadowDisc(existing.id, rebuilt.root);
         this.scene.add(rebuilt.root);
         this.vehicleMeshes.set(existing.id, rebuilt);
       }
@@ -11675,27 +12833,28 @@ export class GameEngine {
       this.emitHud();
     } else if (packet.type === 'combat_shot') {
       const dist = Math.hypot(packet.toX - packet.fromX, packet.toY - packet.fromY, packet.toZ - packet.fromZ);
-      if (dist > 0.2) {
-        const geom = new THREE.CylinderGeometry(0.018, 0.018, Math.min(28, dist), 5);
-        const mat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
-        const mesh = new THREE.Mesh(geom, mat);
-        const midX = (packet.fromX + packet.toX) * 0.5;
-        const midY = (packet.fromY + packet.toY) * 0.5;
-        const midZ = (packet.fromZ + packet.toZ) * 0.5;
-        mesh.position.set(midX, midY, midZ);
-        const dir = new THREE.Vector3(
-          packet.toX - packet.fromX,
-          packet.toY - packet.fromY,
-          packet.toZ - packet.fromZ,
-        ).normalize();
-        mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-        this.scene.add(mesh);
+      if (dist > 0.2 && this.p2pTracerPool.length > 0) {
+        const tracer =
+          this.p2pTracerPool[this.p2pTracerIdx % this.p2pTracerPool.length];
+        this.p2pTracerIdx += 1;
+        const len = Math.min(28, dist);
+        tracer.mesh.scale.set(1, len, 1);
+        tracer.mesh.position.set(
+          (packet.fromX + packet.toX) * 0.5,
+          (packet.fromY + packet.toY) * 0.5,
+          (packet.fromZ + packet.toZ) * 0.5,
+        );
+        _vec3A
+          .set(
+            packet.toX - packet.fromX,
+            packet.toY - packet.fromY,
+            packet.toZ - packet.fromZ,
+          )
+          .normalize();
+        tracer.mesh.quaternion.setFromUnitVectors(_upAxis, _vec3A);
+        tracer.mesh.visible = true;
+        tracer.life = 0.12;
         this.spawnParticles(packet.fromX, packet.fromY, packet.fromZ, 0xfbbf24, 6);
-        window.setTimeout(() => {
-          this.scene.remove(mesh);
-          geom.dispose();
-          mat.dispose();
-        }, 120);
       }
     } else if (packet.type === 'creature_damage') {
       const target = this.creatures.creatures.find((c) => c.id === packet.creatureId);
@@ -11758,7 +12917,7 @@ export class GameEngine {
       this.hydraulicBounceTimer = Math.max(0, this.hydraulicBounceTimer - dt);
     }
 
-    for (const rp of this.remotePlayers.values()) {
+    for (const [peerId, rp] of this.remotePlayers.entries()) {
       const h = rp.handle;
       h.group.position.x = THREE.MathUtils.damp(h.group.position.x, rp.targetX, 12, dt);
       h.group.position.y = THREE.MathUtils.damp(h.group.position.y, rp.targetY, 12, dt);
@@ -11767,6 +12926,16 @@ export class GameEngine {
       const curYaw = h.group.rotation.y;
       const diffYaw = ((rp.targetYaw - curYaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
       h.group.rotation.y = curYaw + diffYaw * Math.min(1, dt * 12);
+
+      if (h.speakerSprite) {
+        const isSpeaking = this.p2p?.speakingPeers.has(peerId) ?? false;
+        h.speakerSprite.visible = isSpeaking;
+        if (isSpeaking) {
+          const pulse = 1 + Math.sin(this.elapsed * 10) * 0.08;
+          h.speakerSprite.scale.set(0.76 * pulse, 0.34 * pulse, 1);
+          h.speakerSprite.position.y = 2.7 + Math.sin(this.elapsed * 6) * 0.03;
+        }
+      }
 
       const moveDist = Math.hypot(rp.targetX - h.group.position.x, rp.targetZ - h.group.position.z);
       const isMoving = rp.anim === 'walk' || rp.anim === 'sprint' || moveDist > 0.04;
@@ -11789,6 +12958,10 @@ export class GameEngine {
         h.legL.rotation.x = THREE.MathUtils.damp(h.legL.rotation.x, 0, 8, dt);
         h.legR.rotation.x = THREE.MathUtils.damp(h.legR.rotation.x, 0, 8, dt);
       }
+    }
+
+    if (this.p2p?.connected) {
+      this.p2p.updatePlayerPosition(this.playerX, this.playerY, this.playerZ);
     }
 
     if (!this.p2p?.connected || this.mode !== 'playing') return;
@@ -11864,6 +13037,18 @@ export class GameEngine {
 
   public setPvpEnabled(enabled: boolean): void {
     this.p2p.setPvpEnabled(enabled);
+  }
+
+  public async initMicrophone(): Promise<boolean> {
+    return this.p2p.initMicrophone();
+  }
+
+  public toggleMicMute(): boolean {
+    return this.p2p.toggleMicMute();
+  }
+
+  public setVoiceMode(mode: 'party' | 'proximity'): void {
+    this.p2p.setVoiceMode(mode);
   }
 
   public sendMultiplayerChat(text: string): void {
@@ -12013,13 +13198,75 @@ export class GameEngine {
     this.emitHud();
   }
 
+  private setOverworldActiveState(active: boolean): void {
+    if (this.world?.overworldGroup) {
+      if (active) {
+        if (!this.world.overworldGroup.parent) {
+          this.scene.add(this.world.overworldGroup);
+        }
+        this.world.overworldGroup.visible = true;
+      } else {
+        this.world.overworldGroup.visible = false;
+        this.scene.remove(this.world.overworldGroup);
+      }
+    }
+    this.creatures?.setOverworldActive(active);
+    for (const v of this.structureVisuals.values()) v.group.visible = active;
+    for (const m of this.structuralMeshes.values()) m.visible = active;
+    for (const h of this.kineticMeshes.values()) h.root.visible = active;
+    for (const bm of this.beltSpanMeshes) bm.group.visible = active;
+    for (const cm of this.cropMeshes.values()) cm.visible = active;
+    for (const p of this.pickups) p.mesh.visible = active;
+    for (const c of this.carcasses) c.mesh.visible = active;
+  }
+
+  private updateActivePortals(dt: number): void {
+    for (const portal of this.activePortals) {
+      const handle = this.portalHandles.get(portal.id);
+      const visible = portal.sourceDim === this.currentDimension;
+      if (handle) {
+        handle.group.visible = visible;
+        if (visible) {
+          handle.update(this.elapsed, dt);
+        }
+      }
+      if (visible && this.portalWarpCooldown <= 0) {
+        const d = Math.hypot(portal.x - this.playerX, portal.z - this.playerZ);
+        if (d < 1.85 && Math.abs(portal.y - this.playerY) < 3.0) {
+          this.switchDimension(portal.targetDim);
+          return;
+        }
+      }
+    }
+  }
+
   public switchDimension(dim: DimensionId): void {
     if (!DIMENSION_DEFINITIONS[dim]) return;
+    if (this.activeDimensionWorld) {
+      disposeDimensionWorld(this.activeDimensionWorld);
+      this.activeDimensionWorld = null;
+    }
+
     this.currentDimension = dim;
     this.visitedDimensions.add(dim);
+    this.portalWarpCooldown = 1.8;
     if (dim === 'gold') {
       this.unlockedGildedPaint = true;
     }
+
+    if (dim === 'overworld') {
+      this.setOverworldActiveState(true);
+    } else {
+      this.setOverworldActiveState(false);
+      this.activeDimensionWorld = buildDimensionWorld(dim, this.renderer);
+      this.scene.add(this.activeDimensionWorld.root);
+    }
+
+    for (const portal of this.activePortals) {
+      const h = this.portalHandles.get(portal.id);
+      if (h) h.group.visible = portal.sourceDim === dim;
+    }
+
     const arrival = getDimensionArrivalPoint(dim);
     this.playerX = arrival.x;
     this.playerY = arrival.y;
@@ -12029,7 +13276,12 @@ export class GameEngine {
 
     const def = DIMENSION_DEFINITIONS[dim];
     if (def) {
-      this.scene.background = new THREE.Color(def.skyHex);
+      _skyColor.setHex(def.skyHex);
+      if (this.scene.background instanceof THREE.Color) {
+        this.scene.background.copy(_skyColor);
+      } else {
+        this.scene.background = _skyColor;
+      }
       if (this.scene.fog) {
         this.scene.fog.color.setHex(def.fogHex);
         if ('density' in this.scene.fog) {
@@ -12082,13 +13334,44 @@ export class GameEngine {
       createdAt: this.elapsed,
     };
 
-    this.activePortals.push(newPortal);
+    const returnPortal: PortalLinkState = {
+      id: `${portalId}_ret`,
+      pairId,
+      sourceDim: targetDim,
+      targetDim: this.currentDimension,
+      x: dest.x + 4.2,
+      y: dest.y,
+      z: dest.z + 4.2,
+      yaw: dest.yaw + Math.PI,
+      destX: px,
+      destY: py,
+      destZ: pz,
+      destYaw: this.playerYaw + Math.PI,
+      isReturn: true,
+      createdAt: this.elapsed,
+    };
+
+    this.activePortals.push(newPortal, returnPortal);
+    const hOut = createPortalVortexMesh(newPortal);
+    hOut.group.visible = newPortal.sourceDim === this.currentDimension;
+    this.scene.add(hOut.group);
+    this.portalHandles.set(newPortal.id, hOut);
+
+    const hRet = createPortalVortexMesh(returnPortal);
+    hRet.group.visible = returnPortal.sourceDim === this.currentDimension;
+    this.scene.add(hRet.group);
+    this.portalHandles.set(returnPortal.id, hRet);
+
     this.sound.playPortalWarp();
     this.toast(`Portal opened to ${DIMENSION_DEFINITIONS[targetDim]?.name || targetDim}! Walk or drive through.`, 'gain');
     this.emitHud();
   }
 
   public closeAllPortals(): void {
+    for (const h of this.portalHandles.values()) {
+      disposePortalVortex(h);
+    }
+    this.portalHandles.clear();
     this.activePortals = [];
     this.toast('All dimensional portals closed.', 'info');
     this.emitHud();
@@ -12113,9 +13396,39 @@ export class GameEngine {
     }
     this.remotePlayers.clear();
 
+    if (this.activeDimensionWorld) {
+      disposeDimensionWorld(this.activeDimensionWorld);
+      this.activeDimensionWorld = null;
+    }
+    for (const h of this.portalHandles.values()) {
+      disposePortalVortex(h);
+    }
+    this.portalHandles.clear();
+
+    this.creatures?.dispose();
+    this.world?.dispose();
     if (this.terrainEngine) {
       this.terrainEngine.dispose(this.scene);
     }
+
+    this.arrowGeo.dispose();
+    this.arrowMat.dispose();
+    this.bulletGeo.dispose();
+    this.bulletMat.dispose();
+    this.particleGeo.dispose();
+    this.particleMat.dispose();
+    this.shellCasingGeo.dispose();
+    this.shellCasingMat.dispose();
+    this.muzzleFlashGeo.dispose();
+    this.muzzleFlashMat.dispose();
+    this.debrisGeo.dispose();
+    this.debrisMat.dispose();
+    this.p2pTracerGeo.dispose();
+    this.p2pTracerMat.dispose();
+    this.vehicleShadowGeo.dispose();
+    this.vehicleShadowMat.dispose();
+    this.envTexture?.dispose();
+    this.envTexture = null;
 
     this.scene.traverse((obj) => {
       if (obj instanceof THREE.Mesh || obj instanceof THREE.Points) {
