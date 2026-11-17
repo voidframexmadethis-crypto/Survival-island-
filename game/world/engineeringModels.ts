@@ -449,6 +449,8 @@ export function createBeltSpanMesh(
 function buildModulePart(
   m: VehicleModulePlacement,
   paintColor: string,
+  rimColor: string,
+  wheelScale: number,
   handles: ModularVehicleMeshHandles,
 ): THREE.Group {
   const part = new THREE.Group();
@@ -458,8 +460,8 @@ function buildModulePart(
 
   const paintMat = new THREE.MeshStandardMaterial({
     color: paintColor,
-    roughness: 0.42,
-    metalness: 0.48,
+    roughness: 0.32,
+    metalness: 0.56,
   });
   const steelMat = new THREE.MeshStandardMaterial({
     color: 0x334155,
@@ -467,9 +469,9 @@ function buildModulePart(
     metalness: 0.82,
   });
   const brassMat = new THREE.MeshStandardMaterial({
-    color: 0xd97706,
-    roughness: 0.28,
-    metalness: 0.86,
+    color: rimColor,
+    roughness: 0.22,
+    metalness: 0.9,
   });
   const woodMat = new THREE.MeshStandardMaterial({
     color: 0x78350f,
@@ -522,10 +524,11 @@ function buildModulePart(
 
     const wheelPivot = new THREE.Group();
     wheelPivot.position.set(m.gx < 0 ? -0.16 : 0.16, -0.04, 0);
+    wheelPivot.scale.setScalar(wheelScale);
     const tireMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.92 });
     const tire = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.34, 14), tireMat);
     tire.rotation.z = Math.PI / 2;
-    const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.36, 8), brassMat);
+    const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.36, 10), brassMat);
     rim.rotation.z = Math.PI / 2;
     const lug = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.1, 0.56), steelMat);
     wheelPivot.add(tire, rim, lug);
@@ -593,6 +596,7 @@ export function createModularVehicleMesh(
 ): ModularVehicleMeshHandles {
   const root = new THREE.Group();
   const chassisGroup = new THREE.Group();
+  chassisGroup.position.y = vehicle.suspensionOffset ?? 0;
   root.add(chassisGroup);
 
   const handles: ModularVehicleMeshHandles = {
@@ -605,9 +609,51 @@ export function createModularVehicleMesh(
     rudders: [],
   };
 
+  const rimColor = vehicle.rimColor || '#d97706';
+  const wheelScale = vehicle.wheelScale ?? 1.0;
+
   for (const mod of vehicle.modules) {
-    const part = buildModulePart(mod, vehicle.paintColor || '#d97706', handles);
+    const part = buildModulePart(
+      mod,
+      vehicle.paintColor || '#d97706',
+      rimColor,
+      wheelScale,
+      handles,
+    );
+    if (mod.kind === 'offroad_wheel') {
+      part.position.y -= (vehicle.suspensionOffset ?? 0) * 0.65;
+    }
     chassisGroup.add(part);
+  }
+
+  // Distinct styling accents for Street Cars, Dune Buggies, and Lowriders
+  if (vehicle.preset === 'lowrider' || vehicle.preset === 'sports_car') {
+    const chromeMat = new THREE.MeshStandardMaterial({
+      color: rimColor,
+      roughness: 0.18,
+      metalness: 0.92,
+    });
+    const rearBumper = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.18, 0.22), chromeMat);
+    rearBumper.position.set(0, 0.38, -1.78);
+    const frontBumper = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.18, 0.22), chromeMat);
+    frontBumper.position.set(0, 0.36, 2.25);
+    chassisGroup.add(rearBumper, frontBumper);
+    if (vehicle.preset === 'sports_car') {
+      const spoilerWing = new THREE.Mesh(
+        new THREE.BoxGeometry(1.72, 0.08, 0.36),
+        new THREE.MeshStandardMaterial({ color: vehicle.paintColor, roughness: 0.28, metalness: 0.6 }),
+      );
+      spoilerWing.position.set(0, 1.52, -1.62);
+      chassisGroup.add(spoilerWing);
+    }
+  } else if (vehicle.preset === 'dune_buggy') {
+    const cageMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.4, metalness: 0.75 });
+    [-0.52, 0.52].forEach((rx) => {
+      const hoop = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.8, 7), cageMat);
+      hoop.position.set(rx, 1.48, -0.1);
+      hoop.rotation.x = 0.68;
+      chassisGroup.add(hoop);
+    });
   }
 
   root.traverse((obj) => {

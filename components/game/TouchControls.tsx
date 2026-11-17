@@ -17,6 +17,7 @@ import {
   PackageOpen,
   PackagePlus,
   Pickaxe,
+  RotateCw,
   Swords,
   Utensils,
   Wind,
@@ -31,9 +32,12 @@ interface TouchControlsProps {
   isSprinting: boolean;
   isCrouching: boolean;
   kickCooldown?: number;
+  showReload?: boolean;
+  isReloading?: boolean;
   onJoystickMove: (x: number, y: number) => void;
   onCameraDrag: (dx: number, dy: number) => void;
   onAction: () => void;
+  onReload?: () => void;
   onJump: () => void;
   onKickDebris?: () => void;
   onSprintToggle: (active: boolean) => void;
@@ -50,9 +54,12 @@ export function TouchControls({
   isSprinting,
   isCrouching,
   kickCooldown = 0,
+  showReload = false,
+  isReloading = false,
   onJoystickMove,
   onCameraDrag,
   onAction,
+  onReload,
   onJump,
   onKickDebris,
   onSprintToggle,
@@ -318,8 +325,28 @@ export function TouchControls({
             )}
           </div>
 
-          {/* Bottom row of right-side arc: KICK + Primary USE/Shoot Button shifted up & right */}
+          {/* Bottom row of right-side arc: Reload + KICK + Primary USE/Shoot Button shifted up & right */}
           <div className="flex items-center gap-2">
+            {showReload && onReload && (
+              <button
+                type="button"
+                aria-label="Reload Weapon"
+                disabled={isReloading}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onReload();
+                }}
+                className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full border-2 flex items-center justify-center shadow-xl transition-colors ${
+                  isReloading
+                    ? 'bg-amber-950/90 border-amber-400 text-amber-300'
+                    : 'bg-stone-950/90 border-amber-500/80 text-amber-200 active:bg-amber-600 active:text-stone-950'
+                }`}
+              >
+                <RotateCw className={`w-5 h-5 ${isReloading ? 'animate-spin' : ''}`} />
+              </button>
+            )}
+
             {onKickDebris && (
               <button
                 type="button"

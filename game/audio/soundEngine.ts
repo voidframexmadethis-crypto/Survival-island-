@@ -454,61 +454,102 @@ export class SoundEngine {
     });
   }
 
+  public playDryFire(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(1450, now);
+    osc.frequency.exponentialRampToValueAtTime(520, now + 0.035);
+    g.gain.setValueAtTime(0.14, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.045);
+  }
+
+  public playReloadClick(isShell = false): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = isShell ? 'triangle' : 'square';
+    osc.frequency.setValueAtTime(isShell ? 620 : 480, now);
+    osc.frequency.exponentialRampToValueAtTime(isShell ? 1120 : 880, now + 0.065);
+    g.gain.setValueAtTime(0.16, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.075);
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.08);
+  }
+
+  public playGunshot(
+    profile: 'pistol' | 'shotgun' | 'smg' | 'rifle' | 'sniper' | 'lmg' | 'musket' = 'pistol',
+  ): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+
+    const isHeavy = profile === 'shotgun' || profile === 'sniper' || profile === 'musket';
+    const isRapid = profile === 'smg';
+    const noiseDur = isHeavy ? 0.34 : isRapid ? 0.16 : 0.24;
+    const noiseBuf = this.ctx.createBuffer(
+      1,
+      Math.floor(this.ctx.sampleRate * noiseDur),
+      this.ctx.sampleRate,
+    );
+    const data = noiseBuf.getChannelData(0);
+    const decay = isHeavy ? 0.085 : isRapid ? 0.028 : 0.045;
+    for (let i = 0; i < data.length; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (this.ctx.sampleRate * decay));
+    }
+    const noiseSource = this.ctx.createBufferSource();
+    noiseSource.buffer = noiseBuf;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(isHeavy ? 2600 : isRapid ? 4200 : 3400, now);
+    filter.frequency.exponentialRampToValueAtTime(isHeavy ? 240 : 420, now + noiseDur * 0.9);
+    const noiseGain = this.ctx.createGain();
+    noiseGain.gain.setValueAtTime(isHeavy ? 0.65 : isRapid ? 0.42 : 0.55, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + noiseDur);
+    noiseSource.connect(filter);
+    filter.connect(noiseGain);
+    noiseGain.connect(this.masterGain);
+    noiseSource.start(now);
+
+    const crackOsc = this.ctx.createOscillator();
+    const crackGain = this.ctx.createGain();
+    crackOsc.type = 'sawtooth';
+    crackOsc.frequency.setValueAtTime(isHeavy ? 520 : isRapid ? 960 : 780, now);
+    crackOsc.frequency.exponentialRampToValueAtTime(isHeavy ? 52 : 95, now + 0.09);
+    crackGain.gain.setValueAtTime(isHeavy ? 0.42 : 0.34, now);
+    crackGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+    crackOsc.connect(crackGain);
+    crackGain.connect(this.masterGain);
+    crackOsc.start(now);
+    crackOsc.stop(now + 0.11);
+
+    const subOsc = this.ctx.createOscillator();
+    const subGain = this.ctx.createGain();
+    subOsc.type = 'sine';
+    subOsc.frequency.setValueAtTime(isHeavy ? 115 : 145, now);
+    subOsc.frequency.exponentialRampToValueAtTime(isHeavy ? 26 : 36, now + (isHeavy ? 0.3 : 0.22));
+    subGain.gain.setValueAtTime(isHeavy ? 0.52 : 0.38, now);
+    subGain.gain.exponentialRampToValueAtTime(0.001, now + (isHeavy ? 0.32 : 0.23));
+    subOsc.connect(subGain);
+    subGain.connect(this.masterGain);
+    subOsc.start(now);
+    subOsc.stop(now + 0.34);
+  }
+
   public playAttack(weaponType: 'melee' | 'bow' | 'whip' | 'cast' | 'gun'): void {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
 
     if (weaponType === 'gun') {
-      // 1. Explosive gunpowder blast noise
-      const noiseDur = 0.22;
-      const noiseBuf = this.ctx.createBuffer(
-        1,
-        Math.floor(this.ctx.sampleRate * noiseDur),
-        this.ctx.sampleRate,
-      );
-      const data = noiseBuf.getChannelData(0);
-      for (let i = 0; i < data.length; i++) {
-        data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (this.ctx.sampleRate * 0.04));
-      }
-      const noiseSource = this.ctx.createBufferSource();
-      noiseSource.buffer = noiseBuf;
-      const filter = this.ctx.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(3200, now);
-      filter.frequency.exponentialRampToValueAtTime(380, now + 0.2);
-      const noiseGain = this.ctx.createGain();
-      noiseGain.gain.setValueAtTime(0.55, now);
-      noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
-      noiseSource.connect(filter);
-      filter.connect(noiseGain);
-      noiseGain.connect(this.masterGain);
-      noiseSource.start(now);
-
-      // 2. High-energy punch crack
-      const crackOsc = this.ctx.createOscillator();
-      const crackGain = this.ctx.createGain();
-      crackOsc.type = 'sawtooth';
-      crackOsc.frequency.setValueAtTime(780, now);
-      crackOsc.frequency.exponentialRampToValueAtTime(80, now + 0.08);
-      crackGain.gain.setValueAtTime(0.38, now);
-      crackGain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
-      crackOsc.connect(crackGain);
-      crackGain.connect(this.masterGain);
-      crackOsc.start(now);
-      crackOsc.stop(now + 0.1);
-
-      // 3. Deep acoustic boom recoil
-      const subOsc = this.ctx.createOscillator();
-      const subGain = this.ctx.createGain();
-      subOsc.type = 'sine';
-      subOsc.frequency.setValueAtTime(140, now);
-      subOsc.frequency.exponentialRampToValueAtTime(32, now + 0.24);
-      subGain.gain.setValueAtTime(0.42, now);
-      subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
-      subOsc.connect(subGain);
-      subGain.connect(this.masterGain);
-      subOsc.start(now);
-      subOsc.stop(now + 0.26);
+      this.playGunshot('pistol');
       return;
     }
 
@@ -947,16 +988,83 @@ export class SoundEngine {
       g.connect(this.masterGain);
       osc.start(now);
       osc.stop(now + 0.54);
-    } else if (species === 'deer' || species === 'parasaurolophus') {
+    } else if (species === 'deer' || species === 'reindeer' || species === 'moose' || species === 'parasaurolophus') {
       osc.type = 'triangle';
-      osc.frequency.setValueAtTime(240, now);
-      osc.frequency.exponentialRampToValueAtTime(160, now + 0.4);
-      g.gain.setValueAtTime(vol * 0.6, now);
-      g.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
+      const startF = species === 'moose' ? 145 : species === 'reindeer' ? 210 : 240;
+      const endF = species === 'moose' ? 92 : 160;
+      osc.frequency.setValueAtTime(startF, now);
+      osc.frequency.exponentialRampToValueAtTime(endF, now + 0.44);
+      g.gain.setValueAtTime(vol * 0.62, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.46);
       osc.connect(g);
       g.connect(this.masterGain);
       osc.start(now);
-      osc.stop(now + 0.44);
+      osc.stop(now + 0.48);
+    } else if (species === 'elephant') {
+      // Resonant brassy elephant trumpet
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(220, now);
+      osc.frequency.exponentialRampToValueAtTime(510, now + 0.18);
+      osc.frequency.exponentialRampToValueAtTime(260, now + 0.65);
+      g.gain.setValueAtTime(vol * 0.85, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.68);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.7);
+    } else if (species === 'tiger' || species === 'polar_bear' || species === 'spinosaurus' || species === 'allosaurus') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(species === 'spinosaurus' ? 98 : 138, now);
+      osc.frequency.exponentialRampToValueAtTime(52, now + 0.72);
+      g.gain.setValueAtTime(vol * 0.86, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.75);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.77);
+    } else if (species === 'cheetah' || species === 'hyena' || species === 'dilophosaurus') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(species === 'hyena' ? 480 : 690, now);
+      osc.frequency.exponentialRampToValueAtTime(species === 'hyena' ? 820 : 380, now + 0.18);
+      osc.frequency.exponentialRampToValueAtTime(290, now + 0.34);
+      g.gain.setValueAtTime(vol * 0.56, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.36);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.38);
+    } else if (species === 'pteranodon' || species === 'peregrine_falcon') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(species === 'pteranodon' ? 1480 : 2350, now);
+      osc.frequency.exponentialRampToValueAtTime(species === 'pteranodon' ? 920 : 1620, now + 0.32);
+      g.gain.setValueAtTime(vol * 0.45, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.36);
+    } else if (species === 'toucan' || species === 'flamingo' || species === 'penguin' || species === 'ostrich') {
+      osc.type = 'triangle';
+      const f1 = species === 'toucan' ? 880 : species === 'flamingo' ? 580 : species === 'penguin' ? 620 : 185;
+      const f2 = species === 'toucan' ? 460 : species === 'flamingo' ? 410 : species === 'penguin' ? 740 : 120;
+      osc.frequency.setValueAtTime(f1, now);
+      osc.frequency.exponentialRampToValueAtTime(f2, now + 0.22);
+      g.gain.setValueAtTime(vol * 0.44, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.26);
+    } else if (species === 'rhinoceros' || species === 'hippopotamus' || species === 'gorilla') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(92, now);
+      osc.frequency.exponentialRampToValueAtTime(56, now + 0.44);
+      g.gain.setValueAtTime(vol * 0.72, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.46);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.48);
     } else {
       osc.type = 'triangle';
       osc.frequency.setValueAtTime(150, now);

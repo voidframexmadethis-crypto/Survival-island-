@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import {
   FARM_POND_POS,
   LAKE_CENTER,
+  OCEAN_LEVEL,
+  PLAYER_SPAWN,
   TERRAIN_HALF,
   TERRAIN_STEP,
   TERRAIN_VERTS,
@@ -11,6 +13,7 @@ import {
   isTerrainProtectedAt,
   terrainDeltaGrid,
   terrainLoosenessGrid,
+  terrainPuddleGrid,
   terrainScorchGrid,
   terrainWetnessGrid,
 } from '../world/terrain';
@@ -44,6 +47,7 @@ export interface ErosionStepResult {
   dirtyVertices: boolean;
   avalanches: AvalancheEvent[];
   erodedVolumeDelta: number;
+  puddleCount: number;
 }
 
 const _dummy = new THREE.Object3D();
@@ -53,13 +57,18 @@ export class VolumetricTerrainEngine {
   private droplets: ActiveWaterDroplet[] = [];
   private emitters: ActiveWaterEmitter[] = [];
   private waterInstancedMesh: THREE.InstancedMesh;
+  private puddleInstancedMesh: THREE.InstancedMesh;
   private dirtyRect: { minIx: number; maxIx: number; minIz: number; maxIz: number } | null = null;
   private avalancheCooldown = 0;
   private breachCheckCooldown = 0;
+  private puddleUpdateCooldown = 0;
+  private coastalErosionCooldown = 0;
   public cratersCarved = 0;
   public totalErodedVolume = 0;
+  public activePuddleCount = 0;
 
   private readonly maxDropletVisuals = 320;
+  private readonly maxPuddleVisuals = 240;
 
   constructor(scene: THREE.Scene) {
     const dropGeo = new THREE.CylinderGeometry(0.45, 0.72, 0.14, 8);
@@ -80,6 +89,27 @@ export class VolumetricTerrainEngine {
     this.waterInstancedMesh.count = 0;
     this.waterInstancedMesh.frustumCulled = false;
     scene.add(this.waterInstancedMesh);
+
+    const puddleGeo = new THREE.CircleGeometry(1.45, 14);
+    puddleGeo.rotateX(-Math.PI / 2);
+    const puddleMat = new THREE.MeshStandardMaterial({
+      color: 0x1d4e6e,
+      emissive: 0x0c4a6e,
+      emissiveIntensity: 0.16,
+      roughness: 0.08,
+      metalness: 0.45,
+      transparent: true,
+      opacity: 0.62,
+      depthWrite: false,
+    });
+    this.puddleInstancedMesh = new THREE.InstancedMesh(
+      puddleGeo,
+      puddleMat,
+      this.maxPuddleVisuals,
+    );
+    this.puddleInstancedMesh.count = 0;
+    this.puddleInstancedMesh.frustumCulled = false;
+    scene.add(this.puddleInstancedMesh);
   }
 
   public clearAll(): void {
@@ -88,8 +118,11 @@ export class VolumetricTerrainEngine {
     this.dirtyRect = null;
     this.cratersCarved = 0;
     this.totalErodedVolume = 0;
+    this.activePuddleCount = 0;
     this.waterInstancedMesh.count = 0;
     this.waterInstancedMesh.instanceMatrix.needsUpdate = true;
+    this.puddleInstancedMesh.count = 0;
+    this.puddleInstancedMesh.instanceMatrix.needsUpdate = true;
   }
 
   public getActiveStreamCount(): number {
@@ -348,16 +381,96 @@ export class VolumetricTerrainEngine {
     isRaining: boolean,
     playerX: number,
     playerZ: number,
+    isStorming = false,
   ): ErosionStepResult {
     let dirtyVertices = false;
     let erodedVolumeDelta = 0;
     const avalanches: AvalancheEvent[] = [];
 
-    // 1. Dry/fade wetness slowly when not actively submerged
-    if (Math.random() < dt * 1.2) {
-      for (let i = 0; i < terrainWetnessGrid.length; i += 3) {
+    // 1. Dry/fade wetness slowly when clear, or moisten gradually during rainfall
+    if (!isRaining && Math.random() < dt * 1.4) {
+      for (let i = 0; i < terrainWetnessGrid.length; i += 2) {
         if (terrainWetnessGrid[i] > 0.005) {
-          terrainWetnessGrid[i] = Math.max(0, terrainWetnessGrid[i] - 0.015);
+          terrainWetnessGrid[i] = Math.max(0, terrainWetnessGrid[i] - 0.018);
+        }
+        if (terrainPuddleGrid[i] > 0.005) {
+          terrainPuddleGrid[i] = Math.max(0, terrainPuddleGrid[i] - 0.022);
+        }
+      }
+    }
+
+    // 1B. Dynamic Rainwater Puddle Accumulation & Evaporation
+    this.puddleUpdateCooldown -= dt;
+    if (this.puddleUpdateCooldown <= 0) {
+      this.puddleUpdateCooldown = 0.35;
+      if (isRaining) {
+        const fillRate = isStorming ? 0.14 : 0.075;
+        const maxRange = 76;
+        const minIx = Math.max(2, Math.floor((playerX - maxRange + TERRAIN_HALF) / TERRAIN_STEP));
+        const maxIx = Math.min(TERRAIN_VERTS - 3, Math.ceil((playerX + maxRange + TERRAIN_HALF) / TERRAIN_STEP));
+        const minIz = Math.max(2, Math.floor((playerZ - maxRange + TERRAIN_HALF) / TERRAIN_STEP));
+        const maxIz = Math.min(TERRAIN_VERTS - 3, Math.ceil((playerZ + maxRange + TERRAIN_HALF) / TERRAIN_STEP));
+
+        for (let iz = minIz; iz <= maxIz; iz += 2) {
+          const vz = -TERRAIN_HALF + iz * TERRAIN_STEP;
+          for (let ix = minIx; ix <= maxIx; ix += 2) {
+            const vx = -TERRAIN_HALF + ix * TERRAIN_STEP;
+            if (isTerrainProtectedAt(vx, vz)) continue;
+            const idx = iz * TERRAIN_VERTS + ix;
+            const hC = getBaseTerrainHeight(vx, vz) + terrainDeltaGrid[idx];
+            if (hC < OCEAN_LEVEL + 0.35 || hC > 11.5) continue;
+            const river = getRiverSample(vx, vz);
+            if (river.inRiver || Math.hypot(vx - LAKE_CENTER.x, vz - LAKE_CENTER.z) < LAKE_CENTER.radius + 1.5) {
+              continue;
+            }
+            const hN = getBaseTerrainHeight(vx, vz - TERRAIN_STEP) + terrainDeltaGrid[idx - TERRAIN_VERTS];
+            const hS = getBaseTerrainHeight(vx, vz + TERRAIN_STEP) + terrainDeltaGrid[idx + TERRAIN_VERTS];
+            const hW = getBaseTerrainHeight(vx - TERRAIN_STEP, vz) + terrainDeltaGrid[idx - 1];
+            const hE = getBaseTerrainHeight(vx + TERRAIN_STEP, vz) + terrainDeltaGrid[idx + 1];
+            const avgNeighbor = (hN + hS + hW + hE) * 0.25;
+            const concavity = avgNeighbor - hC;
+            if (concavity > 0.035 || (isStorming && Math.abs(concavity) < 0.04 && hC < 4.5)) {
+              const prevWet = terrainWetnessGrid[idx];
+              terrainPuddleGrid[idx] = Math.min(1.0, terrainPuddleGrid[idx] + fillRate + Math.max(0, concavity) * 0.25);
+              terrainWetnessGrid[idx] = Math.min(1.0, prevWet + fillRate * 1.4);
+              if (terrainWetnessGrid[idx] - prevWet > 0.05) {
+                this.markDirtyArea(vx, vz, TERRAIN_STEP);
+              }
+            } else {
+              terrainWetnessGrid[idx] = Math.min(0.65, terrainWetnessGrid[idx] + fillRate * 0.45);
+            }
+          }
+        }
+      }
+    }
+
+    // 1C. Coastal Shoreline Sand Erosion during Rainfall & Storm Surge
+    this.coastalErosionCooldown -= dt;
+    if (isRaining && this.coastalErosionCooldown <= 0) {
+      this.coastalErosionCooldown = 0.55;
+      const sandErode = isStorming ? 0.022 : 0.009;
+      for (let k = 0; k < (isStorming ? 18 : 10); k++) {
+        const angle = Math.random() * Math.PI * 2;
+        const rad = 98 + Math.random() * 44;
+        const sx = Math.cos(angle) * rad;
+        const sz = Math.sin(angle) * rad;
+        if (isTerrainProtectedAt(sx, sz)) continue;
+        if (Math.hypot(sx - PLAYER_SPAWN.x, sz - PLAYER_SPAWN.z) < 9.5) continue;
+        const ix = Math.round((sx + TERRAIN_HALF) / TERRAIN_STEP);
+        const iz = Math.round((sz + TERRAIN_HALF) / TERRAIN_STEP);
+        if (ix < 2 || ix >= TERRAIN_VERTS - 2 || iz < 2 || iz >= TERRAIN_VERTS - 2) continue;
+        const idx = iz * TERRAIN_VERTS + ix;
+        const vx = -TERRAIN_HALF + ix * TERRAIN_STEP;
+        const vz = -TERRAIN_HALF + iz * TERRAIN_STEP;
+        const h = getBaseTerrainHeight(vx, vz) + terrainDeltaGrid[idx];
+        if (h >= -0.35 && h <= 1.85 && terrainDeltaGrid[idx] > -0.68) {
+          terrainDeltaGrid[idx] = Math.max(-0.68, terrainDeltaGrid[idx] - sandErode);
+          terrainWetnessGrid[idx] = Math.min(1.0, terrainWetnessGrid[idx] + 0.16);
+          terrainLoosenessGrid[idx] = Math.min(1.0, terrainLoosenessGrid[idx] + 0.08);
+          this.markDirtyArea(vx, vz, TERRAIN_STEP * 1.5);
+          erodedVolumeDelta += sandErode;
+          this.totalErodedVolume += sandErode;
+          dirtyVertices = true;
         }
       }
     }
@@ -414,13 +527,14 @@ export class VolumetricTerrainEngine {
         }
       }
       // Rainstorm hillslope runoff droplets near player
-      if (isRaining && this.droplets.length < 180) {
-        for (let k = 0; k < 3; k++) {
-          const rx = playerX + (Math.random() - 0.5) * 56;
-          const rz = playerZ + (Math.random() - 0.5) * 56;
+      if (isRaining && this.droplets.length < (isStorming ? 220 : 180)) {
+        const runoffCount = isStorming ? 6 : 3;
+        for (let k = 0; k < runoffCount; k++) {
+          const rx = playerX + (Math.random() - 0.5) * 64;
+          const rz = playerZ + (Math.random() - 0.5) * 64;
           const { h, gx, gz } = this.sampleHeightAndGradient(rx, rz);
-          if (h > 4.2 && Math.hypot(gx, gz) > 0.25) {
-            this.spawnDroplet(rx, rz, -gx * 1.4, -gz * 1.4, 0.6, 4.5);
+          if (h > 3.2 && Math.hypot(gx, gz) > 0.2) {
+            this.spawnDroplet(rx, rz, -gx * 1.6, -gz * 1.6, isStorming ? 0.8 : 0.6, 5.0);
           }
         }
       }
@@ -630,10 +744,37 @@ export class VolumetricTerrainEngine {
       this.waterInstancedMesh.instanceColor.needsUpdate = true;
     }
 
+    // 8. Update Instanced Rainwater Puddles pooled in basins & depressions
+    let puddleIdx = 0;
+    for (let iz = 2; iz < TERRAIN_VERTS - 2 && puddleIdx < this.maxPuddleVisuals; iz += 2) {
+      const vz = -TERRAIN_HALF + iz * TERRAIN_STEP;
+      if (Math.abs(vz - playerZ) > 85) continue;
+      for (let ix = 2; ix < TERRAIN_VERTS - 2 && puddleIdx < this.maxPuddleVisuals; ix += 2) {
+        const vx = -TERRAIN_HALF + ix * TERRAIN_STEP;
+        if (Math.abs(vx - playerX) > 85) continue;
+        const idx = iz * TERRAIN_VERTS + ix;
+        const depth = terrainPuddleGrid[idx];
+        if (depth > 0.18) {
+          const h = getBaseTerrainHeight(vx, vz) + terrainDeltaGrid[idx];
+          const sc = 0.65 + depth * 0.95;
+          _dummy.position.set(vx, h + 0.045, vz);
+          _dummy.rotation.set(0, ((ix * 7 + iz * 13) % 6) * 0.5, 0);
+          _dummy.scale.set(sc, 1, sc * 0.88);
+          _dummy.updateMatrix();
+          this.puddleInstancedMesh.setMatrixAt(puddleIdx, _dummy.matrix);
+          puddleIdx++;
+        }
+      }
+    }
+    this.activePuddleCount = puddleIdx;
+    this.puddleInstancedMesh.count = puddleIdx;
+    this.puddleInstancedMesh.instanceMatrix.needsUpdate = true;
+
     return {
       dirtyVertices,
       avalanches,
       erodedVolumeDelta,
+      puddleCount: puddleIdx,
     };
   }
 
@@ -720,5 +861,8 @@ export class VolumetricTerrainEngine {
     scene.remove(this.waterInstancedMesh);
     this.waterInstancedMesh.geometry.dispose();
     (this.waterInstancedMesh.material as THREE.Material).dispose();
+    scene.remove(this.puddleInstancedMesh);
+    this.puddleInstancedMesh.geometry.dispose();
+    (this.puddleInstancedMesh.material as THREE.Material).dispose();
   }
 }

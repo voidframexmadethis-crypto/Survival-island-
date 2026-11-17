@@ -6,6 +6,7 @@ import {
   ArrowDownToLine,
   Axe,
   Backpack,
+  Box,
   Car,
   ChevronDown,
   ChevronLeft,
@@ -47,11 +48,13 @@ import {
   Terminal,
   Thermometer,
   Trophy,
+  Tv,
+  Users,
   Utensils,
   Waves,
   Zap,
 } from 'lucide-react';
-import { ITEMS, isActiveWeaponItem, isAmmoItem } from '@/game/data/items';
+import { ITEMS, isActiveWeaponItem, isAmmoItem, isFirearmItem } from '@/game/data/items';
 import { STAGE_1_MISSIONS } from '@/game/data/missions';
 import { GameEngine } from '@/game/engine/GameEngine';
 import {
@@ -85,6 +88,8 @@ import {
   PauseModal,
   SettingsModal,
 } from './MissionsAndPauseModals';
+import { ModManagerModal } from './ModManagerModal';
+import { MultiplayerModal } from './MultiplayerModal';
 import { PlaceModal } from './PlaceModal';
 import { TouchControls } from './TouchControls';
 import { TvPlayerModal } from './TvPlayerModal';
@@ -128,6 +133,7 @@ export function SurvivalGameClient() {
   const [hudSlotJumpInput, setHudSlotJumpInput] = useState('');
   const [draggingHudSlot, setDraggingHudSlot] = useState<number | null>(null);
   const [hudDropHover, setHudDropHover] = useState(false);
+  const [inviteRoomCode, setInviteRoomCode] = useState('');
 
   const refreshSaves = useCallback(() => {
     setSaveSlots(listSaveSlots());
@@ -156,6 +162,11 @@ export function SurvivalGameClient() {
         navigator.maxTouchPoints > 0 ||
         window.matchMedia('(pointer: coarse)').matches;
       setIsTouchDevice(hasTouch);
+      const roomParam = new URLSearchParams(window.location.search).get('room');
+      if (roomParam) {
+        setInviteRoomCode(roomParam.trim().toUpperCase());
+        setActiveModal('multiplayer');
+      }
     });
     return () => window.cancelAnimationFrame(id);
   }, [refreshSaves]);
@@ -472,17 +483,36 @@ export function SurvivalGameClient() {
       {/* MAIN MENU / TITLE SCREEN OVERLAY */}
       {screen === 'menu' && (
         <div className="relative z-10 w-full h-full flex flex-col justify-between p-5 sm:p-10 bg-gradient-to-t from-stone-950/90 via-stone-950/40 to-stone-950/70 overflow-y-auto survival-scroll">
-          <div className="flex items-center justify-between safe-top">
+          <div className="flex flex-wrap items-center justify-between gap-2 safe-top">
             <div className="text-xs font-semibold tracking-wider text-amber-300 uppercase">
               AdventureForgeGames · Stage 1 Final Polish
             </div>
-            <button
-              onClick={() => setActiveModal('settings')}
-              className="min-h-[44px] px-4 rounded-xl bg-stone-900/90 hover:bg-stone-800 border border-stone-700 text-stone-100 text-xs font-semibold flex items-center gap-2 whitespace-nowrap shrink-0"
-            >
-              <Settings className="w-4 h-4" />
-              <span>Settings</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveModal('multiplayer')}
+                className="min-h-[44px] px-3.5 rounded-xl bg-sky-950/90 hover:bg-sky-900 border border-sky-500/50 text-sky-200 text-xs font-semibold flex items-center gap-2 whitespace-nowrap shrink-0"
+              >
+                <Users className="w-4 h-4" />
+                <span>Multiplayer{hud?.multiplayerState?.roomCode ? ` (${hud.multiplayerState.roomCode})` : ''}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveModal('mods')}
+                className="min-h-[44px] px-3.5 rounded-xl bg-emerald-950/90 hover:bg-emerald-900 border border-emerald-500/50 text-emerald-200 text-xs font-semibold flex items-center gap-2 whitespace-nowrap shrink-0"
+              >
+                <Box className="w-4 h-4" />
+                <span>Mods</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveModal('settings')}
+                className="min-h-[44px] px-4 rounded-xl bg-stone-900/90 hover:bg-stone-800 border border-stone-700 text-stone-100 text-xs font-semibold flex items-center gap-2 whitespace-nowrap shrink-0"
+              >
+                <Settings className="w-4 h-4" />
+                <span>Settings</span>
+              </button>
+            </div>
           </div>
 
           <div className="max-w-3xl space-y-6 my-auto py-6">
@@ -900,8 +930,18 @@ export function SurvivalGameClient() {
               />
               <HudIconButton
                 icon={<Car className="w-5 h-5" />}
-                label="Vehicles"
+                label="Garage"
                 onClick={() => openModal('vehicles')}
+              />
+              <HudIconButton
+                icon={<Users className="w-5 h-5" />}
+                label={hud.multiplayerState?.connected ? `${1 + (hud.multiplayerState.peers?.length ?? 0)} Online` : 'P2P'}
+                onClick={() => openModal('multiplayer')}
+              />
+              <HudIconButton
+                icon={<Box className="w-5 h-5" />}
+                label="Mods"
+                onClick={() => openModal('mods')}
               />
               <HudIconButton
                 icon={<Terminal className="w-5 h-5" />}
@@ -930,6 +970,12 @@ export function SurvivalGameClient() {
                   <span>Sheltered</span>
                 </div>
               )}
+              {hud.cozyComfort?.active && (
+                <div className="px-2.5 py-0.5 rounded-lg bg-amber-950/90 border border-amber-500/65 text-[11px] font-medium text-amber-200 flex items-center gap-1.5">
+                  <Tv className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Cozy Base · {hud.cozyComfort.label}</span>
+                </div>
+              )}
               {hud.nearFire && (
                 <div className="px-2.5 py-0.5 rounded-lg bg-orange-950/85 border border-orange-700/60 text-[11px] font-medium text-orange-200 flex items-center gap-1.5">
                   <Flame className="w-3.5 h-3.5" />
@@ -955,12 +1001,18 @@ export function SurvivalGameClient() {
                   </span>
                 </div>
               )}
-              {hud.terrainSummary && hud.terrainSummary.activeWaterStreams > 0 && (
-                <div className="px-2.5 py-0.5 rounded-lg bg-sky-950/85 border border-sky-700/70 text-[11px] font-medium text-sky-200 flex items-center gap-1.5">
-                  <Waves className="w-3.5 h-3.5 text-sky-400" />
-                  <span>Fluid Erosion Active</span>
-                </div>
-              )}
+              {hud.terrainSummary &&
+                (hud.terrainSummary.activeWaterStreams > 0 ||
+                  (hud.terrainSummary.puddleCount ?? 0) > 0) && (
+                  <div className="px-2.5 py-0.5 rounded-lg bg-sky-950/85 border border-sky-700/70 text-[11px] font-medium text-sky-200 flex items-center gap-1.5 font-mono-tabular">
+                    <Waves className="w-3.5 h-3.5 text-sky-400" />
+                    <span>
+                      {hud.terrainSummary.activeWaterStreams > 0
+                        ? `Fluid Erosion${(hud.terrainSummary.puddleCount ?? 0) > 0 ? ` · ${hud.terrainSummary.puddleCount} Puddles` : ''}`
+                        : `Rainwater Pooling (${hud.terrainSummary.puddleCount})`}
+                    </span>
+                  </div>
+                )}
               {hud.momentumState?.wallRunning && (
                 <div className="px-2.5 py-0.5 rounded-lg bg-emerald-950/90 border border-emerald-500/80 text-[11px] font-bold text-emerald-200 flex items-center gap-1.5">
                   <Footprints className="w-3.5 h-3.5 text-emerald-300" />
@@ -1093,6 +1145,8 @@ export function SurvivalGameClient() {
                   : null;
               const eqDef = eqId && countOf(eqId) > 0 ? ITEMS[eqId] : null;
               const weaponActive = isActiveWeaponItem(eqDef?.id);
+              const gunState =
+                eqDef && isFirearmItem(eqDef.id) ? hud.equippedWeaponState : null;
               const dirtyBottleCount = countOf('dirty_water_bottle');
               const filteredBottleCount = countOf('filtered_water_bottle');
               return (
@@ -1104,10 +1158,34 @@ export function SurvivalGameClient() {
                         <span className="font-semibold text-amber-300">
                           {eqDef.name}
                         </span>
-                        {eqDef.id === 'gun' ? (
-                          <span className="text-stone-400 font-mono-tabular">
-                            · DMG {eqDef.attackDamage} · {countOf('ammo')} rds
-                          </span>
+                        {gunState ? (
+                          <div className="flex items-center gap-2 font-mono-tabular">
+                            <span
+                              className={
+                                gunState.magCurrent === 0
+                                  ? 'text-red-400 font-bold'
+                                  : 'text-stone-200 font-bold'
+                              }
+                            >
+                              {gunState.magCurrent}/{gunState.magMax}
+                            </span>
+                            <span className="text-stone-400">
+                              / {gunState.reserveAmmo} · {gunState.caliberLabel}
+                            </span>
+                            {gunState.isReloading && (
+                              <span className="inline-flex items-center gap-1.5 text-amber-300">
+                                <span>Reloading</span>
+                                <span className="w-12 h-1.5 rounded-full bg-stone-800 overflow-hidden inline-block">
+                                  <span
+                                    className="block h-full bg-amber-400 transition-all duration-75"
+                                    style={{
+                                      width: `${Math.round(gunState.reloadProgress * 100)}%`,
+                                    }}
+                                  />
+                                </span>
+                              </span>
+                            )}
+                          </div>
                         ) : eqDef.id === 'primitive_bow' ? (
                           <span className="text-stone-400 font-mono-tabular">
                             · DMG {eqDef.attackDamage} · {countOf('arrows')} arrows
@@ -1132,6 +1210,21 @@ export function SurvivalGameClient() {
                       </span>
                     )}
                   </div>
+                  {gunState &&
+                    !gunState.isReloading &&
+                    gunState.magCurrent < gunState.magMax &&
+                    gunState.reserveAmmo > 0 && (
+                      <button
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={() => engineRef.current?.reloadEquippedWeapon()}
+                        className="px-2.5 py-1 rounded-lg bg-amber-950/90 hover:bg-amber-600 hover:text-stone-950 border border-amber-500/70 text-amber-200 font-bold text-[11px] shadow-md flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors"
+                        title="Reload firearm (R)"
+                      >
+                        <RotateCw className="w-3.5 h-3.5" />
+                        <span>Reload [R]</span>
+                      </button>
+                    )}
                   {!showTouchControls && (
                     <button
                       type="button"
@@ -1577,6 +1670,9 @@ export function SurvivalGameClient() {
           onJoystickMove={(x, y) => engineRef.current?.setTouchJoystick(x, y)}
           onCameraDrag={(dx, dy) => engineRef.current?.addCameraLookDelta(dx, dy)}
           onAction={() => engineRef.current?.triggerPrimaryAction()}
+          showReload={Boolean(hud.equippedWeaponState)}
+          isReloading={Boolean(hud.equippedWeaponState?.isReloading)}
+          onReload={() => engineRef.current?.reloadEquippedWeapon()}
           onJump={() => engineRef.current?.triggerJump()}
           onKickDebris={() => engineRef.current?.triggerDebrisKick()}
           kickCooldown={hud.momentumState?.kickCooldown ?? 0}
@@ -1759,11 +1855,76 @@ export function SurvivalGameClient() {
         <VehicleBuilderModal
           onClose={closeModal}
           onSpawnVehicle={(v) => engineRef.current?.spawnCustomVehicle(v)}
+          vehicles={hud.vehicles}
+          onCustomizeVehicle={(vid, patch) =>
+            engineRef.current?.customizeVehicle(vid, patch)
+          }
+          onParkInGarage={(vid, bay) =>
+            engineRef.current?.parkVehicleInGarage(vid, bay)
+          }
           playerInventory={hud.inventory}
           playerX={hud.playerX}
           playerY={hud.playerY}
           playerZ={hud.playerZ}
           playerYaw={hud.playerYaw}
+        />
+      )}
+
+      {activeModal === 'multiplayer' && (
+        <MultiplayerModal
+          mpState={hud?.multiplayerState}
+          chatLog={hud?.multiplayerState?.chatLog ?? []}
+          initialJoinCode={inviteRoomCode}
+          onCreateRoom={(name) =>
+            engineRef.current?.createMultiplayerRoom(name) ?? Promise.resolve(null)
+          }
+          onJoinRoom={(code, name) =>
+            engineRef.current?.joinMultiplayerRoom(code, name) ?? Promise.resolve(false)
+          }
+          onLeaveRoom={() => engineRef.current?.leaveMultiplayerRoom()}
+          onUpdateName={(name) => engineRef.current?.setMultiplayerName(name)}
+          onTogglePvp={(enabled) => engineRef.current?.setPvpEnabled(enabled)}
+          onSendChat={(text) => engineRef.current?.sendMultiplayerChat(text)}
+          onClose={closeModal}
+        />
+      )}
+
+      {activeModal === 'mods' && (
+        <ModManagerModal
+          modState={hud?.modState}
+          onSetTweaks={(partial) => engineRef.current?.setModTweaks(partial)}
+          onResetTweaks={() => engineRef.current?.resetModTweaks()}
+          onImportModelFile={(file) =>
+            engineRef.current
+              ? engineRef.current.importModModelFile(file)
+              : Promise.reject(new Error('Engine not initialized'))
+          }
+          onImportModelUrl={(url) =>
+            engineRef.current
+              ? engineRef.current.importModModelUrl(url)
+              : Promise.reject(new Error('Engine not initialized'))
+          }
+          onUpdateAssetTransform={(assetId, patch) =>
+            engineRef.current?.updateModAssetTransform(assetId, patch)
+          }
+          onRemoveAsset={(assetId) => engineRef.current?.removeModAsset(assetId)}
+          onLoadScriptUrl={(url, name) =>
+            engineRef.current
+              ? engineRef.current.loadModScriptUrl(url, name)
+              : Promise.reject(new Error('Engine not initialized'))
+          }
+          onAddScript={(name, code) =>
+            engineRef.current!.addModScript(name, code)
+          }
+          onToggleScript={(scriptId, enabled) =>
+            engineRef.current?.toggleModScript(scriptId, enabled)
+          }
+          onRemoveScript={(scriptId) => engineRef.current?.removeModScript(scriptId)}
+          onExportBundle={() => engineRef.current?.exportModAndBuildBundle()}
+          onImportBundle={(bundle) =>
+            engineRef.current?.importModAndBuildBundle(bundle)
+          }
+          onClose={closeModal}
         />
       )}
 

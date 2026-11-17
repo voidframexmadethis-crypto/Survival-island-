@@ -15,6 +15,7 @@ import {
   LAKE_CENTER,
   SNOWY_WOODLAND_POS,
   SWAMP_POS,
+  VEHICLE_GARAGE_POS,
   WATERFALL_POS,
   WHEATFIELD_POS,
   getBiomeAt,
@@ -67,11 +68,18 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
           const inHouse =
             Math.abs(wx - HILL_HOUSE_POS.x) < 5.6 &&
             Math.abs(wz - HILL_HOUSE_POS.z) < 4.6;
+          const inGarage =
+            Math.abs(wx - VEHICLE_GARAGE_POS.x) < 7.2 &&
+            Math.abs(wz - VEHICLE_GARAGE_POS.z) < 5.2;
 
           if (inHouse) {
             r = 165;
             g = 96;
             b = 58;
+          } else if (inGarage) {
+            r = 100;
+            g = 116;
+            b = 139;
           } else if (dWheat < 7.8) {
             r = 212;
             g = 172;
@@ -148,6 +156,7 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
       { label: 'Wheatfield', pos: WHEATFIELD_POS, color: '#facc15' },
       { label: 'Farmer Market', pos: FARMER_POS, color: '#4ade80' },
       { label: 'Hilltop House', pos: HILL_HOUSE_POS, color: '#fb923c' },
+      { label: 'Vehicle Garage', pos: VEHICLE_GARAGE_POS, color: '#38bdf8' },
       { label: 'Azure Lake', pos: LAKE_CENTER, color: '#2dd4bf' },
     ];
     ctx.font = '600 10px sans-serif';
@@ -177,13 +186,28 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
       const p = toPx(s.x, s.z);
       ctx.fillStyle =
         s.species === 'trex' ||
+        s.species === 'spinosaurus' ||
+        s.species === 'allosaurus' ||
+        s.species === 'dilophosaurus' ||
         s.species === 'velociraptor' ||
         s.species === 'grizzly_bear' ||
+        s.species === 'polar_bear' ||
         s.species === 'gray_wolf' ||
         s.species === 'african_lion' ||
+        s.species === 'tiger' ||
+        s.species === 'cheetah' ||
+        s.species === 'hyena' ||
+        s.species === 'great_white_shark' ||
         s.species === 'saltwater_crocodile'
           ? '#ef4444'
-          : s.species === 'dolphin' || s.species === 'bald_eagle'
+          : s.species === 'dolphin' ||
+              s.species === 'sea_turtle' ||
+              s.species === 'manta_ray' ||
+              s.species === 'bald_eagle' ||
+              s.species === 'peregrine_falcon' ||
+              s.species === 'pteranodon' ||
+              s.species === 'toucan' ||
+              s.species === 'flamingo'
             ? '#38bdf8'
             : '#a3e635';
       ctx.beginPath();

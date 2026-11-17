@@ -8,11 +8,13 @@ import {
 } from '../systems/smartTvSystem';
 import {
   FARM_SHOP_STOCK,
+  FIREARM_SPECS,
   ITEMS,
   ITEM_SELL_PRICES,
   SEED_SPECS,
   isActiveWeaponItem,
   isAmmoItem,
+  isFirearmItem,
   isSeedItem,
 } from '../data/items';
 import { STAGE_1_MISSIONS } from '../data/missions';
@@ -49,6 +51,12 @@ import {
   worldToGrid,
 } from '../systems/structuralPhysics';
 import { VolumetricTerrainEngine } from '../systems/terrainPhysics';
+import { ModSystemManager } from '../systems/modManager';
+import {
+  P2PMultiplayerManager,
+  P2PPacket,
+  RemoteAnimState,
+} from '../systems/p2pMultiplayer';
 import {
   ActiveModal,
   ActiveVehicleHudState,
@@ -59,7 +67,10 @@ import {
   CampStructureType,
   CarcassSaveData,
   CreatureSpecies,
+  CustomModAsset,
+  CustomModScript,
   DEFAULT_HUD_BAR_SLOTS,
+  FirearmReloadMode,
   GameMode,
   GameSaveData,
   GameSettings,
@@ -69,6 +80,8 @@ import {
   ItemDefinition,
   ItemId,
   MAX_HUD_BAR_SLOTS,
+  ModExportBundle,
+  ModGameplayTweaks,
   TOTAL_BACKPACK_COMPARTMENTS,
   KineticHudSummary,
   KineticNode,
@@ -102,12 +115,14 @@ import {
 } from '../world/engineeringModels';
 import {
   HouseStationTarget,
+  RemotePlayerMeshHandle,
   createCampStructureModel,
   createCarcassMesh,
   createCropPlantMesh,
   createFirstPersonHandsRig,
   createPickupMesh,
   createPowderKegMesh,
+  createRemotePlayerMesh,
   createSailingShipModel,
   createSkyCelestialBodies,
   createStructuralBlockMesh,
@@ -129,6 +144,7 @@ import {
   PLAYER_SPAWN,
   SNOWY_WOODLAND_POS,
   SWAMP_POS,
+  VEHICLE_GARAGE_POS,
   WHEATFIELD_POS,
   exportSparseTerrainDeltas,
   getBiomeAt,
@@ -142,6 +158,7 @@ import {
 import {
   buildIslandWorld,
   CaveCeilingCluster,
+  ShipwreckChestHandle,
   WorldHandles,
 } from '../world/worldBuilder';
 
@@ -260,6 +277,14 @@ export class GameEngine {
   private nightVisionLight!: THREE.PointLight;
   private hemiLight!: THREE.HemisphereLight;
   private world!: WorldHandles;
+  private shipwreckChests: (ShipwreckChestHandle & {
+    opened: boolean;
+    lootTable: [ItemId, number][];
+  })[] = [];
+  private armoryChestState!: ShipwreckChestHandle & {
+    opened: boolean;
+    lootTable: [ItemId, number][];
+  };
   private skyBodies!: SkyCelestialHandles;
   private handsRig!: FirstPersonHandsRig;
   private shipModel!: THREE.Group;
@@ -305,6 +330,13 @@ export class GameEngine {
   private swingTimer = 0;
   private actionCooldown = 0;
   private recoilTimer = 0;
+  private weaponMagazines = new Map<ItemId, number>();
+  private reloadingItemId: ItemId | null = null;
+  private reloadTimer = 0;
+  private reloadDuration = 0;
+  private reloadMode: FirearmReloadMode | null = null;
+  private cozyComfortActive = false;
+  private cozyComfortLabel = '';
   private eatTimer = 0;
   private eatBiteCount = 0;
   private drinkTimer = 0;
@@ -503,6 +535,29 @@ export class GameEngine {
   private gravityScale = 1.0;
   private erosionSpeedMult = 1.0;
 
+  // Native P2P Multiplayer & In-Game Mod System
+  private p2p!: P2PMultiplayerManager;
+  private modSystem!: ModSystemManager;
+  private remotePlayers = new Map<
+    string,
+    {
+      name: string;
+      handle: RemotePlayerMeshHandle;
+      targetX: number;
+      targetY: number;
+      targetZ: number;
+      targetYaw: number;
+      anim: RemoteAnimState;
+      vehicleId: string | null;
+      biome: string;
+      walkPhase: number;
+    }
+  >();
+  private p2pStateSendAccum = 0;
+  private p2pVehicleSyncAccum = 0;
+  private p2pChatLog: { peerId: string; name: string; text: string; time: number }[] = [];
+  private hydraulicBounceTimer = 0;
+
   constructor(
     container: HTMLElement,
     settings: GameSettings,
@@ -514,6 +569,7 @@ export class GameEngine {
     this.sound.configure(settings);
 
     this.initScene();
+    this.initMultiplayerAndMods();
     this.setupInputs();
     this.startNewWorldState('slot_1', false);
     this.mode = 'menu';
@@ -643,6 +699,72 @@ export class GameEngine {
     this.world = buildIslandWorld(this.scene, this.renderer);
     this.world.resourceNodes.forEach((n) => this.nodeById.set(n.id, n));
     this.terrainEngine = new VolumetricTerrainEngine(this.scene);
+
+    const chestLootMap: Record<string, [ItemId, number][]> = {
+      deck: [
+        ['glock_19', 1],
+        ['colt_m1911', 1],
+        ['ammo', 90],
+        ['roasted_meat', 5],
+        ['filtered_water_bottle', 4],
+        ['gold_bar', 5],
+      ],
+      cargo: [
+        ['remington_870', 1],
+        ['mossberg_590', 1],
+        ['sawed_off', 1],
+        ['glock_19', 1],
+        ['desert_eagle', 1],
+        ['ammo', 140],
+        ['roasted_meat', 6],
+      ],
+      armory: [
+        ['ak_47', 1],
+        ['m4a1', 1],
+        ['scar_h', 1],
+        ['fn_fal', 1],
+        ['mp5', 1],
+        ['vector', 1],
+        ['uzi', 1],
+        ['space_gem', 4],
+        ['ammo', 180],
+      ],
+      captain: [
+        ['barrett_50', 1],
+        ['remington_700', 1],
+        ['m249_saw', 1],
+        ['magnum_44', 1],
+        ['desert_eagle', 1],
+        ['gold_bar', 15],
+        ['diamond', 5],
+        ['ruby', 5],
+        ['emerald', 5],
+        ['sapphire', 5],
+        ['space_crystal', 6],
+        ['captain_key', 1],
+        ['nautical_map', 1],
+        ['navigation_sextant', 1],
+        ['ammo', 220],
+      ],
+    };
+
+    this.shipwreckChests = (this.world.shipwreckChests || []).map((ch) => ({
+      ...ch,
+      opened: false,
+      lootTable: chestLootMap[ch.id] || chestLootMap.deck,
+    }));
+
+    this.armoryChestState = {
+      ...this.world.armoryChest,
+      opened: false,
+      lootTable: [
+        ['glock_19', 1],
+        ['remington_870', 1],
+        ['m4a1', 1],
+        ['ammo', 120],
+        ['gold_bar', 3],
+      ],
+    };
 
     // Initialize Persistent Native 3D CanvasTexture Smart TV OS
     this.smartTv = new SmartTvSystem();
@@ -786,7 +908,17 @@ export class GameEngine {
         this.dismantleNearbyKineticNode();
       }
     } else if (e.code === 'KeyR') {
-      this.rotateBuildPiece();
+      const eqId = this.getEquippedItemId();
+      if (
+        eqId &&
+        isFirearmItem(eqId) &&
+        !ITEMS[eqId].structuralKind &&
+        !ITEMS[eqId].kineticKind
+      ) {
+        this.reloadEquippedWeapon();
+      } else {
+        this.rotateBuildPiece();
+      }
     } else if (e.code === 'Digit0' || e.code === 'Backquote') {
       this.selectHotbarSlot(-1);
     } else if (e.code.startsWith('Digit')) {
@@ -896,13 +1028,30 @@ export class GameEngine {
   public triggerJump(): void {
     this.sound.unlock();
     if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
+    if (this.activeVehicleId) {
+      const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
+      if (av && (av.hydraulicHop || av.preset === 'lowrider')) {
+        const floorY = Math.max(
+          getTerrainHeight(av.x, av.z),
+          this.getStructuralSurfaceY(av.x, av.z, av.y + 0.8),
+        );
+        if (av.y <= floorY + 0.35) {
+          av.vy = 5.8;
+          this.hydraulicBounceTimer = 0.32;
+          this.sound.playSteamHiss();
+          this.spawnParticles(av.x, av.y + 0.3, av.z, 0xfbbf24, 8);
+        }
+      }
+      return;
+    }
     if (this.seatedState) {
       this.standUp();
       return;
     }
+    const jumpMult = this.modSystem?.tweaks.jumpMultiplier ?? 1;
     if (this.wallRunTimer > 0) {
       // Wall-Kick Leap off vertical wall!
-      this.playerVelY = 9.0;
+      this.playerVelY = 9.0 * jumpMult;
       this.playerX += this.wallRunNormX * 1.15;
       this.playerZ += this.wallRunNormZ * 1.15;
       this.wallRunTimer = 0;
@@ -919,7 +1068,7 @@ export class GameEngine {
       return;
     }
     if (this.grounded && !this.isSwimming) {
-      this.playerVelY = 7.4;
+      this.playerVelY = 7.4 * jumpMult;
       this.grounded = false;
     }
   }
@@ -969,10 +1118,11 @@ export class GameEngine {
       ['captain_key', 1],
       ['ammo', 120],
     ];
-    this.spawnWorldPickupsFromGrants(wreckX, wreckZ, treasureDrops, 0, 0);
+    this.spawnWorldPickupsFromGrants(-6.8, 128.0, treasureDrops.slice(0, 8), 0, 0);
+    this.spawnWorldPickupsFromGrants(-5.5, 133.0, treasureDrops.slice(8), 0, 0);
 
     this.toast(
-      'SHIPWRECK BEACHED IN SHALLOW WATER! Search chests for Real-Life Firearms (Glocks, AK-47, Barrett .50, Shotguns & LMG).',
+      'SHIPWRECK BEACHED! 4 Unlocked Loot Chests on ship & shoreline (Shotguns, Rifles, Barrett .50, Glocks & Ammo)!',
       'discovery',
     );
     this.emitHud();
@@ -993,6 +1143,10 @@ export class GameEngine {
   public selectHotbarSlot(index: number): void {
     if (index === -1 || (index >= 0 && index < this.hotbarItemIds.length)) {
       this.equippedSlot = index;
+      const nextEq = this.getEquippedItemId();
+      if (this.reloadingItemId && nextEq !== this.reloadingItemId) {
+        this.cancelReload();
+      }
       this.emitHud();
     }
   }
@@ -1463,6 +1617,26 @@ export class GameEngine {
       'stone_arch',
     ];
     this.equippedSlot = 0;
+    this.weaponMagazines.clear();
+    this.cancelReload();
+    this.shipwreckChests.forEach((ch) => {
+      ch.opened = false;
+      ch.lidGroup.rotation.x = 0;
+      if (ch.glowMesh?.material) {
+        const mat = ch.glowMesh.material as THREE.MeshBasicMaterial;
+        mat.opacity = 0.45;
+        mat.color.setHex(0xfacc15);
+      }
+    });
+    if (this.armoryChestState) {
+      this.armoryChestState.opened = false;
+      this.armoryChestState.lidGroup.rotation.x = 0;
+      if (this.armoryChestState.glowMesh?.material) {
+        const mat = this.armoryChestState.glowMesh.material as THREE.MeshBasicMaterial;
+        mat.opacity = 0.42;
+        mat.color.setHex(0x10b981);
+      }
+    }
 
     resetTerrainDeformation();
     this.terrainEngine.clearAll();
@@ -1622,6 +1796,30 @@ export class GameEngine {
     this.discoveredLocations = new Set(save.discoveredLocations || []);
     this.completedMissionIds = new Set(save.completedMissionIds || []);
     this.stats = { ...this.createEmptyStats(), ...save.stats };
+    this.weaponMagazines.clear();
+    this.cancelReload();
+    if (save.weaponMagazines) {
+      Object.entries(save.weaponMagazines).forEach(([id, mag]) => {
+        const itemId = id as ItemId;
+        const spec = FIREARM_SPECS[itemId];
+        if (spec && typeof mag === 'number') {
+          this.weaponMagazines.set(
+            itemId,
+            THREE.MathUtils.clamp(Math.floor(mag), 0, spec.magSize),
+          );
+        }
+      });
+    }
+    if (this.armoryChestState) {
+      const opened = Boolean(save.baseArmoryOpened);
+      this.armoryChestState.opened = opened;
+      this.armoryChestState.lidGroup.rotation.x = opened ? -Math.PI * 0.45 : 0;
+      if (this.armoryChestState.glowMesh?.material) {
+        const mat = this.armoryChestState.glowMesh.material as THREE.MeshBasicMaterial;
+        mat.opacity = opened ? 0.12 : 0.42;
+        mat.color.setHex(0x10b981);
+      }
+    }
     this.cinematicActive = false;
     this.cinematicSubtitle = '';
     this.shipModel.visible = false;
@@ -1809,6 +2007,16 @@ export class GameEngine {
       existingAmmo.quantity = 60;
     }
 
+    // Initialize magazines for any owned firearms
+    this.inventory.forEach((slot) => {
+      if (isFirearmItem(slot.itemId) && !this.weaponMagazines.has(slot.itemId)) {
+        const spec = FIREARM_SPECS[slot.itemId];
+        if (spec) {
+          this.weaponMagazines.set(slot.itemId, spec.magSize);
+        }
+      }
+    });
+
     // 4. Ensure diverse baseline materials if missing (e.g. older save files)
     if (forceEquip) {
       this.ensureStarterMaterials();
@@ -1878,7 +2086,7 @@ export class GameEngine {
     // Update hands rig mesh immediately so equipped tool/gun is visible in hands
     if (this.handsRig) {
       const eqId = this.getEquippedItemId();
-      const isGun = eqId === 'gun';
+      const isGun = isFirearmItem(eqId);
       const hasWeaponOrTool = Boolean(
         eqId &&
           (isActiveWeaponItem(eqId) ||
@@ -2176,6 +2384,8 @@ export class GameEngine {
       tvIsMuted: this.smartTv.isMuted,
       tvAutoCycle: this.smartTv.autoCycleChannels,
       tvPaused: this.smartTv.isPaused,
+      weaponMagazines: Object.fromEntries(this.weaponMagazines.entries()),
+      baseArmoryOpened: Boolean(this.armoryChestState?.opened),
     };
   }
 
@@ -2535,6 +2745,7 @@ export class GameEngine {
         def.structureType === 'cooking_station',
     };
     this.spawnStructure(st);
+    this.p2p?.broadcast({ type: 'place_structure', structure: st });
     this.sound.playCraftSuccess();
     this.toast(`Built ${def.name}`, 'craft');
     this.evaluateMissions();
@@ -2873,7 +3084,7 @@ export class GameEngine {
       this.toast('Find dry soil or tilled farm plots to plant seeds', 'warning');
       return false;
     }
-    if (Math.hypot(tx - HILL_HOUSE_POS.x, tz - HILL_HOUSE_POS.z) < 6.5) {
+    if (Math.hypot(tx - HILL_HOUSE_POS.x, tz - HILL_HOUSE_POS.z) < 8.5) {
       this.toast('Step outside the house onto soil to plant crops', 'warning');
       return false;
     }
@@ -2950,7 +3161,9 @@ export class GameEngine {
         this.camYaw = sitYaw;
         this.playerYaw = sitYaw + Math.PI;
         this.camPitch = -0.02;
-        this.toast('Sat on the living room sofa facing the TV', 'info');
+        this.vitals.stamina = Math.min(this.vitals.maxStamina, this.vitals.stamina + 18);
+        this.vitals.temperatureC = Math.max(this.vitals.temperatureC, 37.0);
+        this.toast('Sat on the living room sofa facing the Smart TV (Cozy Lounge active)', 'info');
         this.emitHud();
         break;
       }
@@ -3026,6 +3239,159 @@ export class GameEngine {
     }
   }
 
+  private handleShipwreckInteraction(near: NearbyInteraction): void {
+    if (near.id.startsWith('shipwreck_chest_')) {
+      const chestId = near.id.replace('shipwreck_chest_', '');
+      const chest = this.shipwreckChests.find((c) => c.id === chestId);
+      if (!chest) return;
+
+      if (!chest.opened) {
+        chest.opened = true;
+        // Animate lid open
+        chest.lidGroup.rotation.x = -Math.PI * 0.45;
+        // Fade aura beacon
+        if (chest.glowMesh && chest.glowMesh.material) {
+          (chest.glowMesh.material as THREE.MeshBasicMaterial).opacity = 0.12;
+          (chest.glowMesh.material as THREE.MeshBasicMaterial).color.setHex(0x10b981);
+        }
+
+        this.sound.playWeldSnap();
+        this.sound.playCraftSuccess();
+        this.spawnParticles(chest.x, chest.y + 0.6, chest.z, 0xeab308, 30);
+
+        chest.lootTable.forEach(([id, qty]) => {
+          this.addItem(id, qty, true);
+        });
+
+        this.spawnWorldPickupsFromGrants(
+          chest.x,
+          chest.z,
+          chest.lootTable.slice(0, 4),
+          0.3,
+          0.3,
+        );
+
+        const primaryGunId = chest.lootTable[0][0];
+        const primaryGunName = ITEMS[primaryGunId]?.name || 'Firearm Arsenal';
+        this.toast(
+          `UNLOCKED ${chest.name.toUpperCase()}! Acquired ${primaryGunName} & full ammunition loadout.`,
+          'discovery',
+          primaryGunId,
+          1,
+        );
+
+        this.stats.shipwreckCratesSearched += 1;
+        this.evaluateMissions();
+      } else {
+        // Bonus ammo on subsequent searches
+        this.addItem('ammo', 30, true);
+        this.sound.playPickup();
+        this.spawnParticles(chest.x, chest.y + 0.4, chest.z, 0x38bdf8, 12);
+        this.toast(
+          `Salvaged 30x spare cartridges from ${chest.name}!`,
+          'gain',
+          'ammo',
+          30,
+        );
+      }
+      this.actionCooldown = 0.35;
+      this.emitHud();
+      return;
+    }
+
+    if (near.id === 'search_shipwreck') {
+      const unopened = this.shipwreckChests.find((c) => !c.opened);
+      if (unopened) {
+        this.handleShipwreckInteraction({
+          ...near,
+          id: `shipwreck_chest_${unopened.id}`,
+        });
+        return;
+      }
+
+      this.addItem('ammo', 40, true);
+      this.sound.playPickup();
+      this.toast(
+        'Shipwreck fully salvaged! Gathered 40x extra ammunition cartridges.',
+        'gain',
+        'ammo',
+        40,
+      );
+      this.actionCooldown = 0.35;
+      this.emitHud();
+      return;
+    }
+  }
+
+  private handleArmoryChestInteraction(): void {
+    const chest = this.armoryChestState;
+    if (!chest) return;
+
+    if (!chest.opened) {
+      chest.opened = true;
+      chest.lidGroup.rotation.x = -Math.PI * 0.45;
+      if (chest.glowMesh && chest.glowMesh.material) {
+        (chest.glowMesh.material as THREE.MeshBasicMaterial).opacity = 0.14;
+        (chest.glowMesh.material as THREE.MeshBasicMaterial).color.setHex(0x10b981);
+      }
+
+      this.sound.playWeldSnap();
+      this.sound.playCraftSuccess();
+      this.spawnParticles(chest.x, chest.y + 0.6, chest.z, 0x10b981, 26);
+
+      chest.lootTable.forEach(([id, qty]) => {
+        this.addItem(id, qty, true);
+        if (isFirearmItem(id)) {
+          const spec = FIREARM_SPECS[id];
+          if (spec) this.weaponMagazines.set(id, spec.magSize);
+        }
+      });
+
+      this.toast(
+        'OPENED BASE ARMORY CHEST! Equipped Glock 19, Remington 870, M4A1 & 120x Ammo!',
+        'discovery',
+        'm4a1',
+        1,
+      );
+    } else {
+      this.addItem('ammo', 25, true);
+      this.sound.playPickup();
+      this.spawnParticles(chest.x, chest.y + 0.4, chest.z, 0x38bdf8, 12);
+      this.toast('Resupplied 25x cartridges from Base Armory Chest', 'gain', 'ammo', 25);
+    }
+    this.actionCooldown = 0.35;
+    this.emitHud();
+  }
+
+  private handleGarageBenchInteraction(): void {
+    const garageVehicles = this.vehicles.filter(
+      (v) => Math.hypot(v.x - VEHICLE_GARAGE_POS.x, v.z - VEHICLE_GARAGE_POS.z) <= 14.5,
+    );
+    let serviced = 0;
+    for (const v of garageVehicles) {
+      if (v.hp < v.maxHp || v.fuel < 98) {
+        v.hp = v.maxHp;
+        v.fuel = 100;
+        serviced++;
+        this.spawnParticles(v.x, v.y + 1.0, v.z, 0x38bdf8, 12);
+      }
+    }
+
+    if (serviced > 0) {
+      this.sound.playWeldSnap();
+      this.sound.playCraftSuccess();
+      this.toast(
+        `Garage Workbench serviced ${serviced} parked vehicle${serviced > 1 ? 's' : ''} (100% Fuel & Armor)`,
+        'craft',
+      );
+      this.actionCooldown = 0.4;
+      this.emitHud();
+      return;
+    }
+
+    this.callbacks.onOpenStation('vehicles', 'garage_bench');
+  }
+
   public triggerPrimaryAction(): void {
     this.sound.unlock();
     if (
@@ -3034,6 +3400,21 @@ export class GameEngine {
       this.cinematicActive ||
       this.actionCooldown > 0
     ) {
+      return;
+    }
+
+    // Prioritize Shipwreck Chests, Base Armory Chest & Vehicle Garage Bench regardless of held tool/gun
+    const near = this.nearbyInteraction;
+    if (near && near.kind === 'shipwreck') {
+      this.handleShipwreckInteraction(near);
+      return;
+    }
+    if (near && near.kind === 'armory_chest') {
+      this.handleArmoryChestInteraction();
+      return;
+    }
+    if (near && near.kind === 'garage_bench') {
+      this.handleGarageBenchInteraction();
       return;
     }
 
@@ -3063,8 +3444,8 @@ export class GameEngine {
           return;
         }
       }
-      if (equippedId === 'gun') {
-        this.fireGun();
+      if (isFirearmItem(equippedId)) {
+        this.fireGun(equippedId);
         return;
       }
       if (equippedId === 'primitive_bow') {
@@ -3254,32 +3635,9 @@ export class GameEngine {
     }
 
     // 8. BARE HANDS (empty slot or Hands mode): Handles world interactions cleanly
-    const near = this.nearbyInteraction;
     if (near) {
       if (near.kind === 'shipwreck') {
-        const treasureGrants: [ItemId, number][] = [
-          ['gold_bar', 8],
-          ['diamond', 3],
-          ['sapphire', 4],
-          ['ruby', 4],
-          ['emerald', 3],
-          ['iron_ingot', 12],
-          ['space_crystal', 4],
-          ['space_gem', 2],
-          ['nautical_map', 1],
-          ['navigation_sextant', 1],
-          ['captain_key', 1],
-          ['pirate_musket', 1],
-          ['ammo', 60],
-        ];
-        treasureGrants.forEach(([id, qty]) => {
-          this.addItem(id, qty);
-        });
-        this.sound.playCraftSuccess();
-        this.spawnParticles(0, this.playerY + 0.8, 104, 0xeab308, 25);
-        this.toast('Explored Shipwreck Zones (Cargo Hold, Vault & Captain’s Quarters)! Acquired Gold, Gems, Nautical Map & Pirate Musket!', 'discovery');
-        this.actionCooldown = 0.5;
-        this.emitHud();
+        this.handleShipwreckInteraction(near);
         return;
       }
       if (near.kind === 'mount') {
@@ -3554,9 +3912,10 @@ export class GameEngine {
     sourceLabel: string,
     extraOptions?: { snareSeconds?: number; stunSeconds?: number; knockback?: number },
   ): void {
+    const dmgMult = this.modSystem?.tweaks.damageMultiplier ?? 1;
     const resolution = resolveWeaponZoneHit(
       weaponClass,
-      baseDamage,
+      Math.round(baseDamage * dmgMult),
       zone,
       c.zoneArmor,
       isGapSlip,
@@ -3584,6 +3943,13 @@ export class GameEngine {
         knockback: totalKb,
       },
     );
+    this.p2p?.broadcast({
+      type: 'creature_damage',
+      creatureId: c.id,
+      damage: resolution.hpDamage,
+      fromX: this.playerX,
+      fromZ: this.playerZ,
+    });
 
     const name = c.displayNameOverride || c.spec.displayName;
     if (res.shatteredZone) {
@@ -3750,75 +4116,265 @@ export class GameEngine {
     });
   }
 
-  private fireGun(): void {
-    const ammoCount = this.getItemCount('ammo');
-    if (ammoCount <= 0) {
-      this.toast(
-        'Fired emergency reserve cartridge! Craft ammo from Stone + Flint.',
-        'warning',
-      );
-    } else {
-      this.removeItem('ammo', 1);
+  private cancelReload(): void {
+    this.reloadingItemId = null;
+    this.reloadTimer = 0;
+    this.reloadDuration = 0;
+    this.reloadMode = null;
+  }
+
+  public reloadEquippedWeapon(): void {
+    if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
+    const eqId = this.getEquippedItemId();
+    if (!eqId || !isFirearmItem(eqId)) return;
+    const spec = FIREARM_SPECS[eqId];
+    if (!spec) return;
+
+    if (this.reloadingItemId === eqId) return;
+
+    const currentMag = this.weaponMagazines.get(eqId) ?? spec.magSize;
+    if (currentMag >= spec.magSize) {
+      this.toast(`${ITEMS[eqId].name} magazine is already full.`, 'info');
+      return;
     }
 
-    this.sound.playAttack('gun');
-    this.recoilTimer = 0.22;
-    this.actionCooldown = 0.28;
-    this.swingTimer = 0.22;
+    const reserve = this.getItemCount('ammo');
+    if (reserve <= 0) {
+      this.sound.playDryFire();
+      this.toast(
+        'No reserve ammunition! Craft Ammo or loot the Base Armory / Shipwreck.',
+        'warning',
+      );
+      return;
+    }
+
+    this.reloadingItemId = eqId;
+    this.reloadMode = spec.reloadMode;
+    this.reloadDuration = spec.reloadTime;
+    this.reloadTimer = spec.reloadTime;
+    this.sound.playReloadClick(spec.reloadMode === 'single');
+    this.emitHud();
+  }
+
+  private tickReload(dt: number): void {
+    if (!this.reloadingItemId) return;
+    if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) {
+      this.cancelReload();
+      return;
+    }
+
+    const eqId = this.getEquippedItemId();
+    if (eqId !== this.reloadingItemId) {
+      this.cancelReload();
+      this.emitHud();
+      return;
+    }
+
+    const spec = FIREARM_SPECS[this.reloadingItemId];
+    if (!spec) {
+      this.cancelReload();
+      return;
+    }
+
+    this.reloadTimer -= dt;
+    if (this.reloadTimer > 0) return;
+
+    const currentMag = this.weaponMagazines.get(this.reloadingItemId) ?? 0;
+    const reserve = this.getItemCount('ammo');
+    if (reserve <= 0 || currentMag >= spec.magSize) {
+      this.cancelReload();
+      this.emitHud();
+      return;
+    }
+
+    if (spec.reloadMode === 'single') {
+      this.removeItem('ammo', 1);
+      const nextMag = currentMag + 1;
+      this.weaponMagazines.set(this.reloadingItemId, nextMag);
+      this.sound.playReloadClick(true);
+
+      if (nextMag < spec.magSize && this.getItemCount('ammo') > 0) {
+        this.reloadDuration = spec.reloadTime;
+        this.reloadTimer = spec.reloadTime;
+      } else {
+        this.cancelReload();
+      }
+      this.emitHud();
+      return;
+    }
+
+    const needed = Math.min(spec.magSize - currentMag, reserve);
+    if (needed > 0) {
+      this.removeItem('ammo', needed);
+      this.weaponMagazines.set(this.reloadingItemId, currentMag + needed);
+      this.sound.playReloadClick(false);
+    }
+    this.cancelReload();
+    this.emitHud();
+  }
+
+  private fireGun(weaponId: ItemId = 'gun'): void {
+    const spec = FIREARM_SPECS[weaponId] ?? FIREARM_SPECS['gun'];
+    if (!spec) return;
+    if (!this.weaponMagazines.has(weaponId)) {
+      this.weaponMagazines.set(weaponId, spec.magSize);
+    }
+    const magAmmo = this.weaponMagazines.get(weaponId) ?? 0;
+
+    if (this.reloadingItemId === weaponId) {
+      if (this.reloadMode === 'single' && magAmmo > 0) {
+        this.cancelReload();
+      } else {
+        return;
+      }
+    }
+
+    if (magAmmo <= 0) {
+      this.sound.playDryFire();
+      this.actionCooldown = 0.22;
+      if (this.getItemCount('ammo') > 0) {
+        this.reloadEquippedWeapon();
+      } else {
+        this.toast(
+          'Empty! Out of reserve Ammo — loot Base Armory, Shipwreck, or Craft Ammo.',
+          'warning',
+        );
+      }
+      return;
+    }
+
+    this.weaponMagazines.set(weaponId, magAmmo - 1);
+    this.sound.playGunshot(spec.soundProfile);
+    this.recoilTimer = Math.min(0.28, Math.max(0.14, spec.fireRate * 0.85));
+    this.actionCooldown = spec.fireRate;
+    this.swingTimer = Math.min(0.24, Math.max(0.14, spec.fireRate));
 
     // Camera recoil kick (upward pitch with smooth spring recovery)
-    this.camPitch = Math.min(1.2, this.camPitch + 0.045);
+    this.camPitch = Math.min(1.2, this.camPitch + spec.recoil);
 
-    // Aim forward direction from camera pitch and yaw
-    const dir = new THREE.Vector3(0, 0, -1).applyEuler(
+    const baseDir = new THREE.Vector3(0, 0, -1).applyEuler(
       new THREE.Euler(this.camPitch, this.camYaw, 0, 'YXZ'),
     );
     const right = new THREE.Vector3(1, 0, 0).applyEuler(
       new THREE.Euler(0, this.camYaw, 0, 'YXZ'),
     );
+    const up = new THREE.Vector3().crossVectors(right, baseDir).normalize();
 
-    // Spawn at gun muzzle in front of camera
+    const barrelScale =
+      spec.soundProfile === 'sniper' || spec.soundProfile === 'musket'
+        ? 0.96
+        : spec.soundProfile === 'rifle' ||
+            spec.soundProfile === 'shotgun' ||
+            spec.soundProfile === 'lmg'
+          ? 0.86
+          : 0.72;
+
     const start = new THREE.Vector3(
-      this.playerX + dir.x * 0.72 + right.x * 0.18,
-      this.playerY + this.currentEyeHeight - 0.14 + dir.y * 0.72,
-      this.playerZ + dir.z * 0.72 + right.z * 0.18,
+      this.playerX + baseDir.x * barrelScale + right.x * 0.18,
+      this.playerY + this.currentEyeHeight - 0.14 + baseDir.y * barrelScale,
+      this.playerZ + baseDir.z * barrelScale + right.z * 0.18,
     );
 
     // Muzzle flash particle burst + smoke
-    this.spawnParticles(start.x, start.y, start.z, 0xffd700, 10);
+    this.spawnParticles(start.x, start.y, start.z, 0xffd700, spec.pelletCount > 1 ? 14 : 10);
     this.spawnParticles(
-      start.x + dir.x * 0.1,
+      start.x + baseDir.x * 0.1,
       start.y + 0.04,
-      start.z + dir.z * 0.1,
+      start.z + baseDir.z * 0.1,
       0xd4d4d8,
       4,
     );
 
-    // High velocity tracer bullet projectile
-    const bulletMesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.018, 0.018, 0.42, 6),
-      new THREE.MeshStandardMaterial({
-        color: 0xfef08a,
-        emissive: 0xf59e0b,
-        emissiveIntensity: 0.9,
-        roughness: 0.2,
-      }),
-    );
-    bulletMesh.quaternion.setFromUnitVectors(
-      new THREE.Vector3(0, 1, 0),
-      dir.clone().normalize(),
-    );
-    bulletMesh.position.copy(start);
-    this.scene.add(bulletMesh);
+    const bulletLife = Math.max(0.8, spec.range / Math.max(40, spec.muzzleSpeed));
+    const pellets = Math.max(1, spec.pelletCount);
 
-    this.arrows.push({
-      mesh: bulletMesh,
-      pos: start,
-      vel: dir.clone().normalize().multiplyScalar(115),
-      life: 2.0,
-      damage: 85,
-      isBullet: true,
+    for (let p = 0; p < pellets; p++) {
+      const pelletDir = baseDir.clone();
+      if (spec.spread > 0) {
+        const yawSpread = (Math.random() - 0.5) * 2 * spec.spread;
+        const pitchSpread = (Math.random() - 0.5) * 2 * spec.spread;
+        pelletDir.addScaledVector(right, yawSpread);
+        pelletDir.addScaledVector(up, pitchSpread);
+      }
+      pelletDir.normalize();
+
+      const bulletMesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(
+          spec.soundProfile === 'sniper' ? 0.024 : 0.017,
+          spec.soundProfile === 'sniper' ? 0.024 : 0.017,
+          spec.soundProfile === 'sniper' ? 0.58 : 0.38,
+          6,
+        ),
+        new THREE.MeshStandardMaterial({
+          color: 0xfef08a,
+          emissive: 0xf59e0b,
+          emissiveIntensity: 0.9,
+          roughness: 0.2,
+        }),
+      );
+      bulletMesh.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0),
+        pelletDir,
+      );
+      bulletMesh.position.copy(start);
+      this.scene.add(bulletMesh);
+
+      this.arrows.push({
+        mesh: bulletMesh,
+        pos: start.clone(),
+        vel: pelletDir.multiplyScalar(spec.muzzleSpeed),
+        life: bulletLife,
+        damage: spec.damage,
+        isBullet: true,
+      });
+    }
+
+    this.p2p?.broadcast({
+      type: 'combat_shot',
+      peerId: this.p2p.localPeerId,
+      fromX: start.x,
+      fromY: start.y,
+      fromZ: start.z,
+      toX: start.x + baseDir.x * Math.min(48, spec.range),
+      toY: start.y + baseDir.y * Math.min(48, spec.range),
+      toZ: start.z + baseDir.z * Math.min(48, spec.range),
+      weaponId,
     });
+
+    if (this.p2p?.connected && this.p2p.pvpEnabled) {
+      const hitDmg = Math.round(spec.damage * (this.modSystem?.tweaks.damageMultiplier ?? 1));
+      for (const [peerId, rp] of this.remotePlayers.entries()) {
+        const dVecX = rp.targetX - start.x;
+        const dVecY = rp.targetY + 1.0 - start.y;
+        const dVecZ = rp.targetZ - start.z;
+        const along = dVecX * baseDir.x + dVecY * baseDir.y + dVecZ * baseDir.z;
+        if (along > 0.5 && along < spec.range) {
+          const px = start.x + baseDir.x * along - rp.targetX;
+          const py = start.y + baseDir.y * along - (rp.targetY + 1.0);
+          const pz = start.z + baseDir.z * along - rp.targetZ;
+          if (Math.hypot(px, py, pz) < 0.72) {
+            this.p2p.broadcast({
+              type: 'player_hit',
+              targetPeerId: peerId,
+              damage: hitDmg,
+              attackerName: this.p2p.playerName,
+            });
+            this.spawnParticles(rp.targetX, rp.targetY + 1.1, rp.targetZ, 0xef4444, 10);
+            this.toast(`Hit ${rp.name} (${hitDmg} DMG)`, 'info');
+            break;
+          }
+        }
+      }
+    }
+
+    if (
+      magAmmo - 1 === 0 &&
+      spec.reloadMode === 'magazine' &&
+      this.getItemCount('ammo') > 0
+    ) {
+      this.reloadEquippedWeapon();
+      return;
+    }
 
     this.emitHud();
   }
@@ -4025,7 +4581,13 @@ export class GameEngine {
       species === 'triceratops' ||
       species === 'stegosaurus' ||
       species === 'brachiosaurus' ||
-      species === 'parasaurolophus'
+      species === 'parasaurolophus' ||
+      species === 'spinosaurus' ||
+      species === 'ankylosaurus' ||
+      species === 'allosaurus' ||
+      species === 'dilophosaurus' ||
+      species === 'diplodocus' ||
+      species === 'pteranodon'
     );
   }
 
@@ -4298,7 +4860,10 @@ export class GameEngine {
       const isFieldCrop =
         node.kind === 'wheat_patch' || node.kind === 'sugarcane_patch';
       node.respawnTimer = isTree || isRock ? 95 : isFieldCrop ? 26 : 65;
-      const grants = this.getResourceYield(node.kind, equippedTool?.id);
+      const yieldMult = Math.max(1, Math.round(this.modSystem?.tweaks.gatherYieldMultiplier ?? 1));
+      const grants = this.getResourceYield(node.kind, equippedTool?.id).map(
+        ([id, q]) => [id, Math.round(q * yieldMult)] as [ItemId, number],
+      );
 
       if (isTree) {
         const dx = node.x - this.playerX;
@@ -4574,8 +5139,9 @@ export class GameEngine {
 
   private updateWeatherAndAtmosphere(dt: number): void {
     if (this.mode === 'playing' && !this.gameOver && !this.cinematicActive) {
-      // Full day-night cycle every 5 minutes so players experience all phases smoothly
-      this.timeOfDay += dt / 300;
+      // Full day-night cycle scaled by mod dayLengthMultiplier
+      const dayLenMult = Math.max(0.2, this.modSystem?.tweaks.dayLengthMultiplier ?? 1);
+      this.timeOfDay += dt / (300 * dayLenMult);
       if (this.timeOfDay >= 1) {
         this.timeOfDay -= 1;
         this.dayCount += 1;
@@ -4907,6 +5473,7 @@ export class GameEngine {
     if (this.actionCooldown > 0) this.actionCooldown -= dt;
     if (this.swingTimer > 0) this.swingTimer -= dt;
     if (this.recoilTimer > 0) this.recoilTimer -= dt;
+    this.tickReload(dt);
     if (this.kickCooldown > 0) this.kickCooldown = Math.max(0, this.kickCooldown - dt);
     if (this.wallRunCooldown > 0) this.wallRunCooldown = Math.max(0, this.wallRunCooldown - dt);
     if (this.eatTimer > 0) {
@@ -5012,9 +5579,17 @@ export class GameEngine {
       );
     }
 
-    // Shelter, Fire & Body Temperature Calculation
+    // Shelter, Fire, Cozy Base Living & Body Temperature Calculation
     const inHilltopHouse =
-      Math.hypot(this.playerX - HILL_HOUSE_POS.x, this.playerZ - HILL_HOUSE_POS.z) < 6.4;
+      Math.hypot(this.playerX - HILL_HOUSE_POS.x, this.playerZ - HILL_HOUSE_POS.z) < 6.8;
+    const nearPlacedSmartTv =
+      this.smartTv.power &&
+      this.structures.some(
+        (s) =>
+          s.type === 'smart_tv' &&
+          Math.hypot(s.x - this.playerX, s.z - this.playerZ) < 6.5,
+      );
+    const sittingOnSofa = this.seatedState?.label === 'Relaxing on Sofa';
     const sheltered =
       inHilltopHouse ||
       this.structures.some(
@@ -5028,27 +5603,47 @@ export class GameEngine {
         Math.hypot(s.x - this.playerX, s.z - this.playerZ) < 8,
     );
 
+    const cozyActive = inHilltopHouse || sittingOnSofa || nearPlacedSmartTv;
+    this.cozyComfortActive = cozyActive;
+    this.cozyComfortLabel =
+      (inHilltopHouse && this.smartTv.power) || nearPlacedSmartTv || sittingOnSofa
+        ? 'Smart TV Lounge'
+        : cozyActive
+          ? 'Hilltop Sanctuary'
+          : '';
+
+    if (cozyActive && !this.isSprinting) {
+      this.vitals.stamina = Math.min(
+        this.vitals.maxStamina,
+        this.vitals.stamina + dt * 7,
+      );
+    }
+
     const sunElev = Math.sin((this.timeOfDay - 0.25) * Math.PI * 2);
     const isNight = sunElev < -0.05;
 
     let targetTemp = 37.0;
-    if (isNight) targetTemp -= 1.5;
-    if (this.weather === 'rain') targetTemp -= 1.3;
-    if (this.weather === 'storm') targetTemp -= 2.6;
-    if (this.isSwimming) targetTemp -= 2.4;
-    if (sheltered) targetTemp += 1.8;
-    if (nearFire) targetTemp += 3.8;
-    if (this.isSprinting) targetTemp += 0.6;
+    if (cozyActive) {
+      targetTemp = nearFire ? 37.2 : 37.0;
+    } else {
+      if (isNight) targetTemp -= 1.5;
+      if (this.weather === 'rain') targetTemp -= 1.3;
+      if (this.weather === 'storm') targetTemp -= 2.6;
+      if (this.isSwimming) targetTemp -= 2.4;
+      if (sheltered) targetTemp += 1.8;
+      if (nearFire) targetTemp += 3.8;
+      if (this.isSprinting) targetTemp += 0.6;
+    }
     targetTemp = THREE.MathUtils.clamp(targetTemp, 31.5, 37.8);
     this.vitals.temperatureC = THREE.MathUtils.damp(
       this.vitals.temperatureC,
       targetTemp,
-      0.16,
+      cozyActive ? 0.45 : 0.16,
       dt,
     );
 
     // Survival needs drain
-    const drainScale = sheltered ? 0.55 : 1.0;
+    const drainScale = cozyActive ? 0.35 : sheltered ? 0.55 : 1.0;
     this.vitals.hunger = Math.max(
       0,
       this.vitals.hunger -
@@ -5086,17 +5681,18 @@ export class GameEngine {
     const standingSurfaceY = Math.max(terrainY, deckY);
     this.isSwimming = standingSurfaceY < waterLevel - 0.45;
 
-    let baseSpeed = this.isSwimming
-      ? 4.2
-      : this.wallRunTimer > 0
-        ? 11.4
-        : this.isSprinting
-          ? 9.4
-          : this.isCrouching
-            ? 3.1
-            : inputMag > 0.65
-              ? 6.0
-              : 3.4;
+    let baseSpeed =
+      (this.isSwimming
+        ? 4.2
+        : this.wallRunTimer > 0
+          ? 11.4
+          : this.isSprinting
+            ? 9.4
+            : this.isCrouching
+              ? 3.1
+              : inputMag > 0.65
+                ? 6.0
+                : 3.4) * (this.modSystem?.tweaks.moveSpeedMultiplier ?? 1);
 
     if (inputMag > 0.08) {
       const fwdX = -Math.sin(this.camYaw);
@@ -5150,8 +5746,9 @@ export class GameEngine {
         nextZ *= PLAYABLE_MAX_RADIUS / rad;
       }
 
-      // Collision detection (skip depleted rocks/crates; tighten radius on felled stumps)
+      // Collision detection (skip depleted rocks/crates; tighten radius on felled stumps; bypass shipwreck area)
       for (const col of this.world.colliders) {
+        if (Math.hypot(col.x - (-4), col.z - 135) < 14) continue;
         let activeRadius = col.radius;
         if (col.nodeId) {
           const node = this.nodeById.get(col.nodeId);
@@ -5251,6 +5848,7 @@ export class GameEngine {
         }
         // 2. Large cliff / cavern rock / house wall collider
         for (const col of this.world.colliders) {
+          if (Math.hypot(col.x - (-4), col.z - 135) < 14) continue;
           if (col.radius < 1.1) continue;
           const d = Math.hypot(px - col.x, pz - col.z);
           if (d <= col.radius + 0.45) {
@@ -5329,7 +5927,8 @@ export class GameEngine {
       }
       this.grounded = false;
     } else {
-      this.playerVelY -= 21 * dt;
+      const gravMult = this.gravityScale * (this.modSystem?.tweaks.gravityMultiplier ?? 1);
+      this.playerVelY -= 21 * gravMult * dt;
       this.playerY += this.playerVelY * dt;
       if (this.playerY <= newSurfaceY) {
         this.playerY = newSurfaceY;
@@ -5691,7 +6290,7 @@ export class GameEngine {
 
     const showConsumable =
       isEating || isDrinking || isWashing || isBottleEquipped || isFoodHeld;
-    const isGun = !showConsumable && eqId === 'gun';
+    const isGun = !showConsumable && isFirearmItem(eqId);
     const hasTool = Boolean(
       !showConsumable &&
         eqId &&
@@ -5703,6 +6302,24 @@ export class GameEngine {
 
     this.handsRig.toolGroup.visible = hasTool;
     this.handsRig.gunMesh.visible = isGun;
+    if (isGun && eqId) {
+      const gunSpec = FIREARM_SPECS[eqId];
+      if (gunSpec?.soundProfile === 'sniper' || gunSpec?.soundProfile === 'musket') {
+        this.handsRig.gunMesh.scale.set(1.06, 1.06, 1.85);
+      } else if (
+        gunSpec?.soundProfile === 'rifle' ||
+        gunSpec?.soundProfile === 'shotgun' ||
+        gunSpec?.soundProfile === 'lmg'
+      ) {
+        this.handsRig.gunMesh.scale.set(1.08, 1.08, 1.55);
+      } else if (gunSpec?.soundProfile === 'smg') {
+        this.handsRig.gunMesh.scale.set(1.04, 1.0, 1.24);
+      } else {
+        this.handsRig.gunMesh.scale.set(1, 1, 1);
+      }
+    } else {
+      this.handsRig.gunMesh.scale.set(1, 1, 1);
+    }
     this.handsRig.shaft.visible = !isGun && hasTool;
     this.handsRig.axeHead.visible =
       !isGun && (eqId === 'stone_axe' || eqId === 'stone_pickaxe' || eqId === 'excavator_shovel');
@@ -5810,14 +6427,16 @@ export class GameEngine {
         : 0;
 
     if (isGun) {
-      // Sturdy tactical two-handed sidearm hold with physical recoil kick
+      const reloadingTilt =
+        this.reloadingItemId && this.reloadingItemId === eqId ? 0.36 : 0;
+      // Sturdy tactical two-handed sidearm / rifle hold with recoil & reload dip
       this.handsRig.rightHand.position.set(
         0.2 + moveBobX * 0.5,
-        -0.21 - idleBob - moveBobY * 0.5 + recoil * 0.07,
+        -0.21 - idleBob - moveBobY * 0.5 + recoil * 0.07 - reloadingTilt * 0.14,
         -0.34 + recoil * 0.1,
       );
-      this.handsRig.rightHand.rotation.x = -recoil * 0.42;
-      this.handsRig.gunMesh.rotation.x = -recoil * 0.45;
+      this.handsRig.rightHand.rotation.x = -recoil * 0.42 - reloadingTilt;
+      this.handsRig.gunMesh.rotation.x = -recoil * 0.45 - reloadingTilt * 0.35;
 
       // Left stabilizing support hand cradling the grip base
       this.handsRig.leftHand.position.set(
@@ -5891,19 +6510,28 @@ export class GameEngine {
           };
         }
       }
-      if (equippedId === 'gun') {
-        const ammoCount = this.getItemCount('ammo');
-        return {
-          id: 'fire_gun',
-          label: 'Fire Survival Gun',
-          sublabel: ammoCount > 0 ? `${ammoCount} rds` : 'Emergency rd',
-          kind: 'gun_action',
-          actionCategory: 'shoot',
-          distance: 0,
-          targetX: this.playerX,
-          targetY: this.playerY,
-          targetZ: this.playerZ,
-        };
+      if (isFirearmItem(equippedId)) {
+        const spec = FIREARM_SPECS[equippedId] ?? FIREARM_SPECS['gun'];
+        if (spec) {
+          const magAmmo = this.weaponMagazines.get(equippedId) ?? spec.magSize;
+          const ammoCount = this.getItemCount('ammo');
+          const reloading = this.reloadingItemId === equippedId;
+          return {
+            id: `fire_${equippedId}`,
+            label: reloading
+              ? `Reloading ${equippedDef.name}`
+              : `Fire ${equippedDef.name}`,
+            sublabel: reloading
+              ? `${magAmmo}/${spec.magSize} · Loading`
+              : `${magAmmo}/${spec.magSize} mag · ${ammoCount} reserve`,
+            kind: 'gun_action',
+            actionCategory: 'shoot',
+            distance: 0,
+            targetX: this.playerX,
+            targetY: this.playerY,
+            targetZ: this.playerZ,
+          };
+        }
       }
       if (equippedId === 'primitive_bow') {
         const arrowCount = this.getItemCount('arrows');
@@ -6410,19 +7038,99 @@ export class GameEngine {
     }
     if (best) return best;
 
-    // Check beached shipwreck wreckage at (0, 104)
-    const wreckDist = Math.hypot(0 - this.playerX, 104 - this.playerZ);
-    if (wreckDist < 5.2) {
-      return {
+    // 1A. Base Armory Chest & Vehicle Garage Bench near Hilltop House
+    if (this.armoryChestState) {
+      const ac = this.armoryChestState;
+      const dArmory = Math.hypot(ac.x - this.playerX, ac.z - this.playerZ);
+      if (dArmory < 4.2 && Math.abs(ac.y - this.playerY) < 3.0 && dArmory < bestDist) {
+        bestDist = dArmory;
+        best = {
+          id: 'base_armory_chest',
+          label: ac.opened
+            ? 'Resupply Base Armory Chest'
+            : 'Open Base Armory Supply Chest',
+          sublabel: ac.opened
+            ? 'Salvage 25x Reserve Cartridges'
+            : 'Glock 19, Remington 870, M4A1 & 120x Ammo',
+          kind: 'armory_chest',
+          actionCategory: 'search',
+          distance: dArmory,
+          targetX: ac.x,
+          targetY: ac.y,
+          targetZ: ac.z,
+        };
+      }
+    }
+
+    if (this.world?.garageBenchPos) {
+      const gb = this.world.garageBenchPos;
+      const dBench = Math.hypot(gb.x - this.playerX, gb.z - this.playerZ);
+      if (dBench < 4.2 && Math.abs(gb.y - this.playerY) < 3.0 && dBench < bestDist) {
+        bestDist = dBench;
+        const parkedNeedsService = this.vehicles.some(
+          (v) =>
+            Math.hypot(v.x - VEHICLE_GARAGE_POS.x, v.z - VEHICLE_GARAGE_POS.z) <= 14.5 &&
+            (v.hp < v.maxHp || v.fuel < 98),
+        );
+        best = {
+          id: 'garage_bench',
+          label: parkedNeedsService
+            ? 'Service & Refuel Garage Vehicles'
+            : 'Open Garage Vehicle Workshop',
+          sublabel: parkedNeedsService
+            ? 'Restore 100% Fuel & Hull Armor'
+            : 'Build, Customize & Spawn Rovers',
+          kind: 'garage_bench',
+          actionCategory: 'craft',
+          distance: dBench,
+          targetX: gb.x,
+          targetY: gb.y,
+          targetZ: gb.z,
+        };
+      }
+    }
+
+    // 1B. Shipwreck Loot Chests (unrestricted access across decks, cargo hold & cabins)
+    for (const chest of this.shipwreckChests) {
+      const d = Math.hypot(chest.x - this.playerX, chest.z - this.playerZ);
+      const dy = Math.abs(chest.y - this.playerY);
+      if (d < 4.5 && dy < 3.2 && d < bestDist) {
+        bestDist = d;
+        best = {
+          id: `shipwreck_chest_${chest.id}`,
+          label: chest.opened ? `Search ${chest.name}` : `Open ${chest.name}`,
+          sublabel: chest.opened ? 'Salvage Spare Ammo' : chest.sublabel,
+          kind: 'shipwreck',
+          actionCategory: 'search',
+          distance: d,
+          targetX: chest.x,
+          targetY: chest.y,
+          targetZ: chest.z,
+        };
+      }
+    }
+
+    // 1C. General Beached Shipwreck Area Check (at -4, 135)
+    const shipDist = Math.hypot(-4 - this.playerX, 135 - this.playerZ);
+    if (shipDist < 13.0 && shipDist < bestDist) {
+      const unopened = this.shipwreckChests.filter((c) => !c.opened).length;
+      bestDist = shipDist;
+      best = {
         id: 'search_shipwreck',
-        label: 'Search Beached Shipwreck & Collect Treasure',
-        sublabel: 'Gold, Diamonds, Rubies, Iron & Pirate Musket',
+        label:
+          unopened > 0
+            ? `Search Beached Shipwreck (${unopened}/4 Chests Unopened)`
+            : 'Search Beached Shipwreck (Fully Looted)',
+        sublabel:
+          unopened > 0
+            ? 'Collect Real-Life Firearms & Treasure'
+            : 'All 4 Chests Looted',
         kind: 'shipwreck',
         actionCategory: 'search',
-        distance: wreckDist,
-        targetX: 0,
-        targetY: getTerrainHeight(0, 104),
-        targetZ: 104,
+        distance: shipDist,
+        targetX: -4,
+        targetY: OCEAN_LEVEL + 0.5,
+        targetZ: 135,
       };
     }
 
@@ -7324,6 +8032,7 @@ export class GameEngine {
       cratersCarved: this.terrainEngine ? this.terrainEngine.cratersCarved : 0,
       activeWaterStreams: this.terrainEngine ? this.terrainEngine.getActiveStreamCount() : 0,
       erodedVolume: this.terrainEngine ? Math.round(this.terrainEngine.totalErodedVolume) : 0,
+      puddleCount: this.terrainEngine ? this.terrainEngine.activePuddleCount : 0,
     };
     const momentumState: MomentumHudState = {
       wallRunning: this.wallRunTimer > 0,
@@ -7499,10 +8208,56 @@ export class GameEngine {
           youtubeVideoId: this.smartTv.youtubeVideoId,
           youtubeTitle: this.smartTv.youtubeTitle,
           youtubeChannel: this.smartTv.youtubeChannel,
-          spatialVolume:
-            Math.round(this.smartTv.volume * this.smartTv.getSpatialMultiplier() * 100),
+            spatialVolume:
+              Math.round(this.smartTv.volume * this.smartTv.getSpatialMultiplier() * 100),
         };
       })(),
+      equippedWeaponState: (() => {
+        if (!eqDef || !isFirearmItem(eqDef.id)) return null;
+        const spec = FIREARM_SPECS[eqDef.id];
+        if (!spec) return null;
+        return {
+          itemId: eqDef.id,
+          magCurrent: this.weaponMagazines.get(eqDef.id) ?? spec.magSize,
+          magMax: spec.magSize,
+          reserveAmmo: this.getItemCount('ammo'),
+          isReloading: this.reloadingItemId === eqDef.id,
+          reloadProgress:
+            this.reloadingItemId === eqDef.id && this.reloadDuration > 0
+              ? Math.max(0, Math.min(1, 1 - this.reloadTimer / this.reloadDuration))
+              : 0,
+          reloadMode: spec.reloadMode,
+          caliberLabel: spec.caliberLabel,
+        };
+      })(),
+      cozyComfort: {
+        active: this.cozyComfortActive,
+        level: this.cozyComfortActive
+          ? this.smartTv.power || this.seatedState?.label === 'Relaxing on Sofa'
+            ? 2
+            : 1
+          : 0,
+        label: this.cozyComfortLabel,
+        warmProtected: this.cozyComfortActive,
+        tvActive:
+          this.cozyComfortActive &&
+          (this.smartTv.power || this.seatedState?.label === 'Relaxing on Sofa'),
+        restedBonus: this.cozyComfortActive,
+      },
+      garageSummary: (() => {
+        const parked = this.vehicles.filter(
+          (v) => Math.hypot(v.x - VEHICLE_GARAGE_POS.x, v.z - VEHICLE_GARAGE_POS.z) <= 13.5,
+        );
+        return {
+          parkedCount: parked.length,
+          damagedCount: parked.filter((v) => v.hp < v.maxHp).length,
+          needsFuelCount: parked.filter((v) => v.fuel < 98).length,
+        };
+      })(),
+      multiplayerState: this.p2p
+        ? { ...this.p2p.getStatusSnapshot(), chatLog: [...this.p2pChatLog] }
+        : undefined,
+      modState: this.modSystem?.getSnapshot(),
     });
   }
 
@@ -7511,6 +8266,8 @@ export class GameEngine {
     const dt = Math.min(0.05, this.clock.getDelta());
     this.elapsed += dt;
 
+    this.modSystem?.tick(dt);
+    this.updateMultiplayer(dt);
     this.updateWeatherAndAtmosphere(dt);
 
     const sunElev = Math.sin((this.timeOfDay - 0.25) * Math.PI * 2);
@@ -7619,6 +8376,17 @@ export class GameEngine {
         this.world.farmerHead.rotation.y = Math.sin(this.elapsed * 0.8) * 0.22;
       }
     }
+
+    // Rotate unlooted shipwreck chest & Base Armory beacon beams gently
+    for (const chest of this.shipwreckChests) {
+      if (chest.glowMesh && !chest.opened) {
+        chest.glowMesh.rotation.y += dt * 1.5;
+      }
+    }
+    if (this.armoryChestState?.glowMesh && !this.armoryChestState.opened) {
+      this.armoryChestState.glowMesh.rotation.y += dt * 1.5;
+    }
+
     // Update 3D Smart TV OS CanvasTexture & Sync CSS3DRenderer YouTube Frame onto the physical 3D TV screen
     this.smartTv.update(dt, {
       dayCount: this.dayCount,
@@ -7751,6 +8519,33 @@ export class GameEngine {
         }
       }
     }
+    // Shipwreck walkable deck surfaces (smooth elevation support, zero lateral collision barriers)
+    const distToShip = Math.hypot(x - (-4), z - 135);
+    if (distToShip < 14) {
+      // 1. Collapsed mast bridge & Forecastle deck (gentle ramp from shoreline up to upper deck)
+      if (z >= 124 && z <= 132 && x >= -9.0 && x <= -1.5) {
+        const rampT = (z - 124) / 8;
+        const rampY = (OCEAN_LEVEL + 0.15) * (1 - rampT) + (OCEAN_LEVEL + 0.85) * rampT;
+        if (footY >= rampY - 0.95 && rampY > bestY) {
+          bestY = rampY;
+        }
+      }
+      // 2. Mid Deck platform & Armory
+      if (z > 132 && z <= 138 && x >= -7.0 && x <= 0.5) {
+        const midDeckY = OCEAN_LEVEL + 0.95;
+        if (footY >= midDeckY - 0.95 && midDeckY > bestY) {
+          bestY = midDeckY;
+        }
+      }
+      // 3. Captain's Quarters (Aft Cabin at raised stern)
+      if (z > 138 && z <= 145 && x >= -5.5 && x <= 1.5) {
+        const aftDeckY = OCEAN_LEVEL + 1.75;
+        if (footY >= aftDeckY - 0.95 && aftDeckY > bestY) {
+          bestY = aftDeckY;
+        }
+      }
+    }
+
     return bestY;
   }
 
@@ -8038,6 +8833,7 @@ export class GameEngine {
       bucklingTimer: 0,
     };
     this.spawnStructuralBlockInstance(block);
+    this.p2p?.broadcast({ type: 'place_block', block });
     this.sound.playCraftSuccess();
     this.spawnParticles(block.x, block.y + 0.9, block.z, 0x94a3b8, 6);
 
@@ -8290,8 +9086,9 @@ export class GameEngine {
     if (this.creakCooldown > 0) this.creakCooldown = Math.max(0, this.creakCooldown - dt);
     if (this.trenchCooldown > 0) this.trenchCooldown = Math.max(0, this.trenchCooldown - dt);
 
-    // 1. Advance volumetric fluid erosion & slope avalanches
+    // 1. Advance volumetric fluid erosion, storm rainwater puddles & coastal sand erosion
     const isRaining = this.weather === 'rain' || this.weather === 'storm';
+    const isStorming = this.weather === 'storm';
     const erosionRes = this.terrainEngine.step(
       dt,
       this.world.terrainMesh,
@@ -8299,6 +9096,7 @@ export class GameEngine {
       isRaining,
       this.playerX,
       this.playerZ,
+      isStorming,
     );
     if (erosionRes.avalanches.length > 0) {
       for (const av of erosionRes.avalanches) {
@@ -8549,16 +9347,32 @@ export class GameEngine {
     }
 
     if (seedVehicles) {
-      const roverY = getTerrainHeight(-6.5, 106);
+      // Park the starter Expedition Rover in Vehicle Garage Bay A and West Coast Lowrider in Bay B
+      const bayAX = VEHICLE_GARAGE_POS.x - 3.1;
+      const bayAZ = VEHICLE_GARAGE_POS.z + 0.4;
+      const roverY = getTerrainHeight(bayAX, bayAZ) + 0.14;
       const rover = createVehicleFromPreset(
         'veh_starter_rover',
         'expedition_rover',
-        -6.5,
+        bayAX,
         roverY,
-        106,
-        Math.PI * 0.88,
+        bayAZ,
+        0,
       );
       this.spawnVehicleInstance(rover);
+
+      const bayBX = VEHICLE_GARAGE_POS.x + 3.1;
+      const bayBZ = VEHICLE_GARAGE_POS.z + 0.4;
+      const lowriderY = getTerrainHeight(bayBX, bayBZ) + 0.14;
+      const lowrider = createVehicleFromPreset(
+        'veh_starter_lowrider',
+        'lowrider',
+        bayBX,
+        lowriderY,
+        bayBZ,
+        0,
+      );
+      this.spawnVehicleInstance(lowrider);
 
       const boat = createVehicleFromPreset(
         'veh_starter_boat',
@@ -9038,6 +9852,7 @@ export class GameEngine {
       this.camYaw + Math.PI,
     );
     this.spawnVehicleInstance(v);
+    this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle: v });
     this.sound.playWeldSnap();
     this.spawnParticles(sx, sy + 1.0, sz, 0x38bdf8, 14);
     this.toast(`Welded & deployed ${v.name} nearby!`, 'craft', 'vehicle_chassis_kit', 1);
@@ -9081,6 +9896,7 @@ export class GameEngine {
         }
         this.scene.add(rebuilt.root);
         this.vehicleMeshes.set(existing.id, rebuilt);
+        this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle: existing });
         this.sound.playWeldSnap();
         this.toast(`Re-welded ${existing.name} (${specs.craftClass})!`, 'craft');
         this.emitHud();
@@ -9127,6 +9943,7 @@ export class GameEngine {
       cargoItems: [],
     };
     this.spawnVehicleInstance(created);
+    this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle: created });
     this.sound.playWeldSnap();
     this.spawnParticles(sx, sy + 1.0, sz, 0x38bdf8, 14);
     this.toast(`Welded ${created.name} (${specs.craftClass}) nearby!`, 'craft');
@@ -9362,11 +10179,13 @@ export class GameEngine {
     const isInWater = surfY < waterY - 0.28 && v.y <= waterY + 0.5;
     const airborne = specs.canFly && (this.vehicleAscendHold || v.y > Math.max(surfY, waterY) + 0.55);
 
-    const topSpeed = airborne
-      ? specs.topAirSpeed * boostMult * fuelMult
-      : isInWater
-        ? specs.topWaterSpeed * boostMult * fuelMult
-        : specs.topLandSpeed * boostMult * fuelMult;
+    const vSpeedMult = (v.turboBoost ?? 1) * (this.modSystem?.tweaks.vehicleSpeedMultiplier ?? 1);
+    const topSpeed =
+      (airborne
+        ? specs.topAirSpeed * boostMult * fuelMult
+        : isInWater
+          ? specs.topWaterSpeed * boostMult * fuelMult
+          : specs.topLandSpeed * boostMult * fuelMult) * vSpeedMult;
 
     // Braking / Throttle
     if (!specs.canFly && this.vehicleAscendHold) {
@@ -9612,8 +10431,76 @@ export class GameEngine {
     const handles = createModularVehicleMesh(vehicle);
     this.vehicleMeshes.set(vehicle.id, handles);
     this.scene.add(handles.root);
+    this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle });
     this.toast(`Spawned ${vehicle.name} in the world!`, 'discovery');
     this.emitHud();
+  }
+
+  public customizeVehicle(
+    vehicleId: string,
+    patch: {
+      name?: string;
+      paintColor?: string;
+      rimColor?: string;
+      suspensionOffset?: number;
+      wheelScale?: number;
+      hydraulicHop?: boolean;
+      turboBoost?: number;
+    },
+  ): boolean {
+    const v = this.vehicles.find((x) => x.id === vehicleId);
+    if (!v) return false;
+    if (patch.name !== undefined) v.name = patch.name.trim() || v.name;
+    if (patch.paintColor !== undefined) v.paintColor = patch.paintColor;
+    if (patch.rimColor !== undefined) v.rimColor = patch.rimColor;
+    if (patch.suspensionOffset !== undefined) v.suspensionOffset = patch.suspensionOffset;
+    if (patch.wheelScale !== undefined) v.wheelScale = patch.wheelScale;
+    if (patch.hydraulicHop !== undefined) v.hydraulicHop = patch.hydraulicHop;
+    if (patch.turboBoost !== undefined) v.turboBoost = patch.turboBoost;
+
+    const oldMesh = this.vehicleMeshes.get(v.id);
+    if (oldMesh) {
+      this.scene.remove(oldMesh.root);
+      this.disposeObject3D(oldMesh.root);
+    }
+    const rebuilt = createModularVehicleMesh(v);
+    rebuilt.root.position.set(v.x, v.y, v.z);
+    rebuilt.root.rotation.y = v.yaw;
+    for (const sw of rebuilt.steerWheels) {
+      sw.rotation.order = 'YXZ';
+    }
+    this.scene.add(rebuilt.root);
+    this.vehicleMeshes.set(v.id, rebuilt);
+    this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle: v });
+    this.sound.playWeldSnap();
+    this.spawnParticles(v.x, v.y + 0.8, v.z, 0xfbbf24, 10);
+    this.toast(`Customized ${v.name} in Garage Bay!`, 'craft');
+    this.emitHud();
+    return true;
+  }
+
+  public parkVehicleInGarage(vehicleId: string, bay: 'A' | 'B' | 'C' = 'A'): boolean {
+    const v = this.vehicles.find((x) => x.id === vehicleId);
+    if (!v) return false;
+    const offsetX = bay === 'A' ? -3.1 : bay === 'B' ? 3.1 : 0;
+    const offsetZ = bay === 'C' ? -5.8 : 0.4;
+    v.x = VEHICLE_GARAGE_POS.x + offsetX;
+    v.z = VEHICLE_GARAGE_POS.z + offsetZ;
+    v.y = getTerrainHeight(v.x, v.z) + 0.14;
+    v.vx = 0;
+    v.vy = 0;
+    v.vz = 0;
+    v.yaw = 0;
+    const vh = this.vehicleMeshes.get(v.id);
+    if (vh) {
+      vh.root.position.set(v.x, v.y, v.z);
+      vh.root.rotation.set(0, v.yaw, 0);
+    }
+    this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle: v });
+    this.sound.playWeldSnap();
+    this.toast(`Parked ${v.name} neatly in Garage Bay ${bay}`, 'info');
+    this.emitHud();
+    return true;
   }
 
   public executeConsoleCommand(cmdStr: string): void {
@@ -9689,18 +10576,75 @@ export class GameEngine {
     } else if (cmd === '/spawn') {
       const cx = this.playerX + Math.sin(this.playerYaw) * 6;
       const cz = this.playerZ + Math.cos(this.playerYaw) * 6;
-      if (arg === 'raptor' || arg === 'velociraptor') {
-        this.creatures.spawnWildAnimalAt('velociraptor', cx, cz);
-        this.toast('Spawned Velociraptor at crosshair', 'discovery');
-      } else if (arg === 'trex' || arg === 'tyrannosaurus') {
-        this.creatures.spawnWildAnimalAt('trex', cx, cz);
-        this.toast('Spawned Tyrannosaurus Rex at crosshair', 'discovery');
-      } else if (arg === 'triceratops') {
-        this.creatures.spawnWildAnimalAt('triceratops', cx, cz);
-        this.toast('Spawned Triceratops at crosshair', 'discovery');
-      } else if (arg === 'brachiosaurus') {
-        this.creatures.spawnWildAnimalAt('brachiosaurus', cx, cz);
-        this.toast('Spawned Brachiosaurus at crosshair', 'discovery');
+      const speciesAliases: Record<string, CreatureSpecies> = {
+        raptor: 'velociraptor',
+        velociraptor: 'velociraptor',
+        trex: 'trex',
+        tyrannosaurus: 'trex',
+        triceratops: 'triceratops',
+        stegosaurus: 'stegosaurus',
+        brachiosaurus: 'brachiosaurus',
+        parasaurolophus: 'parasaurolophus',
+        spinosaurus: 'spinosaurus',
+        spino: 'spinosaurus',
+        ankylosaurus: 'ankylosaurus',
+        allosaurus: 'allosaurus',
+        dilophosaurus: 'dilophosaurus',
+        diplodocus: 'diplodocus',
+        pteranodon: 'pteranodon',
+        elephant: 'elephant',
+        reindeer: 'reindeer',
+        giraffe: 'giraffe',
+        zebra: 'zebra',
+        rhino: 'rhinoceros',
+        rhinoceros: 'rhinoceros',
+        hippo: 'hippopotamus',
+        hippopotamus: 'hippopotamus',
+        tiger: 'tiger',
+        lion: 'african_lion',
+        african_lion: 'african_lion',
+        cheetah: 'cheetah',
+        hyena: 'hyena',
+        polarbear: 'polar_bear',
+        polar_bear: 'polar_bear',
+        moose: 'moose',
+        penguin: 'penguin',
+        gorilla: 'gorilla',
+        kangaroo: 'kangaroo',
+        camel: 'camel',
+        toucan: 'toucan',
+        flamingo: 'flamingo',
+        falcon: 'peregrine_falcon',
+        peregrine_falcon: 'peregrine_falcon',
+        ostrich: 'ostrich',
+        eagle: 'bald_eagle',
+        bald_eagle: 'bald_eagle',
+        owl: 'great_horned_owl',
+        wolf: 'gray_wolf',
+        bear: 'grizzly_bear',
+        fox: 'red_fox',
+        croc: 'saltwater_crocodile',
+        crocodile: 'saltwater_crocodile',
+        bison: 'bison',
+        deer: 'deer',
+        turtle: 'sea_turtle',
+        sea_turtle: 'sea_turtle',
+        shark: 'great_white_shark',
+        great_white_shark: 'great_white_shark',
+        manta: 'manta_ray',
+        manta_ray: 'manta_ray',
+        dolphin: 'dolphin',
+      };
+      const mappedSpecies = speciesAliases[arg];
+      if (mappedSpecies) {
+        this.creatures.spawnWildAnimalAt(mappedSpecies, cx, cz);
+        this.toast(`Spawned ${mappedSpecies.replace(/_/g, ' ')} at crosshair`, 'discovery');
+      } else if (arg === 'wildlife' || arg === 'safari') {
+        const herd: CreatureSpecies[] = ['elephant', 'reindeer', 'giraffe', 'zebra', 'tiger', 'spinosaurus', 'pteranodon'];
+        herd.forEach((sp, idx) => {
+          this.creatures.spawnWildAnimalAt(sp, cx + (idx - 3) * 3.2, cz + (idx % 2) * 3.5);
+        });
+        this.toast('Spawned Wild Safari & Dinosaur Herd!', 'discovery');
       } else if (arg === 'airship') {
         const v = createVehicleFromPreset('gyro_airship', 'gyro_airship', cx, this.playerY + 1.2, cz);
         this.spawnCustomVehicle(v);
@@ -9914,8 +10858,18 @@ export class GameEngine {
     c.rig.root.position.set(c.x, c.y, c.z);
     c.rig.root.rotation.y = c.yaw;
 
+    const seatHeight =
+      c.species === 'trex' ||
+      c.species === 'spinosaurus' ||
+      c.species === 'elephant' ||
+      c.species === 'brachiosaurus' ||
+      c.species === 'diplodocus'
+        ? 2.85
+        : c.species === 'giraffe' || c.species === 'allosaurus'
+          ? 2.4
+          : 1.6;
     this.playerX = c.x;
-    this.playerY = c.y + (c.species === 'trex' ? 2.8 : 1.6);
+    this.playerY = c.y + seatHeight;
     this.playerZ = c.z;
     this.playerYaw = c.yaw;
     this.currentSpeedMps = Math.abs(moveForward) * baseSpd;
@@ -9924,7 +10878,19 @@ export class GameEngine {
     this.markExploredAroundPlayer();
 
     // Trample attack against nearby hostile creatures
-    if (sprinting && (c.species === 'trex' || c.species === 'triceratops' || c.species === 'velociraptor')) {
+    if (
+      sprinting &&
+      (c.species === 'trex' ||
+        c.species === 'triceratops' ||
+        c.species === 'velociraptor' ||
+        c.species === 'spinosaurus' ||
+        c.species === 'ankylosaurus' ||
+        c.species === 'allosaurus' ||
+        c.species === 'elephant' ||
+        c.species === 'rhinoceros' ||
+        c.species === 'hippopotamus' ||
+        c.species === 'moose')
+    ) {
       for (const target of this.creatures.creatures) {
         if (target.id === c.id || !target.alive) continue;
         if (Math.hypot(target.x - c.x, target.z - c.z) < 2.8) {
@@ -9934,6 +10900,515 @@ export class GameEngine {
         }
       }
     }
+  }
+
+  private initMultiplayerAndMods(): void {
+    this.modSystem = new ModSystemManager(this.scene, {
+      toast: (msg, tone = 'info') => this.toast(msg, tone),
+      giveItem: (itemId, qty) => {
+        if (ITEMS[itemId]) {
+          this.addItem(itemId, qty, true);
+          this.emitHud();
+        }
+      },
+      spawnCreature: (species) => {
+        const cx = this.playerX + Math.sin(this.playerYaw) * 6;
+        const cz = this.playerZ + Math.cos(this.playerYaw) * 6;
+        this.creatures.spawnWildAnimalAt(species as CreatureSpecies, cx, cz);
+      },
+      setWeather: (w) => {
+        this.weather = w;
+        this.emitHud();
+      },
+      setTime: (t) => {
+        this.timeOfDay = THREE.MathUtils.clamp(t, 0, 0.999);
+        this.emitHud();
+      },
+      getPlayerPos: () => ({ x: this.playerX, y: this.playerY, z: this.playerZ }),
+      onTweaksUpdated: (tweaks) => {
+        if (this.p2p?.connected && this.p2p.isHost) {
+          this.p2p.broadcast({ type: 'mod_tweaks', tweaks });
+        }
+        this.emitHud();
+      },
+    });
+
+    this.p2p = new P2PMultiplayerManager({
+      onPacket: (fromPeerId, packet) => this.handleP2PPacket(fromPeerId, packet),
+      onPeerJoined: (peerId, name) => {
+        this.toast(`${name} joined the island room!`, 'discovery');
+        if (this.p2p.isHost) {
+          this.p2p.sendToPeer(peerId, {
+            type: 'world_sync',
+            dayCount: this.dayCount,
+            timeOfDay: this.timeOfDay,
+            weather: this.weather,
+            structures: this.structures,
+            structuralBlocks: this.structuralBlocks,
+            vehicles: this.vehicles,
+            tweaks: this.modSystem.tweaks,
+          });
+        }
+        this.emitHud();
+      },
+      onPeerLeft: (peerId) => {
+        const entry = this.remotePlayers.get(peerId);
+        if (entry) {
+          this.scene.remove(entry.handle.group);
+          this.disposeObject3D(entry.handle.group);
+          this.remotePlayers.delete(peerId);
+          this.toast(`${entry.name} left the room`, 'info');
+        }
+        this.emitHud();
+      },
+      onStatusChanged: () => this.emitHud(),
+    });
+  }
+
+  private getOrCreateRemotePlayer(peerId: string, name: string) {
+    let entry = this.remotePlayers.get(peerId);
+    if (!entry) {
+      const palette = [0x0ea5e9, 0x10b981, 0xf59e0b, 0xec4899, 0x8b5cf6];
+      const hash = peerId.split('').reduce((s, ch) => s + ch.charCodeAt(0), 0);
+      const handle = createRemotePlayerMesh(name, palette[hash % palette.length]);
+      handle.group.position.set(this.playerX, this.playerY, this.playerZ);
+      this.scene.add(handle.group);
+      entry = {
+        name,
+        handle,
+        targetX: this.playerX,
+        targetY: this.playerY,
+        targetZ: this.playerZ,
+        targetYaw: 0,
+        anim: 'idle',
+        vehicleId: null,
+        biome: 'Beachfront',
+        walkPhase: 0,
+      };
+      this.remotePlayers.set(peerId, entry);
+    } else if (entry.name !== name) {
+      this.scene.remove(entry.handle.group);
+      this.disposeObject3D(entry.handle.group);
+      const palette = [0x0ea5e9, 0x10b981, 0xf59e0b, 0xec4899, 0x8b5cf6];
+      const hash = peerId.split('').reduce((s, ch) => s + ch.charCodeAt(0), 0);
+      const handle = createRemotePlayerMesh(name, palette[hash % palette.length]);
+      handle.group.position.set(entry.targetX, entry.targetY, entry.targetZ);
+      this.scene.add(handle.group);
+      entry.name = name;
+      entry.handle = handle;
+    }
+    return entry;
+  }
+
+  private upsertRemoteVehicle(rv: ModularVehicleData): void {
+    const existing = this.vehicles.find((v) => v.id === rv.id);
+    if (existing) {
+      if (this.activeVehicleId === existing.id) return;
+      existing.x = rv.x;
+      existing.y = rv.y;
+      existing.z = rv.z;
+      existing.yaw = rv.yaw;
+      existing.vx = rv.vx;
+      existing.vy = rv.vy;
+      existing.vz = rv.vz;
+      existing.hp = rv.hp;
+      existing.fuel = rv.fuel;
+      const paintChanged =
+        existing.paintColor !== rv.paintColor ||
+        existing.rimColor !== rv.rimColor ||
+        existing.suspensionOffset !== rv.suspensionOffset ||
+        existing.wheelScale !== rv.wheelScale;
+      if (paintChanged) {
+        existing.paintColor = rv.paintColor;
+        existing.rimColor = rv.rimColor;
+        existing.suspensionOffset = rv.suspensionOffset;
+        existing.wheelScale = rv.wheelScale;
+        existing.hydraulicHop = rv.hydraulicHop;
+        existing.turboBoost = rv.turboBoost;
+        const old = this.vehicleMeshes.get(existing.id);
+        if (old) {
+          this.scene.remove(old.root);
+          this.disposeObject3D(old.root);
+        }
+        const rebuilt = createModularVehicleMesh(existing);
+        rebuilt.root.position.set(existing.x, existing.y, existing.z);
+        rebuilt.root.rotation.y = existing.yaw;
+        this.scene.add(rebuilt.root);
+        this.vehicleMeshes.set(existing.id, rebuilt);
+      }
+      return;
+    }
+    this.spawnVehicleInstance({ ...rv, modules: rv.modules.map((m) => ({ ...m })), cargoItems: [] });
+  }
+
+  private handleP2PPacket(fromPeerId: string, packet: P2PPacket): void {
+    if (packet.type === 'player_state') {
+      const rp = this.getOrCreateRemotePlayer(fromPeerId, packet.name);
+      rp.targetX = packet.x;
+      rp.targetY = packet.y;
+      rp.targetZ = packet.z;
+      rp.targetYaw = packet.yaw;
+      rp.anim = packet.anim;
+      rp.vehicleId = packet.vehicleId;
+      rp.biome = packet.biome;
+      const hasGun = Boolean(packet.heldItemId && isFirearmItem(packet.heldItemId));
+      rp.handle.heldGunMesh.visible = hasGun;
+      rp.handle.heldToolMesh.visible = Boolean(packet.heldItemId) && !hasGun;
+
+      if (packet.vehicleId && packet.vx !== undefined && packet.vz !== undefined && packet.vyaw !== undefined) {
+        const veh = this.vehicles.find((v) => v.id === packet.vehicleId);
+        if (veh && this.activeVehicleId !== veh.id) {
+          veh.x = THREE.MathUtils.lerp(veh.x, packet.vx, 0.65);
+          veh.z = THREE.MathUtils.lerp(veh.z, packet.vz, 0.65);
+          veh.yaw = packet.vyaw;
+        }
+      }
+    } else if (packet.type === 'place_structure') {
+      if (!this.structures.some((s) => s.id === packet.structure.id)) {
+        this.spawnStructure({ ...packet.structure });
+        this.emitHud();
+      }
+    } else if (packet.type === 'place_block') {
+      if (!this.structuralBlocks.some((b) => b.id === packet.block.id)) {
+        this.spawnStructuralBlockInstance({ ...packet.block });
+        this.recalculateStructuralIntegrity(false);
+        this.emitHud();
+      }
+    } else if (packet.type === 'vehicle_upsert') {
+      this.upsertRemoteVehicle(packet.vehicle);
+      this.emitHud();
+    } else if (packet.type === 'combat_shot') {
+      const dist = Math.hypot(packet.toX - packet.fromX, packet.toY - packet.fromY, packet.toZ - packet.fromZ);
+      if (dist > 0.2) {
+        const geom = new THREE.CylinderGeometry(0.018, 0.018, Math.min(28, dist), 5);
+        const mat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+        const mesh = new THREE.Mesh(geom, mat);
+        const midX = (packet.fromX + packet.toX) * 0.5;
+        const midY = (packet.fromY + packet.toY) * 0.5;
+        const midZ = (packet.fromZ + packet.toZ) * 0.5;
+        mesh.position.set(midX, midY, midZ);
+        const dir = new THREE.Vector3(
+          packet.toX - packet.fromX,
+          packet.toY - packet.fromY,
+          packet.toZ - packet.fromZ,
+        ).normalize();
+        mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+        this.scene.add(mesh);
+        this.spawnParticles(packet.fromX, packet.fromY, packet.fromZ, 0xfbbf24, 6);
+        window.setTimeout(() => {
+          this.scene.remove(mesh);
+          geom.dispose();
+          mat.dispose();
+        }, 120);
+      }
+    } else if (packet.type === 'creature_damage') {
+      const target = this.creatures.creatures.find((c) => c.id === packet.creatureId);
+      if (target && target.alive) {
+        this.creatures.damageCreature(target, packet.damage, packet.fromX, packet.fromZ);
+      }
+    } else if (packet.type === 'player_hit') {
+      if (packet.targetPeerId === this.p2p.localPeerId && this.p2p.pvpEnabled && !this.gameOver) {
+        this.vitals.health = Math.max(0, this.vitals.health - packet.damage);
+        this.hurtFlash = 0.45;
+        this.sound.playHurt();
+        this.toast(`${packet.attackerName} shot you (-${packet.damage} HP)!`, 'warning');
+        if (this.vitals.health <= 0) {
+          this.gameOver = true;
+          this.gameOverReason = `Eliminated in PvP by ${packet.attackerName}`;
+        }
+        this.emitHud();
+      }
+    } else if (packet.type === 'world_sync') {
+      this.dayCount = packet.dayCount;
+      this.timeOfDay = packet.timeOfDay;
+      this.weather = packet.weather;
+      for (const st of packet.structures) {
+        if (!this.structures.some((x) => x.id === st.id)) {
+          this.spawnStructure({ ...st });
+        }
+      }
+      for (const blk of packet.structuralBlocks) {
+        if (!this.structuralBlocks.some((x) => x.id === blk.id)) {
+          this.spawnStructuralBlockInstance({ ...blk });
+        }
+      }
+      this.recalculateStructuralIntegrity(false);
+      for (const rv of packet.vehicles) {
+        this.upsertRemoteVehicle(rv);
+      }
+      if (packet.tweaks) {
+        this.modSystem.setTweaks(packet.tweaks);
+      }
+      this.toast('Synced island buildings, vehicles & mods from host!', 'discovery');
+      this.emitHud();
+    } else if (packet.type === 'mod_tweaks') {
+      this.modSystem.setTweaks(packet.tweaks);
+      this.emitHud();
+    } else if (packet.type === 'chat') {
+      this.p2pChatLog.push({
+        peerId: packet.peerId,
+        name: packet.name,
+        text: packet.text,
+        time: Date.now(),
+      });
+      if (this.p2pChatLog.length > 40) this.p2pChatLog.shift();
+      this.toast(`${packet.name}: ${packet.text}`, 'info');
+      this.emitHud();
+    }
+  }
+
+  private updateMultiplayer(dt: number): void {
+    if (this.hydraulicBounceTimer > 0) {
+      this.hydraulicBounceTimer = Math.max(0, this.hydraulicBounceTimer - dt);
+    }
+
+    for (const rp of this.remotePlayers.values()) {
+      const h = rp.handle;
+      h.group.position.x = THREE.MathUtils.damp(h.group.position.x, rp.targetX, 12, dt);
+      h.group.position.y = THREE.MathUtils.damp(h.group.position.y, rp.targetY, 12, dt);
+      h.group.position.z = THREE.MathUtils.damp(h.group.position.z, rp.targetZ, 12, dt);
+
+      const curYaw = h.group.rotation.y;
+      const diffYaw = ((rp.targetYaw - curYaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      h.group.rotation.y = curYaw + diffYaw * Math.min(1, dt * 12);
+
+      const moveDist = Math.hypot(rp.targetX - h.group.position.x, rp.targetZ - h.group.position.z);
+      const isMoving = rp.anim === 'walk' || rp.anim === 'sprint' || moveDist > 0.04;
+      if (rp.anim === 'crouch') {
+        h.bodyGroup.position.y = -0.35;
+      } else {
+        h.bodyGroup.position.y = 0;
+      }
+      if (isMoving) {
+        const rate = rp.anim === 'sprint' ? 14 : 9;
+        rp.walkPhase += dt * rate;
+        const swing = Math.sin(rp.walkPhase) * 0.65;
+        h.armL.rotation.x = swing;
+        h.armR.rotation.x = -swing;
+        h.legL.rotation.x = -swing;
+        h.legR.rotation.x = swing;
+      } else {
+        h.armL.rotation.x = THREE.MathUtils.damp(h.armL.rotation.x, 0, 8, dt);
+        h.armR.rotation.x = THREE.MathUtils.damp(h.armR.rotation.x, 0, 8, dt);
+        h.legL.rotation.x = THREE.MathUtils.damp(h.legL.rotation.x, 0, 8, dt);
+        h.legR.rotation.x = THREE.MathUtils.damp(h.legR.rotation.x, 0, 8, dt);
+      }
+    }
+
+    if (!this.p2p?.connected || this.mode !== 'playing') return;
+
+    this.p2pStateSendAccum += dt;
+    if (this.p2pStateSendAccum >= 0.065) {
+      this.p2pStateSendAccum = 0;
+      const anim: RemoteAnimState = this.activeVehicleId
+        ? 'drive'
+        : this.isSwimming
+          ? 'swim'
+          : this.isCrouching
+            ? 'crouch'
+            : this.isSprinting
+              ? 'sprint'
+              : this.currentSpeedMps > 0.4
+                ? 'walk'
+                : 'idle';
+      const av = this.activeVehicleId
+        ? this.vehicles.find((v) => v.id === this.activeVehicleId)
+        : null;
+      this.p2p.broadcast({
+        type: 'player_state',
+        peerId: this.p2p.localPeerId,
+        name: this.p2p.playerName,
+        x: this.playerX,
+        y: this.playerY,
+        z: this.playerZ,
+        yaw: this.playerYaw,
+        pitch: this.camPitch,
+        anim,
+        heldItemId: this.getEquippedItemId(),
+        biome: BIOME_INFO[getBiomeAt(this.playerX, this.playerZ)].name,
+        vehicleId: this.activeVehicleId,
+        vx: av?.x,
+        vz: av?.z,
+        vyaw: av?.yaw,
+      });
+    }
+
+    if (this.activeVehicleId) {
+      this.p2pVehicleSyncAccum += dt;
+      if (this.p2pVehicleSyncAccum >= 0.35) {
+        this.p2pVehicleSyncAccum = 0;
+        const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
+        if (av) this.p2p.broadcast({ type: 'vehicle_upsert', vehicle: av });
+      }
+    }
+  }
+
+  // ---- Public P2P Multiplayer API ----
+  public async createMultiplayerRoom(playerName?: string): Promise<string | null> {
+    return this.p2p.createRoom(playerName);
+  }
+
+  public async joinMultiplayerRoom(code: string, playerName?: string): Promise<boolean> {
+    return this.p2p.joinRoom(code, playerName);
+  }
+
+  public leaveMultiplayerRoom(): void {
+    this.p2p.leaveRoom();
+    for (const rp of this.remotePlayers.values()) {
+      this.scene.remove(rp.handle.group);
+      this.disposeObject3D(rp.handle.group);
+    }
+    this.remotePlayers.clear();
+    this.emitHud();
+  }
+
+  public setMultiplayerName(name: string): void {
+    this.p2p.setPlayerName(name);
+  }
+
+  public setPvpEnabled(enabled: boolean): void {
+    this.p2p.setPvpEnabled(enabled);
+  }
+
+  public sendMultiplayerChat(text: string): void {
+    const clean = text.trim().slice(0, 180);
+    if (!clean) return;
+    this.p2pChatLog.push({
+      peerId: this.p2p.localPeerId,
+      name: this.p2p.playerName,
+      text: clean,
+      time: Date.now(),
+    });
+    if (this.p2pChatLog.length > 40) this.p2pChatLog.shift();
+    if (this.p2p.connected) {
+      this.p2p.broadcast({
+        type: 'chat',
+        peerId: this.p2p.localPeerId,
+        name: this.p2p.playerName,
+        text: clean,
+      });
+    }
+    this.emitHud();
+  }
+
+  public getMultiplayerChatLog(): { peerId: string; name: string; text: string; time: number }[] {
+    return [...this.p2pChatLog];
+  }
+
+  // ---- Public In-Game Mod & Asset Importer API ----
+  public setModTweaks(partial: Partial<ModGameplayTweaks>): void {
+    this.modSystem.setTweaks(partial);
+  }
+
+  public resetModTweaks(): void {
+    this.modSystem.resetTweaks();
+    this.toast('Reset gameplay tweaks to defaults', 'info');
+  }
+
+  public async importModModelFile(file: File): Promise<CustomModAsset> {
+    const fwdX = -Math.sin(this.camYaw);
+    const fwdZ = -Math.cos(this.camYaw);
+    const px = this.playerX + fwdX * 4.5;
+    const pz = this.playerZ + fwdZ * 4.5;
+    const py = getTerrainHeight(px, pz);
+    const asset = await this.modSystem.importModelFromFile(file, px, py, pz, this.camYaw + Math.PI);
+    this.emitHud();
+    return asset;
+  }
+
+  public async importModModelUrl(url: string): Promise<CustomModAsset> {
+    const fwdX = -Math.sin(this.camYaw);
+    const fwdZ = -Math.cos(this.camYaw);
+    const px = this.playerX + fwdX * 4.5;
+    const pz = this.playerZ + fwdZ * 4.5;
+    const py = getTerrainHeight(px, pz);
+    const asset = await this.modSystem.importModelFromUrl(url, px, py, pz, this.camYaw + Math.PI);
+    this.emitHud();
+    return asset;
+  }
+
+  public updateModAssetTransform(assetId: string, patch: { scale?: number; rotationY?: number }): void {
+    this.modSystem.updateAssetTransform(assetId, patch);
+    this.emitHud();
+  }
+
+  public removeModAsset(assetId: string): void {
+    this.modSystem.removeAsset(assetId);
+    this.emitHud();
+  }
+
+  public async loadModScriptUrl(url: string, name?: string): Promise<CustomModScript> {
+    const s = await this.modSystem.loadScriptFromUrl(url, name);
+    this.toast(`Loaded mod script "${s.name}"`, 'craft');
+    this.emitHud();
+    return s;
+  }
+
+  public addModScript(name: string, code: string): CustomModScript {
+    const s = this.modSystem.addAndRunScript(name, code);
+    this.toast(`Activated mod "${s.name}"`, 'craft');
+    this.emitHud();
+    return s;
+  }
+
+  public toggleModScript(scriptId: string, enabled: boolean): void {
+    this.modSystem.toggleScript(scriptId, enabled);
+    this.emitHud();
+  }
+
+  public removeModScript(scriptId: string): void {
+    this.modSystem.removeScript(scriptId);
+    this.emitHud();
+  }
+
+  public exportModAndBuildBundle(): ModExportBundle {
+    return {
+      format: 'survival-island-modpack-v1',
+      exportedAt: Date.now(),
+      tweaks: { ...this.modSystem.tweaks },
+      scripts: this.modSystem.scripts.map((s) => ({
+        name: s.name,
+        sourceUrl: s.sourceUrl,
+        code: s.code,
+        enabled: s.enabled,
+      })),
+      build: {
+        structures: this.structures.map((s) => ({ ...s })),
+        structuralBlocks: this.structuralBlocks.map((b) => ({ ...b })),
+        vehicles: this.vehicles.map((v) => ({
+          ...v,
+          modules: v.modules.map((m) => ({ ...m })),
+          cargoItems: [],
+        })),
+      },
+    };
+  }
+
+  public importModAndBuildBundle(bundle: ModExportBundle): void {
+    this.modSystem.applyBundle(bundle);
+    const build = bundle.build;
+    if (build && Array.isArray(build.structures)) {
+      for (const st of build.structures) {
+        if (!this.structures.some((x) => x.id === st.id)) {
+          this.spawnStructure({ ...st });
+        }
+      }
+    }
+    if (build && Array.isArray(build.structuralBlocks)) {
+      for (const blk of build.structuralBlocks) {
+        if (!this.structuralBlocks.some((x) => x.id === blk.id)) {
+          this.spawnStructuralBlockInstance({ ...blk });
+        }
+      }
+      this.recalculateStructuralIntegrity(false);
+    }
+    if (build && Array.isArray(build.vehicles)) {
+      for (const rv of build.vehicles) {
+        this.upsertRemoteVehicle(rv);
+      }
+    }
+    this.toast('Imported Mod & Build Share Bundle!', 'discovery');
+    this.emitHud();
   }
 
   public dispose(): void {
@@ -9946,6 +11421,14 @@ export class GameEngine {
     window.removeEventListener('wheel', this.onWheel);
     window.removeEventListener('blur', this.onWindowBlur);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
+
+    this.p2p?.leaveRoom();
+    this.modSystem?.dispose();
+    for (const rp of this.remotePlayers.values()) {
+      this.scene.remove(rp.handle.group);
+      this.disposeObject3D(rp.handle.group);
+    }
+    this.remotePlayers.clear();
 
     if (this.terrainEngine) {
       this.terrainEngine.dispose(this.scene);

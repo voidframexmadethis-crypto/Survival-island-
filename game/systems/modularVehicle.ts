@@ -258,7 +258,13 @@ export function computeVehicleSpecs(
   };
 }
 
-export type VehiclePresetKey = 'expedition_rover' | 'steam_boat' | 'gyro_airship';
+export type VehiclePresetKey =
+  | 'expedition_rover'
+  | 'sports_car'
+  | 'dune_buggy'
+  | 'lowrider'
+  | 'steam_boat'
+  | 'gyro_airship';
 
 export function buildPresetModules(preset: VehiclePresetKey): VehicleModulePlacement[] {
   const mk = (
@@ -274,6 +280,54 @@ export function buildPresetModules(preset: VehiclePresetKey): VehicleModulePlace
     gy,
     gz,
   });
+
+  if (preset === 'sports_car') {
+    return [
+      mk('chassis_frame', 0, 0, 0, 1),
+      mk('chassis_frame', 0, 0, 1, 2),
+      mk('chassis_frame', 0, 0, -1, 3),
+      mk('offroad_wheel', -1, 0, 1, 4),
+      mk('offroad_wheel', 1, 0, 1, 5),
+      mk('offroad_wheel', -1, 0, -1, 6),
+      mk('offroad_wheel', 1, 0, -1, 7),
+      mk('cockpit_seat', 0, 1, 0, 8),
+      mk('steam_engine_pod', 0, 1, 1, 9),
+      mk('steam_engine_pod', 0, 1, -1, 10),
+      mk('steering_rudder', 0, 1, 2, 11),
+    ];
+  }
+
+  if (preset === 'dune_buggy') {
+    return [
+      mk('chassis_frame', 0, 0, 0, 1),
+      mk('chassis_frame', 0, 0, 1, 2),
+      mk('offroad_wheel', -1, 0, 1, 3),
+      mk('offroad_wheel', 1, 0, 1, 4),
+      mk('offroad_wheel', -1, 0, -1, 5),
+      mk('offroad_wheel', 1, 0, -1, 6),
+      mk('cockpit_seat', 0, 1, 0, 7),
+      mk('steam_engine_pod', 0, 1, -1, 8),
+      mk('steering_rudder', 0, 1, 1, 9),
+      mk('storage_rack', 0, 1, -2, 10),
+    ];
+  }
+
+  if (preset === 'lowrider') {
+    return [
+      mk('chassis_frame', 0, 0, 0, 1),
+      mk('chassis_frame', 0, 0, 1, 2),
+      mk('chassis_frame', 0, 0, -1, 3),
+      mk('chassis_frame', 0, 0, 2, 4),
+      mk('offroad_wheel', -1, 0, 1, 5),
+      mk('offroad_wheel', 1, 0, 1, 6),
+      mk('offroad_wheel', -1, 0, -1, 7),
+      mk('offroad_wheel', 1, 0, -1, 8),
+      mk('cockpit_seat', 0, 1, 0, 9),
+      mk('steam_engine_pod', 0, 1, 1, 10),
+      mk('armor_plate', 0, 1, 2, 11),
+      mk('storage_rack', 0, 1, -1, 12),
+    ];
+  }
 
   if (preset === 'steam_boat') {
     return [
@@ -338,18 +392,54 @@ export function createVehicleFromPreset(
   const specs = computeVehicleSpecs(modules);
   const names: Record<VehiclePresetKey, string> = {
     expedition_rover: 'Expedition 4x4 Steam Rover',
+    sports_car: 'Island GT Street Car',
+    dune_buggy: 'Sandstorm Dune Buggy',
+    lowrider: 'West Coast Chrome Lowrider',
     steam_boat: 'Pontoon Valley Explorer Boat',
     gyro_airship: 'Island Gyro Rotor Airship',
   };
   const colors: Record<VehiclePresetKey, string> = {
     expedition_rover: '#d97706',
+    sports_car: '#dc2626',
+    dune_buggy: '#84cc16',
+    lowrider: '#7e22ce',
     steam_boat: '#0284c7',
     gyro_airship: '#eab308',
+  };
+  const rimColors: Record<VehiclePresetKey, string> = {
+    expedition_rover: '#d97706',
+    sports_car: '#e2e8f0',
+    dune_buggy: '#334155',
+    lowrider: '#facc15',
+    steam_boat: '#d97706',
+    gyro_airship: '#e2e8f0',
+  };
+  const suspensionByPreset: Record<VehiclePresetKey, number> = {
+    expedition_rover: 0.04,
+    sports_car: -0.1,
+    dune_buggy: 0.22,
+    lowrider: -0.22,
+    steam_boat: 0,
+    gyro_airship: 0.05,
+  };
+  const wheelScaleByPreset: Record<VehiclePresetKey, number> = {
+    expedition_rover: 1.05,
+    sports_car: 0.88,
+    dune_buggy: 1.22,
+    lowrider: 0.8,
+    steam_boat: 1.0,
+    gyro_airship: 0.9,
   };
   return {
     id,
     name: names[preset],
     paintColor: colors[preset],
+    preset,
+    rimColor: rimColors[preset],
+    suspensionOffset: suspensionByPreset[preset],
+    wheelScale: wheelScaleByPreset[preset],
+    hydraulicHop: preset === 'lowrider',
+    turboBoost: preset === 'sports_car' ? 1.35 : preset === 'dune_buggy' ? 1.2 : 1.0,
     x,
     y,
     z,

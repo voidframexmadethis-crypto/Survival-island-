@@ -16,6 +16,8 @@ import {
   SWAMP_POS,
   TERRAIN_SEGS,
   TERRAIN_SIZE,
+  VEHICLE_GARAGE_POS,
+  VEHICLE_GARAGE_Y,
   WATERFALL_POS,
   WHEATFIELD_POS,
   getBiomeAt,
@@ -63,6 +65,19 @@ export interface ResourceVisualHandle {
   rockBody?: THREE.Group;
 }
 
+export interface ShipwreckChestHandle {
+  id: string;
+  name: string;
+  sublabel: string;
+  zone: 'cargo' | 'armory' | 'captain' | 'deck';
+  x: number;
+  y: number;
+  z: number;
+  group: THREE.Group;
+  lidGroup: THREE.Group;
+  glowMesh: THREE.Mesh;
+}
+
 export interface WorldHandles {
   terrainMesh: THREE.Mesh;
   baseTerrainColors: Float32Array;
@@ -87,8 +102,12 @@ export interface WorldHandles {
   tvScreenMesh: THREE.Mesh;
   tvWorldPos: THREE.Vector3;
   hillHousePos: THREE.Vector3;
+  garagePos: THREE.Vector3;
+  garageBenchPos: THREE.Vector3;
+  armoryChest: ShipwreckChestHandle;
   wheatfieldPos: THREE.Vector3;
   caveCeilings: CaveCeilingCluster[];
+  shipwreckChests: ShipwreckChestHandle[];
 }
 
 function seededRand(seed: number): () => number {
@@ -145,10 +164,17 @@ export function buildIslandWorld(
     const dAutumn = Math.hypot(x - AUTUMN_GROVE_POS.x, z - AUTUMN_GROVE_POS.z);
     const dSwamp = Math.hypot(x - SWAMP_POS.x, z - SWAMP_POS.z);
     const dWheat = Math.hypot(x - WHEATFIELD_POS.x, z - WHEATFIELD_POS.z);
+    const dGarage = Math.hypot(x - VEHICLE_GARAGE_POS.x, z - VEHICLE_GARAGE_POS.z);
     const onHouseRamp =
       x >= HILL_HOUSE_POS.x + 5 &&
       x <= HILL_HOUSE_POS.x + 22 &&
       Math.abs(z - HILL_HOUSE_POS.z) < 2.3;
+    const onGarageDriveway =
+      x >= VEHICLE_GARAGE_POS.x - 4 &&
+      x <= VEHICLE_GARAGE_POS.x + 18 &&
+      z >= VEHICLE_GARAGE_POS.z - 12 &&
+      z <= VEHICLE_GARAGE_POS.z + 10 &&
+      Math.abs((z - VEHICLE_GARAGE_POS.z) - 0.35 * (x - VEHICLE_GARAGE_POS.x)) < 3.2;
 
     if (y < -0.3) {
       c.setHex(0x1e6b7b);
@@ -160,8 +186,10 @@ export function buildIslandWorld(
       c.setHex(0x8c5228); // warm fallen autumn leaf bed
     } else if (dWheat < 7.8) {
       c.setHex(0x7c5832); // rich cultivated wheatfield loam
-    } else if (onHouseRamp) {
-      c.setHex(0xa89274); // gravel-earth path up hill to house
+    } else if (dGarage < 9.5) {
+      c.setHex(0x78736c); // leveled compacted stone garage clearing
+    } else if (onHouseRamp || onGarageDriveway) {
+      c.setHex(0xa89274); // gravel-earth path & vehicle driveway
     } else if (biome === 'beach' || y < 2.2) {
       c.setHex(0xe5c88b);
     } else if (biome === 'river' || biome === 'lake') {
@@ -307,6 +335,7 @@ export function buildIslandWorld(
   scene.add(cloudsGroup);
 
   // 6. Hyper-Realistic Shipwreck & Beaching Event with Tiered Interior Zones & Boarding Routes
+  // ALL COLLISION BARRIERS & INVISIBLE WALLS STRIPPED: Player can walk/swim freely through any part!
   const colliders: { x: number; z: number; radius: number; nodeId?: string }[] = [];
   const wreckMat = new THREE.MeshStandardMaterial({
     color: 0x4b3320,
@@ -338,7 +367,7 @@ export function buildIslandWorld(
   wreckGroup.rotation.set(0.1, 0.35, -0.35); // Realistic 20-degree angle in shallow water
   wreckGroup.scale.set(2.0, 2.0, 2.0); // Proportional medium-large vessel (~18-22m long)
 
-  // Main Galleon Hull & Splintered Ribs
+  // Main Galleon Hull & Splintered Ribs (100% open, collision-free mesh)
   const shatteredHull = new THREE.Mesh(new THREE.BoxGeometry(5.2, 3.0, 12.0), wreckMat);
   shatteredHull.castShadow = true;
   shatteredHull.receiveShadow = true;
@@ -349,14 +378,6 @@ export function buildIslandWorld(
     new THREE.MeshBasicMaterial({ color: 0x0c0a09 }),
   );
   sideBreach.position.set(-2.5, -0.2, 1.5);
-
-  // Lower Deck Cargo Hold Chests & Barrels
-  const chestMat = new THREE.MeshStandardMaterial({ color: 0x85532a, roughness: 0.8 });
-  const goldLockMat = new THREE.MeshStandardMaterial({ color: 0xeab308, metalness: 0.8, roughness: 0.2 });
-  const cargoChest = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.8, 0.9), chestMat);
-  cargoChest.position.set(-1.0, -0.9, 1.8);
-  const cargoLock = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.1), goldLockMat);
-  cargoLock.position.set(-1.0, -0.8, 2.28);
 
   // Mid-Deck Armory & Vault (Gem displays & outer space gems)
   const vaultDesk = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.75, 0.9), wreckMat);
@@ -395,8 +416,6 @@ export function buildIslandWorld(
   wreckGroup.add(
     shatteredHull,
     sideBreach,
-    cargoChest,
-    cargoLock,
     vaultDesk,
     gemCluster,
     aftCabin,
@@ -408,7 +427,161 @@ export function buildIslandWorld(
     tatteredSail,
   );
   scene.add(wreckGroup);
-  colliders.push({ x: hullX, z: hullZ, radius: 6.0 });
+  // NOTE: Zero colliders pushed for the ship — completely removing all invisible walls & barriers!
+
+  // 4 Interactive 3D Loot Chests placed with 100% open, unrestricted access
+  const shipwreckChests: ShipwreckChestHandle[] = [];
+
+  function createShipwreckLootChest(
+    id: string,
+    name: string,
+    sublabel: string,
+    zone: 'cargo' | 'armory' | 'captain' | 'deck',
+    x: number,
+    y: number,
+    z: number,
+    rotY: number,
+    accentColor: number,
+  ): ShipwreckChestHandle {
+    const chestGroup = new THREE.Group();
+    chestGroup.position.set(x, y, z);
+    chestGroup.rotation.y = rotY;
+
+    const chestWoodMat = new THREE.MeshStandardMaterial({
+      color: zone === 'captain' ? 0x3d2817 : zone === 'armory' ? 0x27272a : 0x5c3818,
+      map: woodTex,
+      roughness: 0.82,
+      metalness: 0.1,
+    });
+
+    const trimMat = new THREE.MeshStandardMaterial({
+      color: zone === 'captain' ? 0xf59e0b : zone === 'armory' ? 0xa855f7 : 0xd97706,
+      metalness: zone === 'captain' ? 0.9 : 0.7,
+      roughness: 0.25,
+    });
+
+    // Chest Body Base
+    const baseMesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.65, 0.8), chestWoodMat);
+    baseMesh.position.y = 0.325;
+    baseMesh.castShadow = true;
+    baseMesh.receiveShadow = true;
+    chestGroup.add(baseMesh);
+
+    // Metal Corner Brackets & Trim Bands
+    const band1 = new THREE.Mesh(new THREE.BoxGeometry(1.22, 0.08, 0.82), trimMat);
+    band1.position.y = 0.58;
+    const band2 = new THREE.Mesh(new THREE.BoxGeometry(1.22, 0.08, 0.82), trimMat);
+    band2.position.y = 0.12;
+    const lockPlate = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.22, 0.08), trimMat);
+    lockPlate.position.set(0, 0.45, 0.42);
+    chestGroup.add(band1, band2, lockPlate);
+
+    // Hinged Lid Group (pivot placed at top-back rim: y = 0.65, z = -0.4)
+    const lidGroup = new THREE.Group();
+    lidGroup.position.set(0, 0.65, -0.4);
+
+    const lidMesh = new THREE.Mesh(new THREE.BoxGeometry(1.24, 0.24, 0.84), chestWoodMat);
+    lidMesh.position.set(0, 0.12, 0.4);
+    lidMesh.castShadow = true;
+    lidGroup.add(lidMesh);
+
+    const lidTrim = new THREE.Mesh(new THREE.BoxGeometry(1.26, 0.08, 0.86), trimMat);
+    lidTrim.position.set(0, 0.12, 0.4);
+    const handleRing = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.025, 6, 12), trimMat);
+    handleRing.position.set(0, 0.25, 0.4);
+    handleRing.rotation.x = Math.PI / 2;
+    lidGroup.add(lidTrim, handleRing);
+
+    chestGroup.add(lidGroup);
+
+    // Visible Glowing Beacon Column (draws players straight to the chest from afar)
+    const glowGeo = new THREE.CylinderGeometry(0.38, 0.38, 3.2, 8, 1, true);
+    const glowMat = new THREE.MeshBasicMaterial({
+      color: accentColor,
+      transparent: true,
+      opacity: 0.38,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const glowMesh = new THREE.Mesh(glowGeo, glowMat);
+    glowMesh.position.y = 1.6;
+    chestGroup.add(glowMesh);
+
+    scene.add(chestGroup);
+
+    return {
+      id,
+      name,
+      sublabel,
+      zone,
+      x,
+      y,
+      z,
+      group: chestGroup,
+      lidGroup,
+      glowMesh,
+    };
+  }
+
+  // 1. Forecastle / Main Deck Shoreline Chest (by the collapsed mast bridge)
+  shipwreckChests.push(
+    createShipwreckLootChest(
+      'deck',
+      'Forecastle Supply Chest',
+      'Glock 19, Colt M1911, Ammo & Supplies',
+      'deck',
+      -7.0,
+      OCEAN_LEVEL + 0.45,
+      128.0,
+      0.35,
+      0x38bdf8,
+    ),
+  );
+
+  // 2. Lower Cargo Hold Weapon Crate (right inside wide blast hull opening)
+  shipwreckChests.push(
+    createShipwreckLootChest(
+      'cargo',
+      'Cargo Hold Weapon Crate',
+      'Remington 870, Mossberg 590, Sawed-Off & Sidearms',
+      'cargo',
+      -5.5,
+      OCEAN_LEVEL + 0.25,
+      133.0,
+      -0.4,
+      0xf59e0b,
+    ),
+  );
+
+  // 3. Mid-Deck Armory Footlocker (mid-deck platform by space crystal display)
+  shipwreckChests.push(
+    createShipwreckLootChest(
+      'armory',
+      'Mid-Deck Armory Footlocker',
+      'AK-47, M4A1, SCAR-H, FN FAL, MP5 & Vector',
+      'armory',
+      -3.0,
+      OCEAN_LEVEL + 0.95,
+      135.5,
+      0.15,
+      0xa855f7,
+    ),
+  );
+
+  // 4. Captain's Royal Sea Chest (in the aft cabin at elevated stern)
+  shipwreckChests.push(
+    createShipwreckLootChest(
+      'captain',
+      'Captain’s Royal Sea Chest',
+      'Barrett .50 Cal, M249 SAW, Gold & Space Gems',
+      'captain',
+      -1.8,
+      OCEAN_LEVEL + 1.65,
+      141.5,
+      -0.25,
+      0xeab308,
+    ),
+  );
 
   // Scattered chaotic debris field in water/sand around shipwreck
   const debrisSpots: [number, number, number][] = [
@@ -825,7 +998,7 @@ export function buildIslandWorld(
       tree.add(bough, snowTop);
     }
     scene.add(tree);
-    colliders.push({ x: tx, z: tz, radius: 0.55 * sc });
+    colliders.push({ x: tx, z: tz, radius: 0.34 * sc });
   });
   [
     [-4.8, 6.2],
@@ -873,7 +1046,7 @@ export function buildIslandWorld(
       pine.add(bough);
     }
     scene.add(pine);
-    colliders.push({ x: px, z: pz, radius: 0.55 * sc });
+    colliders.push({ x: px, z: pz, radius: 0.34 * sc });
   });
   [
     [-8.0, -25.2, 0.95],
@@ -923,7 +1096,7 @@ export function buildIslandWorld(
       tree.add(crown);
     }
     scene.add(tree);
-    colliders.push({ x: ax, z: az, radius: 0.5 * sc });
+    colliders.push({ x: ax, z: az, radius: 0.32 * sc });
   });
   // Undergrowth ferns & fallen autumn leaves on ground
   const autumnUndergrowthMat = new THREE.MeshStandardMaterial({ color: 0x9a3412, roughness: 0.88 });
@@ -1530,40 +1703,41 @@ export function buildIslandWorld(
     resourceHandles.set(id, handle);
 
     if (hasCollider) {
-      colliders.push({ x, z, radius: 0.65 * scale, nodeId: id });
+      const isTree =
+        kind === 'palm_tree' ||
+        kind === 'tropical_tree' ||
+        kind === 'banyan_tree' ||
+        kind === 'highland_cedar';
+      colliders.push({
+        x,
+        z,
+        radius: (isTree ? 0.32 : 0.65) * scale,
+        nodeId: id,
+      });
     }
   }
 
-  // Shipwreck Crates along the Southern Landing Beach
+  // Shipwreck Crates along the Southern Landing Beach (collision-free for unblocked movement)
   [
     [-3.8, 114.5],
     [5.6, 116.2],
     [-8.5, 120.0],
     [9.8, 121.0],
   ].forEach(([cx, cz], idx) => {
-    addResourceNode(`shipwreck_crate_${idx}`, 'shipwreck_crate', cx, cz, 1.0, true);
+    addResourceNode(`shipwreck_crate_${idx}`, 'shipwreck_crate', cx, cz, 1.0, false);
   });
 
-  // Starter beach & forest-edge resources
+  // Cleanly framed coastal & forest-edge starter nodes (zero scattered ground clutter on landing meadow)
   const starterResources: [ResourceNodeKind, number, number][] = [
-    ['palm_tree', -6, 102],
-    ['palm_tree', 8, 100],
-    ['palm_tree', -14, 96],
-    ['tropical_tree', 14, 93],
-    ['banyan_tree', -16, 86],
-    ['branch_pile', -3, 106],
-    ['branch_pile', 5, 108],
-    ['sand_mound', -12, 113],
-    ['sand_mound', 12, 114],
-    ['small_stone', -2.5, 104.5],
-    ['small_stone', 4.5, 103.5],
-    ['stone_boulder', 12, 103],
-    ['stone_boulder', -11, 101],
-    ['flint_outcrop', 6, 104],
-    ['fiber_fern', 3, 97],
-    ['grass_tuft', -5, 95],
-    ['berry_bush', 1, 93],
-    ['mushroom_cluster', 9, 91],
+    ['palm_tree', -14, 104],
+    ['palm_tree', 14, 103],
+    ['palm_tree', -19, 94],
+    ['tropical_tree', 17, 90],
+    ['banyan_tree', -18, 82],
+    ['flint_outcrop', 12, 101],
+    ['fiber_fern', 10, 95],
+    ['berry_bush', 8, 91],
+    ['mushroom_cluster', 15, 88],
   ];
   starterResources.forEach(([kind, x, z], idx) => {
     addResourceNode(
@@ -1740,35 +1914,183 @@ export function buildIslandWorld(
     }
   }
 
-  // D. Premade Fully Furnished House on a Hill (HILL_HOUSE_POS, HILL_HOUSE_Y)
+  // D. Premade Fully Furnished House on a Hill (HILL_HOUSE_POS, grounded directly on hilltop terrain)
+  const hillHouseGroundY = getTerrainHeight(HILL_HOUSE_POS.x, HILL_HOUSE_POS.z);
   const hillHouse = createHilltopHouse(
     HILL_HOUSE_POS.x,
-    HILL_HOUSE_Y,
+    hillHouseGroundY,
     HILL_HOUSE_POS.z,
     woodTex,
   );
   scene.add(hillHouse.group);
   hillHouse.colliders.forEach((hc) => colliders.push(hc));
 
-  // Scatter biome-accurate resource nodes across the island
+  // E. Structured Vehicle Garage Clearing Right Beside the Shelter (VEHICLE_GARAGE_POS)
+  const garageGroundY = getTerrainHeight(VEHICLE_GARAGE_POS.x, VEHICLE_GARAGE_POS.z);
+  const garageGroup = new THREE.Group();
+  garageGroup.position.set(VEHICLE_GARAGE_POS.x, garageGroundY, VEHICLE_GARAGE_POS.z);
+
+  const padMat = new THREE.MeshStandardMaterial({ color: 0x4b4844, map: rockTex, roughness: 0.9 });
+  const timberPostMat = new THREE.MeshStandardMaterial({ color: 0x6b4226, map: woodTex, roughness: 0.85 });
+  const garageRoofMat = new THREE.MeshStandardMaterial({ color: 0x3f4c54, roughness: 0.68, metalness: 0.35 });
+  const bayLineMat = new THREE.MeshStandardMaterial({
+    color: 0xf59e0b,
+    emissive: 0xd97706,
+    emissiveIntensity: 0.55,
+    roughness: 0.3,
+  });
+  const bayCyanMat = new THREE.MeshStandardMaterial({
+    color: 0x38bdf8,
+    emissive: 0x0284c7,
+    emissiveIntensity: 0.45,
+    roughness: 0.3,
+  });
+  const tireMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.85 });
+  const toolMetalMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8, roughness: 0.28 });
+
+  // Leveled concrete/stone pad (14.5m x 10.6m)
+  const garagePad = new THREE.Mesh(new THREE.BoxGeometry(14.5, 0.16, 10.6), padMat);
+  garagePad.position.set(0, 0.04, 0);
+  garagePad.receiveShadow = true;
+  garageGroup.add(garagePad);
+
+  // Dual illuminated parking bay guides (Bay A: x = -3.1, Bay B: x = +3.1)
+  [-3.1, 3.1].forEach((bx, bayIdx) => {
+    const lineMat = bayIdx === 0 ? bayLineMat : bayCyanMat;
+    [-2.2, 2.2].forEach((sideOffset) => {
+      const sideLine = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.03, 6.2), lineMat);
+      sideLine.position.set(bx + sideOffset, 0.135, 0.4);
+      garageGroup.add(sideLine);
+    });
+    const backStop = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.14, 0.26), lineMat);
+    backStop.position.set(bx, 0.18, -2.7);
+    garageGroup.add(backStop);
+  });
+
+  // Heavy Timber Canopy Pillars & Open Drive-In Archway
+  const postPositions: [number, number][] = [
+    [-6.6, -4.6],
+    [0, -4.6],
+    [6.6, -4.6],
+    [-6.6, 4.6],
+    [6.6, 4.6],
+  ];
+  postPositions.forEach(([px, pz]) => {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.32, 4.2, 0.32), timberPostMat);
+    post.position.set(px, 2.15, pz);
+    post.castShadow = true;
+    garageGroup.add(post);
+    colliders.push({
+      x: VEHICLE_GARAGE_POS.x + px,
+      z: VEHICLE_GARAGE_POS.z + pz,
+      radius: 0.34,
+    });
+  });
+
+  // Top beams + angled canopy roof (open front driveway facing South +Z)
+  const frontBeam = new THREE.Mesh(new THREE.BoxGeometry(13.8, 0.35, 0.35), timberPostMat);
+  frontBeam.position.set(0, 4.15, 4.6);
+  const backBeam = new THREE.Mesh(new THREE.BoxGeometry(13.8, 0.35, 0.35), timberPostMat);
+  backBeam.position.set(0, 4.15, -4.6);
+  const sideBeamL = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, 9.6), timberPostMat);
+  sideBeamL.position.set(-6.6, 4.15, 0);
+  const sideBeamR = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, 9.6), timberPostMat);
+  sideBeamR.position.set(6.6, 4.15, 0);
+  const canopyRoof = new THREE.Mesh(new THREE.BoxGeometry(14.8, 0.18, 10.6), garageRoofMat);
+  canopyRoof.position.set(0, 4.55, 0);
+  canopyRoof.rotation.x = -0.08;
+  canopyRoof.castShadow = true;
+  canopyRoof.receiveShadow = true;
+  garageGroup.add(frontBeam, backBeam, sideBeamL, sideBeamR, canopyRoof);
+
+  // Warm overhead garage work light
+  const garageLight = new THREE.PointLight(0xffedd5, 1.5, 22, 1.35);
+  garageLight.position.set(0, 3.85, 0.4);
+  garageGroup.add(garageLight);
+
+  // Interactive Mechanic Repair & Crafting Workbench at center-north (-33, 85.9)
+  const benchGroup = new THREE.Group();
+  benchGroup.position.set(0, 0.12, -4.0);
+  const benchTable = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.92, 1.0), timberPostMat);
+  benchTable.position.y = 0.46;
+  benchTable.castShadow = true;
+  const benchVise = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.28, 0.35), toolMetalMat);
+  benchVise.position.set(-0.75, 1.05, 0.15);
+  const benchLamp = new THREE.Mesh(
+    new THREE.SphereGeometry(0.14, 8, 8),
+    new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0xf59e0b, emissiveIntensity: 1.0 }),
+  );
+  benchLamp.position.set(0.85, 1.18, -0.2);
+  benchGroup.add(benchTable, benchVise, benchLamp);
+  garageGroup.add(benchGroup);
+  colliders.push({
+    x: VEHICLE_GARAGE_POS.x,
+    z: VEHICLE_GARAGE_POS.z - 4.0,
+    radius: 0.85,
+  });
+
+  // Spare Tires & Fuel Cans neatly stacked in West corner
+  for (let t = 0; t < 3; t++) {
+    const tire = new THREE.Mesh(new THREE.TorusGeometry(0.36, 0.13, 8, 14), tireMat);
+    tire.rotation.x = Math.PI / 2;
+    tire.position.set(-5.6, 0.24 + t * 0.24, -3.7);
+    tire.castShadow = true;
+    garageGroup.add(tire);
+  }
+  const fuelCanMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.45, metalness: 0.25 });
+  [-4.6, -4.15].forEach((fx) => {
+    const can = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.56, 0.24), fuelCanMat);
+    can.position.set(fx, 0.4, -4.0);
+    can.castShadow = true;
+    garageGroup.add(can);
+  });
+
+  scene.add(garageGroup);
+
+  const garagePos = new THREE.Vector3(VEHICLE_GARAGE_POS.x, garageGroundY, VEHICLE_GARAGE_POS.z);
+  const garageBenchPos = new THREE.Vector3(
+    VEHICLE_GARAGE_POS.x,
+    garageGroundY + 0.12,
+    VEHICLE_GARAGE_POS.z - 4.0,
+  );
+
+  // Base Armory Supply Chest tucked neatly beside the Vehicle Garage
+  const armoryX = VEHICLE_GARAGE_POS.x + 5.6;
+  const armoryZ = VEHICLE_GARAGE_POS.z - 3.2;
+  const armoryY = getTerrainHeight(armoryX, armoryZ);
+  const armoryChest = createShipwreckLootChest(
+    'base_armory',
+    'Base Armory Supply Chest',
+    'Glock 19, Remington 870, M4A1 & Tactical Ammo',
+    'armory',
+    armoryX,
+    armoryY + 0.08,
+    armoryZ,
+    -0.35,
+    0x10b981,
+  );
+
+  // Cleanly zoned biome resource scatter (wide-open grassy prairies, clean sandy beaches, dense forests)
   let count = 0;
-  for (let attempt = 0; attempt < 1150 && count < 275; attempt++) {
+  for (let attempt = 0; attempt < 1100 && count < 185; attempt++) {
     const angle = rand() * Math.PI * 2;
-    const rad = 14 + Math.sqrt(rand()) * 116;
+    const rad = 16 + Math.sqrt(rand()) * 114;
     const x = Math.cos(angle) * rad;
     const z = Math.sin(angle) * rad;
 
-    if (Math.hypot(x, z - 112) < 12) continue;
+    if (Math.hypot(x, z - 112) < 16) continue;
+    if (z >= 114 && Math.abs(x) < 28) continue; // Keep shipwreck shoreline corridor clean
     if (Math.hypot(x - EXPEDITION_POS.x, z - EXPEDITION_POS.z) < 9) continue;
     if (Math.hypot(x - CAVE_POS.x, z - CAVE_POS.z) < 9) continue;
     if (Math.hypot(x - HOMESTEAD_POS.x, z - HOMESTEAD_POS.z) < 20) continue;
-    if (Math.hypot(x - WHEATFIELD_POS.x, z - WHEATFIELD_POS.z) < 10.5) continue;
-    if (Math.hypot(x - FARMER_POS.x, z - FARMER_POS.z) < 9.5) continue;
-    if (Math.hypot(x - HILL_HOUSE_POS.x, z - HILL_HOUSE_POS.z) < 14.5) continue;
+    if (Math.hypot(x - WHEATFIELD_POS.x, z - WHEATFIELD_POS.z) < 11.5) continue;
+    if (Math.hypot(x - FARMER_POS.x, z - FARMER_POS.z) < 10.5) continue;
+    if (Math.hypot(x - HILL_HOUSE_POS.x, z - HILL_HOUSE_POS.z) < 16.5) continue;
+    if (Math.hypot(x - VEHICLE_GARAGE_POS.x, z - VEHICLE_GARAGE_POS.z) < 15.5) continue;
     if (
-      x >= HILL_HOUSE_POS.x + 4 &&
-      x <= HILL_HOUSE_POS.x + 22 &&
-      Math.abs(z - HILL_HOUSE_POS.z) < 4.5
+      x >= HILL_HOUSE_POS.x + 3 &&
+      x <= HILL_HOUSE_POS.x + 23 &&
+      Math.abs(z - HILL_HOUSE_POS.z) < 5.8
     ) {
       continue;
     }
@@ -1787,10 +2109,12 @@ export function buildIslandWorld(
     if (biome === 'lake' && h < LAKE_CENTER.waterY + 0.1) continue;
     if (river.inRiver && h < river.waterY + 0.1) continue;
 
+    // Wide-open breathable spacing in grasslands & beaches; natural groves in forest/mountain
+    const minDistSq = biome === 'grassland' || biome === 'beach' ? 72 : 28;
     let tooClose = false;
     for (let i = 0; i < resourceNodes.length; i++) {
       const n = resourceNodes[i];
-      if ((n.x - x) * (n.x - x) + (n.z - z) * (n.z - z) < 17) {
+      if ((n.x - x) * (n.x - x) + (n.z - z) * (n.z - z) < minDistSq) {
         tooClose = true;
         break;
       }
@@ -1800,25 +2124,16 @@ export function buildIslandWorld(
     let kind: ResourceNodeKind | null = null;
     if (biome === 'beach') {
       const r = rand();
-      kind =
-        r < 0.36
-          ? 'palm_tree'
-          : r < 0.54
-            ? 'small_stone'
-            : r < 0.72
-              ? 'sand_mound'
-              : r < 0.88
-                ? 'branch_pile'
-                : 'stone_boulder';
+      kind = r < 0.65 ? 'palm_tree' : r < 0.88 ? 'sand_mound' : 'small_stone';
     } else if (biome === 'river' || (river.dist < 10.5 && river.dist > 5.5)) {
       const r = rand();
-      kind = r < 0.45 ? 'clay_deposit' : r < 0.75 ? 'plant_cluster' : 'small_stone';
+      kind = r < 0.52 ? 'clay_deposit' : r < 0.85 ? 'plant_cluster' : 'small_stone';
     } else if (biome === 'mountain') {
       const r = rand();
       kind =
-        r < 0.28
+        r < 0.3
           ? 'ore_vein'
-          : r < 0.54
+          : r < 0.56
             ? 'mountain_rock'
             : r < 0.74
               ? 'stone_boulder'
@@ -1827,36 +2142,31 @@ export function buildIslandWorld(
                 : 'highland_cedar';
     } else if (biome === 'grassland') {
       const r = rand();
+      // Open grassy savanna: tall wheat, grass tufts, occasional berry bush or palm (no boulder/branch clutter)
       kind =
-        r < 0.3
+        r < 0.42
           ? 'wheat_patch'
-          : r < 0.5
+          : r < 0.74
             ? 'grass_tuft'
-            : r < 0.68
+            : r < 0.88
               ? 'berry_bush'
-              : r < 0.82
-                ? 'small_stone'
-                : r < 0.92
-                  ? 'stone_boulder'
-                  : 'palm_tree';
+              : 'palm_tree';
     } else if (biome === 'forest') {
       const r = rand();
       kind =
-        r < 0.25
+        r < 0.3
           ? 'tropical_tree'
-          : r < 0.38
+          : r < 0.45
             ? 'banyan_tree'
-            : r < 0.48
+            : r < 0.56
               ? 'highland_cedar'
-              : r < 0.6
+              : r < 0.7
                 ? 'fiber_fern'
-                : r < 0.72
+                : r < 0.82
                   ? 'berry_bush'
-                  : r < 0.82
+                  : r < 0.91
                     ? 'mushroom_cluster'
-                    : r < 0.92
-                      ? 'plant_cluster'
-                      : 'branch_pile';
+                    : 'plant_cluster';
     }
 
     if (!kind) continue;
@@ -1872,13 +2182,13 @@ export function buildIslandWorld(
     count++;
   }
 
-  // 10. Performance-Friendly Instanced Ambient Grass & Pebble Ground Detail (2 draw calls total)
-  const grassCount = 320;
+  // 10. Performance-Friendly Instanced Ambient Grass & Minimal River/Mountain Pebbles (clean beaches & fields)
+  const grassCount = 260;
   const grassBladeGeo = new THREE.ConeGeometry(0.11, 0.55, 4);
   grassBladeGeo.translate(0, 0.27, 0);
   const ambientGrassMat = new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.9 });
   const grassInstanced = new THREE.InstancedMesh(grassBladeGeo, ambientGrassMat, grassCount);
-  const pebbleCount = 160;
+  const pebbleCount = 75;
   const pebbleGeo = new THREE.DodecahedronGeometry(0.14, 0);
   const pebbleInstanced = new THREE.InstancedMesh(pebbleGeo, smallStoneMat, pebbleCount);
 
@@ -1900,7 +2210,15 @@ export function buildIslandWorld(
     if (Math.hypot(px - SWAMP_POS.x, pz - SWAMP_POS.z) < SWAMP_POS.radius + 2.5) continue;
     if (Math.hypot(px - WHEATFIELD_POS.x, pz - WHEATFIELD_POS.z) < 9.0) continue;
     if (Math.hypot(px - FARMER_POS.x, pz - FARMER_POS.z) < 8.5) continue;
-    if (Math.hypot(px - HILL_HOUSE_POS.x, pz - HILL_HOUSE_POS.z) < 12.0) continue;
+    if (Math.hypot(px - HILL_HOUSE_POS.x, pz - HILL_HOUSE_POS.z) < 16.5) continue;
+    if (
+      px >= HILL_HOUSE_POS.x + 3 &&
+      px <= HILL_HOUSE_POS.x + 23 &&
+      Math.abs(pz - HILL_HOUSE_POS.z) < 5.5
+    ) {
+      continue;
+    }
+    if (Math.hypot(px - VEHICLE_GARAGE_POS.x, pz - VEHICLE_GARAGE_POS.z) < 14.0) continue;
 
     if (gPlaced < grassCount && (biome === 'forest' || biome === 'grassland')) {
       dummy.position.set(px, py, pz);
@@ -1912,7 +2230,7 @@ export function buildIslandWorld(
       tintColor.setHex(biome === 'grassland' ? 0x84a93c : 0x3f7a2c).offsetHSL(0, 0, (rand() - 0.5) * 0.08);
       grassInstanced.setColorAt(gPlaced, tintColor);
       gPlaced++;
-    } else if (pPlaced < pebbleCount && (biome === 'beach' || biome === 'mountain' || biome === 'river')) {
+    } else if (pPlaced < pebbleCount && biome === 'river') {
       dummy.position.set(px, py + 0.04, pz);
       dummy.rotation.set(rand() * 2, rand() * 3, rand() * 2);
       const sc = 0.6 + rand() * 0.95;
@@ -1957,7 +2275,11 @@ export function buildIslandWorld(
     tvScreenMesh: hillHouse.tvScreenMesh,
     tvWorldPos: new THREE.Vector3(HILL_HOUSE_POS.x + 1.4, HILL_HOUSE_Y + 1.24, HILL_HOUSE_POS.z + 0.41),
     hillHousePos: new THREE.Vector3(HILL_HOUSE_POS.x, HILL_HOUSE_Y, HILL_HOUSE_POS.z),
+    garagePos,
+    garageBenchPos,
+    armoryChest,
     wheatfieldPos: new THREE.Vector3(WHEATFIELD_POS.x, wheatY, WHEATFIELD_POS.z),
     caveCeilings,
+    shipwreckChests,
   };
 }

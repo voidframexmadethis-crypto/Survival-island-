@@ -11,6 +11,8 @@ export const WHEATFIELD_POS = { x: -2, z: 68 };
 export const FARMER_POS = { x: -12, z: 70 };
 export const HILL_HOUSE_POS = { x: -44, z: 78 };
 export const HILL_HOUSE_Y = 8.4;
+export const VEHICLE_GARAGE_POS = { x: -28, z: 93 };
+export const VEHICLE_GARAGE_Y = 3.25;
 export const SNOWY_WOODLAND_POS = { x: -24, z: -72 };
 export const AUTUMN_GROVE_POS = { x: 26, z: 22 };
 export const SWAMP_POS = { x: 46, z: 44, radius: 9.0, waterY: 1.55 };
@@ -30,16 +32,19 @@ export const terrainDeltaGrid = new Float32Array(TERRAIN_VERTS * TERRAIN_VERTS);
 export const terrainWetnessGrid = new Float32Array(TERRAIN_VERTS * TERRAIN_VERTS);
 export const terrainScorchGrid = new Float32Array(TERRAIN_VERTS * TERRAIN_VERTS);
 export const terrainLoosenessGrid = new Float32Array(TERRAIN_VERTS * TERRAIN_VERTS);
+export const terrainPuddleGrid = new Float32Array(TERRAIN_VERTS * TERRAIN_VERTS);
 
 export function resetTerrainDeformation(): void {
   terrainDeltaGrid.fill(0);
   terrainWetnessGrid.fill(0);
   terrainScorchGrid.fill(0);
   terrainLoosenessGrid.fill(0);
+  terrainPuddleGrid.fill(0);
 }
 
 export function isTerrainProtectedAt(x: number, z: number): boolean {
-  if (Math.hypot(x - HILL_HOUSE_POS.x, z - HILL_HOUSE_POS.z) < 7.8) return true;
+  if (Math.hypot(x - HILL_HOUSE_POS.x, z - HILL_HOUSE_POS.z) < 10.8) return true;
+  if (Math.hypot(x - VEHICLE_GARAGE_POS.x, z - VEHICLE_GARAGE_POS.z) < 9.5) return true;
   if (Math.hypot(x - FARMER_POS.x, z - FARMER_POS.z) < 4.5) return true;
   return false;
 }
@@ -390,21 +395,28 @@ export function getBaseTerrainHeight(x: number, z: number): number {
 
   // Scenic Hilltop Plateau + gentle East Access Ramp for the Premade Furnished House
   const dHouse = Math.hypot(x - HILL_HOUSE_POS.x, z - HILL_HOUSE_POS.z);
-  if (dHouse < 21) {
-    const houseBlend = 1 - smoothstep(9.5, 21, dHouse);
+  if (dHouse < 16.5) {
+    const houseBlend = 1 - smoothstep(9.8, 16.5, dHouse);
     h = h * (1 - houseBlend) + HILL_HOUSE_Y * houseBlend;
   }
-  // Gentle walkable ramp along +X (east) side from hilltop (x=-36.5) down to farm path (x=-23.5)
+  // Gentle walkable ramp along +X (east) side from hilltop porch (x=-37.5) down to farm path (x=-23.5)
   const dzRamp = Math.abs(z - HILL_HOUSE_POS.z);
   if (
-    x >= HILL_HOUSE_POS.x + 6.5 &&
+    x >= HILL_HOUSE_POS.x + 6.4 &&
     x <= HILL_HOUSE_POS.x + 21.5 &&
-    dzRamp < 4.8
+    dzRamp < 4.6
   ) {
-    const rampT = smoothstep(HILL_HOUSE_POS.x + 7.2, HILL_HOUSE_POS.x + 20.5, x);
-    const sideBlend = 1 - smoothstep(2.0, 4.8, dzRamp);
+    const rampT = smoothstep(HILL_HOUSE_POS.x + 6.8, HILL_HOUSE_POS.x + 20.5, x);
+    const sideBlend = 1 - smoothstep(2.0, 4.6, dzRamp);
     const rampH = HILL_HOUSE_Y * (1 - rampT) + 3.25 * rampT;
     h = h * (1 - sideBlend) + rampH * sideBlend;
+  }
+
+  // Structured Vehicle Garage clearing beside the base (outside the hilltop house footprint)
+  const dGarage = Math.hypot(x - VEHICLE_GARAGE_POS.x, z - VEHICLE_GARAGE_POS.z);
+  if (dGarage < 13.8) {
+    const garageBlend = 1 - smoothstep(9.2, 13.8, dGarage);
+    h = h * (1 - garageBlend) + VEHICLE_GARAGE_Y * garageBlend;
   }
 
   return h;

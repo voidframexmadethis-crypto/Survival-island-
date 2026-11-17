@@ -187,6 +187,12 @@ export function loadGameFromSlot(slotId: string): GameSaveData | null {
       if (!Array.isArray(data.backpackCompartments)) {
         data.backpackCompartments = [];
       }
+      if (!data.weaponMagazines || typeof data.weaponMagazines !== 'object') {
+        data.weaponMagazines = {};
+      }
+      if (typeof data.baseArmoryOpened !== 'boolean') {
+        data.baseArmoryOpened = false;
+      }
     }
     return data;
   } catch {

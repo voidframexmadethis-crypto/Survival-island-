@@ -24,6 +24,10 @@ import {
   createWoolFleeceTexture,
   createYorkshirePigTexture,
 } from './textures';
+import {
+  createExpandedCreatureModel,
+  isExpandedCreatureSpecies,
+} from './expandedCreatureModels';
 
 let cachedAnimalTextures: {
   holstein: THREE.CanvasTexture;
@@ -457,6 +461,9 @@ export function createSailingShipModel(): THREE.Group {
 }
 
 export function createCreatureModel(species: CreatureSpecies): CreatureRig {
+  if (isExpandedCreatureSpecies(species)) {
+    return createExpandedCreatureModel(species, makeContactShadow);
+  }
   const root = new THREE.Group();
   const body = new THREE.Group();
   const head = new THREE.Group();
@@ -2518,6 +2525,19 @@ export function createCampStructureModel(
   }
 
   if (type === 'basic_shelter') {
+    // Timber deck + stone/timber foundation plinth embedded into hill slopes
+    const shelterPlinth = new THREE.Mesh(
+      new THREE.BoxGeometry(3.05, 0.55, 2.65),
+      new THREE.MeshStandardMaterial({ color: 0x57534e, roughness: 0.94 }),
+    );
+    shelterPlinth.position.set(0, -0.25, 0);
+    shelterPlinth.receiveShadow = true;
+    shelterPlinth.castShadow = true;
+    const shelterDeck = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.1, 2.6), woodMat);
+    shelterDeck.position.set(0, 0.04, 0);
+    shelterDeck.receiveShadow = true;
+    group.add(shelterPlinth, shelterDeck);
+
     [
       [-1.4, -1.2],
       [1.4, -1.2],
@@ -2525,8 +2545,8 @@ export function createCampStructureModel(
       [1.4, 1.2],
     ].forEach(([px, pz]) => {
       const h = pz < 0 ? 1.75 : 2.35;
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, h, 7), woodMat);
-      post.position.set(px, h / 2, pz);
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, h + 0.55, 7), woodMat);
+      post.position.set(px, (h - 0.55) / 2, pz);
       post.castShadow = true;
       group.add(post);
     });
@@ -2536,7 +2556,7 @@ export function createCampStructureModel(
     roof.castShadow = true;
     roof.receiveShadow = true;
     group.add(roof);
-    const backWall = new THREE.Mesh(new THREE.BoxGeometry(2.9, 1.5, 0.12), woodMat);
+    const backWall = new THREE.Mesh(new THREE.BoxGeometry(2.9, 1.6, 0.12), woodMat);
     backWall.position.set(0, 0.85, -1.2);
     group.add(backWall);
 
@@ -2545,7 +2565,7 @@ export function createCampStructureModel(
       new THREE.BoxGeometry(1.1, 0.1, 1.85),
       new THREE.MeshStandardMaterial({ color: 0x9ca653, roughness: 0.95 }),
     );
-    mat.position.set(0, 0.08, 0.1);
+    mat.position.set(0, 0.13, 0.1);
     group.add(mat);
     return { group };
   }
@@ -3479,18 +3499,35 @@ export function createHilltopHouse(
     roughness: 0.2,
   });
 
-  // 1. Main Hardwood Floor Deck & Front Porch (+X = East entrance)
+  // 1. Stone Foundation Plinth + Main Hardwood Floor Deck & Front Porch (+X = East entrance)
+  const foundationMat = new THREE.MeshStandardMaterial({ color: 0x57534e, roughness: 0.94 });
+  const mainFoundation = new THREE.Mesh(new THREE.BoxGeometry(9.8, 1.8, 8.8), foundationMat);
+  mainFoundation.position.set(-0.5, -0.88, 0);
+  mainFoundation.receiveShadow = true;
+  mainFoundation.castShadow = true;
+  group.add(mainFoundation);
+
   // House interior spans X: -5.2 to +4.2 (9.4m), Z: -4.2 to +4.2 (8.4m)
   const mainFloor = new THREE.Mesh(new THREE.BoxGeometry(9.6, 0.14, 8.6), floorMat);
   mainFloor.position.set(-0.5, 0.01, 0);
   mainFloor.receiveShadow = true;
   group.add(mainFloor);
 
-  // Porch Deck on +X side (X: +4.2 to +6.4)
+  // Porch Stone Foundation + Deck on +X side (X: +4.2 to +6.4) + Entry Step
+  const porchFoundation = new THREE.Mesh(new THREE.BoxGeometry(2.35, 1.8, 6.35), foundationMat);
+  porchFoundation.position.set(5.3, -0.9, 0);
+  porchFoundation.receiveShadow = true;
+  group.add(porchFoundation);
+
   const porchFloor = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.14, 6.2), trimMat);
   porchFloor.position.set(5.3, 0.0, 0);
   porchFloor.receiveShadow = true;
   group.add(porchFloor);
+
+  const entryStep = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.16, 2.8), foundationMat);
+  entryStep.position.set(6.55, -0.04, 0);
+  entryStep.receiveShadow = true;
+  group.add(entryStep);
 
   // Bathroom Tiled Floor (NW corner: X -5.2..-1.0, Z -4.2..0.0)
   const bathFloor = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.02, 4.2), tileMat);
@@ -4086,7 +4123,17 @@ export function attachCreatureArmorPlates(
   const limbGroup = new THREE.Group();
 
   const isLargeDino =
-    species === 'trex' || species === 'triceratops' || species === 'stegosaurus' || species === 'brachiosaurus';
+    species === 'trex' ||
+    species === 'triceratops' ||
+    species === 'stegosaurus' ||
+    species === 'brachiosaurus' ||
+    species === 'spinosaurus' ||
+    species === 'ankylosaurus' ||
+    species === 'allosaurus' ||
+    species === 'diplodocus' ||
+    species === 'elephant' ||
+    species === 'rhinoceros' ||
+    species === 'hippopotamus';
 
   // Head Helm Armor
   if (zoneArmor.head.tier !== 'none' && zoneArmor.head.maxHp > 0) {
@@ -4205,6 +4252,150 @@ export function createCaveCeilingClusterMesh(): THREE.Group {
   return g;
 }
 
+export interface RemotePlayerMeshHandle {
+  group: THREE.Group;
+  bodyGroup: THREE.Group;
+  headGroup: THREE.Group;
+  armL: THREE.Group;
+  armR: THREE.Group;
+  legL: THREE.Group;
+  legR: THREE.Group;
+  heldGunMesh: THREE.Mesh;
+  heldToolMesh: THREE.Mesh;
+}
 
+export function createRemotePlayerMesh(
+  name: string,
+  accentHex = 0x38bdf8,
+): RemotePlayerMeshHandle {
+  const group = new THREE.Group();
+  const bodyGroup = new THREE.Group();
+  group.add(bodyGroup);
 
+  const jacketMat = new THREE.MeshStandardMaterial({ color: accentHex, roughness: 0.72 });
+  const pantsMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.86 });
+  const bootMat = new THREE.MeshStandardMaterial({ color: 0x292524, roughness: 0.9 });
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0xd99b6c, roughness: 0.7 });
+  const packMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.85 });
+  const visorMat = new THREE.MeshStandardMaterial({
+    color: 0x0f172a,
+    metalness: 0.8,
+    roughness: 0.2,
+  });
 
+  // Articulated Legs
+  const makeLeg = (lx: number) => {
+    const legPivot = new THREE.Group();
+    legPivot.position.set(lx, 0.78, 0);
+    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.09, 0.62, 8), pantsMat);
+    thigh.position.y = -0.34;
+    thigh.castShadow = true;
+    const boot = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.2, 0.24), bootMat);
+    boot.position.set(0, -0.68, 0.03);
+    boot.castShadow = true;
+    legPivot.add(thigh, boot);
+    bodyGroup.add(legPivot);
+    return legPivot;
+  };
+  const legL = makeLeg(-0.14);
+  const legR = makeLeg(0.14);
+
+  // Torso + Survival Backpack
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.68, 0.28), jacketMat);
+  torso.position.y = 1.14;
+  torso.castShadow = true;
+  const backpack = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.48, 0.18), packMat);
+  backpack.position.set(0, 1.16, -0.22);
+  backpack.castShadow = true;
+  bodyGroup.add(torso, backpack);
+
+  // Articulated Arms + Held Item Proxies
+  const makeArm = (ax: number) => {
+    const armPivot = new THREE.Group();
+    armPivot.position.set(ax, 1.4, 0);
+    const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.07, 0.52, 8), jacketMat);
+    sleeve.position.y = -0.24;
+    sleeve.castShadow = true;
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), skinMat);
+    hand.position.y = -0.52;
+    armPivot.add(sleeve, hand);
+    bodyGroup.add(armPivot);
+    return armPivot;
+  };
+  const armL = makeArm(-0.33);
+  const armR = makeArm(0.33);
+
+  const heldGunMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(0.08, 0.12, 0.52),
+    new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.78, roughness: 0.3 }),
+  );
+  heldGunMesh.position.set(0, -0.5, 0.24);
+  heldGunMesh.visible = false;
+  armR.add(heldGunMesh);
+
+  const heldToolMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.03, 0.03, 0.65, 6),
+    new THREE.MeshStandardMaterial({ color: 0x92400e, roughness: 0.85 }),
+  );
+  heldToolMesh.rotation.x = Math.PI / 2.2;
+  heldToolMesh.position.set(0, -0.52, 0.22);
+  heldToolMesh.visible = false;
+  armR.add(heldToolMesh);
+
+  // Head + Shades Visor
+  const headGroup = new THREE.Group();
+  headGroup.position.set(0, 1.68, 0);
+  const cranium = new THREE.Mesh(new THREE.SphereGeometry(0.19, 12, 10), skinMat);
+  cranium.castShadow = true;
+  const hair = new THREE.Mesh(
+    new THREE.SphereGeometry(0.195, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    bootMat,
+  );
+  hair.position.y = 0.02;
+  const visor = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.075, 0.08), visorMat);
+  visor.position.set(0, 0.02, 0.16);
+  headGroup.add(cranium, hair, visor);
+  bodyGroup.add(headGroup);
+
+  // Floating Nameplate Sprite
+  if (typeof document !== 'undefined') {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = 'rgba(12, 10, 9, 0.78)';
+      ctx.beginPath();
+      ctx.roundRect(12, 10, 232, 44, 12);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.75)';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+      ctx.fillStyle = '#fef3c7';
+      ctx.font = 'bold 24px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(name.slice(0, 18), 128, 33);
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const sprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }),
+    );
+    sprite.position.set(0, 2.25, 0);
+    sprite.scale.set(1.5, 0.38, 1);
+    group.add(sprite);
+  }
+
+  return {
+    group,
+    bodyGroup,
+    headGroup,
+    armL,
+    armR,
+    legL,
+    legR,
+    heldGunMesh,
+    heldToolMesh,
+  };
+}

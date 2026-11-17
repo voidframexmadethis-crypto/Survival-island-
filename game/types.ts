@@ -261,6 +261,12 @@ export interface ModularVehicleData {
   id: string;
   name: string;
   paintColor: string;
+  preset?: string;
+  rimColor?: string;
+  suspensionOffset?: number;
+  wheelScale?: number;
+  hydraulicHop?: boolean;
+  turboBoost?: number;
   x: number;
   y: number;
   z: number;
@@ -351,6 +357,33 @@ export interface ItemDefinition {
   structureType?: CampStructureType;
   structuralKind?: StructuralBlockKind;
   kineticKind?: KineticNodeKind;
+}
+
+export type FirearmReloadMode = 'magazine' | 'single';
+
+export type FirearmSoundProfile =
+  | 'pistol'
+  | 'shotgun'
+  | 'smg'
+  | 'rifle'
+  | 'sniper'
+  | 'lmg'
+  | 'musket';
+
+export interface FirearmSpec {
+  magSize: number;
+  reloadTime: number;
+  reloadMode: FirearmReloadMode;
+  fireRate: number;
+  pelletCount: number;
+  spread: number;
+  recoil: number;
+  damage: number;
+  muzzleSpeed: number;
+  range: number;
+  autoFire: boolean;
+  caliberLabel: string;
+  soundProfile: FirearmSoundProfile;
 }
 
 export type BodyZone = 'head' | 'chest' | 'limb';
@@ -546,15 +579,44 @@ export type CreatureSpecies =
   | 'great_horned_owl'
   | 'bird'
   | 'fish_school'
+  // Expanded Global Wild Animals, Arctic, Savanna, Jungle & Birds
+  | 'elephant'
+  | 'reindeer'
+  | 'giraffe'
+  | 'zebra'
+  | 'rhinoceros'
+  | 'hippopotamus'
+  | 'tiger'
+  | 'cheetah'
+  | 'hyena'
+  | 'polar_bear'
+  | 'moose'
+  | 'penguin'
+  | 'gorilla'
+  | 'kangaroo'
+  | 'camel'
+  | 'toucan'
+  | 'flamingo'
+  | 'peregrine_falcon'
+  | 'ostrich'
   // Marine Interactive
   | 'dolphin'
-  // Prehistoric Dinosaurs
+  | 'sea_turtle'
+  | 'great_white_shark'
+  | 'manta_ray'
+  // Prehistoric Dinosaurs & Pterosaurs
   | 'trex'
   | 'triceratops'
   | 'velociraptor'
   | 'stegosaurus'
   | 'brachiosaurus'
-  | 'parasaurolophus';
+  | 'parasaurolophus'
+  | 'spinosaurus'
+  | 'ankylosaurus'
+  | 'allosaurus'
+  | 'dilophosaurus'
+  | 'diplodocus'
+  | 'pteranodon';
 
 export type CreatureTemperament =
   | 'apex_predator'
@@ -700,6 +762,8 @@ export interface GameSaveData {
   tvAutoCycle?: boolean;
   tvPaused?: boolean;
   tamedCreatures?: { species: CreatureSpecies; name: string }[];
+  weaponMagazines?: Partial<Record<ItemId, number>>;
+  baseArmoryOpened?: boolean;
 }
 
 export interface CarcassSaveData {
@@ -732,7 +796,9 @@ export type ActiveModal =
   | 'missions'
   | 'pause'
   | 'settings'
-  | 'console';
+  | 'console'
+  | 'multiplayer'
+  | 'mods';
 
 export interface NearbyInteraction {
   id: string;
@@ -777,7 +843,9 @@ export interface NearbyInteraction {
     | 'structural_block'
     | 'kinetic_node'
     | 'modular_vehicle'
-    | 'shipwreck';
+    | 'shipwreck'
+    | 'garage_bench'
+    | 'armory_chest';
   actionCategory?:
     | 'chop'
     | 'mine'
@@ -873,6 +941,30 @@ export interface HUDStateSnapshot {
     cratersCarved: number;
     activeWaterStreams: number;
     erodedVolume: number;
+    puddleCount?: number;
+  };
+  equippedWeaponState?: {
+    itemId: ItemId;
+    magCurrent: number;
+    magMax: number;
+    reserveAmmo: number;
+    isReloading: boolean;
+    reloadProgress: number;
+    reloadMode: FirearmReloadMode;
+    caliberLabel: string;
+  } | null;
+  cozyComfort?: {
+    active: boolean;
+    level: number;
+    label: string;
+    warmProtected: boolean;
+    tvActive: boolean;
+    restedBonus: boolean;
+  };
+  garageSummary?: {
+    parkedCount: number;
+    damagedCount: number;
+    needsFuelCount: number;
   };
   targetHitbox?: TargetHitboxSnapshot | null;
   momentumState?: MomentumHudState;
@@ -924,4 +1016,81 @@ export interface HUDStateSnapshot {
     hp: number;
     maxHp: number;
   } | null;
+  multiplayerState?: MultiplayerStatusSnapshot;
+  modState?: ModSystemSnapshot;
 }
+
+export interface ModGameplayTweaks {
+  moveSpeedMultiplier: number;
+  gravityMultiplier: number;
+  damageMultiplier: number;
+  dayLengthMultiplier: number;
+  jumpMultiplier: number;
+  gatherYieldMultiplier: number;
+  vehicleSpeedMultiplier: number;
+}
+
+export interface CustomModAsset {
+  id: string;
+  name: string;
+  format: 'gltf' | 'glb' | 'obj';
+  sourceType: 'file' | 'url';
+  sourceUrl?: string;
+  x: number;
+  y: number;
+  z: number;
+  scale: number;
+  rotationY: number;
+  meshCount: number;
+}
+
+export interface CustomModScript {
+  id: string;
+  name: string;
+  sourceUrl?: string;
+  code: string;
+  enabled: boolean;
+  lastError?: string;
+}
+
+export interface ModExportBundle {
+  format: 'survival-island-modpack-v1';
+  exportedAt: number;
+  tweaks: ModGameplayTweaks;
+  scripts: { name: string; sourceUrl?: string; code: string; enabled: boolean }[];
+  build?: {
+    structures: PlacedStructure[];
+    structuralBlocks: StructuralBlock[];
+    vehicles: ModularVehicleData[];
+  };
+}
+
+export interface ModSystemSnapshot {
+  tweaks: ModGameplayTweaks;
+  assets: CustomModAsset[];
+  scripts: CustomModScript[];
+}
+
+export interface MultiplayerPeerInfo {
+  peerId: string;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  biome: string;
+  connected: boolean;
+  transport: 'webrtc' | 'relay' | 'local';
+}
+
+export interface MultiplayerStatusSnapshot {
+  connected: boolean;
+  isHost: boolean;
+  roomCode: string | null;
+  localPeerId: string;
+  playerName: string;
+  peers: MultiplayerPeerInfo[];
+  pvpEnabled: boolean;
+  statusMessage: string;
+  chatLog?: { peerId: string; name: string; text: string; time: number }[];
+}
+

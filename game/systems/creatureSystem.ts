@@ -18,6 +18,7 @@ import {
   CAVE_POS,
   DEAD_OAK_POS,
   FARMER_POS,
+  getBiomeAt,
   getTerrainHeight,
   HILL_HOUSE_POS,
   HOMESTEAD_POS,
@@ -25,6 +26,7 @@ import {
   OCEAN_LEVEL,
   SNOWY_WOODLAND_POS,
   SWAMP_POS,
+  VEHICLE_GARAGE_POS,
   WHEATFIELD_POS,
 } from '../world/terrain';
 import { getCreatureDefaultArmor } from './combatSystem';
@@ -504,6 +506,456 @@ export const SPECIES_SPECS: Record<CreatureSpecies, SpeciesSpec> = {
     ],
     footprintRadius: 0,
   },
+  // Expanded Global Wild Animals, Arctic, Savanna, Jungle & Birds
+  elephant: {
+    species: 'elephant',
+    displayName: 'Savanna Elephant',
+    temperament: 'defensive_herbivore',
+    maxHp: 340,
+    walkSpeed: 2.1,
+    chaseSpeed: 6.4,
+    attackDamage: 24,
+    aggroRadius: 0,
+    attackRange: 3.1,
+    drops: [
+      { itemId: 'raw_meat', min: 8, max: 12 },
+      { itemId: 'hide', min: 5, max: 8 },
+      { itemId: 'bone', min: 4, max: 6 },
+    ],
+    footprintRadius: 0.62,
+  },
+  reindeer: {
+    species: 'reindeer',
+    displayName: 'Arctic Reindeer',
+    temperament: 'timid_herbivore',
+    maxHp: 68,
+    walkSpeed: 3.1,
+    chaseSpeed: 8.6,
+    attackDamage: 6,
+    aggroRadius: 0,
+    attackRange: 1.9,
+    drops: [
+      { itemId: 'raw_meat', min: 3, max: 5 },
+      { itemId: 'hide', min: 2, max: 4 },
+      { itemId: 'bone', min: 2, max: 3 },
+    ],
+    footprintRadius: 0.28,
+  },
+  giraffe: {
+    species: 'giraffe',
+    displayName: 'Reticulated Giraffe',
+    temperament: 'timid_herbivore',
+    maxHp: 175,
+    walkSpeed: 2.6,
+    chaseSpeed: 7.4,
+    attackDamage: 12,
+    aggroRadius: 0,
+    attackRange: 2.6,
+    drops: [
+      { itemId: 'raw_meat', min: 5, max: 8 },
+      { itemId: 'hide', min: 4, max: 6 },
+      { itemId: 'bone', min: 3, max: 5 },
+    ],
+    footprintRadius: 0.38,
+  },
+  zebra: {
+    species: 'zebra',
+    displayName: 'Plains Zebra',
+    temperament: 'timid_herbivore',
+    maxHp: 78,
+    walkSpeed: 3.2,
+    chaseSpeed: 8.8,
+    attackDamage: 6,
+    aggroRadius: 0,
+    attackRange: 1.9,
+    drops: [
+      { itemId: 'raw_meat', min: 3, max: 5 },
+      { itemId: 'hide', min: 3, max: 4 },
+      { itemId: 'bone', min: 1, max: 2 },
+    ],
+    footprintRadius: 0.28,
+  },
+  rhinoceros: {
+    species: 'rhinoceros',
+    displayName: 'Armored Rhinoceros',
+    temperament: 'defensive_herbivore',
+    maxHp: 260,
+    walkSpeed: 2.3,
+    chaseSpeed: 7.4,
+    attackDamage: 22,
+    aggroRadius: 0,
+    attackRange: 2.8,
+    drops: [
+      { itemId: 'raw_meat', min: 6, max: 9 },
+      { itemId: 'hide', min: 5, max: 7 },
+      { itemId: 'bone', min: 3, max: 5 },
+    ],
+    footprintRadius: 0.5,
+  },
+  hippopotamus: {
+    species: 'hippopotamus',
+    displayName: 'River Hippopotamus',
+    temperament: 'defensive_herbivore',
+    maxHp: 245,
+    walkSpeed: 2.0,
+    chaseSpeed: 6.8,
+    attackDamage: 21,
+    aggroRadius: 0,
+    attackRange: 2.6,
+    drops: [
+      { itemId: 'raw_meat', min: 6, max: 9 },
+      { itemId: 'hide', min: 4, max: 6 },
+      { itemId: 'bone', min: 2, max: 4 },
+    ],
+    footprintRadius: 0.48,
+  },
+  tiger: {
+    species: 'tiger',
+    displayName: 'Bengal Tiger',
+    temperament: 'apex_predator',
+    maxHp: 135,
+    walkSpeed: 3.1,
+    chaseSpeed: 8.8,
+    attackDamage: 18,
+    aggroRadius: 20,
+    attackRange: 2.4,
+    drops: [
+      { itemId: 'raw_meat', min: 4, max: 6 },
+      { itemId: 'hide', min: 3, max: 4 },
+      { itemId: 'bone', min: 2, max: 3 },
+    ],
+    footprintRadius: 0.3,
+  },
+  cheetah: {
+    species: 'cheetah',
+    displayName: 'Spotted Cheetah',
+    temperament: 'pack_predator',
+    maxHp: 82,
+    walkSpeed: 3.6,
+    chaseSpeed: 11.4,
+    attackDamage: 13,
+    aggroRadius: 18,
+    attackRange: 2.2,
+    drops: [
+      { itemId: 'raw_meat', min: 2, max: 4 },
+      { itemId: 'hide', min: 2, max: 3 },
+    ],
+    footprintRadius: 0.24,
+  },
+  hyena: {
+    species: 'hyena',
+    displayName: 'Spotted Hyena',
+    temperament: 'pack_predator',
+    maxHp: 68,
+    walkSpeed: 3.2,
+    chaseSpeed: 7.8,
+    attackDamage: 11,
+    aggroRadius: 16,
+    attackRange: 2.0,
+    drops: [
+      { itemId: 'raw_meat', min: 2, max: 3 },
+      { itemId: 'hide', min: 1, max: 2 },
+      { itemId: 'bone', min: 1, max: 2 },
+    ],
+    footprintRadius: 0.22,
+  },
+  polar_bear: {
+    species: 'polar_bear',
+    displayName: 'Arctic Polar Bear',
+    temperament: 'apex_predator',
+    maxHp: 175,
+    walkSpeed: 2.4,
+    chaseSpeed: 7.1,
+    attackDamage: 20,
+    aggroRadius: 20,
+    attackRange: 2.6,
+    drops: [
+      { itemId: 'raw_meat', min: 5, max: 7 },
+      { itemId: 'hide', min: 4, max: 5 },
+      { itemId: 'bone', min: 2, max: 3 },
+    ],
+    footprintRadius: 0.42,
+  },
+  moose: {
+    species: 'moose',
+    displayName: 'Giant Bull Moose',
+    temperament: 'defensive_herbivore',
+    maxHp: 155,
+    walkSpeed: 2.6,
+    chaseSpeed: 7.5,
+    attackDamage: 16,
+    aggroRadius: 0,
+    attackRange: 2.5,
+    drops: [
+      { itemId: 'raw_meat', min: 5, max: 8 },
+      { itemId: 'hide', min: 3, max: 5 },
+      { itemId: 'bone', min: 3, max: 4 },
+    ],
+    footprintRadius: 0.36,
+  },
+  penguin: {
+    species: 'penguin',
+    displayName: 'Emperor Penguin',
+    temperament: 'domestic_calm',
+    maxHp: 22,
+    walkSpeed: 1.6,
+    chaseSpeed: 3.4,
+    attackDamage: 0,
+    aggroRadius: 0,
+    attackRange: 0,
+    drops: [{ itemId: 'raw_meat', min: 1, max: 2 }],
+    footprintRadius: 0.14,
+  },
+  gorilla: {
+    species: 'gorilla',
+    displayName: 'Silverback Gorilla',
+    temperament: 'defensive_herbivore',
+    maxHp: 165,
+    walkSpeed: 2.3,
+    chaseSpeed: 6.9,
+    attackDamage: 19,
+    aggroRadius: 0,
+    attackRange: 2.4,
+    drops: [
+      { itemId: 'raw_meat', min: 4, max: 6 },
+      { itemId: 'hide', min: 3, max: 4 },
+      { itemId: 'bone', min: 2, max: 3 },
+    ],
+    footprintRadius: 0.34,
+  },
+  kangaroo: {
+    species: 'kangaroo',
+    displayName: 'Red Kangaroo',
+    temperament: 'timid_herbivore',
+    maxHp: 64,
+    walkSpeed: 3.4,
+    chaseSpeed: 8.9,
+    attackDamage: 9,
+    aggroRadius: 0,
+    attackRange: 2.0,
+    drops: [
+      { itemId: 'raw_meat', min: 2, max: 4 },
+      { itemId: 'hide', min: 2, max: 3 },
+    ],
+    footprintRadius: 0.24,
+  },
+  camel: {
+    species: 'camel',
+    displayName: 'Desert Camel',
+    temperament: 'timid_herbivore',
+    maxHp: 135,
+    walkSpeed: 2.5,
+    chaseSpeed: 6.4,
+    attackDamage: 7,
+    aggroRadius: 0,
+    attackRange: 2.1,
+    drops: [
+      { itemId: 'raw_meat', min: 4, max: 6 },
+      { itemId: 'hide', min: 3, max: 5 },
+    ],
+    footprintRadius: 0.32,
+  },
+  toucan: {
+    species: 'toucan',
+    displayName: 'Toco Toucan',
+    temperament: 'aerial_ambient',
+    maxHp: 16,
+    walkSpeed: 5.5,
+    chaseSpeed: 9.0,
+    attackDamage: 0,
+    aggroRadius: 0,
+    attackRange: 0,
+    drops: [{ itemId: 'raw_meat', min: 1, max: 1 }],
+    footprintRadius: 0,
+  },
+  flamingo: {
+    species: 'flamingo',
+    displayName: 'Greater Flamingo',
+    temperament: 'timid_herbivore',
+    maxHp: 24,
+    walkSpeed: 2.0,
+    chaseSpeed: 5.4,
+    attackDamage: 0,
+    aggroRadius: 0,
+    attackRange: 0,
+    drops: [{ itemId: 'raw_meat', min: 1, max: 2 }],
+    footprintRadius: 0.14,
+  },
+  peregrine_falcon: {
+    species: 'peregrine_falcon',
+    displayName: 'Peregrine Falcon',
+    temperament: 'aerial_ambient',
+    maxHp: 28,
+    walkSpeed: 7.5,
+    chaseSpeed: 13.0,
+    attackDamage: 0,
+    aggroRadius: 0,
+    attackRange: 0,
+    drops: [{ itemId: 'raw_meat', min: 1, max: 2 }],
+    footprintRadius: 0,
+  },
+  ostrich: {
+    species: 'ostrich',
+    displayName: 'Plains Ostrich',
+    temperament: 'timid_herbivore',
+    maxHp: 72,
+    walkSpeed: 3.8,
+    chaseSpeed: 10.2,
+    attackDamage: 8,
+    aggroRadius: 0,
+    attackRange: 2.0,
+    drops: [
+      { itemId: 'raw_meat', min: 3, max: 4 },
+      { itemId: 'hide', min: 1, max: 2 },
+    ],
+    footprintRadius: 0.24,
+  },
+  sea_turtle: {
+    species: 'sea_turtle',
+    displayName: 'Green Sea Turtle',
+    temperament: 'friendly_marine',
+    maxHp: 95,
+    walkSpeed: 2.8,
+    chaseSpeed: 5.0,
+    attackDamage: 0,
+    aggroRadius: 0,
+    attackRange: 0,
+    drops: [
+      { itemId: 'raw_meat', min: 2, max: 4 },
+      { itemId: 'bone', min: 2, max: 3 },
+    ],
+    footprintRadius: 0,
+  },
+  great_white_shark: {
+    species: 'great_white_shark',
+    displayName: 'Great White Shark',
+    temperament: 'aquatic_school',
+    maxHp: 195,
+    walkSpeed: 4.8,
+    chaseSpeed: 9.2,
+    attackDamage: 18,
+    aggroRadius: 0,
+    attackRange: 2.5,
+    drops: [
+      { itemId: 'raw_meat', min: 5, max: 8 },
+      { itemId: 'bone', min: 2, max: 4 },
+    ],
+    footprintRadius: 0,
+  },
+  manta_ray: {
+    species: 'manta_ray',
+    displayName: 'Giant Manta Ray',
+    temperament: 'friendly_marine',
+    maxHp: 110,
+    walkSpeed: 3.6,
+    chaseSpeed: 6.0,
+    attackDamage: 0,
+    aggroRadius: 0,
+    attackRange: 0,
+    drops: [{ itemId: 'raw_meat', min: 3, max: 5 }],
+    footprintRadius: 0,
+  },
+  spinosaurus: {
+    species: 'spinosaurus',
+    displayName: 'Spinosaurus',
+    temperament: 'apex_predator',
+    maxHp: 310,
+    walkSpeed: 2.8,
+    chaseSpeed: 7.4,
+    attackDamage: 24,
+    aggroRadius: 24,
+    attackRange: 3.4,
+    drops: [
+      { itemId: 'dino_meat', min: 7, max: 10 },
+      { itemId: 'hide', min: 4, max: 6 },
+      { itemId: 'bone', min: 3, max: 5 },
+    ],
+    footprintRadius: 0.6,
+  },
+  ankylosaurus: {
+    species: 'ankylosaurus',
+    displayName: 'Ankylosaurus',
+    temperament: 'defensive_herbivore',
+    maxHp: 285,
+    walkSpeed: 1.9,
+    chaseSpeed: 5.2,
+    attackDamage: 22,
+    aggroRadius: 0,
+    attackRange: 3.0,
+    drops: [
+      { itemId: 'dino_meat', min: 6, max: 9 },
+      { itemId: 'hide', min: 5, max: 7 },
+      { itemId: 'bone', min: 4, max: 6 },
+    ],
+    footprintRadius: 0.52,
+  },
+  allosaurus: {
+    species: 'allosaurus',
+    displayName: 'Allosaurus',
+    temperament: 'apex_predator',
+    maxHp: 215,
+    walkSpeed: 3.1,
+    chaseSpeed: 8.2,
+    attackDamage: 20,
+    aggroRadius: 22,
+    attackRange: 2.9,
+    drops: [
+      { itemId: 'dino_meat', min: 5, max: 7 },
+      { itemId: 'hide', min: 3, max: 5 },
+      { itemId: 'bone', min: 2, max: 4 },
+    ],
+    footprintRadius: 0.46,
+  },
+  dilophosaurus: {
+    species: 'dilophosaurus',
+    displayName: 'Dilophosaurus',
+    temperament: 'pack_predator',
+    maxHp: 95,
+    walkSpeed: 3.5,
+    chaseSpeed: 8.4,
+    attackDamage: 14,
+    aggroRadius: 19,
+    attackRange: 2.3,
+    drops: [
+      { itemId: 'dino_meat', min: 3, max: 5 },
+      { itemId: 'hide', min: 2, max: 3 },
+      { itemId: 'bone', min: 1, max: 2 },
+    ],
+    footprintRadius: 0.3,
+  },
+  diplodocus: {
+    species: 'diplodocus',
+    displayName: 'Diplodocus',
+    temperament: 'defensive_herbivore',
+    maxHp: 460,
+    walkSpeed: 1.8,
+    chaseSpeed: 3.6,
+    attackDamage: 18,
+    aggroRadius: 0,
+    attackRange: 3.8,
+    drops: [
+      { itemId: 'dino_meat', min: 10, max: 14 },
+      { itemId: 'hide', min: 5, max: 8 },
+      { itemId: 'bone', min: 4, max: 6 },
+    ],
+    footprintRadius: 0.72,
+  },
+  pteranodon: {
+    species: 'pteranodon',
+    displayName: 'Pteranodon',
+    temperament: 'aerial_ambient',
+    maxHp: 62,
+    walkSpeed: 6.5,
+    chaseSpeed: 11.0,
+    attackDamage: 0,
+    aggroRadius: 0,
+    attackRange: 0,
+    drops: [
+      { itemId: 'dino_meat', min: 2, max: 4 },
+      { itemId: 'hide', min: 1, max: 2 },
+    ],
+    footprintRadius: 0,
+  },
 };
 
 export interface ScavengerCarcassTarget {
@@ -681,6 +1133,41 @@ export class CreatureManager {
       ['bison', -54, 32, 'always'],
       ['bison', -60, 22, 'always'],
       ['great_horned_owl', DEAD_OAK_POS.x + 1.35, DEAD_OAK_POS.z + 0.2, 'always'],
+      // Expanded Global Wildlife Showcase (Savanna, Arctic, Jungle, Coast & Prehistoric)
+      ['elephant', -70, 18, 'always'],
+      ['elephant', -75, 22, 'always'],
+      ['giraffe', -66, 28, 'always'],
+      ['zebra', -64, 4, 'always'],
+      ['zebra', -68, 7, 'always'],
+      ['rhinoceros', -78, -6, 'always'],
+      ['cheetah', -58, -28, 'always'],
+      ['hyena', -48, -32, 'always'],
+      ['reindeer', SNOWY_WOODLAND_POS.x - 5, SNOWY_WOODLAND_POS.z + 4, 'always'],
+      ['reindeer', SNOWY_WOODLAND_POS.x + 6, SNOWY_WOODLAND_POS.z - 3, 'always'],
+      ['moose', SNOWY_WOODLAND_POS.x + 11, SNOWY_WOODLAND_POS.z + 7, 'always'],
+      ['polar_bear', SNOWY_WOODLAND_POS.x - 8, SNOWY_WOODLAND_POS.z - 7, 'always'],
+      ['penguin', SNOWY_WOODLAND_POS.x + 3, SNOWY_WOODLAND_POS.z + 10, 'always'],
+      ['penguin', SNOWY_WOODLAND_POS.x + 5, SNOWY_WOODLAND_POS.z + 11, 'always'],
+      ['tiger', 42, -16, 'always'],
+      ['gorilla', 48, 22, 'always'],
+      ['kangaroo', -46, 74, 'always'],
+      ['camel', 52, 74, 'always'],
+      ['ostrich', -52, 62, 'always'],
+      ['flamingo', SWAMP_POS.x - 7, SWAMP_POS.z + 6, 'always'],
+      ['flamingo', LAKE_CENTER.x - 14, LAKE_CENTER.z + 10, 'always'],
+      ['hippopotamus', LAKE_CENTER.x + 12, LAKE_CENTER.z - 9, 'always'],
+      ['toucan', 34, 34, 'diurnal'],
+      ['peregrine_falcon', -20, -45, 'diurnal'],
+      ['pteranodon', 28, -24, 'always'],
+      ['pteranodon', -35, -35, 'always'],
+      ['spinosaurus', SWAMP_POS.x - 8, SWAMP_POS.z - 7, 'always'],
+      ['ankylosaurus', -38, -28, 'always'],
+      ['allosaurus', 40, -34, 'always'],
+      ['dilophosaurus', 28, 4, 'always'],
+      ['diplodocus', 6, -32, 'always'],
+      ['sea_turtle', -12, 128, 'always'],
+      ['great_white_shark', 38, 138, 'always'],
+      ['manta_ray', -42, 136, 'always'],
     ];
 
     spawns.forEach(([species, x, z, spawnCycle], i) => {
@@ -718,21 +1205,34 @@ export class CreatureManager {
       }
 
       const dSwamp = Math.hypot(x - SWAMP_POS.x, z - SWAMP_POS.z);
+      const isMarine =
+        species === 'dolphin' ||
+        species === 'fish_school' ||
+        species === 'sea_turtle' ||
+        species === 'great_white_shark' ||
+        species === 'manta_ray';
+      const isAerialSoarer =
+        species === 'bald_eagle' ||
+        species === 'peregrine_falcon' ||
+        species === 'pteranodon';
+      const isAerialFlier = species === 'bird' || species === 'toucan';
       const y = perch
         ? perch.y
         : species === 'dolphin'
           ? OCEAN_LEVEL - 0.15
-          : species === 'bird'
-            ? 24 + (i % 3) * 5
-            : species === 'bald_eagle'
-              ? 18.5 + (i % 2) * 3.2
-              : species === 'saltwater_crocodile' && dSwamp < SWAMP_POS.radius
-                ? SWAMP_POS.waterY - 0.24
-                : species === 'fish_school'
-                  ? Math.hypot(x - LAKE_CENTER.x, z - LAKE_CENTER.z) < 25
-                    ? LAKE_CENTER.waterY - 0.55
-                    : OCEAN_LEVEL - 0.45
-                  : getTerrainHeight(x, z);
+          : species === 'sea_turtle' || species === 'great_white_shark' || species === 'manta_ray'
+            ? OCEAN_LEVEL - 0.48
+            : isAerialFlier
+              ? 24 + (i % 3) * 5
+              : isAerialSoarer
+                ? 19 + (i % 3) * 3.2
+                : species === 'saltwater_crocodile' && dSwamp < SWAMP_POS.radius
+                  ? SWAMP_POS.waterY - 0.24
+                  : species === 'fish_school'
+                    ? Math.hypot(x - LAKE_CENTER.x, z - LAKE_CENTER.z) < 25
+                      ? LAKE_CENTER.waterY - 0.55
+                      : OCEAN_LEVEL - 0.45
+                    : getTerrainHeight(x, z);
       rig.root.position.set(x, y, z);
       const initialActive = spawnCycle !== 'nocturnal';
       rig.root.visible = initialActive;
@@ -761,7 +1261,7 @@ export class CreatureManager {
         respawnTimer: 0,
         state: perch
           ? 'idle'
-          : species === 'dolphin' || species === 'fish_school'
+          : isMarine
             ? 'swim'
             : 'wander',
         stateTimer: 3 + Math.random() * 4,
@@ -842,10 +1342,42 @@ export class CreatureManager {
     });
   }
 
+  private disposeCreatureRig(rig: CreatureRig): void {
+    this.scene.remove(rig.root);
+    rig.root.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        obj.geometry?.dispose();
+        if (Array.isArray(obj.material)) {
+          obj.material.forEach((m) => m.dispose());
+        } else {
+          obj.material?.dispose();
+        }
+      }
+    });
+  }
+
   public spawnWildAnimalAt(species: CreatureSpecies, x: number, z: number): void {
     const spec = SPECIES_SPECS[species];
     const rig = createCreatureModel(species);
-    const y = getTerrainHeight(x, z);
+    const isMarine =
+      species === 'dolphin' ||
+      species === 'fish_school' ||
+      species === 'sea_turtle' ||
+      species === 'great_white_shark' ||
+      species === 'manta_ray';
+    const isAerial =
+      species === 'bird' ||
+      species === 'toucan' ||
+      species === 'bald_eagle' ||
+      species === 'peregrine_falcon' ||
+      species === 'pteranodon';
+    const y = isMarine
+      ? species === 'dolphin'
+        ? OCEAN_LEVEL - 0.15
+        : OCEAN_LEVEL - 0.48
+      : isAerial
+        ? Math.max(OCEAN_LEVEL + 16, getTerrainHeight(x, z) + 16)
+        : getTerrainHeight(x, z);
     rig.root.position.set(x, y, z);
     rig.root.visible = true;
     const zoneArmor = getCreatureDefaultArmor(species, false);
@@ -871,7 +1403,7 @@ export class CreatureManager {
       spawnCycle: 'always',
       cycleActive: true,
       respawnTimer: 0,
-      state: 'wander',
+      state: isMarine ? 'swim' : 'wander',
       stateTimer: 3 + Math.random() * 4,
       attackCooldown: 0,
       provokedTimer: 0,
@@ -908,12 +1440,12 @@ export class CreatureManager {
         scale: 1.6,
       },
       {
-        species: 'saltwater_crocodile',
+        species: 'spinosaurus',
         name: 'Spinosaurus River Titan',
         x: SWAMP_POS.x,
         z: SWAMP_POS.z,
         hp: 750,
-        scale: 1.5,
+        scale: 1.45,
       },
       {
         species: 'triceratops',
@@ -1260,19 +1792,31 @@ export class CreatureManager {
           c.y =
             c.species === 'dolphin'
               ? OCEAN_LEVEL - 0.15
-              : c.species === 'bird'
-                ? 24 + (i % 3) * 5
-                : c.species === 'bald_eagle'
-                  ? 18.5 + (i % 2) * 3.2
-                  : c.species === 'fish_school'
-                    ? Math.hypot(c.homeX - LAKE_CENTER.x, c.homeZ - LAKE_CENTER.z) < 25
-                      ? LAKE_CENTER.waterY - 0.55
-                      : OCEAN_LEVEL - 0.45
-                    : c.species === 'great_horned_owl'
-                      ? getTerrainHeight(DEAD_OAK_POS.x, DEAD_OAK_POS.z) + 3.25
-                      : getTerrainHeight(c.x, c.z);
+              : c.species === 'sea_turtle' ||
+                  c.species === 'great_white_shark' ||
+                  c.species === 'manta_ray'
+                ? OCEAN_LEVEL - 0.48
+                : c.species === 'bird' || c.species === 'toucan'
+                  ? 24 + (i % 3) * 5
+                  : c.species === 'bald_eagle' ||
+                      c.species === 'peregrine_falcon' ||
+                      c.species === 'pteranodon'
+                    ? 19 + (i % 3) * 3.2
+                    : c.species === 'fish_school'
+                      ? Math.hypot(c.homeX - LAKE_CENTER.x, c.homeZ - LAKE_CENTER.z) < 25
+                        ? LAKE_CENTER.waterY - 0.55
+                        : OCEAN_LEVEL - 0.45
+                      : c.species === 'great_horned_owl'
+                        ? getTerrainHeight(DEAD_OAK_POS.x, DEAD_OAK_POS.z) + 3.25
+                        : getTerrainHeight(c.x, c.z);
           c.state =
-            c.species === 'dolphin' || c.species === 'fish_school' ? 'swim' : 'wander';
+            c.species === 'dolphin' ||
+            c.species === 'fish_school' ||
+            c.species === 'sea_turtle' ||
+            c.species === 'great_white_shark' ||
+            c.species === 'manta_ray'
+              ? 'swim'
+              : 'wander';
           c.rig.root.position.set(c.x, c.y, c.z);
           c.rig.root.visible = true;
         }
@@ -1294,12 +1838,12 @@ export class CreatureManager {
         }
       }
 
-      // Cold breath puffs (Timber Wolf) & warm nostril steam (American Bison)
+      // Cold breath puffs (Timber Wolf, Polar Bear) & warm nostril steam (American Bison)
       if (c.rig.breathWisps && c.rig.breathWisps.length > 0) {
         c.rig.breathWisps.forEach((wisp, wi) => {
           const cycle = (elapsed * 0.78 + wi * 0.34 + i * 0.19) % 1;
-          const baseZ = c.species === 'bison' ? 1.48 : 0.88;
-          const baseY = c.species === 'bison' ? 1.12 : 0.72;
+          const baseZ = c.species === 'bison' ? 1.48 : c.species === 'polar_bear' ? 1.38 : 0.88;
+          const baseY = c.species === 'bison' ? 1.12 : c.species === 'polar_bear' ? 1.15 : 0.72;
           const sideX = c.species === 'bison' ? (wi % 2 === 0 ? -0.1 : 0.1) : 0;
           wisp.position.set(
             sideX + Math.sin(elapsed * 2 + wi) * 0.03,
@@ -1321,28 +1865,35 @@ export class CreatureManager {
         });
       }
 
-      // Bald Eagle majestic wide-winged soaring above Misty Mountain Lake
-      if (c.species === 'bald_eagle') {
-        const orbit = elapsed * 0.34 + i * 2.2;
-        const radius = 19 + (i % 2) * 5;
-        const nx = LAKE_CENTER.x + Math.cos(orbit) * radius;
-        const nz = LAKE_CENTER.z + Math.sin(orbit) * radius;
+      // Majestic wide-winged soaring flyers (Bald Eagle, Peregrine Falcon, Pteranodon)
+      if (
+        c.species === 'bald_eagle' ||
+        c.species === 'peregrine_falcon' ||
+        c.species === 'pteranodon'
+      ) {
+        const speedMult = c.species === 'peregrine_falcon' ? 0.46 : c.species === 'pteranodon' ? 0.28 : 0.34;
+        const orbit = elapsed * speedMult + i * 2.2;
+        const radius = (c.species === 'pteranodon' ? 28 : 20) + (i % 3) * 5;
+        const centerX = c.species === 'bald_eagle' && !c.id.startsWith('wild_') ? LAKE_CENTER.x : c.homeX;
+        const centerZ = c.species === 'bald_eagle' && !c.id.startsWith('wild_') ? LAKE_CENTER.z : c.homeZ;
+        const nx = centerX + Math.cos(orbit) * radius;
+        const nz = centerZ + Math.sin(orbit) * radius;
         c.yaw = Math.atan2(nx - c.x, nz - c.z);
         c.x = nx;
         c.z = nz;
-        c.y = 18.5 + (i % 2) * 3.0 + Math.sin(elapsed * 0.65 + i) * 1.4;
+        const baseAlt = Math.max(18.5, getTerrainHeight(nx, nz) + 12);
+        c.y = baseAlt + (i % 3) * 2.4 + Math.sin(elapsed * 0.65 + i) * 1.6;
         c.rig.root.position.set(c.x, c.y, c.z);
         c.rig.root.rotation.y = c.yaw;
-        c.rig.body.rotation.z = -0.18; // subtle banked thermal turn
-        // Alternating majestic wingbeats & soaring glides
+        c.rig.body.rotation.z = -0.18;
         const beatPhase = (elapsed * 0.55 + i) % 1;
         const flapEnv = beatPhase < 0.38 ? Math.sin((beatPhase / 0.38) * Math.PI) : 0;
         c.rig.wings?.forEach((w, wi) => {
           const side = wi === 0 ? 1 : -1;
           w.rotation.z = side * (0.08 + flapEnv * Math.sin(elapsed * 10 + i) * 0.42);
         });
-        const distEagle = Math.hypot(playerX - c.x, playerZ - c.z);
-        if (distEagle < 65) {
+        const distSoarer = Math.hypot(playerX - c.x, playerZ - c.z);
+        if (distSoarer < 65) {
           sightings.push({
             species: c.species,
             name: c.spec.displayName,
@@ -1354,13 +1905,13 @@ export class CreatureManager {
         c.callCooldown -= dt;
         if (c.callCooldown <= 0) {
           c.callCooldown = 12 + Math.random() * 14;
-          if (distEagle < 55) onCreatureCall('bald_eagle', distEagle);
+          if (distSoarer < 55) onCreatureCall(c.species, distSoarer);
         }
         continue;
       }
 
-      // Birds circling overhead, swooping onto unclaimed carcasses, pecking & startling off
-      if (c.species === 'bird') {
+      // Birds & Toucans circling overhead, swooping onto unclaimed carcasses, pecking & startling off
+      if (c.species === 'bird' || c.species === 'toucan') {
         if ((c.startledTimer ?? 0) > 0) {
           c.startledTimer = Math.max(0, (c.startledTimer ?? 0) - dt);
         }
@@ -1560,16 +2111,25 @@ export class CreatureManager {
         });
       }
 
-      // Coastal Dolphins
-      if (c.species === 'dolphin') {
-        const orbitAngle = elapsed * 0.25 + i * 2.1;
+      // Coastal Dolphins, Sea Turtles, Great White Sharks & Manta Rays
+      if (
+        c.species === 'dolphin' ||
+        c.species === 'sea_turtle' ||
+        c.species === 'great_white_shark' ||
+        c.species === 'manta_ray'
+      ) {
+        const orbitSpd =
+          c.species === 'great_white_shark' ? 0.32 : c.species === 'manta_ray' ? 0.22 : 0.25;
+        const orbitAngle = elapsed * orbitSpd + i * 2.1;
         const nextX = c.homeX + Math.cos(orbitAngle) * 14;
-        const nextZ = c.homeZ + Math.sin(orbitAngle) * 10;
-        c.yaw = Math.atan2(nextX - c.x, nextZ - c.z);
-        c.x = nextX;
-        c.z = nextZ;
+        const nextZ = c.homeZ + Math.sin(orbitAngle) * 11;
+        if (getTerrainHeight(nextX, nextZ) < OCEAN_LEVEL - 0.5) {
+          c.yaw = Math.atan2(nextX - c.x, nextZ - c.z);
+          c.x = nextX;
+          c.z = nextZ;
+        }
 
-        if (c.leaping) {
+        if (c.species === 'dolphin' && c.leaping) {
           c.leapPhase += dt * 3.8;
           const arc = Math.sin(c.leapPhase);
           c.y = OCEAN_LEVEL - 0.15 + Math.max(-0.2, arc * 2.4);
@@ -1580,10 +2140,20 @@ export class CreatureManager {
             c.rig.body.rotation.x = 0;
           }
         } else {
-          c.y = OCEAN_LEVEL - 0.12 + Math.sin(elapsed * 2.8 + i) * 0.18;
-          c.rig.body.rotation.x = Math.cos(elapsed * 2.8 + i) * 0.1;
+          const depthOffset = c.species === 'dolphin' ? -0.12 : -0.45;
+          c.y = OCEAN_LEVEL + depthOffset + Math.sin(elapsed * 2.4 + i) * 0.16;
+          c.rig.body.rotation.x = Math.cos(elapsed * 2.4 + i) * 0.07;
         }
-        c.rig.tail.rotation.x = Math.sin(elapsed * 7.5 + i) * 0.35;
+        if (c.species === 'great_white_shark') {
+          c.rig.tail.rotation.y = Math.sin(elapsed * 6.5 + i) * 0.38;
+        } else {
+          c.rig.tail.rotation.x = Math.sin(elapsed * 7.5 + i) * 0.3;
+        }
+        if (c.rig.wings && c.rig.wings.length > 0) {
+          c.rig.wings.forEach((w, wi) => {
+            w.rotation.z = (wi === 0 ? 1 : -1) * Math.sin(elapsed * 3.4 + i) * 0.36;
+          });
+        }
         c.rig.root.position.set(c.x, c.y, c.z);
         c.rig.root.rotation.y = c.yaw;
         continue;
@@ -1661,11 +2231,17 @@ export class CreatureManager {
 
       const isCarnivoreScavenger =
         c.species === 'trex' ||
+        c.species === 'spinosaurus' ||
+        c.species === 'allosaurus' ||
         c.species === 'velociraptor' ||
+        c.species === 'dilophosaurus' ||
         c.species === 'wild_boar' ||
         c.species === 'grizzly_bear' ||
+        c.species === 'polar_bear' ||
         c.species === 'gray_wolf' ||
         c.species === 'african_lion' ||
+        c.species === 'tiger' ||
+        c.species === 'hyena' ||
         c.species === 'red_fox';
 
       let feedCarcass: ScavengerCarcassTarget | undefined;
@@ -1847,8 +2423,11 @@ export class CreatureManager {
           const candidateX = c.x + nx * moveSpeed * dt;
           const candidateZ = c.z + nz * moveSpeed * dt;
           const nextTerrain = getTerrainHeight(candidateX, candidateZ);
+          const insideHillHouse =
+            Math.abs(candidateX - (HILL_HOUSE_POS.x - 0.3)) < 6.2 &&
+            Math.abs(candidateZ - HILL_HOUSE_POS.z) < 5.0;
 
-          if (nextTerrain > 0.2) {
+          if (nextTerrain > 0.2 && !insideHillHouse) {
             c.x = candidateX;
             c.z = candidateZ;
             c.stepAccum += moveSpeed * dt;
@@ -1873,21 +2452,27 @@ export class CreatureManager {
         c.species === 'saltwater_crocodile' &&
         Math.hypot(c.x - SWAMP_POS.x, c.z - SWAMP_POS.z) < SWAMP_POS.radius - 0.35;
 
-      c.y = inSwampZone ? SWAMP_POS.waterY - 0.24 : getTerrainHeight(c.x, c.z);
-      // Resting/sleeping posture or stealthy Red Fox crouch lowers body subtly; ducks waddle slightly
+      const kangarooHop =
+        c.species === 'kangaroo' && moveSpeed > 0
+          ? Math.abs(Math.sin(elapsed * 8.5 + i)) * 0.28
+          : 0;
+      c.y = (inSwampZone ? SWAMP_POS.waterY - 0.24 : getTerrainHeight(c.x, c.z)) + kangarooHop;
+      // Resting/sleeping posture or stealthy Red Fox crouch lowers body subtly; ducks & penguins waddle
       const isFoxCrouch =
         c.species === 'red_fox' && (c.state === 'idle' || c.state === 'graze');
       const sleepDrop = c.state === 'sleep' ? -0.32 : isFoxCrouch ? -0.09 : 0;
       c.rig.root.position.set(c.x, c.y + sleepDrop, c.z);
       c.rig.root.rotation.y = c.yaw;
       c.rig.root.rotation.z =
-        c.species === 'duck' && moveSpeed > 0 ? Math.sin(elapsed * 9 + i) * 0.08 : 0;
+        (c.species === 'duck' || c.species === 'penguin') && moveSpeed > 0
+          ? Math.sin(elapsed * 9 + i) * 0.09
+          : 0;
 
       const isScratchingRooster = c.species === 'jungle_fowl' && c.state === 'graze';
       const animFreq = moveSpeed > 0 ? moveSpeed * 1.9 : isScratchingRooster ? 11.5 : 1.8;
       const legAmp = moveSpeed > 0 ? (inSwampZone ? 0.22 : 0.52) : isScratchingRooster ? 0.48 : 0.03;
       c.rig.legs.forEach((leg, idx) => {
-        const phase = idx % 2 === 0 ? 0 : Math.PI;
+        const phase = c.species === 'kangaroo' ? 0 : idx % 2 === 0 ? 0 : Math.PI;
         leg.rotation.x =
           c.state === 'sleep'
             ? 0.6
@@ -1895,6 +2480,11 @@ export class CreatureManager {
               ? -0.28
               : Math.sin(elapsed * animFreq + phase) * legAmp;
       });
+      if (c.species === 'penguin' && c.rig.wings) {
+        c.rig.wings.forEach((w, wi) => {
+          w.rotation.z = (wi === 0 ? 1 : -1) * (0.14 + Math.sin(elapsed * 7 + i) * 0.16);
+        });
+      }
       c.rig.tail.rotation.y =
         Math.sin(elapsed * (inSwampZone ? 2.6 : c.state === 'feed' ? 5.2 : moveSpeed > 0 ? 4.2 : 1.8) + i) *
         (inSwampZone ? 0.34 : c.state === 'feed' ? 0.28 : 0.22);
@@ -1946,44 +2536,136 @@ export class CreatureManager {
       }
     }
 
-    // Infinite wild animal population replenishment: continuously repopulates roaming wild animals whenever hunted
+    // Infinite Biome-Aware Wildlife Ecosystem: cleanly recycles distant/dead dynamic spawns & endlessly populates herds, birds, marine life, and dinosaurs around the explorer!
     this.replenishTimer -= dt;
     if (this.replenishTimer <= 0) {
-      this.replenishTimer = 3.2;
-      const wildPool: CreatureSpecies[] = [
-        'deer',
-        'rabbit',
-        'wild_boar',
-        'red_fox',
-        'gray_wolf',
-        'grizzly_bear',
-        'african_lion',
-        'bison',
-        'jungle_fowl',
-        'duck',
-      ];
-      let aliveWildCount = 0;
-      for (const c of this.creatures) {
-        if (c.alive && wildPool.includes(c.species)) {
-          aliveWildCount += 1;
+      this.replenishTimer = 2.2;
+
+      // 1. Prune distant (>112m) or expired dead untamed dynamic wildlife with full GPU disposal
+      for (let idx = this.creatures.length - 1; idx >= 0; idx--) {
+        const dc = this.creatures[idx];
+        if (!dc.id.startsWith('wild_') || dc.tamed || dc.mounted) continue;
+        const farAway = Math.hypot(dc.x - playerX, dc.z - playerZ) > 112;
+        const deadExpired = !dc.alive && dc.respawnTimer <= 0;
+        if (farAway || deadExpired) {
+          this.disposeCreatureRig(dc.rig);
+          this.creatures.splice(idx, 1);
         }
       }
-      if (aliveWildCount < 38 && this.creatures.length < 88) {
-        const species = wildPool[Math.floor(Math.random() * wildPool.length)];
-        for (let attempt = 0; attempt < 8; attempt++) {
+
+      // 2. Count active dynamic & wild creatures near the player
+      let liveWildCount = 0;
+      for (const c of this.creatures) {
+        if (c.alive && c.id.startsWith('wild_')) {
+          liveWildCount += 1;
+        }
+      }
+
+      const herdSpecies = new Set<CreatureSpecies>([
+        'reindeer',
+        'zebra',
+        'elephant',
+        'flamingo',
+        'penguin',
+        'deer',
+        'velociraptor',
+        'dilophosaurus',
+        'kangaroo',
+        'ostrich',
+      ]);
+
+      // Spawn up to 2 fresh encounters per tick until target active wild density is met
+      let spawnsThisTick = 0;
+      while (liveWildCount < 44 && this.creatures.length < 118 && spawnsThisTick < 2) {
+        spawnsThisTick += 1;
+        let spawned = false;
+        for (let attempt = 0; attempt < 10; attempt++) {
           const angle = Math.random() * Math.PI * 2;
-          const rad = 22 + Math.random() * 78;
-          const sx = Math.cos(angle) * rad;
-          const sz = Math.sin(angle) * rad;
-          const h = getTerrainHeight(sx, sz);
-          if (h < OCEAN_LEVEL + 0.65) continue;
-          if (Math.hypot(sx - playerX, sz - playerZ) < 22) continue;
-          if (Math.hypot(sx - HILL_HOUSE_POS.x, sz - HILL_HOUSE_POS.z) < 15) continue;
+          const rad = 24 + Math.random() * 68;
+          const sx = THREE.MathUtils.clamp(playerX + Math.cos(angle) * rad, -142, 142);
+          const sz = THREE.MathUtils.clamp(playerZ + Math.sin(angle) * rad, -142, 142);
+
+          // Keep safe homestead/garage clearings free of random wild spawns
+          if (Math.hypot(sx - HILL_HOUSE_POS.x, sz - HILL_HOUSE_POS.z) < 16) continue;
+          if (Math.hypot(sx - VEHICLE_GARAGE_POS.x, sz - VEHICLE_GARAGE_POS.z) < 14) continue;
           if (Math.hypot(sx - WHEATFIELD_POS.x, sz - WHEATFIELD_POS.z) < 11) continue;
-          if (Math.hypot(sx - FARMER_POS.x, sz - FARMER_POS.z) < 8) continue;
-          this.spawnWildAnimalAt(species, sx, sz);
+          if (Math.hypot(sx - FARMER_POS.x, sz - FARMER_POS.z) < 9) continue;
+
+          const h = getTerrainHeight(sx, sz);
+          const biome = getBiomeAt(sx, sz);
+          const dSnow = Math.hypot(sx - SNOWY_WOODLAND_POS.x, sz - SNOWY_WOODLAND_POS.z);
+          const dSwamp = Math.hypot(sx - SWAMP_POS.x, sz - SWAMP_POS.z);
+
+          let pool: CreatureSpecies[];
+          if (h < OCEAN_LEVEL - 0.65 || biome === 'ocean') {
+            pool = ['great_white_shark', 'sea_turtle', 'manta_ray', 'dolphin', 'fish_school'];
+          } else if (biome === 'beach') {
+            pool = ['flamingo', 'camel', 'ostrich', 'sea_turtle', 'toucan', 'bird', 'peregrine_falcon'];
+          } else if (dSnow < 28 || biome === 'mountain') {
+            pool = ['reindeer', 'moose', 'polar_bear', 'penguin', 'gray_wolf', 'peregrine_falcon', 'pteranodon'];
+          } else if (dSwamp < 20 || biome === 'river' || biome === 'lake') {
+            pool = ['hippopotamus', 'saltwater_crocodile', 'flamingo', 'duck', 'spinosaurus', 'bald_eagle'];
+          } else if (biome === 'grassland') {
+            pool = [
+              'elephant',
+              'giraffe',
+              'zebra',
+              'african_lion',
+              'rhinoceros',
+              'cheetah',
+              'hyena',
+              'ostrich',
+              'kangaroo',
+              'bison',
+              'camel',
+              'triceratops',
+              'diplodocus',
+              'pteranodon',
+            ];
+          } else {
+            // Forest / Expedition / Autumn / Wild Interior
+            pool = [
+              'tiger',
+              'gorilla',
+              'toucan',
+              'deer',
+              'red_fox',
+              'wild_boar',
+              'grizzly_bear',
+              'rabbit',
+              'jungle_fowl',
+              'velociraptor',
+              'dilophosaurus',
+              'allosaurus',
+              'ankylosaurus',
+              'spinosaurus',
+              'trex',
+              'stegosaurus',
+              'parasaurolophus',
+              'brachiosaurus',
+              'pteranodon',
+              'peregrine_falcon',
+              'bird',
+            ];
+          }
+
+          const chosen = pool[Math.floor(Math.random() * pool.length)];
+          this.spawnWildAnimalAt(chosen, sx, sz);
+          liveWildCount += 1;
+
+          // Spawn a companion herd/pack mate nearby for social wild species
+          if (herdSpecies.has(chosen) && this.creatures.length < 118 && Math.random() < 0.6) {
+            const mx = sx + (Math.random() - 0.5) * 7;
+            const mz = sz + (Math.random() - 0.5) * 7;
+            if (getTerrainHeight(mx, mz) > OCEAN_LEVEL + 0.3) {
+              this.spawnWildAnimalAt(chosen, mx, mz);
+              liveWildCount += 1;
+            }
+          }
+          spawned = true;
           break;
         }
+        if (!spawned) break;
       }
     }
 
