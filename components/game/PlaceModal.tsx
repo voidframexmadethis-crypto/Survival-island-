@@ -21,6 +21,11 @@ const STRUCTURE_ITEM_IDS: ItemId[] = [
   'storage_chest',
   'sleeping_area',
   'basic_shelter',
+  'stone_block',
+  'stone_pillar',
+  'stone_arch',
+  'timber_beam',
+  'timber_pillar',
 ];
 
 export function PlaceModal({
@@ -43,10 +48,15 @@ export function PlaceModal({
   const equippedDef = equippedId && equippedQty > 0 ? ITEMS[equippedId] : null;
 
   const ownedStructures = hud.inventory.filter(
-    (s) => s.quantity > 0 && Boolean(ITEMS[s.itemId].structureType),
+    (s) =>
+      s.quantity > 0 &&
+      Boolean(ITEMS[s.itemId].structureType || ITEMS[s.itemId].structuralKind),
   );
   const ownedSupplies = hud.inventory.filter(
-    (s) => s.quantity > 0 && !ITEMS[s.itemId].structureType,
+    (s) =>
+      s.quantity > 0 &&
+      !ITEMS[s.itemId].structureType &&
+      !ITEMS[s.itemId].structuralKind,
   );
   const unownedStructureIds = STRUCTURE_ITEM_IDS.filter(
     (id) => countOf(id) <= 0,
@@ -170,16 +180,20 @@ export function PlaceModal({
                 className="min-h-[44px] px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-xs flex items-center gap-1.5 whitespace-nowrap shrink-0"
               >
                 <MapPin className="w-4 h-4" />
-                <span>{equippedDef.structureType ? 'Build Here' : 'Place Down'}</span>
+                <span>
+                  {equippedDef.structureType || equippedDef.structuralKind
+                    ? 'Build Here'
+                    : 'Place Down'}
+                </span>
               </button>
             </div>
           )}
 
-          {/* Camp Structures */}
+          {/* Camp Structures & Structural Engineering */}
           <div className="space-y-2.5">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold uppercase tracking-wider text-stone-300">
-                Camp Structures & Stations
+                Camp Structures &amp; Engineered Masonry
               </h3>
               <button
                 type="button"

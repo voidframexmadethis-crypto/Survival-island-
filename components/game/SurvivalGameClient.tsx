@@ -2,20 +2,30 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   Axe,
   Backpack,
+  Car,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
   Cloud,
   CloudLightning,
   CloudRain,
+  Coins,
   Compass,
   Crosshair,
   Droplets,
   Eye,
+  EyeOff,
   FastForward,
   Flame,
+  Footprints,
   Hammer,
   Hand,
   Heart,
+  Layers,
   Map as MapIcon,
   Moon,
   PackageOpen,
@@ -24,13 +34,19 @@ import {
   Pickaxe,
   Play,
   RotateCcw,
+  RotateCw,
   Settings,
   Shield,
+  ShieldAlert,
+  ShieldOff,
+  Skull,
   Sun,
   Swords,
+  Terminal,
   Thermometer,
   Trophy,
   Utensils,
+  Waves,
   Zap,
 } from 'lucide-react';
 import { ITEMS, isActiveWeaponItem, isAmmoItem } from '@/game/data/items';
@@ -56,6 +72,8 @@ import {
 } from '@/game/types';
 import { CookingModal } from './CookingModal';
 import { CraftingModal } from './CraftingModal';
+import { FarmerShopModal } from './FarmerShopModal';
+import { FridgeModal } from './FridgeModal';
 import { InventoryModal } from './InventoryModal';
 import { IslandMapModal } from './IslandMapModal';
 import { ItemIcon } from './ItemIcon';
@@ -66,6 +84,9 @@ import {
 } from './MissionsAndPauseModals';
 import { PlaceModal } from './PlaceModal';
 import { TouchControls } from './TouchControls';
+import { TvPlayerModal } from './TvPlayerModal';
+import { VehicleBuilderModal } from './VehicleBuilderModal';
+import { CommandConsoleModal } from './CommandConsoleModal';
 
 function formatTimePhase(t: number): string {
   if (t < 0.2 || t >= 0.84) return 'Night';
@@ -84,6 +105,8 @@ export function SurvivalGameClient() {
   const pointerDownPos = useRef({ x: 0, y: 0 });
   const pointerDownTime = useRef(0);
   const toastSeqRef = useRef(0);
+  const hotbarScrollRef = useRef<HTMLDivElement | null>(null);
+  const slotButtonRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const [screen, setScreen] = useState<'menu' | 'playing'>('menu');
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
@@ -96,6 +119,7 @@ export function SurvivalGameClient() {
   const [isTouchDevice, setIsTouchDevice] = useState(false);
   const [hud, setHud] = useState<HUDStateSnapshot | null>(null);
   const [toasts, setToasts] = useState<ResourceToast[]>([]);
+  const [telemetryExpanded, setTelemetryExpanded] = useState(false);
 
   const refreshSaves = useCallback(() => {
     setSaveSlots(listSaveSlots());
@@ -218,6 +242,23 @@ export function SurvivalGameClient() {
     }, 35000);
     return () => window.clearInterval(id);
   }, [screen, refreshSaves]);
+
+  // Smoothly keep the wheel-selected slot centered in the scrollable HUD bar
+  const equippedSlot = hud?.equippedSlot ?? -1;
+  useEffect(() => {
+    if (equippedSlot < 0) {
+      hotbarScrollRef.current?.scrollTo({ left: 0, behavior: 'smooth' });
+      return;
+    }
+    const btn = slotButtonRefs.current[equippedSlot];
+    if (btn) {
+      btn.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'center',
+      });
+    }
+  }, [equippedSlot]);
 
   const handleStartNewGame = () => {
     if (!engineRef.current) return;
@@ -487,7 +528,7 @@ export function SurvivalGameClient() {
 
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-stone-300 safe-bottom">
             <span>
-              Desktop: WASD Move · Drag Look · C Crouch · E Act · B Craft · Space Jump
+              Desktop: WASD Move · Drag Look · C Crouch · E Act · V Kick Debris · B Craft · Space Jump/Vault/Wall-Kick
             </span>
             <span aria-hidden="true">·</span>
             <span>Mobile: Virtual Thumbstick &amp; Touch Camera</span>
@@ -522,14 +563,109 @@ export function SurvivalGameClient() {
       {/* IN-GAME FIRST-PERSON HUD */}
       {screen === 'playing' && hud && !hud.cinematicActive && (
         <div className="pointer-events-none fixed inset-0 z-10 flex flex-col justify-between p-3 sm:p-4 safe-top safe-bottom">
-          {/* Subtle First-Person Aim Reticle */}
+          {/* Subtle First-Person Aim Reticle + Dynamic Hitbox & Armor Inspector */}
           {!activeModal && !hud.gameOver && (
             <div className="fixed inset-0 pointer-events-none flex items-center justify-center">
               <div
                 className={`w-1.5 h-1.5 rounded-full border border-black/60 ${
-                  hud.nearbyInteraction ? 'bg-amber-400 scale-125' : 'bg-white/75'
+                  hud.targetHitbox
+                    ? hud.targetHitbox.isGapSlip ||
+                      hud.targetHitbox.armorHp <= 0
+                      ? 'bg-emerald-400 scale-125'
+                      : 'bg-amber-400 scale-125'
+                    : hud.nearbyInteraction
+                      ? 'bg-amber-400 scale-125'
+                      : 'bg-white/75'
                 }`}
               />
+              {hud.targetHitbox && (
+                <div className="absolute top-[54%] left-1/2 -translate-x-1/2 w-64 sm:w-72 rounded-xl bg-stone-950/90 border border-stone-700/85 px-3 py-2 shadow-2xl space-y-1.5">
+                  <div className="flex items-center justify-between gap-2 text-[11px]">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      {hud.targetHitbox.isBoss && (
+                        <Skull className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                      )}
+                      <span className="font-bold text-stone-100 truncate">
+                        {hud.targetHitbox.name}
+                      </span>
+                      {hud.targetHitbox.isBoss && (
+                        <span className="px-1 py-0.5 rounded bg-red-950 border border-red-600/70 text-[9px] font-bold text-red-300 uppercase shrink-0">
+                          Boss
+                        </span>
+                      )}
+                    </div>
+                    <span className="font-mono-tabular text-stone-400 shrink-0">
+                      {hud.targetHitbox.distance.toFixed(1)}m
+                    </span>
+                  </div>
+
+                  {/* Target Health Bar */}
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-1.5 rounded-full bg-stone-800 overflow-hidden">
+                      <div
+                        className="h-full bg-red-500 transition-all duration-100"
+                        style={{
+                          width: `${Math.max(0, Math.min(100, (hud.targetHitbox.hp / Math.max(1, hud.targetHitbox.maxHp)) * 100))}%`,
+                        }}
+                      />
+                    </div>
+                    <span className="text-[10px] font-mono-tabular text-stone-300 shrink-0">
+                      {Math.ceil(hud.targetHitbox.hp)}/{hud.targetHitbox.maxHp}
+                    </span>
+                  </div>
+
+                  {/* Body Zone + Armor Material Tier + Debuff Badges */}
+                  <div className="flex flex-wrap items-center gap-1 text-[10px] font-semibold">
+                    <span className="px-1.5 py-0.5 rounded bg-stone-800 border border-stone-600 text-amber-300 uppercase">
+                      Zone: {hud.targetHitbox.zone}
+                    </span>
+                    {hud.targetHitbox.armorTier !== 'none' &&
+                    hud.targetHitbox.armorHp > 0 ? (
+                      <span className="px-1.5 py-0.5 rounded bg-stone-900 border border-stone-500/80 text-stone-200 flex items-center gap-1 uppercase font-mono-tabular">
+                        <ShieldAlert className="w-3 h-3 text-amber-400" />
+                        {hud.targetHitbox.armorTier}{' '}
+                        {Math.ceil(hud.targetHitbox.armorHp)}/
+                        {hud.targetHitbox.armorMaxHp}
+                      </span>
+                    ) : (
+                      <span className="px-1.5 py-0.5 rounded bg-emerald-950/90 border border-emerald-600/70 text-emerald-300 flex items-center gap-1 uppercase">
+                        <ShieldOff className="w-3 h-3" />
+                        {hud.targetHitbox.armorMaxHp > 0
+                          ? 'Armor Shattered'
+                          : 'Unarmored'}
+                      </span>
+                    )}
+                    {hud.targetHitbox.blinded && (
+                      <span className="px-1.5 py-0.5 rounded bg-amber-950/90 border border-amber-500 text-amber-200 flex items-center gap-1 uppercase">
+                        <EyeOff className="w-3 h-3" />
+                        Blinded
+                      </span>
+                    )}
+                    {hud.targetHitbox.staggered && (
+                      <span className="px-1.5 py-0.5 rounded bg-sky-950/90 border border-sky-500 text-sky-200 uppercase">
+                        Staggered
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Weapon Material Reaction Hint */}
+                  <div
+                    className={`text-[10px] font-semibold leading-tight ${
+                      hud.targetHitbox.isGapSlip ||
+                      hud.targetHitbox.reactionHint.includes('Shatter') ||
+                      hud.targetHitbox.reactionHint.includes('CRIT') ||
+                      hud.targetHitbox.reactionHint.includes('Unarmored')
+                        ? 'text-emerald-300'
+                        : hud.targetHitbox.reactionHint.includes('Deflect') ||
+                            hud.targetHitbox.reactionHint.includes('Ricochet')
+                          ? 'text-red-300'
+                          : 'text-amber-200'
+                    }`}
+                  >
+                    {hud.targetHitbox.reactionHint}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -582,40 +718,59 @@ export function SurvivalGameClient() {
                 barColor="bg-lime-500"
               />
 
-              {/* Body Temperature, Visibility & Resource Summary */}
-              <div className="pt-1 border-t border-stone-800 space-y-1 text-[11px] font-mono-tabular text-stone-300">
-                <div className="flex items-center justify-between">
-                  <span
-                    className={`flex items-center gap-1 ${
-                      hud.vitals.temperatureC < 34.5
-                        ? 'text-sky-300'
-                        : hud.nearFire
-                          ? 'text-orange-300'
-                          : 'text-stone-200'
-                    }`}
-                  >
-                    <Thermometer className="w-3 h-3" />
-                    {hud.vitals.temperatureC.toFixed(1)}°C
-                  </span>
-                  <span
-                    className={`flex items-center gap-1 ${
-                      hud.visibilityPercent <= 38
-                        ? 'text-emerald-300'
-                        : hud.visibilityPercent >= 78
-                          ? 'text-amber-300'
-                          : 'text-stone-300'
-                    }`}
-                    title="Player Visibility (Day/Night, Campfire, Crouch, Weather)"
-                  >
-                    <Eye className="w-3 h-3" />
-                    Vis {hud.visibilityPercent}%
-                  </span>
-                </div>
-                {!settings.compactHud && (
-                  <div className="flex items-center justify-between text-stone-400">
-                    <span>W:{countOf('wood')}</span>
-                    <span>S:{countOf('stone')}</span>
-                    <span>F:{countOf('flint')}</span>
+              {/* Body Temperature, Visibility & Resource Summary (Collapsible) */}
+              <div className="pt-1 border-t border-stone-800">
+                <button
+                  type="button"
+                  onClick={() => setTelemetryExpanded(!telemetryExpanded)}
+                  className="w-full flex items-center justify-between text-[11px] text-stone-400 hover:text-stone-200 py-0.5"
+                >
+                  <span className="font-semibold">Telemetry &amp; Stats</span>
+                  {telemetryExpanded ? (
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  ) : (
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  )}
+                </button>
+                {telemetryExpanded && (
+                  <div className="space-y-1 text-[11px] font-mono-tabular text-stone-300 pt-1 border-t border-stone-800/60 mt-1">
+                    <div className="flex items-center justify-between">
+                      <span
+                        className={`flex items-center gap-1 ${
+                          hud.vitals.temperatureC < 34.5
+                            ? 'text-sky-300'
+                            : hud.nearFire
+                              ? 'text-orange-300'
+                              : 'text-stone-200'
+                        }`}
+                      >
+                        <Thermometer className="w-3 h-3" />
+                        {hud.vitals.temperatureC.toFixed(1)}°C
+                      </span>
+                      <span
+                        className={`flex items-center gap-1 ${
+                          hud.visibilityPercent <= 38
+                            ? 'text-emerald-300'
+                            : hud.visibilityPercent >= 78
+                              ? 'text-amber-300'
+                              : 'text-stone-300'
+                        }`}
+                        title="Player Visibility"
+                      >
+                        <Eye className="w-3 h-3" />
+                        Vis {hud.visibilityPercent}%
+                      </span>
+                    </div>
+                    {!settings.compactHud && (
+                      <div className="flex items-center justify-between text-stone-400">
+                        <span>W:{countOf('wood')}</span>
+                        <span>S:{countOf('stone')}</span>
+                        <span className="text-amber-300 flex items-center gap-0.5">
+                          <Coins className="w-3 h-3" />
+                          {hud.coins}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -662,6 +817,16 @@ export function SurvivalGameClient() {
                 onClick={() => openModal('map')}
               />
               <HudIconButton
+                icon={<Car className="w-5 h-5" />}
+                label="Vehicles"
+                onClick={() => openModal('vehicles')}
+              />
+              <HudIconButton
+                icon={<Terminal className="w-5 h-5" />}
+                label="Console"
+                onClick={() => openModal('console')}
+              />
+              <HudIconButton
                 icon={<Trophy className="w-5 h-5" />}
                 label="Goals"
                 onClick={() => openModal('missions')}
@@ -700,6 +865,42 @@ export function SurvivalGameClient() {
                   <span>Nocturnal Stalkers Active</span>
                 </div>
               )}
+              {hud.structuralSummary && hud.structuralSummary.bucklingCount > 0 && (
+                <div className="px-3 py-1 rounded-lg bg-red-950/90 border border-red-600/80 text-[11px] font-bold text-red-200 flex items-center gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+                  <span>
+                    Structural Buckling ({hud.structuralSummary.bucklingCount})
+                  </span>
+                </div>
+              )}
+              {hud.terrainSummary && hud.terrainSummary.activeWaterStreams > 0 && (
+                <div className="px-3 py-1 rounded-lg bg-sky-950/85 border border-sky-700/70 text-[11px] font-medium text-sky-200 flex items-center gap-1.5">
+                  <Waves className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Fluid Erosion Active</span>
+                </div>
+              )}
+              {hud.momentumState?.wallRunning && (
+                <div className="px-3 py-1 rounded-lg bg-emerald-950/90 border border-emerald-500/80 text-[11px] font-bold text-emerald-200 flex items-center gap-1.5">
+                  <Footprints className="w-3.5 h-3.5 text-emerald-300" />
+                  <span>
+                    Wall-Run ({hud.momentumState.wallSide < 0 ? 'Left' : 'Right'}) · Space Wall-Kick
+                  </span>
+                </div>
+              )}
+              {hud.momentumState?.vaulting && (
+                <div className="px-3 py-1 rounded-lg bg-sky-950/90 border border-sky-500/80 text-[11px] font-bold text-sky-200 flex items-center gap-1.5">
+                  <Zap className="w-3.5 h-3.5 text-sky-300" />
+                  <span>Obstacle Vault</span>
+                </div>
+              )}
+              {hud.momentumState?.nearCaveBoss && (
+                <div className="px-3 py-1 rounded-lg bg-red-950/90 border border-red-500/80 text-[11px] font-bold text-amber-200 flex items-center gap-1.5">
+                  <Skull className="w-3.5 h-3.5 text-red-400" />
+                  <span>
+                    Cave Boss Lair · Shoot/Strike Glowing Ceiling Stalactites to Crush Armor!
+                  </span>
+                </div>
+              )}
             </div>
             {toasts.map((t) => (
               <div
@@ -722,9 +923,23 @@ export function SurvivalGameClient() {
             ))}
           </div>
 
-          {/* Bottom-Center Contextual Prompt + Collect Carcass + Equipped Readout + 6-Slot Quick Hotbar */}
+          {/* Bottom-Center Contextual Prompt + Seated Stand Up + Collect Carcass + Equipped Readout + 6-Slot Quick Hotbar */}
           <div className="flex flex-col items-center gap-1.5 pb-1">
             <div className="flex flex-wrap items-center justify-center gap-2">
+              {hud.seatedLabel && !activeModal && (
+                <button
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => engineRef.current?.standUp()}
+                  className="pointer-events-auto min-h-[44px] px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-stone-950 font-bold text-xs sm:text-sm shadow-xl flex items-center gap-2 whitespace-nowrap shrink-0"
+                >
+                  <span>{hud.seatedLabel} · Stand Up</span>
+                  <span className="hidden sm:inline text-[11px] px-1.5 py-0.5 rounded bg-stone-950/20 font-mono-tabular">
+                    Space / WASD
+                  </span>
+                </button>
+              )}
+
               {hud.nearbyCarcass && !activeModal && (
                 <button
                   type="button"
@@ -832,6 +1047,25 @@ export function SurvivalGameClient() {
                       </span>
                     )}
                   </div>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => engineRef.current?.triggerDebrisKick()}
+                    disabled={(hud.momentumState?.kickCooldown ?? 0) > 0}
+                    className={`px-2.5 py-1 rounded-lg font-bold text-[11px] shadow-md flex items-center gap-1 whitespace-nowrap shrink-0 border transition-colors ${
+                      (hud.momentumState?.kickCooldown ?? 0) > 0
+                        ? 'bg-stone-900/75 border-stone-700 text-stone-500 cursor-not-allowed'
+                        : 'bg-stone-900/90 hover:bg-amber-600 hover:text-stone-950 border-amber-500/60 text-amber-300'
+                    }`}
+                    title="Kick dust & gravel debris into enemies' faces to blind them & open armor gaps (V)"
+                  >
+                    <Footprints className="w-3.5 h-3.5" />
+                    <span>
+                      {(hud.momentumState?.kickCooldown ?? 0) > 0
+                        ? `Kick ${hud.momentumState?.kickCooldown.toFixed(1)}s`
+                        : 'Kick Debris [V]'}
+                    </span>
+                  </button>
                   {!weaponActive &&
                     dirtyBottleCount > 0 &&
                     (eqDef?.id === 'dirty_water_bottle' || !eqDef) && (
@@ -871,6 +1105,41 @@ export function SurvivalGameClient() {
                     )}
                   {!weaponActive &&
                     eqDef &&
+                    eqDef.structuralKind &&
+                    hud.structuralSummary?.previewStressPercent !== null &&
+                    hud.structuralSummary?.previewStressPercent !== undefined && (
+                      <>
+                        <div
+                          className={`px-2.5 py-1 rounded-lg font-bold text-[11px] border shadow-md flex items-center gap-1.5 whitespace-nowrap shrink-0 font-mono-tabular ${
+                            hud.structuralSummary.previewStressPercent >= 100
+                              ? 'bg-red-950/90 border-red-500 text-red-200'
+                              : hud.structuralSummary.previewStressPercent >= 55
+                                ? 'bg-amber-950/90 border-amber-500 text-amber-200'
+                                : 'bg-emerald-950/90 border-emerald-500 text-emerald-200'
+                          }`}
+                          title="Real-time structural bending & compression load at target snap point"
+                        >
+                          <Layers className="w-3.5 h-3.5" />
+                          <span>
+                            {hud.structuralSummary.previewStressPercent >= 100
+                              ? `OVERLOAD ${hud.structuralSummary.previewStressPercent}% — Add Pillar/Arch!`
+                              : `Load ${hud.structuralSummary.previewStressPercent}%`}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={() => engineRef.current?.rotateBuildPiece()}
+                          className="px-2.5 py-1 rounded-lg bg-stone-900/90 hover:bg-stone-800 border border-stone-600 text-stone-100 font-semibold text-[11px] shadow-md flex items-center gap-1 whitespace-nowrap shrink-0"
+                          title="Rotate structural piece 90 degrees (R)"
+                        >
+                          <RotateCw className="w-3.5 h-3.5" />
+                          <span>Rotate [R]</span>
+                        </button>
+                      </>
+                    )}
+                  {!weaponActive &&
+                    eqDef &&
                     eqDef.category !== 'tool' &&
                     eqDef.category !== 'equipment' &&
                     !isAmmoItem(eqDef.id) && (
@@ -882,21 +1151,34 @@ export function SurvivalGameClient() {
                         title={`Place ${eqDef.name} in front of you`}
                       >
                         <PackageOpen className="w-3.5 h-3.5" />
-                        <span>{eqDef.structureType ? 'Build' : 'Set Down'}</span>
+                        <span>
+                          {eqDef.structuralKind
+                            ? 'Build Span'
+                            : eqDef.structureType
+                              ? 'Build'
+                              : eqDef.id === 'powder_keg'
+                                ? 'Throw Keg'
+                                : eqDef.id === 'water_torrent'
+                                  ? 'Release Torrent'
+                                  : 'Set Down'}
+                        </span>
                       </button>
                     )}
                 </div>
               );
             })()}
 
-            {/* Bare Hands Toggle + 6-Slot Hotbar + Dedicated Place Button */}
-            <div className="pointer-events-auto flex items-center gap-1.5 p-1.5 rounded-xl bg-stone-950/88 border border-stone-700/80 shadow-xl">
+            {/* Bare Hands Toggle + Scrollable 9-Slot HUD Bar + Scroll Arrows + Dedicated Place Button */}
+            <div
+              className="pointer-events-auto flex items-center gap-1 p-1.5 rounded-xl bg-stone-950/88 border border-stone-700/80 shadow-xl max-w-[96vw]"
+              title="Use Mouse Wheel or keys 1–9 to scroll through your HUD bar"
+            >
               <button
                 type="button"
                 aria-label="Bare Hands"
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => engineRef.current?.selectHotbarSlot(-1)}
-                className={`relative w-11 h-11 sm:w-12 sm:h-12 rounded-lg border flex flex-col items-center justify-center transition-colors ${
+                className={`relative w-11 h-11 sm:w-12 sm:h-12 shrink-0 rounded-lg border flex flex-col items-center justify-center transition-colors ${
                   hud.equippedSlot === -1
                     ? 'bg-amber-950/75 border-amber-400 text-amber-300'
                     : 'bg-stone-900 border-stone-800 hover:border-stone-600 text-stone-400'
@@ -912,63 +1194,94 @@ export function SurvivalGameClient() {
                 </span>
               </button>
 
-              {hud.hotbarItemIds.map((itemId, idx) => {
-                const isSelected = hud.equippedSlot === idx;
-                const qty = itemId ? countOf(itemId) : 0;
-                return (
-                  <button
-                    key={idx}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={() => {
-                      if (
-                        isSelected &&
-                        itemId &&
-                        qty > 0 &&
-                        ITEMS[itemId].category === 'food'
-                      ) {
-                        engineRef.current?.useOrEquipItem(itemId);
-                      } else {
-                        engineRef.current?.selectHotbarSlot(idx);
+              <button
+                type="button"
+                aria-label="Previous HUD Slot"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => engineRef.current?.cycleHotbarSlot(-1)}
+                className="w-6 h-11 sm:h-12 shrink-0 rounded-lg bg-stone-900/90 hover:bg-stone-800 border border-stone-800 hover:border-stone-600 text-stone-300 flex items-center justify-center transition-colors"
+                title="Scroll Previous Slot (Mouse Wheel Up)"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+
+              <div
+                ref={hotbarScrollRef}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="flex items-center gap-1.5 overflow-x-auto survival-scroll pb-1 max-w-[min(52vw,290px)] sm:max-w-[336px] snap-x snap-mandatory"
+              >
+                {hud.hotbarItemIds.map((itemId, idx) => {
+                  const isSelected = hud.equippedSlot === idx;
+                  const qty = itemId ? countOf(itemId) : 0;
+                  return (
+                    <button
+                      key={idx}
+                      ref={(el) => {
+                        slotButtonRefs.current[idx] = el;
+                      }}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={() => {
+                        if (
+                          isSelected &&
+                          itemId &&
+                          qty > 0 &&
+                          ITEMS[itemId].category === 'food'
+                        ) {
+                          engineRef.current?.useOrEquipItem(itemId);
+                        } else {
+                          engineRef.current?.selectHotbarSlot(idx);
+                        }
+                      }}
+                      className={`relative w-11 h-11 sm:w-12 sm:h-12 shrink-0 snap-center rounded-lg border flex flex-col items-center justify-center transition-colors ${
+                        isSelected
+                          ? 'bg-amber-950/75 border-amber-400'
+                          : 'bg-stone-900 border-stone-800 hover:border-stone-600'
+                      }`}
+                      title={
+                        itemId && qty > 0
+                          ? `${ITEMS[itemId].name}${
+                              isSelected && ITEMS[itemId].category === 'food'
+                                ? ' (Tap again to consume)'
+                                : ''
+                            }`
+                          : `Empty Slot ${idx + 1}`
                       }
-                    }}
-                    className={`relative w-11 h-11 sm:w-12 sm:h-12 rounded-lg border flex flex-col items-center justify-center transition-colors ${
-                      isSelected
-                        ? 'bg-amber-950/75 border-amber-400'
-                        : 'bg-stone-900 border-stone-800 hover:border-stone-600'
-                    }`}
-                    title={
-                      itemId && qty > 0
-                        ? `${ITEMS[itemId].name}${
-                            isSelected && ITEMS[itemId].category === 'food'
-                              ? ' (Tap again to consume)'
-                              : ''
-                          }`
-                        : `Empty Slot ${idx + 1}`
-                    }
-                  >
-                    <span className="absolute top-0.5 left-1 text-[9px] font-mono-tabular text-stone-500">
-                      {idx + 1}
-                    </span>
-                    {itemId && qty > 0 ? (
-                      <>
-                        <ItemIcon itemId={itemId} className="w-5 h-5" />
-                        <span className="absolute bottom-0.5 right-1 text-[10px] font-mono-tabular font-bold text-stone-200">
-                          {qty > 1 ? qty : ''}
-                        </span>
-                      </>
-                    ) : (
-                      <span className="text-[10px] text-stone-700">—</span>
-                    )}
-                  </button>
-                );
-              })}
+                    >
+                      <span className="absolute top-0.5 left-1 text-[9px] font-mono-tabular text-stone-500">
+                        {idx + 1}
+                      </span>
+                      {itemId && qty > 0 ? (
+                        <>
+                          <ItemIcon itemId={itemId} className="w-5 h-5" />
+                          <span className="absolute bottom-0.5 right-1 text-[10px] font-mono-tabular font-bold text-stone-200">
+                            {qty > 1 ? qty : ''}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-[10px] text-stone-700">—</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <button
+                type="button"
+                aria-label="Next HUD Slot"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => engineRef.current?.cycleHotbarSlot(1)}
+                className="w-6 h-11 sm:h-12 shrink-0 rounded-lg bg-stone-900/90 hover:bg-stone-800 border border-stone-800 hover:border-stone-600 text-stone-300 flex items-center justify-center transition-colors"
+                title="Scroll Next Slot (Mouse Wheel Down)"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
 
               <button
                 type="button"
                 aria-label="Place Stuff"
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => openModal('place')}
-                className="h-11 sm:h-12 px-2.5 sm:px-3 rounded-lg bg-amber-600 hover:bg-amber-500 border border-amber-300/70 text-stone-950 font-bold text-xs flex flex-col sm:flex-row items-center justify-center gap-1 whitespace-nowrap shrink-0"
+                className="h-11 sm:h-12 px-2.5 sm:px-3 shrink-0 rounded-lg bg-amber-600 hover:bg-amber-500 border border-amber-300/70 text-stone-950 font-bold text-xs flex flex-col sm:flex-row items-center justify-center gap-1 whitespace-nowrap"
                 title="Place structures, supplies, or food down (P)"
               >
                 <PackageOpen className="w-4 h-4" />
@@ -991,6 +1304,8 @@ export function SurvivalGameClient() {
           onCameraDrag={(dx, dy) => engineRef.current?.addCameraLookDelta(dx, dy)}
           onAction={() => engineRef.current?.triggerPrimaryAction()}
           onJump={() => engineRef.current?.triggerJump()}
+          onKickDebris={() => engineRef.current?.triggerDebrisKick()}
+          kickCooldown={hud.momentumState?.kickCooldown ?? 0}
           onSprintToggle={(active) => engineRef.current?.setTouchSprint(active)}
           onCrouchToggle={(active) => engineRef.current?.setTouchCrouch(active)}
           onOpenBackpack={() => openModal('inventory')}
@@ -1057,17 +1372,45 @@ export function SurvivalGameClient() {
         />
       )}
 
-      {activeModal === 'cooking' && hud && (
+      {(activeModal === 'cooking' || activeModal === 'stove') && hud && (
         <CookingModal
           hud={hud}
-          atCookingStation={nearCookingStation}
+          atCookingStation={nearCookingStation || activeModal === 'stove'}
+          isStove={activeModal === 'stove'}
           onCook={(recipeId) =>
-            engineRef.current?.cookRecipe(recipeId, nearCookingStation) || false
+            engineRef.current?.cookRecipe(
+              recipeId,
+              nearCookingStation || activeModal === 'stove',
+            ) || false
           }
           onEat={(itemId) => engineRef.current?.useOrEquipItem(itemId)}
           onClose={closeModal}
         />
       )}
+
+      {activeModal === 'farmer' && hud && (
+        <FarmerShopModal
+          hud={hud}
+          onBuy={(itemId) => engineRef.current?.buyFromFarmer(itemId) || false}
+          onSell={(itemId, qty) =>
+            engineRef.current?.sellToFarmer(itemId, qty) || false
+          }
+          onEquipSeed={(itemId) => engineRef.current?.useOrEquipItem(itemId)}
+          onClose={closeModal}
+        />
+      )}
+
+      {activeModal === 'fridge' && hud && (
+        <FridgeModal
+          hud={hud}
+          onTake={(itemId) => engineRef.current?.transferFromFridge(itemId, 1)}
+          onStore={(itemId) => engineRef.current?.transferToFridge(itemId, 1)}
+          onEat={(itemId) => engineRef.current?.useOrEquipItem(itemId)}
+          onClose={closeModal}
+        />
+      )}
+
+      {activeModal === 'tv' && <TvPlayerModal onClose={closeModal} />}
 
       {activeModal === 'place' && hud && (
         <PlaceModal
@@ -1089,6 +1432,26 @@ export function SurvivalGameClient() {
 
       {activeModal === 'missions' && hud && (
         <MissionsModal hud={hud} onClose={closeModal} />
+      )}
+
+      {activeModal === 'vehicles' && hud && (
+        <VehicleBuilderModal
+          onClose={closeModal}
+          onSpawnVehicle={(v) => engineRef.current?.spawnCustomVehicle(v)}
+          playerInventory={hud.inventory}
+          playerX={hud.playerX}
+          playerY={hud.playerY}
+          playerZ={hud.playerZ}
+          playerYaw={hud.playerYaw}
+        />
+      )}
+
+      {activeModal === 'console' && (
+        <CommandConsoleModal
+          onClose={closeModal}
+          onExecuteCommand={(cmd) => engineRef.current?.executeConsoleCommand(cmd)}
+          onSpawnCreatorRelic={(relicKey) => engineRef.current?.spawnCreatorRelic(relicKey)}
+        />
       )}
 
       {activeModal === 'pause' && (

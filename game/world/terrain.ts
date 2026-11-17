@@ -7,6 +7,10 @@ export const CAVE_POS = { x: -36, z: -56 };
 export const EXPEDITION_POS = { x: 46, z: -12 };
 export const HOMESTEAD_POS = { x: -24, z: 58 };
 export const FARM_POND_POS = { x: -12, z: 56, radius: 4.4, waterY: 2.95 };
+export const WHEATFIELD_POS = { x: -2, z: 68 };
+export const FARMER_POS = { x: -12, z: 70 };
+export const HILL_HOUSE_POS = { x: -44, z: 78 };
+export const HILL_HOUSE_Y = 8.4;
 export const SNOWY_WOODLAND_POS = { x: -24, z: -72 };
 export const AUTUMN_GROVE_POS = { x: 26, z: 22 };
 export const SWAMP_POS = { x: 46, z: 44, radius: 9.0, waterY: 1.55 };
@@ -15,6 +19,75 @@ export const PLAYER_SPAWN = { x: 0, z: 112 };
 
 export const WORLD_RADIUS = 175;
 export const PLAYABLE_MAX_RADIUS = 152;
+
+export const TERRAIN_SIZE = 360;
+export const TERRAIN_SEGS = 150;
+export const TERRAIN_VERTS = TERRAIN_SEGS + 1;
+export const TERRAIN_STEP = TERRAIN_SIZE / TERRAIN_SEGS; // 2.4m per vertex
+export const TERRAIN_HALF = TERRAIN_SIZE * 0.5;
+
+export const terrainDeltaGrid = new Float32Array(TERRAIN_VERTS * TERRAIN_VERTS);
+export const terrainWetnessGrid = new Float32Array(TERRAIN_VERTS * TERRAIN_VERTS);
+export const terrainScorchGrid = new Float32Array(TERRAIN_VERTS * TERRAIN_VERTS);
+export const terrainLoosenessGrid = new Float32Array(TERRAIN_VERTS * TERRAIN_VERTS);
+
+export function resetTerrainDeformation(): void {
+  terrainDeltaGrid.fill(0);
+  terrainWetnessGrid.fill(0);
+  terrainScorchGrid.fill(0);
+  terrainLoosenessGrid.fill(0);
+}
+
+export function isTerrainProtectedAt(x: number, z: number): boolean {
+  if (Math.hypot(x - HILL_HOUSE_POS.x, z - HILL_HOUSE_POS.z) < 7.8) return true;
+  if (Math.hypot(x - FARMER_POS.x, z - FARMER_POS.z) < 4.5) return true;
+  return false;
+}
+
+export function sampleGridBilinear(grid: Float32Array, x: number, z: number): number {
+  const gx = (x + TERRAIN_HALF) / TERRAIN_STEP;
+  const gz = (z + TERRAIN_HALF) / TERRAIN_STEP;
+  const ix0 = Math.max(0, Math.min(TERRAIN_VERTS - 2, Math.floor(gx)));
+  const iz0 = Math.max(0, Math.min(TERRAIN_VERTS - 2, Math.floor(gz)));
+  const fx = Math.max(0, Math.min(1, gx - ix0));
+  const fz = Math.max(0, Math.min(1, gz - iz0));
+
+  const idx00 = iz0 * TERRAIN_VERTS + ix0;
+  const idx10 = idx00 + 1;
+  const idx01 = idx00 + TERRAIN_VERTS;
+  const idx11 = idx01 + 1;
+
+  const h0 = grid[idx00] * (1 - fx) + grid[idx10] * fx;
+  const h1 = grid[idx01] * (1 - fx) + grid[idx11] * fx;
+  return h0 * (1 - fz) + h1 * fz;
+}
+
+export function exportSparseTerrainDeltas(): [number, number][] {
+  const out: [number, number][] = [];
+  for (let i = 0; i < terrainDeltaGrid.length; i++) {
+    const v = terrainDeltaGrid[i];
+    if (Math.abs(v) > 0.03) {
+      out.push([i, Math.round(v * 1000) / 1000]);
+    }
+  }
+  return out;
+}
+
+export function importSparseTerrainDeltas(entries?: [number, number][]): void {
+  resetTerrainDeformation();
+  if (!Array.isArray(entries)) return;
+  for (const pair of entries) {
+    if (!Array.isArray(pair) || pair.length < 2) continue;
+    const idx = pair[0];
+    const val = pair[1];
+    if (idx >= 0 && idx < terrainDeltaGrid.length && Number.isFinite(val)) {
+      terrainDeltaGrid[idx] = val;
+      if (val < -0.25) {
+        terrainLoosenessGrid[idx] = Math.min(1, Math.abs(val) * 0.25);
+      }
+    }
+  }
+}
 
 export const BIOME_INFO: Record<
   BiomeId,
@@ -188,6 +261,10 @@ export function isFreshwaterAt(x: number, z: number): boolean {
 }
 
 export function getTerrainHeight(x: number, z: number): number {
+  return getBaseTerrainHeight(x, z) + sampleGridBilinear(terrainDeltaGrid, x, z);
+}
+
+export function getBaseTerrainHeight(x: number, z: number): number {
   const r = Math.hypot(x, z);
   const angle = Math.atan2(z, x);
 
@@ -297,6 +374,37 @@ export function getTerrainHeight(x: number, z: number): number {
   if (dSwamp < SWAMP_POS.radius + 4.0) {
     const swampBlend = 1 - smoothstep(SWAMP_POS.radius - 2.5, SWAMP_POS.radius + 4.0, dSwamp);
     h = h * (1 - swampBlend) + 0.85 * swampBlend;
+  }
+
+  // Smooth flat meadow terrace for Golden Wheatfield & Farmer Garden Market
+  const dWheat = Math.hypot(x - WHEATFIELD_POS.x, z - WHEATFIELD_POS.z);
+  if (dWheat < 14.5) {
+    const wBlend = 1 - smoothstep(8.5, 14.5, dWheat);
+    h = h * (1 - wBlend) + 3.15 * wBlend;
+  }
+  const dFarmer = Math.hypot(x - FARMER_POS.x, z - FARMER_POS.z);
+  if (dFarmer < 13.5) {
+    const fBlend = 1 - smoothstep(7.5, 13.5, dFarmer);
+    h = h * (1 - fBlend) + 3.15 * fBlend;
+  }
+
+  // Scenic Hilltop Plateau + gentle East Access Ramp for the Premade Furnished House
+  const dHouse = Math.hypot(x - HILL_HOUSE_POS.x, z - HILL_HOUSE_POS.z);
+  if (dHouse < 21) {
+    const houseBlend = 1 - smoothstep(9.5, 21, dHouse);
+    h = h * (1 - houseBlend) + HILL_HOUSE_Y * houseBlend;
+  }
+  // Gentle walkable ramp along +X (east) side from hilltop (x=-36.5) down to farm path (x=-23.5)
+  const dzRamp = Math.abs(z - HILL_HOUSE_POS.z);
+  if (
+    x >= HILL_HOUSE_POS.x + 6.5 &&
+    x <= HILL_HOUSE_POS.x + 21.5 &&
+    dzRamp < 4.8
+  ) {
+    const rampT = smoothstep(HILL_HOUSE_POS.x + 7.2, HILL_HOUSE_POS.x + 20.5, x);
+    const sideBlend = 1 - smoothstep(2.0, 4.8, dzRamp);
+    const rampH = HILL_HOUSE_Y * (1 - rampT) + 3.25 * rampT;
+    h = h * (1 - sideBlend) + rampH * sideBlend;
   }
 
   return h;

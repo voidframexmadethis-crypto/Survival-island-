@@ -98,6 +98,10 @@ export function loadGameFromSlot(slotId: string): GameSaveData | null {
       if (!hasKnife) {
         data.inventory.splice(1, 0, { itemId: 'hunting_knife', quantity: 1 });
       }
+      const hasSickle = data.inventory.some((s) => s.itemId === 'sickle');
+      if (!hasSickle) {
+        data.inventory.push({ itemId: 'sickle', quantity: 1 });
+      }
       const hasAmmo = data.inventory.some((s) => s.itemId === 'ammo');
       if (!hasAmmo) {
         data.inventory.push({ itemId: 'ammo', quantity: 60 });
@@ -106,6 +110,24 @@ export function loadGameFromSlot(slotId: string): GameSaveData | null {
         if (ammoSlot && ammoSlot.quantity < 30) {
           ammoSlot.quantity = 60;
         }
+      }
+
+      if (typeof data.coins !== 'number') {
+        data.coins = 150;
+      }
+      if (!Array.isArray(data.plantedCrops)) {
+        data.plantedCrops = [];
+      }
+      if (!Array.isArray(data.fridgeItems)) {
+        data.fridgeItems = [
+          { itemId: 'milk', quantity: 2 },
+          { itemId: 'egg', quantity: 6 },
+          { itemId: 'butter', quantity: 3 },
+          { itemId: 'chocolate', quantity: 2 },
+          { itemId: 'salt', quantity: 4 },
+          { itemId: 'lettuce', quantity: 2 },
+          { itemId: 'tomato', quantity: 2 },
+        ];
       }
 
       const baselineMaterials: { itemId: GameSaveData['inventory'][number]['itemId']; minQty: number }[] = [
@@ -140,7 +162,20 @@ export function loadGameFromSlot(slotId: string): GameSaveData | null {
       }
 
       if (!Array.isArray(data.player.hotbarItemIds)) {
-        data.player.hotbarItemIds = ['gun', 'hunting_knife', 'ammo', null, 'dirty_water_bottle', null];
+        data.player.hotbarItemIds = [
+          'gun',
+          'hunting_knife',
+          'ammo',
+          null,
+          'dirty_water_bottle',
+          'sickle',
+          null,
+          null,
+          null,
+        ];
+      }
+      while (data.player.hotbarItemIds.length < 9) {
+        data.player.hotbarItemIds.push(null);
       }
       if (!data.player.hotbarItemIds.includes('gun')) {
         const emptyIdx = data.player.hotbarItemIds.indexOf(null);
@@ -167,6 +202,12 @@ export function loadGameFromSlot(slotId: string): GameSaveData | null {
           )
             ? 'filtered_water_bottle'
             : 'dirty_water_bottle';
+        }
+      }
+      if (!data.player.hotbarItemIds.includes('sickle')) {
+        const emptyIdx = data.player.hotbarItemIds.indexOf(null);
+        if (emptyIdx !== -1) {
+          data.player.hotbarItemIds[emptyIdx] = 'sickle';
         }
       }
       // Ensure gun is the active equipped slot on start of game

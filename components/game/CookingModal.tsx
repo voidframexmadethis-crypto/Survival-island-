@@ -10,16 +10,18 @@ import { ItemIcon } from './ItemIcon';
 interface CookingModalProps {
   hud: HUDStateSnapshot;
   atCookingStation: boolean;
+  isStove?: boolean;
   onCook: (recipeId: string) => boolean;
   onEat?: (itemId: ItemId) => void;
   onClose: () => void;
 }
 
-type CookFilter = 'all' | 'ready' | 'meat' | 'fruit' | 'fish';
+type CookFilter = 'all' | 'ready' | 'bakery' | 'veggie' | 'meat' | 'fish' | 'fruit';
 
 export function CookingModal({
   hud,
   atCookingStation,
+  isStove = false,
   onCook,
   onEat,
   onClose,
@@ -82,6 +84,46 @@ export function CookingModal({
           id === 'coconut_fish_curry',
       );
     }
+    if (filter === 'bakery') {
+      return ids.some(
+        (id) =>
+          id === 'flour' ||
+          id === 'sugar' ||
+          id === 'dough' ||
+          id === 'bread_loaf' ||
+          id === 'wheat_bread' ||
+          id === 'cake' ||
+          id === 'chocolate_cake' ||
+          id === 'cookies' ||
+          id === 'jalapeno_cornbread' ||
+          id === 'pumpkin_pie' ||
+          id === 'sugarcane' ||
+          id === 'chocolate' ||
+          id === 'butter',
+      );
+    }
+    if (filter === 'veggie') {
+      return ids.some(
+        (id) =>
+          id === 'lettuce' ||
+          id === 'tomato' ||
+          id === 'cucumber' ||
+          id === 'jalapeno' ||
+          id === 'carrot' ||
+          id === 'potato' ||
+          id === 'onion' ||
+          id === 'corn' ||
+          id === 'bell_pepper' ||
+          id === 'pumpkin' ||
+          id === 'garlic' ||
+          id === 'garden_salad' ||
+          id === 'fresh_salsa' ||
+          id === 'cucumber_salad' ||
+          id === 'stuffed_pepper' ||
+          id === 'vegetable_soup' ||
+          id === 'garlic_herb_roast',
+      );
+    }
     if (filter === 'fruit') {
       return ids.some(
         (id) =>
@@ -109,12 +151,18 @@ export function CookingModal({
             <Flame className="w-5 h-5 text-orange-400" />
             <div>
               <h2 className="font-display text-lg font-bold text-stone-100">
-                {atCookingStation ? 'Cooking Station Hearth' : 'Campfire Cooking'}
+                {isStove
+                  ? 'Kitchen Stove & Baking Oven'
+                  : atCookingStation
+                    ? 'Cooking Station Hearth'
+                    : 'Campfire Cooking'}
               </h2>
               <p className="text-xs text-stone-400">
-                {atCookingStation
-                  ? 'Cook anything 25% faster — dinosaur meat, fish, fruit, maple glazes & stews.'
-                  : 'Cook anything over the fire — dinosaur meat, fish, coconut, banana, apple, maple glazes & more.'}
+                {isStove
+                  ? 'Bake real-life bread, cakes & cookies from flour & sugar, or sauté fresh farm vegetables 25% faster.'
+                  : atCookingStation
+                    ? 'Cook anything 25% faster — bread, cakes, cookies, dinosaur meat, fish, fruit & stews.'
+                    : 'Cook over the fire — bread, meat, fish, coconut, banana, apple, maple glazes & more.'}
               </p>
             </div>
           </div>
@@ -133,9 +181,11 @@ export function CookingModal({
             [
               ['all', 'All Dishes'],
               ['ready', 'Ready Now'],
+              ['bakery', 'Bread, Cake & Cookies'],
+              ['veggie', 'Salads & Veggies'],
               ['meat', 'Dino & Meat'],
               ['fish', 'Fish'],
-              ['fruit', 'Coconut, Fruit & Camp'],
+              ['fruit', 'Fruit & Camp'],
             ] as [CookFilter, string][]
           ).map(([key, label]) => (
             <button

@@ -17,7 +17,8 @@ export type ItemCategory =
   | 'weapon'
   | 'food'
   | 'structure'
-  | 'equipment';
+  | 'equipment'
+  | 'seed';
 
 export type ItemId =
   // Raw Resources
@@ -30,6 +31,15 @@ export type ItemId =
   | 'grass'
   | 'leaves'
   | 'wheat'
+  | 'sugarcane'
+  | 'flour'
+  | 'sugar'
+  | 'dough'
+  | 'milk'
+  | 'egg'
+  | 'butter'
+  | 'chocolate'
+  | 'salt'
   | 'clay'
   | 'sand'
   | 'berries'
@@ -45,7 +55,33 @@ export type ItemId =
   | 'bone'
   | 'freshwater_fish'
   | 'ocean_fish'
-  // Cooked / Prepared Foods
+  // Farm Vegetables
+  | 'lettuce'
+  | 'tomato'
+  | 'cucumber'
+  | 'jalapeno'
+  | 'carrot'
+  | 'potato'
+  | 'onion'
+  | 'corn'
+  | 'bell_pepper'
+  | 'pumpkin'
+  | 'garlic'
+  // Farm Seeds & Cuttings
+  | 'wheat_seeds'
+  | 'sugarcane_cutting'
+  | 'lettuce_seeds'
+  | 'tomato_seeds'
+  | 'cucumber_seeds'
+  | 'jalapeno_seeds'
+  | 'carrot_seeds'
+  | 'potato_seeds'
+  | 'onion_seeds'
+  | 'corn_seeds'
+  | 'bell_pepper_seeds'
+  | 'pumpkin_seeds'
+  | 'garlic_seeds'
+  // Cooked / Prepared Foods & Bakery
   | 'roasted_meat'
   | 'roasted_dino_meat'
   | 'roasted_coconut'
@@ -56,6 +92,18 @@ export type ItemId =
   | 'dino_feast'
   | 'berry_medley'
   | 'wheat_bread'
+  | 'bread_loaf'
+  | 'cake'
+  | 'chocolate_cake'
+  | 'cookies'
+  | 'jalapeno_cornbread'
+  | 'pumpkin_pie'
+  | 'garden_salad'
+  | 'fresh_salsa'
+  | 'cucumber_salad'
+  | 'stuffed_pepper'
+  | 'vegetable_soup'
+  | 'garlic_herb_roast'
   | 'hearty_stew'
   | 'grilled_fish'
   | 'roasted_mushrooms'
@@ -64,9 +112,11 @@ export type ItemId =
   | 'ammo'
   | 'stone_axe'
   | 'stone_pickaxe'
+  | 'sickle'
   | 'hunting_knife'
   | 'wooden_club'
   | 'wooden_spear'
+  | 'stone_warhammer'
   | 'rope'
   | 'rope_whip'
   | 'lasso'
@@ -75,13 +125,181 @@ export type ItemId =
   | 'fishing_rod'
   | 'dirty_water_bottle'
   | 'filtered_water_bottle'
+  | 'excavator_shovel'
+  | 'powder_keg'
+  | 'water_torrent'
   // Placeable Camp Structures
   | 'campfire'
   | 'sleeping_area'
   | 'storage_chest'
   | 'crafting_table'
   | 'cooking_station'
-  | 'basic_shelter';
+  | 'basic_shelter'
+  // Structural Engineering Pieces (Load-Bearing Bridges & Cliffside Fortresses)
+  | 'stone_block'
+  | 'stone_pillar'
+  | 'stone_arch'
+  | 'timber_beam'
+  | 'timber_pillar'
+  // Kinetic Power Networks & Automated Assembly Machinery
+  | 'water_wheel'
+  | 'steam_boiler'
+  | 'steam_engine'
+  | 'drive_shaft'
+  | 'gear_box'
+  | 'belt_pulley'
+  | 'fluid_pipe'
+  | 'auto_assembler'
+  // Modular Vehicle & Craft Parts
+  | 'vehicle_chassis_kit'
+  // 7-Day Blood Moon & Advanced Lost World Tech
+  | 'core_shard'
+  | 'glider_wings'
+  | 'kinetic_grapple'
+  | 'auto_turret'
+  | 'smart_tv';
+
+export type StructuralBlockKind =
+  | 'stone_block'
+  | 'stone_pillar'
+  | 'stone_arch'
+  | 'timber_beam'
+  | 'timber_pillar';
+
+export type KineticNodeKind =
+  | 'water_wheel'
+  | 'steam_boiler'
+  | 'steam_engine'
+  | 'drive_shaft'
+  | 'gear_box'
+  | 'belt_pulley'
+  | 'fluid_pipe'
+  | 'auto_assembler';
+
+export interface KineticNode {
+  id: string;
+  kind: KineticNodeKind;
+  x: number;
+  y: number;
+  z: number;
+  rotationY: number;
+  rpm: number; // Signed angular speed (gears reverse polarity!)
+  torque: number;
+  steamPsi: number; // 0..100 PSI pressure in boiler/pipe/engine network
+  waterFlow: number; // 0..1 flow pressure in river/pipe network
+  active: boolean;
+  stalled: boolean;
+  cycleProgress: number; // 0..1 assembler production cycle
+  storedOutputCount: number; // Manufactured parts ready in auto_assembler buffer
+  connectedIds: string[];
+}
+
+export interface BeltLink {
+  id: string;
+  fromId: string;
+  toId: string;
+  fromX: number;
+  fromY: number;
+  fromZ: number;
+  toX: number;
+  toY: number;
+  toZ: number;
+  distance: number;
+  active: boolean;
+  rpm: number;
+}
+
+export type VehicleModuleKind =
+  | 'cockpit_seat'
+  | 'chassis_frame'
+  | 'armor_plate'
+  | 'offroad_wheel'
+  | 'steam_engine_pod'
+  | 'boat_hull'
+  | 'rotor_wing'
+  | 'steering_rudder'
+  | 'storage_rack';
+
+export interface VehicleModulePlacement {
+  id: string;
+  kind: VehicleModuleKind;
+  gx: number; // -2..2 lateral
+  gy: number; // 0..2 vertical
+  gz: number; // -3..3 longitudinal (+Z = forward nose)
+}
+
+export interface ModularVehicleData {
+  id: string;
+  name: string;
+  paintColor: string;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  hp: number;
+  maxHp: number;
+  fuel: number; // Steam coal/wood fuel 0..100
+  modules: VehicleModulePlacement[];
+  cargoItems: InventorySlot[];
+}
+
+export interface KineticHudSummary {
+  nodeCount: number;
+  beltSpanCount: number;
+  totalRpmOutput: number;
+  maxSteamPsi: number;
+  activeAssemblers: number;
+  readyProducts: number;
+  targetNode: {
+    id: string;
+    name: string;
+    kind: KineticNodeKind;
+    rpm: number;
+    torque: number;
+    steamPsi: number;
+    waterFlow: number;
+    active: boolean;
+    readyProducts: number;
+    cycleProgress: number;
+  } | null;
+}
+
+export interface ActiveVehicleHudState {
+  id: string;
+  name: string;
+  craftClass: 'Land Rover' | 'Steam Boat' | 'Amphibious Craft' | 'Gyro Airship' | 'Armored Rig';
+  speedKmh: number;
+  altitudeM: number;
+  steamPsi: number;
+  fuel: number;
+  hp: number;
+  maxHp: number;
+  inWater: boolean;
+  airborne: boolean;
+  canFloat: boolean;
+  canFly: boolean;
+  cargoUsed: number;
+  cargoCapacity: number;
+}
+
+export interface StructuralBlock {
+  id: string;
+  kind: StructuralBlockKind;
+  gx: number;
+  gy: number;
+  gz: number;
+  x: number;
+  y: number;
+  z: number;
+  rotationY: number;
+  stress: number; // 0..1 safe/strained, >= 1.0 critical collapse
+  anchored: boolean;
+  supportHops: number;
+  bucklingTimer: number; // > 0 when actively buckling before detaching
+}
 
 export interface ItemDefinition {
   id: ItemId;
@@ -95,12 +313,60 @@ export interface ItemDefinition {
   gatherPower?: number;
   attackDamage?: number;
   attackRange?: number;
+  weaponClass?: WeaponMaterialClass;
   preferredResource?: 'wood' | 'stone' | 'meat' | 'plant';
   hungerRestore?: number;
   thirstRestore?: number;
   healthRestore?: number;
   staminaRestore?: number;
   structureType?: CampStructureType;
+  structuralKind?: StructuralBlockKind;
+  kineticKind?: KineticNodeKind;
+}
+
+export type BodyZone = 'head' | 'chest' | 'limb';
+
+export type ArmorMaterialTier = 'none' | 'hide' | 'bone' | 'stone';
+
+export type WeaponMaterialClass =
+  | 'blunt_heavy'
+  | 'blade'
+  | 'pierce'
+  | 'ballistic'
+  | 'blunt_light';
+
+export interface ZoneArmorState {
+  tier: ArmorMaterialTier;
+  hp: number;
+  maxHp: number;
+}
+
+export type CreatureZoneArmor = Record<BodyZone, ZoneArmorState>;
+
+export interface TargetHitboxSnapshot {
+  creatureId: string;
+  name: string;
+  hp: number;
+  maxHp: number;
+  zone: BodyZone;
+  armorTier: ArmorMaterialTier;
+  armorHp: number;
+  armorMaxHp: number;
+  isGapSlip: boolean;
+  reactionHint: string;
+  blinded: boolean;
+  staggered: boolean;
+  isBoss?: boolean;
+  distance: number;
+}
+
+export interface MomentumHudState {
+  wallRunning: boolean;
+  wallSide: -1 | 0 | 1;
+  vaulting: boolean;
+  speedMps: number;
+  kickCooldown: number;
+  nearCaveBoss: boolean;
 }
 
 export interface InventorySlot {
@@ -134,13 +400,20 @@ export interface CookingRecipe {
   description: string;
 }
 
+export type GameMode = 'survival' | 'boss_hunt' | 'sandbox';
+
 export type CampStructureType =
   | 'campfire'
   | 'sleeping_area'
   | 'storage_chest'
   | 'crafting_table'
   | 'cooking_station'
-  | 'basic_shelter';
+  | 'basic_shelter'
+  | 'gravity_monolith'
+  | 'spike_barricade'
+  | 'timeshift_sundial'
+  | 'auto_turret'
+  | 'smart_tv';
 
 export interface PlacedStructure {
   id: string;
@@ -151,6 +424,18 @@ export interface PlacedStructure {
   rotationY: number;
   chestItems?: InventorySlot[];
   lit?: boolean;
+}
+
+export interface PlantedCrop {
+  id: string;
+  seedItemId: ItemId;
+  produceItemId: ItemId;
+  x: number;
+  y: number;
+  z: number;
+  growthProgress: number; // 0 to 1
+  watered: boolean;
+  mature: boolean;
 }
 
 export type ResourceNodeKind =
@@ -167,6 +452,7 @@ export type ResourceNodeKind =
   | 'fiber_fern'
   | 'grass_tuft'
   | 'wheat_patch'
+  | 'sugarcane_patch'
   | 'clay_deposit'
   | 'sand_mound'
   | 'berry_bush'
@@ -345,6 +631,13 @@ export interface GameSaveData {
   weather?: WeatherType;
   inventory: InventorySlot[];
   structures: PlacedStructure[];
+  structuralBlocks?: StructuralBlock[];
+  kineticNodes?: KineticNode[];
+  modularVehicles?: ModularVehicleData[];
+  terrainDeltas?: [number, number][]; // sparse [vertexIndex, deltaY] persisted craters/channels
+  coins?: number;
+  plantedCrops?: PlantedCrop[];
+  fridgeItems?: InventorySlot[];
   visitedBiomes: BiomeId[];
   exploredCells?: number[]; // Indices of 32x32 fog-of-war map cells discovered
   resourceStates?: SavedResourceNodeState[];
@@ -374,12 +667,19 @@ export type ActiveModal =
   | 'inventory'
   | 'crafting'
   | 'cooking'
+  | 'stove'
   | 'chest'
+  | 'fridge'
+  | 'farmer'
+  | 'tv'
   | 'place'
+  | 'vehicles'
+  | 'vehicle_cargo'
   | 'map'
   | 'missions'
   | 'pause'
-  | 'settings';
+  | 'settings'
+  | 'console';
 
 export interface NearbyInteraction {
   id: string;
@@ -396,14 +696,34 @@ export interface NearbyInteraction {
     | 'storage_chest'
     | 'sleeping_area'
     | 'basic_shelter'
+    | 'gravity_monolith'
+    | 'spike_barricade'
+    | 'timeshift_sundial'
+    | 'auto_turret'
+    | 'smart_tv'
     | 'creature'
+    | 'mount'
+    | 'tame'
     | 'footprint'
     | 'dolphin'
     | 'fishing'
     | 'expedition_journal'
     | 'gun_action'
     | 'clean_bottle'
-    | 'tool_action';
+    | 'tool_action'
+    | 'farmer'
+    | 'planted_crop'
+    | 'house_couch'
+    | 'house_bed'
+    | 'house_tv'
+    | 'house_fridge'
+    | 'house_stove'
+    | 'house_toilet'
+    | 'house_sink'
+    | 'house_shower'
+    | 'structural_block'
+    | 'kinetic_node'
+    | 'modular_vehicle';
   actionCategory?:
     | 'chop'
     | 'mine'
@@ -456,6 +776,10 @@ export interface HUDStateSnapshot {
   visibilityPercent: number;
   isNight: boolean;
   nocturnalActiveCount: number;
+  coins: number;
+  seatedLabel: string | null;
+  plantedCrops: PlantedCrop[];
+  fridgeItems: InventorySlot[];
   nearbyInteraction: NearbyInteraction | null;
   nearbyCarcass: {
     id: string;
@@ -477,4 +801,37 @@ export interface HUDStateSnapshot {
   cinematicSubtitle: string;
   gameOver: boolean;
   gameOverReason?: string;
+  structuralSummary?: {
+    blockCount: number;
+    maxStressPercent: number;
+    bucklingCount: number;
+    previewStressPercent: number | null;
+    previewSupported: boolean;
+    previewLabel: string | null;
+  };
+  terrainSummary?: {
+    cratersCarved: number;
+    activeWaterStreams: number;
+    erodedVolume: number;
+  };
+  targetHitbox?: TargetHitboxSnapshot | null;
+  momentumState?: MomentumHudState;
+  kineticSummary?: KineticHudSummary;
+  vehicles?: ModularVehicleData[];
+  activeVehicle?: ActiveVehicleHudState | null;
+  selectedCargoVehicleId?: string | null;
+  gameMode?: GameMode;
+  bloodMoonActive?: boolean;
+  daysUntilBloodMoon?: number;
+  bossesDefeatedCount?: number;
+  objectiveText?: string;
+  hitMarkerActive?: boolean;
+  tvState?: {
+    power: boolean;
+    channel: number;
+    channelName: string;
+    volume: number;
+    isMuted: boolean;
+    isZoomedToTv: boolean;
+  };
 }

@@ -1,11 +1,13 @@
 'use client';
 
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   ArrowDown,
   ArrowUp,
   Axe,
   Backpack,
+  ChevronDown,
+  ChevronUp,
   Crosshair,
   Droplets,
   Flame,
@@ -17,6 +19,7 @@ import {
   Pickaxe,
   Swords,
   Utensils,
+  Wind,
   Zap,
 } from 'lucide-react';
 import { NearbyInteraction } from '@/game/types';
@@ -27,10 +30,12 @@ interface TouchControlsProps {
   actionCategory?: NearbyInteraction['actionCategory'];
   isSprinting: boolean;
   isCrouching: boolean;
+  kickCooldown?: number;
   onJoystickMove: (x: number, y: number) => void;
   onCameraDrag: (dx: number, dy: number) => void;
   onAction: () => void;
   onJump: () => void;
+  onKickDebris?: () => void;
   onSprintToggle: (active: boolean) => void;
   onCrouchToggle: (active: boolean) => void;
   onOpenBackpack?: () => void;
@@ -44,47 +49,96 @@ export function TouchControls({
   actionCategory,
   isSprinting,
   isCrouching,
+  kickCooldown = 0,
   onJoystickMove,
   onCameraDrag,
   onAction,
   onJump,
+  onKickDebris,
   onSprintToggle,
   onCrouchToggle,
   onOpenBackpack,
   onOpenCraft,
   onOpenPlace,
 }: TouchControlsProps) {
-  const joyRef = useRef<HTMLDivElement | null>(null);
-  const joyPointerId = useRef<number | null>(null);
+  const joyPadRef = useRef<HTMLDivElement | null>(null);
+  const activePointerId = useRef<number | null>(null);
+  const joyCenter = useRef({ x: 0, y: 0 });
   const [knobOffset, setKnobOffset] = useState({ x: 0, y: 0 });
+  const [isPortrait, setIsPortrait] = useState(false);
 
-  if (!visible) return null;
+  useEffect(() => {
+    const checkOrientation = () => {
+      setIsPortrait(window.innerHeight > window.innerWidth);
+    };
+    checkOrientation();
+    window.addEventListener('resize', checkOrientation);
+    window.addEventListener('orientationchange', checkOrientation);
+    return () => {
+      window.removeEventListener('resize', checkOrientation);
+      window.removeEventListener('orientationchange', checkOrientation);
+    };
+  }, []);
 
-  const maxRadius = 46;
+  const maxRadius = 48;
 
-  const updateJoystickFromPoint = (clientX: number, clientY: number) => {
-    const el = joyRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    let dx = clientX - cx;
-    let dy = clientY - cy;
-    const dist = Math.hypot(dx, dy);
-    if (dist > maxRadius) {
-      dx = (dx / dist) * maxRadius;
-      dy = (dy / dist) * maxRadius;
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    e.stopPropagation();
+    if (activePointerId.current !== null) return;
+    const pad = joyPadRef.current;
+    if (!pad) return;
+
+    const rect = pad.getBoundingClientRect();
+    joyCenter.current = {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    };
+
+    activePointerId.current = e.pointerId;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // Ignore
     }
-    setKnobOffset({ x: dx, y: dy });
-    // Invert Y so pushing up yields +1 forward
-    onJoystickMove(dx / maxRadius, -dy / maxRadius);
-  };
 
-  const resetJoystick = () => {
-    joyPointerId.current = null;
+    const dx = e.clientX - joyCenter.current.x;
+    const dy = e.clientY - joyCenter.current.y;
+    const dist = Math.hypot(dx, dy);
+    let clampedDx = dx;
+    let clampedDy = dy;
+    if (dist > maxRadius) {
+      clampedDx = (dx / dist) * maxRadius;
+      clampedDy = (dy / dist) * maxRadius;
+    }
+    setKnobOffset({ x: clampedDx, y: clampedDy });
+    onJoystickMove(clampedDx / maxRadius, -clampedDy / maxRadius);
+  }, [onJoystickMove]);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (e.pointerId !== activePointerId.current) return;
+    e.stopPropagation();
+
+    const dx = e.clientX - joyCenter.current.x;
+    const dy = e.clientY - joyCenter.current.y;
+    const dist = Math.hypot(dx, dy);
+    let clampedDx = dx;
+    let clampedDy = dy;
+    if (dist > maxRadius) {
+      clampedDx = (dx / dist) * maxRadius;
+      clampedDy = (dy / dist) * maxRadius;
+    }
+    setKnobOffset({ x: clampedDx, y: clampedDy });
+    onJoystickMove(clampedDx / maxRadius, -clampedDy / maxRadius);
+  }, [onJoystickMove]);
+
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    if (e.pointerId !== activePointerId.current) return;
+    activePointerId.current = null;
     setKnobOffset({ x: 0, y: 0 });
     onJoystickMove(0, 0);
-  };
+  }, [onJoystickMove]);
+
+  if (!visible) return null;
 
   const renderActionIcon = () => {
     switch (actionCategory) {
@@ -130,116 +184,92 @@ export function TouchControls({
       case 'attack':
         return 'Strike';
       case 'harvest':
-        return 'Prepare';
+        return 'Harvest';
       case 'clean':
         return 'Clean';
       default:
-        return 'Act';
+        return 'Use';
     }
   })();
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-20 touch-surface">
-      {/* Left Thumb Virtual Movement Joystick (Supports Multi-Touch + Mouse Pointer) */}
-      <div className="pointer-events-auto absolute bottom-22 left-4 sm:left-6 safe-bottom">
+    <div className="pointer-events-none fixed inset-0 z-20 touch-surface select-none overflow-hidden">
+      {/* LEFT ZONE: Unobstructed Movement Joystick */}
+      <div className="pointer-events-auto absolute bottom-28 left-6 sm:left-8 safe-bottom">
         <div
-          ref={joyRef}
-          className="relative w-32 h-32 rounded-full bg-stone-950/60 border-2 border-stone-400/35 flex items-center justify-center touch-surface"
-          onPointerDown={(e) => {
-            e.stopPropagation();
-            if (joyPointerId.current === null) {
-              joyPointerId.current = e.pointerId;
-              try {
-                e.currentTarget.setPointerCapture(e.pointerId);
-              } catch {
-                // Ignore if synthetic event cannot capture
-              }
-              updateJoystickFromPoint(e.clientX, e.clientY);
-            }
-          }}
-          onPointerMove={(e) => {
-            if (e.pointerId === joyPointerId.current) {
-              e.stopPropagation();
-              updateJoystickFromPoint(e.clientX, e.clientY);
-            }
-          }}
-          onPointerUp={(e) => {
-            if (e.pointerId === joyPointerId.current) {
-              resetJoystick();
-            }
-          }}
-          onPointerCancel={(e) => {
-            if (e.pointerId === joyPointerId.current) {
-              resetJoystick();
-            }
-          }}
-          onLostPointerCapture={() => {
-            resetJoystick();
-          }}
+          ref={joyPadRef}
+          className="relative w-36 h-36 sm:w-40 sm:h-40 rounded-full bg-stone-950/75 border-2 border-amber-500/35 flex items-center justify-center touch-surface shadow-2xl backdrop-blur-md"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+          onLostPointerCapture={handlePointerUp}
         >
           <div
-            className="w-14 h-14 rounded-full bg-amber-500/85 border-2 border-amber-200/80 shadow-lg flex items-center justify-center"
+            className="w-16 h-16 sm:w-18 sm:h-18 rounded-full bg-amber-500 border-2 border-amber-200 shadow-xl flex items-center justify-center pointer-events-none transition-transform duration-75"
             style={{
               transform: `translate(${knobOffset.x}px, ${knobOffset.y}px)`,
             }}
           >
-            <Footprints className="w-5 h-5 text-stone-950" />
+            <Footprints className="w-6 h-6 text-stone-950" />
           </div>
         </div>
       </div>
 
-      {/* Right Thumb Action Cluster + Quick Backpack & Craft */}
-      <div className="pointer-events-auto absolute bottom-22 right-4 sm:right-6 safe-bottom flex items-end gap-3">
-        <div className="flex flex-col gap-2">
-          <button
-            type="button"
-            aria-label="Sprint"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onSprintToggle(!isSprinting);
-            }}
-            className={`w-12 h-12 min-w-[48px] min-h-[48px] rounded-full border-2 flex items-center justify-center transition-colors ${
-              isSprinting
-                ? 'bg-amber-500 border-amber-200 text-stone-950'
-                : 'bg-stone-950/75 border-stone-500/50 text-stone-100'
-            }`}
-          >
-            <Zap className="w-5 h-5" />
-          </button>
+      {/* MID-LEFT ZONE: Sprint, Crouch & Jump / Vault Arc */}
+      <div className="pointer-events-auto absolute bottom-28 left-48 sm:left-56 safe-bottom flex items-end gap-2.5">
+        <button
+          type="button"
+          aria-label="Sprint"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSprintToggle(!isSprinting);
+          }}
+          className={`w-12 h-12 sm:w-13 sm:h-13 rounded-full border-2 flex items-center justify-center shadow-lg transition-colors ${
+            isSprinting
+              ? 'bg-amber-500 border-amber-200 text-stone-950'
+              : 'bg-stone-950/80 border-stone-500/60 text-stone-100'
+          }`}
+        >
+          <Zap className="w-5 h-5 sm:w-6 sm:h-6" />
+        </button>
 
-          <button
-            type="button"
-            aria-label="Crouch"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onCrouchToggle(!isCrouching);
-            }}
-            className={`w-12 h-12 min-w-[48px] min-h-[48px] rounded-full border-2 flex items-center justify-center transition-colors ${
-              isCrouching
-                ? 'bg-emerald-500 border-emerald-200 text-stone-950'
-                : 'bg-stone-950/75 border-stone-500/50 text-stone-100'
-            }`}
-          >
-            <ArrowDown className="w-5 h-5" />
-          </button>
+        <button
+          type="button"
+          aria-label="Crouch"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onCrouchToggle(!isCrouching);
+          }}
+          className={`w-12 h-12 sm:w-13 sm:h-13 rounded-full border-2 flex items-center justify-center shadow-lg transition-colors ${
+            isCrouching
+              ? 'bg-emerald-500 border-emerald-200 text-stone-950'
+              : 'bg-stone-950/80 border-stone-500/60 text-stone-100'
+          }`}
+        >
+          <ArrowDown className="w-5 h-5 sm:w-6 sm:h-6" />
+        </button>
 
-          <button
-            type="button"
-            aria-label="Jump"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onJump();
-            }}
-            className="w-12 h-12 min-w-[48px] min-h-[48px] rounded-full bg-stone-950/75 border-2 border-stone-500/50 text-stone-100 active:bg-stone-800 flex items-center justify-center"
-          >
-            <ArrowUp className="w-5 h-5" />
-          </button>
-        </div>
+        <button
+          type="button"
+          aria-label="Jump & Vault"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onJump();
+          }}
+          className="w-14 h-14 sm:w-15 sm:h-15 rounded-full bg-stone-950/85 border-2 border-amber-500/70 text-amber-300 active:bg-amber-600 active:text-stone-950 flex items-center justify-center shadow-2xl"
+        >
+          <ArrowUp className="w-7 h-7" />
+        </button>
+      </div>
 
-        <div className="flex flex-col items-center gap-2.5">
+      {/* RIGHT ZONE: Ergonomic Arc for Action, Secondary Dynamic Context, Backpack/Craft, and Single Build Toggle */}
+      <div className="pointer-events-auto absolute bottom-28 right-6 sm:right-8 safe-bottom flex items-end gap-3.5">
+        <div className="flex flex-col items-end gap-2.5">
+          {/* Top row of right-side arc: Quick Backpack, Craft, and Single Build / Place Toggle (No duplicates) */}
           <div className="flex items-center gap-2">
             {onOpenBackpack && (
               <button
@@ -250,9 +280,9 @@ export function TouchControls({
                   e.stopPropagation();
                   onOpenBackpack();
                 }}
-                className="w-11 h-11 min-w-[44px] min-h-[44px] rounded-full bg-stone-950/80 border-2 border-stone-500/50 text-amber-300 active:bg-stone-800 flex items-center justify-center"
+                className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-stone-950/85 border-2 border-stone-500/60 text-amber-300 active:bg-stone-800 flex items-center justify-center shadow-lg"
               >
-                <Backpack className="w-4 h-4" />
+                <Backpack className="w-5 h-5" />
               </button>
             )}
             {onOpenCraft && (
@@ -264,45 +294,71 @@ export function TouchControls({
                   e.stopPropagation();
                   onOpenCraft();
                 }}
-                className="w-11 h-11 min-w-[44px] min-h-[44px] rounded-full bg-stone-950/80 border-2 border-stone-500/50 text-amber-300 active:bg-stone-800 flex items-center justify-center"
+                className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-stone-950/85 border-2 border-stone-500/60 text-amber-300 active:bg-stone-800 flex items-center justify-center shadow-lg"
               >
-                <Hammer className="w-4 h-4" />
+                <Hammer className="w-5 h-5" />
               </button>
             )}
             {onOpenPlace && (
               <button
                 type="button"
-                aria-label="Place Stuff"
+                aria-label="Build / Place"
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
                   onOpenPlace();
                 }}
-                className="h-11 min-w-[44px] min-h-[44px] px-2.5 rounded-full bg-amber-950/90 border-2 border-amber-400/70 text-amber-200 active:bg-amber-800 flex items-center justify-center gap-1"
+                className="h-11 sm:h-12 px-3.5 rounded-full bg-amber-950/90 border-2 border-amber-400/80 text-amber-200 active:bg-amber-800 flex items-center gap-1.5 shadow-lg"
               >
-                <PackageOpen className="w-4 h-4" />
-                <span className="text-[10px] font-bold uppercase tracking-wide">
-                  Place
+                <PackageOpen className="w-5 h-5" />
+                <span className="text-[11px] font-bold uppercase tracking-wider">
+                  Build
                 </span>
               </button>
             )}
           </div>
 
-          <button
-            type="button"
-            aria-label={actionLabel}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onAction();
-            }}
-            className="w-18 h-18 min-w-[72px] min-h-[72px] rounded-full bg-amber-600/95 active:bg-amber-500 border-2 border-amber-200 text-stone-950 font-bold shadow-xl flex flex-col items-center justify-center gap-0.5"
-          >
-            {renderActionIcon()}
-            <span className="text-[10px] uppercase tracking-wide leading-none">
-              {shortVerb}
-            </span>
-          </button>
+          {/* Bottom row of right-side arc: Secondary Dynamic Context (Kick / Interact) + Primary Shoot/Use Button */}
+          <div className="flex items-center gap-3">
+            {onKickDebris && (
+              <button
+                type="button"
+                aria-label="Dynamic Context (Kick / Interact)"
+                disabled={kickCooldown > 0}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onKickDebris();
+                }}
+                className={`h-14 sm:h-16 px-4 rounded-full border-2 flex items-center gap-2 shadow-xl transition-colors ${
+                  kickCooldown > 0
+                    ? 'bg-stone-950/60 border-stone-700 text-stone-500'
+                    : 'bg-stone-950/90 border-amber-400/85 text-amber-300 active:bg-amber-700 active:text-stone-950'
+                }`}
+              >
+                <Wind className="w-5 h-5" />
+                <span className="text-xs font-extrabold uppercase tracking-wide">
+                  {kickCooldown > 0 ? `${kickCooldown.toFixed(0)}s` : 'Kick'}
+                </span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              aria-label={actionLabel}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onAction();
+              }}
+              className="w-20 h-20 sm:w-22 sm:h-22 rounded-full bg-amber-600 hover:bg-amber-500 active:bg-amber-400 border-3 border-amber-200 text-stone-950 font-extrabold shadow-2xl flex flex-col items-center justify-center gap-0.5"
+            >
+              {renderActionIcon()}
+              <span className="text-[11px] uppercase tracking-wider leading-none">
+                {shortVerb}
+              </span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

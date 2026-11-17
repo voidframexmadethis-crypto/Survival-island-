@@ -32,6 +32,11 @@ const RESOURCE_ORDER: ItemId[] = [
   'grass',
   'leaves',
   'wheat',
+  'sugarcane',
+  'flour',
+  'sugar',
+  'salt',
+  'dough',
   'clay',
   'sand',
   'hide',
@@ -217,7 +222,8 @@ export function InventoryModal({
                 {hud.inventory.length} carried stacks ·{' '}
                 {hud.equippedSlot >= 0
                   ? `Equipped Slot ${hud.equippedSlot + 1}`
-                  : 'Bare Hands'}
+                  : 'Bare Hands'}{' '}
+                · <span className="text-amber-300 font-mono-tabular">{hud.coins} Coins</span>
               </p>
             </div>
           </div>
@@ -427,6 +433,7 @@ export function InventoryModal({
                       selectedDef.category === 'tool' ||
                       selectedDef.category === 'weapon' ||
                       selectedDef.category === 'equipment' ||
+                      selectedDef.category === 'seed' ||
                       selectedDef.structureType) && (
                       <button
                         onClick={() => {
@@ -439,9 +446,11 @@ export function InventoryModal({
                           ? 'Drink Filtered Water'
                           : selectedDef.category === 'food'
                             ? 'Eat Now'
-                            : selectedDef.structureType
-                              ? 'Place in World'
-                              : 'Equip Tool / Weapon'}
+                            : selectedDef.category === 'seed'
+                              ? 'Equip Seed to Plant'
+                              : selectedDef.structureType
+                                ? 'Place in World'
+                                : 'Equip Tool / Weapon'}
                       </button>
                     )}
 
@@ -471,14 +480,14 @@ export function InventoryModal({
                       <div className="text-[11px] text-stone-400 mb-1.5">
                         Move / Pin to Hotbar Slot
                       </div>
-                      <div className="grid grid-cols-6 gap-1.5">
-                        {[0, 1, 2, 3, 4, 5].map((slotIdx) => (
+                      <div className="grid grid-cols-5 sm:grid-cols-9 gap-1.5">
+                        {hud.hotbarItemIds.map((_, slotIdx) => (
                           <button
                             key={slotIdx}
                             onClick={() =>
                               onAssignHotbar(slotIdx, selectedDef.id)
                             }
-                            className={`min-h-[40px] rounded-lg text-xs font-mono-tabular font-semibold transition-colors ${
+                            className={`min-h-[38px] rounded-lg text-xs font-mono-tabular font-semibold transition-colors ${
                               hud.hotbarItemIds[slotIdx] === selectedDef.id
                                 ? 'bg-amber-600 text-stone-950'
                                 : 'bg-stone-800 hover:bg-amber-600 hover:text-stone-950 text-stone-200'
@@ -678,9 +687,9 @@ export function InventoryModal({
           <div className="flex-1 overflow-y-auto survival-scroll p-5 space-y-5">
             <div>
               <div className="text-xs font-semibold text-stone-400 mb-2.5">
-                Active 6-Slot Hotbar Loadout (Tap a slot to equip)
+                Active {hud.hotbarItemIds.length}-Slot Hotbar Loadout (Scroll Wheel or 1–{hud.hotbarItemIds.length} to equip)
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5">
+              <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-9 gap-2">
                 {hud.hotbarItemIds.map((itemId, idx) => {
                   const active = hud.equippedSlot === idx;
                   const def = itemId ? ITEMS[itemId] : null;

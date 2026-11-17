@@ -985,4 +985,375 @@ export class SoundEngine {
     osc.start(now);
     osc.stop(now + 0.2);
   }
+
+  public playExplosion(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const dur = 1.2;
+    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    let lp = 0;
+    for (let i = 0; i < d.length; i++) {
+      lp = (lp + 0.08 * (Math.random() * 2 - 1)) / 1.08;
+      const env = Math.exp(-i / (d.length * 0.28));
+      d[i] = lp * 4.5 * env;
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(520, now);
+    filter.frequency.exponentialRampToValueAtTime(90, now + dur);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.65, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    src.connect(filter);
+    filter.connect(g);
+    g.connect(this.masterGain);
+    src.start(now);
+
+    // Sub-bass punch
+    const osc = this.ctx.createOscillator();
+    const og = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(110, now);
+    osc.frequency.exponentialRampToValueAtTime(28, now + 0.45);
+    og.gain.setValueAtTime(0.55, now);
+    og.gain.exponentialRampToValueAtTime(0.001, now + 0.48);
+    osc.connect(og);
+    og.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.5);
+  }
+
+  public playStructuralCreak(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(95, now);
+    osc.frequency.linearRampToValueAtTime(62, now + 0.28);
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 340;
+    g.gain.setValueAtTime(0.18, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+    osc.connect(bp);
+    bp.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.32);
+  }
+
+  public playCollapseCrash(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const dur = 0.72;
+    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      const env = Math.exp(-i / (d.length * 0.35));
+      d[i] = (Math.random() * 2 - 1) * env;
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(750, now);
+    lp.frequency.exponentialRampToValueAtTime(160, now + dur);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.42, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    src.connect(lp);
+    lp.connect(g);
+    g.connect(this.masterGain);
+    src.start(now);
+  }
+
+  public playDigSoil(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const dur = 0.16;
+    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 460;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.28, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(this.masterGain);
+    src.start(now);
+  }
+
+  public playWaterRush(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const dur = 0.85;
+    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      d[i] = (Math.random() * 2 - 1) * Math.sin((i / d.length) * Math.PI);
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(980, now);
+    bp.frequency.linearRampToValueAtTime(620, now + dur);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.25, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(this.masterGain);
+    src.start(now);
+  }
+
+  public playArmorShatter(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const dur = 0.42;
+    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      const env = Math.exp(-i / (d.length * 0.25));
+      d[i] = (Math.random() * 2 - 1) * env;
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(1450, now);
+    bp.frequency.exponentialRampToValueAtTime(320, now + dur);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.42, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(this.masterGain);
+    src.start(now);
+
+    const osc = this.ctx.createOscillator();
+    const og = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(175, now);
+    osc.frequency.exponentialRampToValueAtTime(42, now + 0.26);
+    og.gain.setValueAtTime(0.38, now);
+    og.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+    osc.connect(og);
+    og.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.3);
+  }
+
+  public playArmorDeflect(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1620, now);
+    osc.frequency.exponentialRampToValueAtTime(2480, now + 0.06);
+    osc.frequency.exponentialRampToValueAtTime(980, now + 0.19);
+    g.gain.setValueAtTime(0.22, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.21);
+  }
+
+  public playBladeGapCrit(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(920, now);
+    osc.frequency.exponentialRampToValueAtTime(340, now + 0.14);
+    const hp = this.ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 600;
+    g.gain.setValueAtTime(0.24, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+    osc.connect(hp);
+    hp.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.17);
+  }
+
+  public playDebrisKick(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const dur = 0.22;
+    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (d.length * 0.4));
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(780, now);
+    bp.frequency.exponentialRampToValueAtTime(1600, now + dur);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.32, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(this.masterGain);
+    src.start(now);
+
+    const osc = this.ctx.createOscillator();
+    const og = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(155, now);
+    osc.frequency.exponentialRampToValueAtTime(48, now + 0.12);
+    og.gain.setValueAtTime(0.28, now);
+    og.gain.exponentialRampToValueAtTime(0.001, now + 0.13);
+    osc.connect(og);
+    og.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.14);
+  }
+
+  public playWallRunStep(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(220 + Math.random() * 50, now);
+    osc.frequency.exponentialRampToValueAtTime(95, now + 0.06);
+    g.gain.setValueAtTime(0.14, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.08);
+  }
+
+  public playCeilingCollapse(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const dur = 1.45;
+    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    let lp = 0;
+    for (let i = 0; i < d.length; i++) {
+      lp = (lp + 0.1 * (Math.random() * 2 - 1)) / 1.1;
+      const env = Math.exp(-i / (d.length * 0.42));
+      d[i] = lp * 5.2 * env;
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(640, now);
+    filter.frequency.exponentialRampToValueAtTime(110, now + dur);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.62, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    src.connect(filter);
+    filter.connect(g);
+    g.connect(this.masterGain);
+    src.start(now);
+
+    const osc = this.ctx.createOscillator();
+    const og = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(92, now);
+    osc.frequency.exponentialRampToValueAtTime(24, now + 0.65);
+    og.gain.setValueAtTime(0.55, now);
+    og.gain.exponentialRampToValueAtTime(0.001, now + 0.68);
+    osc.connect(og);
+    og.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.7);
+  }
+
+  public playWeldSnap(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const clank = this.ctx.createOscillator();
+    const cg = this.ctx.createGain();
+    clank.type = 'triangle';
+    clank.frequency.setValueAtTime(620, now);
+    clank.frequency.exponentialRampToValueAtTime(190, now + 0.09);
+    cg.gain.setValueAtTime(0.24, now);
+    cg.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
+    clank.connect(cg);
+    cg.connect(this.masterGain);
+    clank.start(now);
+    clank.stop(now + 0.12);
+
+    const dur = 0.12;
+    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (d.length * 0.4));
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const hp = this.ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 1800;
+    const hg = this.ctx.createGain();
+    hg.gain.setValueAtTime(0.16, now);
+    hg.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    src.connect(hp);
+    hp.connect(hg);
+    hg.connect(this.masterGain);
+    src.start(now);
+  }
+
+  public playKineticGearTick(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(280, now);
+    osc.frequency.exponentialRampToValueAtTime(110, now + 0.05);
+    g.gain.setValueAtTime(0.08, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.07);
+  }
+
+  public playSteamHiss(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const dur = 0.32;
+    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (d.length * 0.55));
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 2600;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.14, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(this.masterGain);
+    src.start(now);
+  }
 }

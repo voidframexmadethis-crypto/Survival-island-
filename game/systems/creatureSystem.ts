@@ -1,20 +1,32 @@
 import * as THREE from 'three';
 import {
+  ArmorMaterialTier,
+  BodyZone,
   CreatureSpecies,
   CreatureTemperament,
+  CreatureZoneArmor,
   ItemId,
   TrackedSighting,
 } from '../types';
-import { createCreatureModel, CreatureRig } from '../world/models';
+import {
+  attachCreatureArmorPlates,
+  createCreatureModel,
+  CreatureRig,
+} from '../world/models';
 import {
   AUTUMN_GROVE_POS,
+  CAVE_POS,
   DEAD_OAK_POS,
+  FARMER_POS,
   getTerrainHeight,
+  HILL_HOUSE_POS,
   LAKE_CENTER,
   OCEAN_LEVEL,
   SNOWY_WOODLAND_POS,
   SWAMP_POS,
+  WHEATFIELD_POS,
 } from '../world/terrain';
+import { getCreatureDefaultArmor } from './combatSystem';
 
 export interface SpeciesSpec {
   species: CreatureSpecies;
@@ -537,6 +549,10 @@ export interface ActiveCreature {
   provokedTimer: number;
   snaredTimer: number;
   stunTimer: number;
+  blindTimer: number;
+  isBoss?: boolean;
+  displayNameOverride?: string;
+  zoneArmor: CreatureZoneArmor;
   stepAccum: number;
   callCooldown: number;
   leapPhase: number;
@@ -553,6 +569,9 @@ export interface ActiveCreature {
     yaw: number;
     mode: 'sit' | 'stand';
   };
+  tamed?: boolean;
+  mounted?: boolean;
+  guardMode?: 'follow' | 'guard' | 'stay';
 }
 
 export interface FootprintMarker {
@@ -579,6 +598,8 @@ export class CreatureManager {
   });
   private scene: THREE.Scene;
   private fpSeq = 0;
+  private replenishTimer = 2.5;
+  private dynamicSeq = 0;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -714,6 +735,8 @@ export class CreatureManager {
       rig.root.position.set(x, y, z);
       const initialActive = spawnCycle !== 'nocturnal';
       rig.root.visible = initialActive;
+      const zoneArmor = getCreatureDefaultArmor(species, false);
+      attachCreatureArmorPlates(rig, species, zoneArmor);
       this.scene.add(rig.root);
 
       this.creatures.push({
@@ -745,6 +768,8 @@ export class CreatureManager {
         provokedTimer: 0,
         snaredTimer: 0,
         stunTimer: 0,
+        blindTimer: 0,
+        zoneArmor,
         stepAccum: 0,
         callCooldown: 4 + Math.random() * 10,
         leapPhase: Math.random() * Math.PI * 2,
@@ -756,6 +781,204 @@ export class CreatureManager {
         perch,
       });
     });
+
+    // Armored Obsidian Cave Boss patrolling underneath the collapsible cavern stalactites!
+    const bossSpec = SPECIES_SPECS['trex'];
+    const bossRig = createCreatureModel('trex');
+    bossRig.root.scale.setScalar(1.22);
+    const bossX = CAVE_POS.x;
+    const bossZ = CAVE_POS.z + 1.2;
+    const bossY = getTerrainHeight(bossX, bossZ);
+    const bossArmor = getCreatureDefaultArmor('trex', true);
+    attachCreatureArmorPlates(bossRig, 'trex', bossArmor);
+    bossRig.root.position.set(bossX, bossY, bossZ);
+    this.scene.add(bossRig.root);
+    this.creatures.push({
+      id: 'boss_obsidian_cavern_titan',
+      species: 'trex',
+      spec: {
+        ...bossSpec,
+        displayName: 'Obsidian Cave Titan',
+        maxHp: 380,
+        attackDamage: 24,
+        attackRange: 3.4,
+        walkSpeed: 2.2,
+        chaseSpeed: 6.2,
+      },
+      rig: bossRig,
+      x: bossX,
+      y: bossY,
+      z: bossZ,
+      yaw: 0.1,
+      homeX: bossX,
+      homeZ: bossZ,
+      targetX: bossX,
+      targetZ: bossZ,
+      hp: 380,
+      maxHp: 380,
+      alive: true,
+      spawnCycle: 'always',
+      cycleActive: true,
+      respawnTimer: 0,
+      state: 'idle',
+      stateTimer: 4,
+      attackCooldown: 0,
+      provokedTimer: 0,
+      snaredTimer: 0,
+      stunTimer: 0,
+      blindTimer: 0,
+      isBoss: true,
+      displayNameOverride: 'Obsidian Cave Titan',
+      zoneArmor: bossArmor,
+      stepAccum: 0,
+      callCooldown: 6,
+      leapPhase: 0,
+      leaping: false,
+      swoopOffsetAngle: 0,
+      feedTimer: 0,
+      startledTimer: 0,
+      velY: 0,
+    });
+  }
+
+  public spawnWildAnimalAt(species: CreatureSpecies, x: number, z: number): void {
+    const spec = SPECIES_SPECS[species];
+    const rig = createCreatureModel(species);
+    const y = getTerrainHeight(x, z);
+    rig.root.position.set(x, y, z);
+    rig.root.visible = true;
+    const zoneArmor = getCreatureDefaultArmor(species, false);
+    attachCreatureArmorPlates(rig, species, zoneArmor);
+    this.scene.add(rig.root);
+
+    this.creatures.push({
+      id: `wild_${species}_${++this.dynamicSeq}`,
+      species,
+      spec,
+      rig,
+      x,
+      y,
+      z,
+      yaw: Math.random() * Math.PI * 2,
+      homeX: x,
+      homeZ: z,
+      targetX: x + (Math.random() - 0.5) * 14,
+      targetZ: z + (Math.random() - 0.5) * 14,
+      hp: spec.maxHp,
+      maxHp: spec.maxHp,
+      alive: true,
+      spawnCycle: 'always',
+      cycleActive: true,
+      respawnTimer: 0,
+      state: 'wander',
+      stateTimer: 3 + Math.random() * 4,
+      attackCooldown: 0,
+      provokedTimer: 0,
+      snaredTimer: 0,
+      stunTimer: 0,
+      blindTimer: 0,
+      zoneArmor,
+      stepAccum: 0,
+      callCooldown: 5 + Math.random() * 10,
+      leapPhase: 0,
+      leaping: false,
+      swoopOffsetAngle: Math.random() * Math.PI * 2,
+      feedTimer: 0,
+      startledTimer: 0,
+      velY: 0,
+    });
+  }
+
+  public syncArmorVisuals(creature: ActiveCreature): void {
+    const groups = creature.rig.armorGroups;
+    if (!groups) return;
+    groups.head.visible =
+      creature.zoneArmor.head.tier !== 'none' && creature.zoneArmor.head.hp > 0;
+    groups.chest.visible =
+      creature.zoneArmor.chest.tier !== 'none' && creature.zoneArmor.chest.hp > 0;
+    const limbVisible =
+      creature.zoneArmor.limb.tier !== 'none' && creature.zoneArmor.limb.hp > 0;
+    groups.limb.visible = limbVisible;
+    for (let i = 0; i < 2; i++) {
+      const g = groups.limb.userData[`leg_${i}`] as THREE.Object3D | undefined;
+      if (g) g.visible = limbVisible;
+    }
+  }
+
+  public blindCreature(
+    creature: ActiveCreature,
+    seconds: number,
+    attackerX?: number,
+    attackerZ?: number,
+    shoveDist = 0,
+  ): void {
+    if (!creature.alive) return;
+    creature.blindTimer = Math.max(creature.blindTimer, seconds);
+    creature.attackCooldown = Math.max(creature.attackCooldown, 1.4);
+    if (shoveDist > 0 && attackerX !== undefined && attackerZ !== undefined) {
+      const dx = creature.x - attackerX;
+      const dz = creature.z - attackerZ;
+      const d = Math.hypot(dx, dz) || 1;
+      creature.x += (dx / d) * shoveDist;
+      creature.z += (dz / d) * shoveDist;
+    }
+  }
+
+  public shatterAllArmor(creature: ActiveCreature): ArmorMaterialTier[] {
+    const broken: ArmorMaterialTier[] = [];
+    (['head', 'chest', 'limb'] as BodyZone[]).forEach((z) => {
+      const st = creature.zoneArmor[z];
+      if (st.tier !== 'none' && st.hp > 0) {
+        broken.push(st.tier);
+        st.hp = 0;
+        st.tier = 'none';
+      }
+    });
+    this.syncArmorVisuals(creature);
+    return broken;
+  }
+
+  public applyZoneArmorDamage(
+    creature: ActiveCreature,
+    zone: BodyZone,
+    hpDamage: number,
+    armorDamage: number,
+    attackerX: number,
+    attackerZ: number,
+    options?: { snareSeconds?: number; stunSeconds?: number; knockback?: number },
+  ): {
+    killed: boolean;
+    drops: { itemId: ItemId; quantity: number }[];
+    shatteredZone: BodyZone | null;
+    shatteredTier: ArmorMaterialTier;
+  } {
+    let shatteredZone: BodyZone | null = null;
+    let shatteredTier: ArmorMaterialTier = 'none';
+
+    const za = creature.zoneArmor[zone];
+    if (za.tier !== 'none' && za.hp > 0 && armorDamage > 0) {
+      const prevTier = za.tier;
+      za.hp = Math.max(0, za.hp - armorDamage);
+      if (za.hp <= 0) {
+        za.tier = 'none';
+        shatteredZone = zone;
+        shatteredTier = prevTier;
+        this.syncArmorVisuals(creature);
+      }
+    }
+
+    const res = this.damageCreature(
+      creature,
+      hpDamage,
+      attackerX,
+      attackerZ,
+      options,
+    );
+    return {
+      ...res,
+      shatteredZone,
+      shatteredTier,
+    };
   }
 
   public triggerDolphinLeap(creature: ActiveCreature): void {
@@ -786,19 +1009,24 @@ export class CreatureManager {
       const dx = creature.x - attackerX;
       const dz = creature.z - attackerZ;
       const d = Math.hypot(dx, dz) || 1;
-      creature.x += (dx / d) * options.knockback;
-      creature.z += (dz / d) * options.knockback;
+      const kbScale = creature.isBoss ? 0.35 : 1.0;
+      creature.x += (dx / d) * options.knockback * kbScale;
+      creature.z += (dz / d) * options.knockback * kbScale;
     }
 
     if (creature.hp <= 0) {
       creature.alive = false;
-      creature.respawnTimer = 75;
+      creature.respawnTimer = creature.isBoss ? 35 : 8 + Math.random() * 4;
       creature.rig.root.visible = false;
 
       const drops = creature.spec.drops.map((d) => ({
         itemId: d.itemId,
         quantity: d.min + Math.floor(Math.random() * (d.max - d.min + 1)),
       }));
+      if (creature.isBoss) {
+        drops.push({ itemId: 'metal_ore', quantity: 6 });
+        drops.push({ itemId: 'stone', quantity: 8 });
+      }
       return { killed: true, drops };
     }
 
@@ -806,6 +1034,12 @@ export class CreatureManager {
       creature.startledTimer = 5.0;
       creature.feedCarcassId = undefined;
       creature.state = 'takeoff';
+    } else if (creature.isBoss) {
+      creature.perch = undefined;
+      creature.provokedTimer = 14;
+      creature.state = 'chase';
+      creature.targetX = attackerX;
+      creature.targetZ = attackerZ;
     } else {
       creature.perch = undefined;
       creature.provokedTimer = 0;
@@ -920,8 +1154,13 @@ export class CreatureManager {
         if (c.respawnTimer <= 0) {
           c.alive = true;
           c.hp = c.maxHp;
-          c.x = c.homeX;
-          c.z = c.homeZ;
+          c.stunTimer = 0;
+          c.blindTimer = 0;
+          c.zoneArmor = getCreatureDefaultArmor(c.species, Boolean(c.isBoss));
+          this.syncArmorVisuals(c);
+          const isStaticPerch = Boolean(c.perch);
+          c.x = isStaticPerch ? c.homeX : c.homeX + (Math.random() - 0.5) * (c.isBoss ? 2 : 10);
+          c.z = isStaticPerch ? c.homeZ : c.homeZ + (Math.random() - 0.5) * (c.isBoss ? 2 : 10);
           c.y =
             c.species === 'dolphin'
               ? OCEAN_LEVEL - 0.15
@@ -1257,9 +1496,18 @@ export class CreatureManager {
       if (c.attackCooldown > 0) c.attackCooldown -= dt;
       if (c.provokedTimer > 0) c.provokedTimer -= dt;
       if (c.snaredTimer > 0) c.snaredTimer -= dt;
+      if (c.blindTimer > 0) {
+        c.blindTimer = Math.max(0, c.blindTimer - dt);
+        c.rig.head.rotation.y = Math.sin(elapsed * 16 + i) * 0.65;
+        c.rig.head.rotation.z = Math.cos(elapsed * 13 + i) * 0.28;
+        c.rig.body.rotation.x = -0.14;
+        if (c.stunTimer > 0) c.stunTimer = Math.max(0, c.stunTimer - dt);
+        continue;
+      }
       if (c.stunTimer > 0) {
-        c.stunTimer -= dt;
-        c.rig.head.rotation.z = Math.sin(elapsed * 18) * 0.22;
+        c.stunTimer = Math.max(0, c.stunTimer - dt);
+        c.rig.head.rotation.z = Math.sin(elapsed * 18) * 0.24;
+        c.rig.body.rotation.x = 0.08;
         continue;
       } else {
         c.rig.head.rotation.z = 0;
@@ -1273,29 +1521,46 @@ export class CreatureManager {
         }
       }
 
-      // All wild animals know not to mess with the player: predators & wild fauna yield/retreat when player nears
-      const isWildPredatorOrDefensive =
-        c.spec.temperament === 'apex_predator' ||
-        c.spec.temperament === 'pack_predator' ||
-        c.spec.temperament === 'defensive_herbivore';
-
-      const fleeRange = isWildPredatorOrDefensive
-        ? (playerSprinting ? 12.5 : 9.5) * Math.max(0.75, stealthMult)
-        : c.spec.temperament === 'timid_herbivore'
-          ? (c.species === 'red_fox' ? 6.5 : 8.5) * stealthMult
-          : 0;
-
-      if (fleeRange > 0 && distToPlayer < fleeRange) {
-        if (c.state !== 'flee') {
-          c.state = 'flee';
-          onCreatureCall(c.species, distToPlayer);
+      // Armored Cave Titan stands its ground & charges intruders near Obsidian Cavern!
+      if (c.isBoss) {
+        const caveAggroDist = 14 * Math.max(0.75, stealthMult);
+        if (distToPlayer < caveAggroDist || c.provokedTimer > 0) {
+          if (c.state !== 'chase') {
+            c.state = 'chase';
+            onCreatureCall(c.species, distToPlayer);
+          }
+          c.targetX = playerX;
+          c.targetZ = playerZ;
+        } else if (c.state === 'chase' && distToPlayer > 22) {
+          c.state = 'wander';
+          c.targetX = c.homeX;
+          c.targetZ = c.homeZ;
         }
-        c.stateTimer = 4.5;
-        const dx = c.x - playerX;
-        const dz = c.z - playerZ;
-        const d = Math.hypot(dx, dz) || 1;
-        c.targetX = c.x + (dx / d) * 22;
-        c.targetZ = c.z + (dz / d) * 22;
+      } else {
+        // Ordinary wild animals yield/retreat when player nears
+        const isWildPredatorOrDefensive =
+          c.spec.temperament === 'apex_predator' ||
+          c.spec.temperament === 'pack_predator' ||
+          c.spec.temperament === 'defensive_herbivore';
+
+        const fleeRange = isWildPredatorOrDefensive
+          ? (playerSprinting ? 12.5 : 9.5) * Math.max(0.75, stealthMult)
+          : c.spec.temperament === 'timid_herbivore'
+            ? (c.species === 'red_fox' ? 6.5 : 8.5) * stealthMult
+            : 0;
+
+        if (fleeRange > 0 && distToPlayer < fleeRange) {
+          if (c.state !== 'flee') {
+            c.state = 'flee';
+            onCreatureCall(c.species, distToPlayer);
+          }
+          c.stateTimer = 4.5;
+          const dx = c.x - playerX;
+          const dz = c.z - playerZ;
+          const d = Math.hypot(dx, dz) || 1;
+          c.targetX = c.x + (dx / d) * 22;
+          c.targetZ = c.z + (dz / d) * 22;
+        }
       }
 
       const isCarnivoreScavenger =
@@ -1582,6 +1847,47 @@ export class CreatureManager {
           8,
           dt,
         );
+      }
+    }
+
+    // Infinite wild animal population replenishment: continuously repopulates roaming wild animals whenever hunted
+    this.replenishTimer -= dt;
+    if (this.replenishTimer <= 0) {
+      this.replenishTimer = 3.2;
+      const wildPool: CreatureSpecies[] = [
+        'deer',
+        'rabbit',
+        'wild_boar',
+        'red_fox',
+        'gray_wolf',
+        'grizzly_bear',
+        'african_lion',
+        'bison',
+        'jungle_fowl',
+        'duck',
+      ];
+      let aliveWildCount = 0;
+      for (const c of this.creatures) {
+        if (c.alive && wildPool.includes(c.species)) {
+          aliveWildCount += 1;
+        }
+      }
+      if (aliveWildCount < 38 && this.creatures.length < 88) {
+        const species = wildPool[Math.floor(Math.random() * wildPool.length)];
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const angle = Math.random() * Math.PI * 2;
+          const rad = 22 + Math.random() * 78;
+          const sx = Math.cos(angle) * rad;
+          const sz = Math.sin(angle) * rad;
+          const h = getTerrainHeight(sx, sz);
+          if (h < OCEAN_LEVEL + 0.65) continue;
+          if (Math.hypot(sx - playerX, sz - playerZ) < 22) continue;
+          if (Math.hypot(sx - HILL_HOUSE_POS.x, sz - HILL_HOUSE_POS.z) < 15) continue;
+          if (Math.hypot(sx - WHEATFIELD_POS.x, sz - WHEATFIELD_POS.z) < 11) continue;
+          if (Math.hypot(sx - FARMER_POS.x, sz - FARMER_POS.z) < 8) continue;
+          this.spawnWildAnimalAt(species, sx, sz);
+          break;
+        }
       }
     }
 

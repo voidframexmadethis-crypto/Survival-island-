@@ -5,13 +5,19 @@ import {
   CAVE_POS,
   DEAD_OAK_POS,
   EXPEDITION_POS,
+  FARMER_POS,
   FARM_POND_POS,
+  HILL_HOUSE_POS,
+  HILL_HOUSE_Y,
   HOMESTEAD_POS,
   LAKE_CENTER,
   OCEAN_LEVEL,
   SNOWY_WOODLAND_POS,
   SWAMP_POS,
+  TERRAIN_SEGS,
+  TERRAIN_SIZE,
   WATERFALL_POS,
+  WHEATFIELD_POS,
   getBiomeAt,
   getRiverSample,
   getTerrainHeight,
@@ -26,6 +32,27 @@ import {
   createWaterNormalTexture,
   createWoodPlankTexture,
 } from './textures';
+import {
+  HouseStationTarget,
+  createCaveCeilingClusterMesh,
+  createFarmerNpcModel,
+  createHilltopHouse,
+} from './models';
+
+export interface CaveCeilingCluster {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  groundY: number;
+  hp: number;
+  maxHp: number;
+  radius: number;
+  collapsed: boolean;
+  falling: boolean;
+  velY: number;
+  mesh: THREE.Group;
+}
 
 export interface ResourceVisualHandle {
   root: THREE.Group;
@@ -38,6 +65,7 @@ export interface ResourceVisualHandle {
 
 export interface WorldHandles {
   terrainMesh: THREE.Mesh;
+  baseTerrainColors: Float32Array;
   oceanMesh: THREE.Mesh;
   lakeMesh: THREE.Mesh;
   waterfallStreams: THREE.Mesh[];
@@ -49,6 +77,16 @@ export interface WorldHandles {
   resourceHandles: Map<string, ResourceVisualHandle>;
   colliders: { x: number; z: number; radius: number; nodeId?: string }[];
   expeditionJournalPos: THREE.Vector3;
+  farmerNpcPos: THREE.Vector3;
+  farmerNpcGroup: THREE.Group;
+  farmerHead: THREE.Group;
+  farmerArmR: THREE.Group;
+  soilPlots: { x: number; y: number; z: number }[];
+  houseStations: HouseStationTarget[];
+  tvScreenMat: THREE.MeshStandardMaterial;
+  hillHousePos: THREE.Vector3;
+  wheatfieldPos: THREE.Vector3;
+  caveCeilings: CaveCeilingCluster[];
 }
 
 function seededRand(seed: number): () => number {
@@ -74,9 +112,12 @@ export function buildIslandWorld(
   const woodTex = createWoodPlankTexture(renderer);
 
   // 1. Island Terrain Geometry (vertex colored by biome, slope & forest paths)
-  const terrainSize = 360;
-  const segs = 150;
-  const terrainGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, segs, segs);
+  const terrainGeo = new THREE.PlaneGeometry(
+    TERRAIN_SIZE,
+    TERRAIN_SIZE,
+    TERRAIN_SEGS,
+    TERRAIN_SEGS,
+  );
   terrainGeo.rotateX(-Math.PI / 2);
 
   const pos = terrainGeo.attributes.position;
@@ -101,6 +142,11 @@ export function buildIslandWorld(
     const dSnow = Math.hypot(x - SNOWY_WOODLAND_POS.x, z - SNOWY_WOODLAND_POS.z);
     const dAutumn = Math.hypot(x - AUTUMN_GROVE_POS.x, z - AUTUMN_GROVE_POS.z);
     const dSwamp = Math.hypot(x - SWAMP_POS.x, z - SWAMP_POS.z);
+    const dWheat = Math.hypot(x - WHEATFIELD_POS.x, z - WHEATFIELD_POS.z);
+    const onHouseRamp =
+      x >= HILL_HOUSE_POS.x + 5 &&
+      x <= HILL_HOUSE_POS.x + 22 &&
+      Math.abs(z - HILL_HOUSE_POS.z) < 2.3;
 
     if (y < -0.3) {
       c.setHex(0x1e6b7b);
@@ -110,6 +156,10 @@ export function buildIslandWorld(
       c.setHex(dSnow < 10.5 ? 0xdbe4ee : 0x9aa8b8); // snowy woodland floor
     } else if (dAutumn < 11.0) {
       c.setHex(0x8c5228); // warm fallen autumn leaf bed
+    } else if (dWheat < 7.8) {
+      c.setHex(0x7c5832); // rich cultivated wheatfield loam
+    } else if (onHouseRamp) {
+      c.setHex(0xa89274); // gravel-earth path up hill to house
     } else if (biome === 'beach' || y < 2.2) {
       c.setHex(0xe5c88b);
     } else if (biome === 'river' || biome === 'lake') {
@@ -132,6 +182,7 @@ export function buildIslandWorld(
     colors[i * 3 + 2] = Math.max(0, Math.min(1, c.b + jitter));
   }
 
+  const baseTerrainColors = new Float32Array(colors);
   terrainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   terrainGeo.computeVertexNormals();
 
@@ -334,13 +385,44 @@ export function buildIslandWorld(
     crys.position.set(cx, cy, cz);
     caveGroup.add(crys);
   });
-  const caveLight = new THREE.PointLight(0x38bdf8, 2.2, 14, 1.5);
+  const caveLight = new THREE.PointLight(0x38bdf8, 2.2, 16, 1.5);
   caveLight.position.set(0, 2.6, -1.8);
   caveGroup.add(caveLight);
   scene.add(caveGroup);
   colliders.push({ x: CAVE_POS.x - 4.2, z: CAVE_POS.z, radius: 2.2 });
   colliders.push({ x: CAVE_POS.x + 4.2, z: CAVE_POS.z, radius: 2.2 });
   colliders.push({ x: CAVE_POS.x, z: CAVE_POS.z - 4.8, radius: 3.0 });
+
+  // Unstable Collapsible Cave Ceiling Stalactites (shoot or warhammer-leap to crush Obsidian Cave Boss!)
+  const caveCeilings: CaveCeilingCluster[] = [];
+  const ceilingOffsets: [number, number, number][] = [
+    [-1.8, 4.35, 1.4],
+    [1.85, 4.4, 0.4],
+    [0.0, 4.5, -1.9],
+  ];
+  ceilingOffsets.forEach(([ox, oy, oz], idx) => {
+    const cx = CAVE_POS.x + ox;
+    const cz = CAVE_POS.z + oz;
+    const cy = caveBaseY + oy;
+    const groundY = getTerrainHeight(cx, cz);
+    const mesh = createCaveCeilingClusterMesh();
+    mesh.position.set(cx, cy, cz);
+    scene.add(mesh);
+    caveCeilings.push({
+      id: `cave_ceiling_${idx}`,
+      x: cx,
+      y: cy,
+      z: cz,
+      groundY,
+      hp: 35,
+      maxHp: 35,
+      radius: 1.85,
+      collapsed: false,
+      falling: false,
+      velY: 0,
+      mesh,
+    });
+  });
 
   // 8. Abandoned Expedition Camp
   const expGroup = new THREE.Group();
@@ -932,6 +1014,8 @@ export function buildIslandWorld(
   const crackMat = new THREE.MeshStandardMaterial({ color: 0x171412, roughness: 0.98 });
 
   const wheatMat = new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.86 });
+  const sugarcaneMat = new THREE.MeshStandardMaterial({ color: 0x84cc16, roughness: 0.72 });
+  const sugarcaneNodeMat = new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.8 });
   const grassMat = new THREE.MeshStandardMaterial({ color: 0x65a30d, roughness: 0.88 });
   const berryBushMat = new THREE.MeshStandardMaterial({ color: 0x15803d, map: leafTex, roughness: 0.85 });
   const berryFruitMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.45 });
@@ -1238,11 +1322,26 @@ export function buildIslandWorld(
         root.add(b);
       }
     } else if (kind === 'wheat_patch') {
-      for (let i = 0; i < 7; i++) {
-        const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.05, 1.15, 5), wheatMat);
-        stalk.position.set((rand() - 0.5) * 0.9, 0.56, (rand() - 0.5) * 0.9);
-        stalk.rotation.z = (rand() - 0.5) * 0.25;
+      for (let i = 0; i < 9; i++) {
+        const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.052, 1.25, 5), wheatMat);
+        stalk.position.set((rand() - 0.5) * 0.95, 0.62, (rand() - 0.5) * 0.95);
+        stalk.rotation.z = (rand() - 0.5) * 0.22;
         root.add(stalk);
+      }
+    } else if (kind === 'sugarcane_patch') {
+      for (let i = 0; i < 5; i++) {
+        const ox = (rand() - 0.5) * 0.65;
+        const oz = (rand() - 0.5) * 0.65;
+        const h = 1.55 + rand() * 0.45;
+        const cane = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, h, 6), sugarcaneMat);
+        cane.position.set(ox, h * 0.5, oz);
+        cane.rotation.z = (rand() - 0.5) * 0.14;
+        cane.castShadow = true;
+        const joint = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.06, 6), sugarcaneNodeMat);
+        joint.position.set(ox, h * 0.55, oz);
+        const tuft = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.55, 4), sugarcaneNodeMat);
+        tuft.position.set(ox, h + 0.18, oz);
+        root.add(cane, joint, tuft);
       }
     } else if (kind === 'grass_tuft') {
       for (let i = 0; i < 8; i++) {
@@ -1414,6 +1513,158 @@ export function buildIslandWorld(
     addResourceNode(`exp_crate_${idx}`, 'expedition_crate', cx, cz, 1.0, true);
   });
 
+  // ==========================================================
+  // GOLDEN WHEATFIELD, LAKE SUGARCANE, FARMER NPC & HILLTOP HOUSE
+  // ==========================================================
+
+  // A. Dedicated Golden Wheatfield (WHEATFIELD_POS) with Wooden Fence Border & Open Gate
+  const wheatY = getTerrainHeight(WHEATFIELD_POS.x, WHEATFIELD_POS.z);
+  const fencePostMat = new THREE.MeshStandardMaterial({ color: 0x7c4d2b, map: woodTex, roughness: 0.88 });
+  const wheatFenceGroup = new THREE.Group();
+  wheatFenceGroup.position.set(WHEATFIELD_POS.x, wheatY, WHEATFIELD_POS.z);
+  const wfRadius = 7.4;
+  for (let side = 0; side < 4; side++) {
+    for (let p = -3; p <= 3; p++) {
+      // Leave generous open gate along South (+Z) and West (-X)
+      if ((side === 0 || side === 3) && Math.abs(p) <= 1) continue;
+      const offset = p * 2.2;
+      const px = side === 0 || side === 1 ? offset : side === 2 ? wfRadius : -wfRadius;
+      const pz = side === 2 || side === 3 ? offset : side === 0 ? wfRadius : -wfRadius;
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.1, 1.15, 6), fencePostMat);
+      post.position.set(px, 0.56, pz);
+      post.castShadow = true;
+      wheatFenceGroup.add(post);
+      if (p < 3) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(2.15, 0.09, 0.09), fencePostMat);
+        if (side >= 2) {
+          rail.rotation.y = Math.PI / 2;
+          rail.position.set(px, 0.82, pz + 1.1);
+        } else {
+          rail.position.set(px + 1.1, 0.82, pz);
+        }
+        wheatFenceGroup.add(rail);
+      }
+    }
+  }
+  scene.add(wheatFenceGroup);
+
+  // 20 Dense Harvestable Wheat Patches inside the Wheatfield (4 rows x 5 cols)
+  for (let row = 0; row < 4; row++) {
+    for (let col = 0; col < 5; col++) {
+      const wx = WHEATFIELD_POS.x - 4.4 + col * 2.2;
+      const wz = WHEATFIELD_POS.z - 3.6 + row * 2.4;
+      addResourceNode(`wheatfield_${row}_${col}`, 'wheat_patch', wx, wz, 1.12, false);
+    }
+  }
+
+  // B. Lush Sugarcane Stands along Azure Lake, Farm Pond, and Crystal River
+  for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * Math.PI * 2;
+    const dist = LAKE_CENTER.radius + 1.2 + (i % 3) * 0.7;
+    const sx = LAKE_CENTER.x + Math.cos(a) * dist;
+    const sz = LAKE_CENTER.z + Math.sin(a) * dist;
+    if (getTerrainHeight(sx, sz) > LAKE_CENTER.waterY - 0.15) {
+      addResourceNode(`lake_sugarcane_${i}`, 'sugarcane_patch', sx, sz, 1.05, false);
+    }
+  }
+  [
+    [FARM_POND_POS.x + 4.8, FARM_POND_POS.z + 1.2],
+    [FARM_POND_POS.x + 4.4, FARM_POND_POS.z - 2.0],
+    [FARM_POND_POS.x - 4.8, FARM_POND_POS.z + 1.6],
+    [FARM_POND_POS.x - 4.2, FARM_POND_POS.z - 2.6],
+    [12, 20],
+    [18, 30],
+    [24, 42],
+    [36, 52],
+    [42, 62],
+    [54, 72],
+  ].forEach(([sx, sz], idx) => {
+    addResourceNode(`river_sugarcane_${idx}`, 'sugarcane_patch', sx, sz, 1.0, false);
+  });
+
+  // C. Unplayable Farmer NPC, Vegetable Market Stall & 12 Tilled Crop Garden Beds
+  const farmerGroundY = getTerrainHeight(FARMER_POS.x, FARMER_POS.z);
+  const { group: farmerNpcGroup, head: farmerHead, armR: farmerArmR } = createFarmerNpcModel();
+  farmerNpcGroup.position.set(FARMER_POS.x, farmerGroundY, FARMER_POS.z);
+  scene.add(farmerNpcGroup);
+  colliders.push({ x: FARMER_POS.x, z: FARMER_POS.z, radius: 0.45 });
+
+  // Rustic Wooden Farm Market Stall right behind Farmer NPC
+  const stallGroup = new THREE.Group();
+  stallGroup.position.set(FARMER_POS.x, farmerGroundY, FARMER_POS.z - 1.9);
+  const counterMat = new THREE.MeshStandardMaterial({ color: 0x85532a, map: woodTex, roughness: 0.85 });
+  const awningMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.8 });
+  const awningStripeMat = new THREE.MeshStandardMaterial({ color: 0xfef3c7, roughness: 0.85 });
+  const counter = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.95, 1.1), counterMat);
+  counter.position.y = 0.48;
+  counter.castShadow = true;
+  stallGroup.add(counter);
+  [-1.55, 1.55].forEach((px) => {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.09, 2.5, 7), fencePostMat);
+    post.position.set(px, 1.25, -0.4);
+    stallGroup.add(post);
+  });
+  for (let s = 0; s < 5; s++) {
+    const strip = new THREE.Mesh(
+      new THREE.BoxGeometry(0.7, 0.1, 1.85),
+      s % 2 === 0 ? awningMat : awningStripeMat,
+    );
+    strip.position.set(-1.4 + s * 0.7, 2.42, 0.15);
+    strip.rotation.x = 0.25;
+    stallGroup.add(strip);
+  }
+  // Display vegetable crates on market counter (tomato, lettuce, cucumber, jalapeno)
+  [
+    [-1.1, 0xef4444],
+    [-0.38, 0x4ade80],
+    [0.36, 0x22c55e],
+    [1.1, 0xfacc15],
+  ].forEach(([cx, col]) => {
+    const tray = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.16, 0.56), counterMat);
+    tray.position.set(cx, 1.03, 0.1);
+    const produce = new THREE.Mesh(
+      new THREE.SphereGeometry(0.18, 8, 7),
+      new THREE.MeshStandardMaterial({ color: col, roughness: 0.55 }),
+    );
+    produce.scale.set(1.2, 0.65, 1.2);
+    produce.position.set(cx, 1.12, 0.1);
+    stallGroup.add(tray, produce);
+  });
+  scene.add(stallGroup);
+  colliders.push({ x: FARMER_POS.x - 0.9, z: FARMER_POS.z - 1.9, radius: 0.7 });
+  colliders.push({ x: FARMER_POS.x + 0.9, z: FARMER_POS.z - 1.9, radius: 0.7 });
+
+  // 12 Tilled Wooden-Framed Crop Garden Beds right beside the Farmer & Wheatfield
+  const soilPlots: { x: number; y: number; z: number }[] = [];
+  const bedSoilMat = new THREE.MeshStandardMaterial({ color: 0x4a2e16, roughness: 0.96 });
+  for (let row = 0; row < 2; row++) {
+    for (let col = 0; col < 6; col++) {
+      const gx = FARMER_POS.x - 4.0 + col * 1.55;
+      const gz = FARMER_POS.z + 3.2 + row * 1.85;
+      const gy = getTerrainHeight(gx, gz);
+      const bed = new THREE.Group();
+      bed.position.set(gx, gy, gz);
+      const rim = new THREE.Mesh(new THREE.BoxGeometry(1.32, 0.14, 1.32), counterMat);
+      rim.position.y = 0.06;
+      const dirt = new THREE.Mesh(new THREE.BoxGeometry(1.14, 0.16, 1.14), bedSoilMat);
+      dirt.position.y = 0.07;
+      dirt.receiveShadow = true;
+      bed.add(rim, dirt);
+      scene.add(bed);
+      soilPlots.push({ x: gx, y: gy + 0.15, z: gz });
+    }
+  }
+
+  // D. Premade Fully Furnished House on a Hill (HILL_HOUSE_POS, HILL_HOUSE_Y)
+  const hillHouse = createHilltopHouse(
+    HILL_HOUSE_POS.x,
+    HILL_HOUSE_Y,
+    HILL_HOUSE_POS.z,
+    woodTex,
+  );
+  scene.add(hillHouse.group);
+  hillHouse.colliders.forEach((hc) => colliders.push(hc));
+
   // Scatter biome-accurate resource nodes across the island
   let count = 0;
   for (let attempt = 0; attempt < 1150 && count < 275; attempt++) {
@@ -1426,6 +1677,16 @@ export function buildIslandWorld(
     if (Math.hypot(x - EXPEDITION_POS.x, z - EXPEDITION_POS.z) < 9) continue;
     if (Math.hypot(x - CAVE_POS.x, z - CAVE_POS.z) < 9) continue;
     if (Math.hypot(x - HOMESTEAD_POS.x, z - HOMESTEAD_POS.z) < 20) continue;
+    if (Math.hypot(x - WHEATFIELD_POS.x, z - WHEATFIELD_POS.z) < 10.5) continue;
+    if (Math.hypot(x - FARMER_POS.x, z - FARMER_POS.z) < 9.5) continue;
+    if (Math.hypot(x - HILL_HOUSE_POS.x, z - HILL_HOUSE_POS.z) < 14.5) continue;
+    if (
+      x >= HILL_HOUSE_POS.x + 4 &&
+      x <= HILL_HOUSE_POS.x + 22 &&
+      Math.abs(z - HILL_HOUSE_POS.z) < 4.5
+    ) {
+      continue;
+    }
     if (Math.hypot(x - FARM_POND_POS.x, z - FARM_POND_POS.z) < 8) continue;
     if (Math.hypot(x - SNOWY_WOODLAND_POS.x, z - SNOWY_WOODLAND_POS.z) < 14) continue;
     if (Math.hypot(x - AUTUMN_GROVE_POS.x, z - AUTUMN_GROVE_POS.z) < 11) continue;
@@ -1552,6 +1813,9 @@ export function buildIslandWorld(
     if (Math.hypot(px - SNOWY_WOODLAND_POS.x, pz - SNOWY_WOODLAND_POS.z) < 14) continue;
     if (Math.hypot(px - AUTUMN_GROVE_POS.x, pz - AUTUMN_GROVE_POS.z) < 11) continue;
     if (Math.hypot(px - SWAMP_POS.x, pz - SWAMP_POS.z) < SWAMP_POS.radius + 2.5) continue;
+    if (Math.hypot(px - WHEATFIELD_POS.x, pz - WHEATFIELD_POS.z) < 9.0) continue;
+    if (Math.hypot(px - FARMER_POS.x, pz - FARMER_POS.z) < 8.5) continue;
+    if (Math.hypot(px - HILL_HOUSE_POS.x, pz - HILL_HOUSE_POS.z) < 12.0) continue;
 
     if (gPlaced < grassCount && (biome === 'forest' || biome === 'grassland')) {
       dummy.position.set(px, py, pz);
@@ -1586,6 +1850,7 @@ export function buildIslandWorld(
 
   return {
     terrainMesh,
+    baseTerrainColors,
     oceanMesh,
     lakeMesh,
     waterfallStreams,
@@ -1597,5 +1862,15 @@ export function buildIslandWorld(
     resourceHandles,
     colliders,
     expeditionJournalPos,
+    farmerNpcPos: new THREE.Vector3(FARMER_POS.x, farmerGroundY, FARMER_POS.z),
+    farmerNpcGroup,
+    farmerHead,
+    farmerArmR,
+    soilPlots,
+    houseStations: hillHouse.stations,
+    tvScreenMat: hillHouse.tvScreenMat,
+    hillHousePos: new THREE.Vector3(HILL_HOUSE_POS.x, HILL_HOUSE_Y, HILL_HOUSE_POS.z),
+    wheatfieldPos: new THREE.Vector3(WHEATFIELD_POS.x, wheatY, WHEATFIELD_POS.z),
+    caveCeilings,
   };
 }

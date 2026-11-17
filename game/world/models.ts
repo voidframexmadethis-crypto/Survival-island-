@@ -1,5 +1,13 @@
 import * as THREE from 'three';
-import { CampStructureType, CreatureSpecies, ItemId } from '../types';
+import {
+  ArmorMaterialTier,
+  BodyZone,
+  CampStructureType,
+  CreatureSpecies,
+  CreatureZoneArmor,
+  ItemId,
+  StructuralBlockKind,
+} from '../types';
 import {
   createBisonFurTexture,
   createChestnutHorseTexture,
@@ -67,6 +75,8 @@ export interface FirstPersonHandsRig {
   clubHead: THREE.Mesh;
   bowArc: THREE.Mesh;
   rodTip: THREE.Mesh;
+  sickleBlade: THREE.Mesh;
+  warhammerHead: THREE.Group;
   gunMesh: THREE.Group;
   consumableGroup: THREE.Group;
   foodMesh: THREE.Mesh;
@@ -88,6 +98,7 @@ export interface CreatureRig {
   maneTufts?: THREE.Mesh[];
   eyeGlowMat?: THREE.MeshBasicMaterial;
   shadowDisc: THREE.Mesh;
+  armorGroups?: Record<BodyZone, THREE.Group>;
 }
 
 export interface SkyCelestialHandles {
@@ -230,6 +241,37 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
   rodTip.position.set(0, 0.26, -0.34);
   toolGroup.add(rodTip);
 
+  const sickleSteelMat = new THREE.MeshStandardMaterial({
+    color: 0xd4d4d8,
+    roughness: 0.28,
+    metalness: 0.85,
+  });
+  const sickleBlade = new THREE.Mesh(
+    new THREE.TorusGeometry(0.115, 0.014, 6, 14, Math.PI * 1.15),
+    sickleSteelMat,
+  );
+  sickleBlade.position.set(-0.07, 0.26, -0.26);
+  sickleBlade.rotation.set(-Math.PI / 4, 0.3, Math.PI * 0.45);
+  sickleBlade.visible = false;
+  toolGroup.add(sickleBlade);
+
+  const warhammerHead = new THREE.Group();
+  warhammerHead.position.set(0, 0.25, -0.25);
+  warhammerHead.rotation.x = -Math.PI / 4;
+  const basaltMat = new THREE.MeshStandardMaterial({
+    color: 0x57534e,
+    roughness: 0.78,
+    metalness: 0.15,
+  });
+  const maulBlock = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.11, 0.22), basaltMat);
+  const ironBand = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.125, 0.05), sickleSteelMat);
+  const faceFront = new THREE.Mesh(new THREE.CylinderGeometry(0.056, 0.048, 0.04, 6), sickleSteelMat);
+  faceFront.rotation.x = Math.PI / 2;
+  faceFront.position.z = -0.12;
+  warhammerHead.add(maulBlock, ironBand, faceFront);
+  warhammerHead.visible = false;
+  toolGroup.add(warhammerHead);
+
   // 3D Realistic Survival Sidearm (Gun)
   const gunMesh = new THREE.Group();
   gunMesh.position.set(0, 0.02, -0.06);
@@ -357,6 +399,8 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
     clubHead,
     bowArc,
     rodTip,
+    sickleBlade,
+    warhammerHead,
     gunMesh,
     consumableGroup,
     foodMesh,
@@ -2504,6 +2548,97 @@ export function createCampStructureModel(
   mat.position.set(0, 0.08, 0.1);
   group.add(mat);
 
+  if (type === 'gravity_monolith') {
+    const obsidianMat = new THREE.MeshStandardMaterial({
+      color: 0x18181b,
+      roughness: 0.28,
+      metalness: 0.82,
+    });
+    const runeMat = new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      emissive: 0x0284c7,
+      emissiveIntensity: 2.2,
+      roughness: 0.2,
+    });
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 1.1, 0.45, 8), obsidianMat);
+    base.position.y = 0.22;
+    base.castShadow = true;
+    base.receiveShadow = true;
+    group.add(base);
+
+    const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.65, 3.4, 6), obsidianMat);
+    pillar.position.y = 1.95;
+    pillar.castShadow = true;
+    group.add(pillar);
+
+    const vortexRing = new THREE.Mesh(new THREE.TorusGeometry(0.95, 0.09, 8, 24), runeMat);
+    vortexRing.rotation.x = Math.PI / 2;
+    vortexRing.position.y = 2.8;
+    group.add(vortexRing);
+
+    const levitatingCrystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.38, 0), runeMat);
+    levitatingCrystal.position.y = 4.1;
+    group.add(levitatingCrystal);
+
+    const vortexLight = new THREE.PointLight(0x38bdf8, 3.5, 16, 1.6);
+    vortexLight.position.y = 3.8;
+    group.add(vortexLight);
+
+    return { group, fireLight: vortexLight };
+  }
+
+  if (type === 'spike_barricade') {
+    for (let i = 0; i < 5; i++) {
+      const stake = new THREE.Mesh(new THREE.ConeGeometry(0.12, 1.9, 6), woodMat);
+      stake.position.set((i - 2) * 0.46, 0.85, (i % 2) * 0.12);
+      stake.rotation.z = (Math.random() - 0.5) * 0.2;
+      stake.rotation.x = 0.38;
+      stake.castShadow = true;
+      group.add(stake);
+    }
+    const crossBar = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.16, 0.16), woodMat);
+    crossBar.position.set(0, 0.65, 0);
+    crossBar.castShadow = true;
+    group.add(crossBar);
+    return { group };
+  }
+
+  if (type === 'timeshift_sundial') {
+    const marbleMat = new THREE.MeshStandardMaterial({
+      color: 0x475569,
+      roughness: 0.4,
+      metalness: 0.35,
+    });
+    const goldMat = new THREE.MeshStandardMaterial({
+      color: 0xf59e0b,
+      emissive: 0xd97706,
+      emissiveIntensity: 0.8,
+      roughness: 0.25,
+      metalness: 0.88,
+    });
+    const plinth = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.05, 0.65, 12), marbleMat);
+    plinth.position.y = 0.32;
+    plinth.castShadow = true;
+    group.add(plinth);
+
+    const dialRing = new THREE.Mesh(new THREE.TorusGeometry(0.72, 0.07, 8, 24), goldMat);
+    dialRing.rotation.x = Math.PI / 2;
+    dialRing.position.y = 0.68;
+    group.add(dialRing);
+
+    const gnomon = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.75, 4), goldMat);
+    gnomon.position.set(0, 0.95, -0.15);
+    gnomon.rotation.x = 0.55;
+    gnomon.castShadow = true;
+    group.add(gnomon);
+
+    const sundialLight = new THREE.PointLight(0xf59e0b, 2.0, 8, 1.8);
+    sundialLight.position.y = 1.2;
+    group.add(sundialLight);
+
+    return { group, fireLight: sundialLight };
+  }
+
   return { group };
 }
 
@@ -2713,18 +2848,93 @@ export function createPickupMesh(
       cap.position.set(stem.position.x, 0.19, stem.position.z);
       group.add(stem, cap);
     }
-  } else if (itemId === 'wheat' || itemId === 'grass') {
+  } else if (itemId === 'wheat' || itemId === 'grass' || itemId === 'sugarcane') {
     const strawMat = new THREE.MeshStandardMaterial({
-      color: itemId === 'wheat' ? 0xeab308 : 0x84cc16,
-      roughness: 0.88,
+      color: itemId === 'wheat' ? 0xeab308 : itemId === 'sugarcane' ? 0x84cc16 : 0x65a30d,
+      roughness: 0.82,
     });
     for (let i = 0; i < 3; i++) {
-      const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.035, 0.44, 5), strawMat);
+      const stalk = new THREE.Mesh(
+        new THREE.CylinderGeometry(itemId === 'sugarcane' ? 0.036 : 0.025, 0.038, 0.52, 6),
+        strawMat,
+      );
       stalk.rotation.z = Math.PI / 2;
       stalk.rotation.y = (i - 1) * 0.25;
-      stalk.position.y = 0.09 + i * 0.02;
+      stalk.position.y = 0.09 + i * 0.025;
       group.add(stalk);
     }
+  } else if (itemId === 'sickle') {
+    const handle = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.025, 0.03, 0.34, 7),
+      barkMat,
+    );
+    handle.rotation.z = Math.PI / 2;
+    handle.position.set(-0.08, 0.14, 0);
+    const blade = new THREE.Mesh(
+      new THREE.TorusGeometry(0.14, 0.018, 6, 14, Math.PI * 1.15),
+      new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.25, metalness: 0.86 }),
+    );
+    blade.rotation.x = Math.PI / 2;
+    blade.position.set(0.12, 0.14, 0);
+    group.add(handle, blade);
+  } else if (itemId === 'flour' || itemId === 'sugar' || itemId === 'salt' || itemId === 'dough') {
+    const sackMat = new THREE.MeshStandardMaterial({
+      color: itemId === 'dough' ? 0xfde68a : 0xf8fafc,
+      roughness: 0.9,
+    });
+    const sack = new THREE.Mesh(new THREE.DodecahedronGeometry(0.18, 1), sackMat);
+    sack.scale.set(1.1, 0.82, 0.95);
+    sack.position.y = 0.16;
+    sack.castShadow = true;
+    group.add(sack);
+  } else if (itemId === 'bread_loaf' || itemId === 'wheat_bread' || itemId === 'cake' || itemId === 'chocolate_cake' || itemId === 'cookies') {
+    const isCake = itemId === 'cake' || itemId === 'chocolate_cake';
+    const bMat = new THREE.MeshStandardMaterial({
+      color: itemId === 'chocolate_cake' ? 0x5c2d16 : itemId === 'cake' ? 0xf9a8d4 : 0xd97706,
+      roughness: 0.65,
+    });
+    const mesh = isCake
+      ? new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.19, 0.14, 14), bMat)
+      : new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.14, 0.2), bMat);
+    mesh.position.y = 0.12;
+    mesh.castShadow = true;
+    group.add(mesh);
+  } else if (
+    itemId === 'tomato' ||
+    itemId === 'lettuce' ||
+    itemId === 'cucumber' ||
+    itemId === 'jalapeno' ||
+    itemId === 'carrot' ||
+    itemId === 'potato' ||
+    itemId === 'onion' ||
+    itemId === 'corn' ||
+    itemId === 'bell_pepper' ||
+    itemId === 'pumpkin' ||
+    itemId === 'garlic'
+  ) {
+    const colorMap: Record<string, number> = {
+      tomato: 0xef4444,
+      lettuce: 0x4ade80,
+      cucumber: 0x22c55e,
+      jalapeno: 0x15803d,
+      carrot: 0xf97316,
+      potato: 0xb45309,
+      onion: 0xdb2777,
+      corn: 0xfacc15,
+      bell_pepper: 0xfb923c,
+      pumpkin: 0xea580c,
+      garlic: 0xf5f5f4,
+    };
+    const vMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(itemId === 'pumpkin' ? 0.22 : 0.14, 9, 8),
+      new THREE.MeshStandardMaterial({ color: colorMap[itemId] ?? 0x22c55e, roughness: 0.55 }),
+    );
+    if (itemId === 'cucumber' || itemId === 'corn' || itemId === 'carrot') {
+      vMesh.scale.set(0.65, 1.45, 0.65);
+    }
+    vMesh.position.y = 0.15;
+    vMesh.castShadow = true;
+    group.add(vMesh);
   } else if (itemId === 'gun') {
     const gunMat = new THREE.MeshStandardMaterial({
       color: 0x18181b,
@@ -2811,6 +3021,25 @@ export function createPickupMesh(
     );
     cap.position.y = 0.41;
     group.add(bottleBody, liquid, neck, cap);
+  } else if (itemId === 'stone_warhammer') {
+    const shaft = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.025, 0.028, 0.68, 8),
+      barkMat,
+    );
+    shaft.rotation.z = Math.PI / 2;
+    shaft.position.set(0, 0.14, 0);
+    const maul = new THREE.Mesh(
+      new THREE.BoxGeometry(0.24, 0.18, 0.28),
+      stoneMat,
+    );
+    maul.position.set(0.28, 0.16, 0);
+    maul.castShadow = true;
+    const strap = new THREE.Mesh(
+      new THREE.BoxGeometry(0.08, 0.19, 0.295),
+      new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.4, metalness: 0.75 }),
+    );
+    strap.position.set(0.28, 0.16, 0);
+    group.add(shaft, maul, strap);
   } else {
     // Generic compact supply crate/pouch
     const pouch = new THREE.Mesh(
@@ -2932,4 +3161,950 @@ export function createCarcassMesh(
 
   return root;
 }
+
+/**
+ * Creates an unplayable Farmer NPC wearing a straw sun hat, plaid shirt, and denim overalls.
+ */
+export function createFarmerNpcModel(): {
+  group: THREE.Group;
+  head: THREE.Group;
+  armR: THREE.Group;
+} {
+  const group = new THREE.Group();
+  const denimMat = new THREE.MeshStandardMaterial({ color: 0x1d4ed8, roughness: 0.85 });
+  const shirtMat = new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.86 });
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0xd99b6c, roughness: 0.72 });
+  const bootMat = new THREE.MeshStandardMaterial({ color: 0x451a03, roughness: 0.9 });
+  const hatMat = new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.92 });
+  const hatBandMat = new THREE.MeshStandardMaterial({ color: 0x7c2d12, roughness: 0.85 });
+  const beardMat = new THREE.MeshStandardMaterial({ color: 0x57534e, roughness: 0.9 });
+
+  // Boots + Legs
+  [-0.14, 0.14].forEach((lx) => {
+    const boot = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.22, 0.22), bootMat);
+    boot.position.set(lx, 0.11, 0.02);
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.1, 0.62, 8), denimMat);
+    leg.position.set(lx, 0.52, 0);
+    leg.castShadow = true;
+    group.add(boot, leg);
+  });
+
+  // Torso (plaid shirt + overalls bib)
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.66, 0.3), shirtMat);
+  torso.position.y = 1.15;
+  torso.castShadow = true;
+  const bib = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.44, 0.32), denimMat);
+  bib.position.y = 1.06;
+  group.add(torso, bib);
+
+  // Arms
+  const armL = new THREE.Group();
+  armL.position.set(-0.34, 1.4, 0);
+  const aL = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.075, 0.54, 7), shirtMat);
+  aL.position.y = -0.24;
+  const hL = new THREE.Mesh(new THREE.SphereGeometry(0.075, 7, 6), skinMat);
+  hL.position.y = -0.52;
+  armL.add(aL, hL);
+
+  const armR = new THREE.Group();
+  armR.position.set(0.34, 1.4, 0);
+  const aR = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.075, 0.54, 7), shirtMat);
+  aR.position.y = -0.24;
+  const hR = new THREE.Mesh(new THREE.SphereGeometry(0.075, 7, 6), skinMat);
+  hR.position.y = -0.52;
+  armR.add(aR, hR);
+  group.add(armL, armR);
+
+  // Head + Straw Hat + Smile/Beard
+  const head = new THREE.Group();
+  head.position.set(0, 1.66, 0);
+  const cranium = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), skinMat);
+  cranium.castShadow = true;
+  const beard = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.12), beardMat);
+  beard.position.set(0, -0.1, 0.14);
+  const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.44, 0.04, 16), hatMat);
+  brim.position.y = 0.14;
+  const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.22, 0.18, 14), hatMat);
+  crown.position.y = 0.24;
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.205, 0.215, 0.05, 14), hatBandMat);
+  band.position.y = 0.17;
+  head.add(cranium, beard, brim, crown, band);
+  group.add(head);
+
+  return { group, head, armR };
+}
+
+/**
+ * Creates a staged 3D growing crop plant mesh (stage 0=seedling, 1=leafy, 2=ripe produce).
+ */
+export function createCropPlantMesh(
+  produceItemId: ItemId,
+  progress: number,
+  watered: boolean,
+): THREE.Group {
+  const g = new THREE.Group();
+  const soilMat = new THREE.MeshStandardMaterial({
+    color: watered ? 0x3b2414 : 0x6b4b32,
+    roughness: 0.95,
+  });
+  const mound = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.42, 0.1, 10), soilMat);
+  mound.position.y = 0.05;
+  g.add(mound);
+
+  const stage = progress >= 1 ? 2 : progress >= 0.45 ? 1 : 0;
+  const leafMat = new THREE.MeshStandardMaterial({
+    color: watered ? 0x22c55e : 0x4d7c0f,
+    roughness: 0.78,
+  });
+
+  if (stage === 0) {
+    for (let i = 0; i < 2; i++) {
+      const sprout = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.22, 5), leafMat);
+      sprout.position.set((i - 0.5) * 0.12, 0.18, 0);
+      sprout.rotation.z = (i - 0.5) * 0.4;
+      g.add(sprout);
+    }
+    return g;
+  }
+
+  const foliageScale = stage === 2 ? 1.15 : 0.72;
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2;
+    const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.11 * foliageScale, 0.46 * foliageScale, 5), leafMat);
+    leaf.position.set(Math.cos(a) * 0.12, 0.22 * foliageScale, Math.sin(a) * 0.12);
+    leaf.rotation.z = -Math.cos(a) * 0.55;
+    leaf.rotation.x = Math.sin(a) * 0.55;
+    g.add(leaf);
+  }
+
+  if (stage === 2) {
+    const fruitColors: Record<string, number> = {
+      wheat: 0xeab308,
+      sugarcane: 0x84cc16,
+      lettuce: 0x4ade80,
+      tomato: 0xef4444,
+      cucumber: 0x16a34a,
+      jalapeno: 0x15803d,
+      carrot: 0xf97316,
+      potato: 0xd97706,
+      onion: 0xdb2777,
+      corn: 0xfacc15,
+      bell_pepper: 0xfb923c,
+      pumpkin: 0xea580c,
+      garlic: 0xf5f5f4,
+    };
+    const fCol = fruitColors[produceItemId] ?? 0xef4444;
+    const fruitMat = new THREE.MeshStandardMaterial({ color: fCol, roughness: 0.45 });
+    const count = produceItemId === 'pumpkin' || produceItemId === 'lettuce' ? 1 : 3;
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2;
+      const r = count === 1 ? 0 : 0.16;
+      const fruit = new THREE.Mesh(
+        new THREE.SphereGeometry(produceItemId === 'pumpkin' ? 0.22 : 0.1, 8, 7),
+        fruitMat,
+      );
+      fruit.position.set(Math.cos(a) * r, produceItemId === 'pumpkin' ? 0.22 : 0.34, Math.sin(a) * r);
+      g.add(fruit);
+    }
+  }
+
+  return g;
+}
+
+export interface HouseStationTarget {
+  id: string;
+  kind:
+    | 'house_couch'
+    | 'house_bed'
+    | 'house_tv'
+    | 'house_fridge'
+    | 'house_stove'
+    | 'house_toilet'
+    | 'house_sink'
+    | 'house_shower';
+  label: string;
+  sublabel: string;
+  x: number;
+  y: number;
+  z: number;
+  range: number;
+  sitX?: number;
+  sitY?: number;
+  sitZ?: number;
+  sitYaw?: number;
+}
+
+export interface HilltopHouseResult {
+  group: THREE.Group;
+  colliders: { x: number; z: number; radius: number }[];
+  stations: HouseStationTarget[];
+  tvScreenMesh: THREE.Mesh;
+  tvScreenMat: THREE.MeshStandardMaterial;
+}
+
+/**
+ * Builds the Premade Fully Furnished House on a Hill at (worldX, worldY, worldZ).
+ * Doorway faces East (+X) directly toward the access ramp & homestead.
+ */
+export function createHilltopHouse(
+  worldX: number,
+  worldY: number,
+  worldZ: number,
+  woodTex: THREE.CanvasTexture,
+): HilltopHouseResult {
+  const group = new THREE.Group();
+  group.position.set(worldX, worldY, worldZ);
+
+  const colliders: { x: number; z: number; radius: number }[] = [];
+  const addLocalCollider = (lx: number, lz: number, radius: number) => {
+    colliders.push({ x: worldX + lx, z: worldZ + lz, radius });
+  };
+
+  // Materials
+  const floorMat = new THREE.MeshStandardMaterial({ color: 0xa16207, map: woodTex, roughness: 0.72 });
+  const tileMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.45 });
+  const wallOuterMat = new THREE.MeshStandardMaterial({ color: 0xd6cfc4, roughness: 0.82 });
+  const wallInnerMat = new THREE.MeshStandardMaterial({ color: 0xf5f0e6, roughness: 0.85 });
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0x7c2d12, roughness: 0.85 });
+  const trimMat = new THREE.MeshStandardMaterial({ color: 0x5c3a21, map: woodTex, roughness: 0.8 });
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: 0x93c5fd,
+    transparent: true,
+    opacity: 0.42,
+    roughness: 0.15,
+    metalness: 0.25,
+  });
+  const fabricMat = new THREE.MeshStandardMaterial({ color: 0x1e40af, roughness: 0.88 });
+  const rugMat = new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.94 });
+  const rugBorderMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.9 });
+  const steelMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.28, metalness: 0.78 });
+  const porcelainMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.22 });
+  const chromeMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.15, metalness: 0.92 });
+  const darkTvMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.3, metalness: 0.4 });
+  const tvScreenMat = new THREE.MeshStandardMaterial({
+    color: 0x38bdf8,
+    emissive: 0x0284c7,
+    emissiveIntensity: 0.85,
+    roughness: 0.2,
+  });
+
+  // 1. Main Hardwood Floor Deck & Front Porch (+X = East entrance)
+  // House interior spans X: -5.2 to +4.2 (9.4m), Z: -4.2 to +4.2 (8.4m)
+  const mainFloor = new THREE.Mesh(new THREE.BoxGeometry(9.6, 0.14, 8.6), floorMat);
+  mainFloor.position.set(-0.5, 0.01, 0);
+  mainFloor.receiveShadow = true;
+  group.add(mainFloor);
+
+  // Porch Deck on +X side (X: +4.2 to +6.4)
+  const porchFloor = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.14, 6.2), trimMat);
+  porchFloor.position.set(5.3, 0.0, 0);
+  porchFloor.receiveShadow = true;
+  group.add(porchFloor);
+
+  // Bathroom Tiled Floor (NW corner: X -5.2..-1.0, Z -4.2..0.0)
+  const bathFloor = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.02, 4.2), tileMat);
+  bathFloor.position.set(-3.1, 0.085, -2.1);
+  bathFloor.receiveShadow = true;
+  group.add(bathFloor);
+
+  // Kitchen Tiled Floor (NE corner: X -0.8..4.2, Z -4.2..-1.2)
+  const kitchenFloor = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.02, 3.0), tileMat);
+  kitchenFloor.position.set(1.7, 0.085, -2.7);
+  kitchenFloor.receiveShadow = true;
+  group.add(kitchenFloor);
+
+  // 2. Exterior & Interior Partition Walls (tall 3.1m)
+  const wallH = 3.1;
+  const addWall = (lx: number, lz: number, sx: number, sz: number, withColliders = true) => {
+    const w = new THREE.Mesh(new THREE.BoxGeometry(sx, wallH, sz), wallOuterMat);
+    w.position.set(lx, wallH / 2 + 0.06, lz);
+    w.castShadow = true;
+    w.receiveShadow = true;
+    const inner = new THREE.Mesh(
+      new THREE.BoxGeometry(Math.max(0.06, sx - 0.03), wallH - 0.05, Math.max(0.06, sz - 0.03)),
+      wallInnerMat,
+    );
+    inner.position.copy(w.position);
+    group.add(w, inner);
+
+    if (withColliders) {
+      const length = Math.max(sx, sz);
+      const steps = Math.max(1, Math.ceil(length / 1.1));
+      for (let i = 0; i < steps; i++) {
+        const t = steps === 1 ? 0 : i / (steps - 1) - 0.5;
+        const cx = sx >= sz ? lx + t * (sx - 0.5) : lx;
+        const cz = sz > sx ? lz + t * (sz - 0.5) : lz;
+        addLocalCollider(cx, cz, 0.42);
+      }
+    }
+  };
+
+  // West Back Wall (with high window cutout feel)
+  addWall(-5.2, 0, 0.24, 8.6);
+  // North Wall
+  addWall(-0.5, -4.2, 9.6, 0.24);
+  // South Wall
+  addWall(-0.5, 4.2, 9.6, 0.24);
+  // East Front Wall (split cleanly leaving wide 2.6m open doorway at Z: -1.3 .. +1.3!)
+  addWall(4.2, -2.75, 0.24, 2.9);
+  addWall(4.2, 2.75, 0.24, 2.9);
+  // Door header lintel above open doorway
+  const doorHeader = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.75, 2.65), trimMat);
+  doorHeader.position.set(4.2, 2.78, 0);
+  group.add(doorHeader);
+
+  // Decorative Glazed Windows on South & West & Front walls
+  [
+    [0.5, 1.65, 4.2, 1.8, 1.1, 0.3],
+    [4.2, 1.65, 2.75, 0.3, 1.1, 1.4],
+    [4.2, 1.65, -2.75, 0.3, 1.1, 1.4],
+    [-5.2, 1.65, 2.0, 0.3, 1.1, 1.6],
+  ].forEach(([wx, wy, wz, sx, sy, sz]) => {
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.08, sy + 0.08, sz + 0.08), trimMat);
+    frame.position.set(wx, wy, wz);
+    const pane = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.12, sy - 0.08, sz - 0.08), glassMat);
+    pane.position.set(wx, wy, wz);
+    group.add(frame, pane);
+  });
+
+  // Interior Partition Wall separating Bathroom (NW) & Bedroom (SW) on West side (leaving wide 2.0m hallway doors!)
+  // North-South spine at X = -1.0 from Z = -4.2 to -1.9 (Bath West door open Z: -1.9..-0.2) and Z = 0.0 to 2.2 (Bed open Z: 2.2..4.1)
+  addWall(-1.0, -3.1, 0.2, 2.2);
+  addWall(-1.0, 1.2, 0.2, 2.2);
+  // East-West divider between Bathroom (Z<0) and Bedroom (Z>0) on West side
+  addWall(-3.1, -0.1, 4.2, 0.2);
+
+  // Porch Pillars
+  [-2.8, 2.8].forEach((pz) => {
+    const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.12, 3.0, 8), trimMat);
+    pillar.position.set(6.1, 1.55, pz);
+    pillar.castShadow = true;
+    group.add(pillar);
+    addLocalCollider(6.1, pz, 0.28);
+  });
+
+  // 3. Pitched Timber Shingle Roof + Warm Ceiling Lights
+  const roofPitchL = new THREE.Mesh(new THREE.BoxGeometry(12.2, 0.22, 5.4), roofMat);
+  roofPitchL.position.set(0.3, 4.05, -2.2);
+  roofPitchL.rotation.x = 0.38;
+  roofPitchL.castShadow = true;
+  const roofPitchR = new THREE.Mesh(new THREE.BoxGeometry(12.2, 0.22, 5.4), roofMat);
+  roofPitchR.position.set(0.3, 4.05, 2.2);
+  roofPitchR.rotation.x = -0.38;
+  roofPitchR.castShadow = true;
+  const ridgeBeam = new THREE.Mesh(new THREE.BoxGeometry(12.3, 0.25, 0.35), trimMat);
+  ridgeBeam.position.set(0.3, 4.95, 0);
+  group.add(roofPitchL, roofPitchR, ridgeBeam);
+
+  // Warm Interior Ceiling Lights
+  const livingLight = new THREE.PointLight(0xffedd5, 1.35, 13, 1.4);
+  livingLight.position.set(1.5, 2.85, 0.8);
+  const bedBathLight = new THREE.PointLight(0xfef3c7, 0.95, 9, 1.5);
+  bedBathLight.position.set(-3.0, 2.85, 0.5);
+  group.add(livingLight, bedBathLight);
+
+  // ==========================================================
+  // 4. FURNISHINGS (LIVING ROOM, KITCHEN, BEDROOM, BATHROOM)
+  // ==========================================================
+
+  // A. Living Room: Carpet/Rug (centered at X=1.4, Z=1.8)
+  const rugBorder = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.025, 2.6), rugBorderMat);
+  rugBorder.position.set(1.4, 0.095, 1.8);
+  const rugInner = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.03, 2.2), rugMat);
+  rugInner.position.set(1.4, 0.1, 1.8);
+  group.add(rugBorder, rugInner);
+
+  // B. Plush Couch / Sofa (X=1.4, Z=3.35 facing North toward TV stand at Z=0.45!)
+  const couchGroup = new THREE.Group();
+  couchGroup.position.set(1.4, 0.08, 3.35);
+  const couchBase = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.42, 0.95), fabricMat);
+  couchBase.position.y = 0.24;
+  couchBase.castShadow = true;
+  const couchBack = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.55, 0.22), fabricMat);
+  couchBack.position.set(0, 0.62, 0.36);
+  const armCouchL = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.48, 0.95), fabricMat);
+  armCouchL.position.set(-1.12, 0.46, 0);
+  const armCouchR = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.48, 0.95), fabricMat);
+  armCouchR.position.set(1.12, 0.46, 0);
+  couchGroup.add(couchBase, couchBack, armCouchL, armCouchR);
+  group.add(couchGroup);
+  addLocalCollider(1.4, 3.35, 0.72);
+
+  // Coffee Table in front of Couch (on the rug)
+  const coffeeTableTop = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.08, 0.7), trimMat);
+  coffeeTableTop.position.set(1.4, 0.46, 1.95);
+  const coffeeLegs = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.38, 0.52), trimMat);
+  coffeeLegs.position.set(1.4, 0.24, 1.95);
+  group.add(coffeeTableTop, coffeeLegs);
+  addLocalCollider(1.4, 1.95, 0.42);
+
+  // C. Working Flat-Screen TV & Entertainment Stand (X=1.4, Z=0.35 facing South toward Couch!)
+  const tvStand = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.55, 0.52), trimMat);
+  tvStand.position.set(1.4, 0.35, 0.35);
+  tvStand.castShadow = true;
+  const tvFrame = new THREE.Mesh(new THREE.BoxGeometry(1.75, 1.0, 0.1), darkTvMat);
+  tvFrame.position.set(1.4, 1.24, 0.35);
+  tvFrame.castShadow = true;
+  const tvScreenMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.86), tvScreenMat);
+  tvScreenMesh.position.set(1.4, 1.24, 0.41);
+  group.add(tvStand, tvFrame, tvScreenMesh);
+  addLocalCollider(1.4, 0.35, 0.55);
+
+  // D. Kitchen (North-East wall Z=-3.55): Refrigerator, Stove/Oven, Kitchen Counter & Sink
+  // Refrigerator at X=-0.1, Z=-3.5
+  const fridgeBody = new THREE.Mesh(new THREE.BoxGeometry(0.95, 1.95, 0.85), steelMat);
+  fridgeBody.position.set(-0.1, 1.05, -3.55);
+  fridgeBody.castShadow = true;
+  const fridgeSplit = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.03, 0.87), darkTvMat);
+  fridgeSplit.position.set(-0.1, 1.38, -3.55);
+  const fridgeHandle = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.55, 0.06), chromeMat);
+  fridgeHandle.position.set(0.28, 1.05, -3.1);
+  group.add(fridgeBody, fridgeSplit, fridgeHandle);
+  addLocalCollider(-0.1, -3.55, 0.55);
+
+  // Kitchen Stove / Oven at X=1.25, Z=-3.55
+  const stoveBody = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.92, 0.82), steelMat);
+  stoveBody.position.set(1.25, 0.54, -3.55);
+  stoveBody.castShadow = true;
+  const ovenWindow = new THREE.Mesh(
+    new THREE.BoxGeometry(0.72, 0.38, 0.04),
+    new THREE.MeshStandardMaterial({ color: 0xf97316, emissive: 0xc2410c, emissiveIntensity: 0.65 }),
+  );
+  ovenWindow.position.set(1.25, 0.48, -3.13);
+  group.add(stoveBody, ovenWindow);
+  [
+    [1.0, -3.38],
+    [1.5, -3.38],
+    [1.0, -3.72],
+    [1.5, -3.72],
+  ].forEach(([bx, bz]) => {
+    const burner = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.03, 12), darkTvMat);
+    burner.position.set(bx, 1.01, bz);
+    group.add(burner);
+  });
+  addLocalCollider(1.25, -3.55, 0.55);
+
+  // Kitchen Counter & Basin at X=2.7, Z=-3.55
+  const counterBase = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.9, 0.8), trimMat);
+  counterBase.position.set(2.7, 0.53, -3.55);
+  const counterTop = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.06, 0.84), porcelainMat);
+  counterTop.position.set(2.7, 0.99, -3.55);
+  group.add(counterBase, counterTop);
+  addLocalCollider(2.7, -3.55, 0.55);
+
+  // E. Bedroom (South-West room: X=-3.6, Z=2.55): Cozy Bed & Nightstand
+  const bedFrame = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.35, 2.35), trimMat);
+  bedFrame.position.set(-3.65, 0.26, 2.55);
+  const mattress = new THREE.Mesh(new THREE.BoxGeometry(1.72, 0.25, 2.2), porcelainMat);
+  mattress.position.set(-3.65, 0.52, 2.55);
+  const blanket = new THREE.Mesh(
+    new THREE.BoxGeometry(1.74, 0.14, 1.55),
+    new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.85 }),
+  );
+  blanket.position.set(-3.65, 0.62, 2.22);
+  const headboard = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.95, 0.14), trimMat);
+  headboard.position.set(-3.65, 0.72, 3.68);
+  const pillowL = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.14, 0.4), porcelainMat);
+  pillowL.position.set(-4.05, 0.7, 3.35);
+  const pillowR = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.14, 0.4), porcelainMat);
+  pillowR.position.set(-3.25, 0.7, 3.35);
+  group.add(bedFrame, mattress, blanket, headboard, pillowL, pillowR);
+  addLocalCollider(-3.65, 2.55, 0.95);
+
+  // F. Bathroom (North-West room): Toilet, Sink Vanity, Walk-in Shower / Tub
+  // Toilet at X=-2.2, Z=-3.65
+  const toiletTank = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.78, 0.26), porcelainMat);
+  toiletTank.position.set(-2.2, 0.52, -3.82);
+  const toiletBowl = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.2, 0.42, 12), porcelainMat);
+  toiletBowl.position.set(-2.2, 0.29, -3.52);
+  group.add(toiletTank, toiletBowl);
+  addLocalCollider(-2.2, -3.62, 0.36);
+
+  // Bathroom Sink Vanity + Mirror at X=-3.3, Z=-3.7
+  const vanityCab = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.82, 0.58), trimMat);
+  vanityCab.position.set(-3.3, 0.49, -3.72);
+  const sinkBasin = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.08, 0.62), porcelainMat);
+  sinkBasin.position.set(-3.3, 0.93, -3.72);
+  const faucet = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.22, 8), chromeMat);
+  faucet.position.set(-3.3, 1.06, -3.88);
+  const mirror = new THREE.Mesh(
+    new THREE.BoxGeometry(0.8, 0.85, 0.04),
+    new THREE.MeshStandardMaterial({ color: 0xe0f2fe, roughness: 0.12, metalness: 0.65 }),
+  );
+  mirror.position.set(-3.3, 1.65, -4.05);
+  group.add(vanityCab, sinkBasin, faucet, mirror);
+  addLocalCollider(-3.3, -3.72, 0.42);
+
+  // Walk-in Bathtub / Shower at X=-4.45, Z=-2.95
+  const tubBase = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.48, 1.85), porcelainMat);
+  tubBase.position.set(-4.45, 0.32, -2.95);
+  const tubWater = new THREE.Mesh(
+    new THREE.BoxGeometry(0.92, 0.04, 1.6),
+    new THREE.MeshStandardMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.65 }),
+  );
+  tubWater.position.set(-4.45, 0.55, -2.95);
+  const showerGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.85, 1.15), glassMat);
+  showerGlass.position.set(-3.88, 1.25, -2.6);
+  const showerPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1.9, 8), chromeMat);
+  showerPipe.position.set(-4.92, 1.45, -2.95);
+  const showerHead = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.12, 10), chromeMat);
+  showerHead.position.set(-4.72, 2.32, -2.95);
+  showerHead.rotation.z = 0.4;
+  group.add(tubBase, tubWater, showerGlass, showerPipe, showerHead);
+  addLocalCollider(-4.45, -2.95, 0.65);
+
+  const stations: HouseStationTarget[] = [
+    {
+      id: 'house_couch',
+      kind: 'house_couch',
+      label: 'Sit on Living Room Couch',
+      sublabel: 'Relax in front of the TV',
+      x: worldX + 1.4,
+      y: worldY,
+      z: worldZ + 3.1,
+      range: 2.3,
+      sitX: worldX + 1.4,
+      sitY: worldY + 0.15,
+      sitZ: worldZ + 3.25,
+      sitYaw: 0, // facing North (-Z) toward TV
+    },
+    {
+      id: 'house_tv',
+      kind: 'house_tv',
+      label: 'Watch TV (YouTube)',
+      sublabel: 'Stream videos & survival channels',
+      x: worldX + 1.4,
+      y: worldY,
+      z: worldZ + 0.6,
+      range: 3.4,
+    },
+    {
+      id: 'house_fridge',
+      kind: 'house_fridge',
+      label: 'Open Refrigerator',
+      sublabel: 'Cold storage & fresh dairy',
+      x: worldX - 0.1,
+      y: worldY,
+      z: worldZ - 3.3,
+      range: 2.4,
+    },
+    {
+      id: 'house_stove',
+      kind: 'house_stove',
+      label: 'Bake / Cook on Stove',
+      sublabel: 'Oven for Bread, Cake, Cookies & Meals',
+      x: worldX + 1.25,
+      y: worldY,
+      z: worldZ - 3.3,
+      range: 2.4,
+    },
+    {
+      id: 'house_bed',
+      kind: 'house_bed',
+      label: 'Sleep in Bed',
+      sublabel: 'Restore full Health, Stamina & Warmth',
+      x: worldX - 3.4,
+      y: worldY,
+      z: worldZ + 2.4,
+      range: 2.6,
+    },
+    {
+      id: 'house_toilet',
+      kind: 'house_toilet',
+      label: 'Use Bathroom Toilet',
+      sublabel: 'Sit & freshen up',
+      x: worldX - 2.2,
+      y: worldY,
+      z: worldZ - 3.4,
+      range: 2.0,
+      sitX: worldX - 2.2,
+      sitY: worldY + 0.05,
+      sitZ: worldZ - 3.42,
+      sitYaw: Math.PI, // facing South (+Z)
+    },
+    {
+      id: 'house_sink',
+      kind: 'house_sink',
+      label: 'Use Bathroom Sink',
+      sublabel: 'Drink fresh water & refill bottles',
+      x: worldX - 3.3,
+      y: worldY,
+      z: worldZ - 3.45,
+      range: 2.0,
+    },
+    {
+      id: 'house_shower',
+      kind: 'house_shower',
+      label: 'Take Hot Shower / Bath',
+      sublabel: 'Restores +60 Stamina, Warmth & +20 HP',
+      x: worldX - 4.2,
+      y: worldY,
+      z: worldZ - 2.8,
+      range: 2.3,
+    },
+  ];
+
+  return { group, colliders, stations, tvScreenMesh, tvScreenMat };
+}
+
+/**
+ * Composite multi-part architectural masonry & timber engineering modules (y = 0..2.0m flush).
+ * Tracks materials in userData.stressMaterials so high structural stress visibly tints & glows red.
+ */
+export function createStructuralBlockMesh(
+  kind: StructuralBlockKind,
+  isPreview = false,
+): THREE.Group {
+  const group = new THREE.Group();
+  const stressMaterials: THREE.MeshStandardMaterial[] = [];
+
+  const mkMat = (hex: number, roughness: number, metalness = 0.04) => {
+    const mat = new THREE.MeshStandardMaterial({
+      color: hex,
+      roughness,
+      metalness,
+      transparent: isPreview,
+      opacity: isPreview ? 0.56 : 1.0,
+    });
+    stressMaterials.push(mat);
+    return mat;
+  };
+
+  if (kind === 'stone_block') {
+    const stoneMain = mkMat(0x78716c, 0.9);
+    const stoneTrim = mkMat(0x57534e, 0.78);
+    const mortarMat = mkMat(0x44403c, 0.96);
+
+    // Lower ashlar course + recessed mortar band + upper dressed course + coping top
+    const lowerCourse = new THREE.Mesh(new THREE.BoxGeometry(2.34, 0.88, 2.34), stoneMain);
+    lowerCourse.position.y = 0.44;
+    const mortarSeam = new THREE.Mesh(new THREE.BoxGeometry(2.26, 0.14, 2.26), mortarMat);
+    mortarSeam.position.y = 0.95;
+    const upperCourse = new THREE.Mesh(new THREE.BoxGeometry(2.34, 0.84, 2.34), stoneMain);
+    upperCourse.position.y = 1.44;
+    const deckCap = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.16, 2.4), stoneTrim);
+    deckCap.position.y = 1.92;
+    group.add(lowerCourse, mortarSeam, upperCourse, deckCap);
+
+    // 4 Corner dressed stone quoins for tactile fortress relief
+    for (let sx = -1; sx <= 1; sx += 2) {
+      for (let sz = -1; sz <= 1; sz += 2) {
+        const quoin = new THREE.Mesh(new THREE.BoxGeometry(0.46, 1.82, 0.46), stoneTrim);
+        quoin.position.set(sx * 0.98, 0.92, sz * 0.98);
+        group.add(quoin);
+      }
+    }
+  } else if (kind === 'stone_pillar') {
+    const baseStone = mkMat(0x57534e, 0.82);
+    const shaftStone = mkMat(0x94a3b8, 0.65);
+    const capStone = mkMat(0x64748b, 0.72);
+
+    const plinth = new THREE.Mesh(new THREE.BoxGeometry(1.36, 0.34, 1.36), baseStone);
+    plinth.position.y = 0.17;
+    const collarLower = new THREE.Mesh(new THREE.CylinderGeometry(0.56, 0.62, 0.16, 10), capStone);
+    collarLower.position.y = 0.42;
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.5, 1.12, 12), shaftStone);
+    shaft.position.y = 1.06;
+    const collarUpper = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.48, 0.18, 10), capStone);
+    collarUpper.position.y = 1.71;
+    const capital = new THREE.Mesh(new THREE.BoxGeometry(1.48, 0.22, 1.48), baseStone);
+    capital.position.y = 1.89;
+    group.add(plinth, collarLower, shaft, collarUpper, capital);
+  } else if (kind === 'stone_arch') {
+    const pierStone = mkMat(0x57534e, 0.84);
+    const archStone = mkMat(0x78716c, 0.74);
+    const keystoneMat = mkMat(0xa8a29e, 0.58);
+
+    // Two grounded side piers
+    const pierL = new THREE.Mesh(new THREE.BoxGeometry(0.56, 1.25, 2.34), pierStone);
+    pierL.position.set(-0.92, 0.625, 0);
+    const pierR = new THREE.Mesh(new THREE.BoxGeometry(0.56, 1.25, 2.34), pierStone);
+    pierR.position.set(0.92, 0.625, 0);
+    // Flat walkable top spandrel deck
+    const topDeck = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.28, 2.4), pierStone);
+    topDeck.position.y = 1.86;
+    group.add(pierL, pierR, topDeck);
+
+    // Curved voussoir arch ring (5 angled stone blocks + center keystone)
+    const segCount = 5;
+    for (let i = 0; i < segCount; i++) {
+      const t = (i / (segCount - 1) - 0.5) * Math.PI * 0.82;
+      const r = 0.92;
+      const vx = Math.sin(t) * r;
+      const vy = 0.95 + Math.cos(t) * 0.78;
+      const isKeystone = i === 2;
+      const block = new THREE.Mesh(
+        new THREE.BoxGeometry(isKeystone ? 0.46 : 0.42, isKeystone ? 0.44 : 0.36, 2.28),
+        isKeystone ? keystoneMat : archStone,
+      );
+      block.position.set(vx, vy, 0);
+      block.rotation.z = -t;
+      group.add(block);
+    }
+    // Corner spandrel masonry shoulders filling deck-to-arch transition
+    const shoulderL = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.54, 2.3), archStone);
+    shoulderL.position.set(-0.86, 1.48, 0);
+    const shoulderR = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.54, 2.3), archStone);
+    shoulderR.position.set(0.86, 1.48, 0);
+    group.add(shoulderL, shoulderR);
+  } else if (kind === 'timber_beam') {
+    const timberMat = mkMat(0x7c4a21, 0.86);
+    const plankMat = mkMat(0x9a5f2d, 0.76);
+    const ironMat = mkMat(0x334155, 0.42, 0.68);
+
+    // Heavy top walkway plank deck (y = 1.62..2.0 so it aligns flush with masonry bridges!)
+    for (let i = -2; i <= 2; i++) {
+      const plank = new THREE.Mesh(new THREE.BoxGeometry(2.36, 0.16, 0.42), plankMat);
+      plank.position.set(0, 1.92, i * 0.46);
+      group.add(plank);
+    }
+    // Two longitudinal timber stringer beams beneath deck
+    for (let sx = -1; sx <= 1; sx += 2) {
+      const stringer = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.36, 2.34), timberMat);
+      stringer.position.set(sx * 0.95, 1.66, 0);
+      group.add(stringer);
+      // Diagonal truss braces underneath
+      const braceA = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 1.4), timberMat);
+      braceA.position.set(sx * 0.95, 1.25, -0.48);
+      braceA.rotation.x = 0.62;
+      const braceB = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 1.4), timberMat);
+      braceB.position.set(sx * 0.95, 1.25, 0.48);
+      braceB.rotation.x = -0.62;
+      const bolt = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.24, 0.24), ironMat);
+      bolt.position.set(sx * 0.95, 1.66, 0);
+      group.add(braceA, braceB, bolt);
+    }
+  } else {
+    // timber_pillar
+    const footStone = mkMat(0x57534e, 0.88);
+    const postWood = mkMat(0x6b3e1b, 0.84);
+    const braceWood = mkMat(0x8b5324, 0.74);
+
+    const footing = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.28, 0.98), footStone);
+    footing.position.y = 0.14;
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.3, 1.56, 8), postWood);
+    post.position.y = 1.06;
+    const topPlate = new THREE.Mesh(new THREE.BoxGeometry(1.18, 0.22, 1.18), braceWood);
+    topPlate.position.y = 1.89;
+    const kneeL = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.68, 0.14), braceWood);
+    kneeL.position.set(-0.32, 1.55, 0);
+    kneeL.rotation.z = -0.65;
+    const kneeR = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.68, 0.14), braceWood);
+    kneeR.position.set(0.32, 1.55, 0);
+    kneeR.rotation.z = 0.65;
+    group.add(footing, post, topPlate, kneeL, kneeR);
+  }
+
+  group.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      child.castShadow = !isPreview;
+      child.receiveShadow = !isPreview;
+    }
+  });
+  group.userData.stressMaterials = stressMaterials;
+  return group;
+}
+
+export function createPowderKegMesh(): THREE.Group {
+  const g = new THREE.Group();
+  const woodMat = new THREE.MeshStandardMaterial({ color: 0x7c2d12, roughness: 0.84 });
+  const hoopMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.38, metalness: 0.72 });
+  const dangerMat = new THREE.MeshStandardMaterial({
+    color: 0xdc2626,
+    emissive: 0x7f1d1d,
+    emissiveIntensity: 0.35,
+    roughness: 0.55,
+  });
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.24, 0.62, 12), woodMat);
+  body.position.y = 0.31;
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.275, 0.275, 0.16, 12), dangerMat);
+  band.position.y = 0.31;
+  const hoopTop = new THREE.Mesh(new THREE.TorusGeometry(0.255, 0.025, 6, 14), hoopMat);
+  hoopTop.rotation.x = Math.PI / 2;
+  hoopTop.position.y = 0.54;
+  const hoopBot = new THREE.Mesh(new THREE.TorusGeometry(0.245, 0.025, 6, 14), hoopMat);
+  hoopBot.rotation.x = Math.PI / 2;
+  hoopBot.position.y = 0.1;
+  const fuse = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.025, 0.025, 0.18, 6),
+    new THREE.MeshStandardMaterial({ color: 0xfde047, emissive: 0xf97316, emissiveIntensity: 0.9 }),
+  );
+  fuse.position.set(0.05, 0.68, 0);
+  fuse.rotation.z = -0.35;
+  g.add(body, band, hoopTop, hoopBot, fuse);
+  return g;
+}
+
+export function createWaterTorrentMesh(): THREE.Group {
+  const g = new THREE.Group();
+  const oakMat = new THREE.MeshStandardMaterial({ color: 0x854d0e, roughness: 0.82 });
+  const aquaMat = new THREE.MeshStandardMaterial({
+    color: 0x38bdf8,
+    emissive: 0x0284c7,
+    emissiveIntensity: 0.4,
+    roughness: 0.22,
+  });
+  const cask = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.24, 0.58, 12), oakMat);
+  cask.position.y = 0.29;
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.272, 0.272, 0.16, 12), aquaMat);
+  band.position.y = 0.29;
+  const spout = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.24, 8), aquaMat);
+  spout.rotation.x = Math.PI / 2;
+  spout.position.set(0, 0.22, 0.28);
+  g.add(cask, band, spout);
+  return g;
+}
+
+function makeArmorMaterial(tier: ArmorMaterialTier): THREE.MeshStandardMaterial {
+  if (tier === 'stone') {
+    return new THREE.MeshStandardMaterial({
+      color: 0x57534e,
+      roughness: 0.85,
+      metalness: 0.22,
+    });
+  }
+  if (tier === 'bone') {
+    return new THREE.MeshStandardMaterial({
+      color: 0xe7e5e4,
+      roughness: 0.58,
+      metalness: 0.08,
+    });
+  }
+  return new THREE.MeshStandardMaterial({
+    color: 0x78350f,
+    roughness: 0.9,
+  });
+}
+
+export function attachCreatureArmorPlates(
+  rig: CreatureRig,
+  species: CreatureSpecies,
+  zoneArmor: CreatureZoneArmor,
+): void {
+  const headGroup = new THREE.Group();
+  const chestGroup = new THREE.Group();
+  const limbGroup = new THREE.Group();
+
+  const isLargeDino =
+    species === 'trex' || species === 'triceratops' || species === 'stegosaurus' || species === 'brachiosaurus';
+
+  // Head Helm Armor
+  if (zoneArmor.head.tier !== 'none' && zoneArmor.head.maxHp > 0) {
+    const mat = makeArmorMaterial(zoneArmor.head.tier);
+    const crownW = isLargeDino ? 0.72 : 0.34;
+    const crownH = isLargeDino ? 0.22 : 0.12;
+    const crownL = isLargeDino ? 0.96 : 0.44;
+    const helmCrown = new THREE.Mesh(new THREE.BoxGeometry(crownW, crownH, crownL), mat);
+    helmCrown.position.set(0, isLargeDino ? 0.38 : 0.18, isLargeDino ? 0.15 : 0.06);
+    helmCrown.castShadow = true;
+    headGroup.add(helmCrown);
+
+    // Ridge horn / brow crest
+    const brow = new THREE.Mesh(
+      new THREE.DodecahedronGeometry(isLargeDino ? 0.26 : 0.12, 0),
+      mat,
+    );
+    brow.scale.set(1.2, 0.7, 1.4);
+    brow.position.set(0, isLargeDino ? 0.48 : 0.24, isLargeDino ? 0.42 : 0.18);
+    headGroup.add(brow);
+  }
+  rig.head.add(headGroup);
+
+  // Chest / Dorsal Armor Plate
+  if (zoneArmor.chest.tier !== 'none' && zoneArmor.chest.maxHp > 0) {
+    const mat = makeArmorMaterial(zoneArmor.chest.tier);
+    const scaleW = isLargeDino ? 1.45 : 0.72;
+    const scaleH = isLargeDino ? 0.38 : 0.22;
+    const scaleL = isLargeDino ? 1.85 : 0.88;
+    const dorsalPlate = new THREE.Mesh(new THREE.BoxGeometry(scaleW, scaleH, scaleL), mat);
+    dorsalPlate.position.set(0, isLargeDino ? 0.62 : 0.3, 0);
+    dorsalPlate.castShadow = true;
+    chestGroup.add(dorsalPlate);
+
+    for (let s = -1; s <= 1; s += 2) {
+      const flank = new THREE.Mesh(
+        new THREE.BoxGeometry(isLargeDino ? 0.24 : 0.12, isLargeDino ? 0.68 : 0.34, isLargeDino ? 1.35 : 0.65),
+        mat,
+      );
+      flank.position.set(s * (scaleW * 0.48), isLargeDino ? 0.16 : 0.08, 0.08);
+      flank.rotation.z = s * -0.22;
+      flank.castShadow = true;
+      chestGroup.add(flank);
+    }
+  }
+  rig.body.add(chestGroup);
+
+  // Limb Greaves mounted on legs
+  if (zoneArmor.limb.tier !== 'none' && zoneArmor.limb.maxHp > 0 && rig.legs.length > 0) {
+    const mat = makeArmorMaterial(zoneArmor.limb.tier);
+    const r = isLargeDino ? 0.28 : 0.14;
+    const h = isLargeDino ? 0.56 : 0.28;
+    for (let i = 0; i < Math.min(2, rig.legs.length); i++) {
+      const greave = new THREE.Mesh(
+        new THREE.CylinderGeometry(r, r * 0.88, h, 7),
+        mat,
+      );
+      greave.position.set(0, isLargeDino ? -0.45 : -0.2, 0.06);
+      rig.legs[i].add(greave);
+      limbGroup.userData[`leg_${i}`] = greave;
+    }
+  }
+
+  rig.armorGroups = {
+    head: headGroup,
+    chest: chestGroup,
+    limb: limbGroup,
+  };
+}
+
+export function createCaveCeilingClusterMesh(): THREE.Group {
+  const g = new THREE.Group();
+  const rockMat = new THREE.MeshStandardMaterial({
+    color: 0x332e2b,
+    roughness: 0.94,
+    metalness: 0.12,
+  });
+  const fissureMat = new THREE.MeshStandardMaterial({
+    color: 0xf97316,
+    emissive: 0xea580c,
+    emissiveIntensity: 0.85,
+    roughness: 0.35,
+  });
+
+  const cap = new THREE.Mesh(new THREE.DodecahedronGeometry(1.15, 0), rockMat);
+  cap.scale.set(1.25, 0.62, 1.25);
+  cap.position.y = 0.2;
+  cap.castShadow = true;
+  g.add(cap);
+
+  const offsets = [
+    [0, -0.65, 0, 0.42, 1.55],
+    [-0.55, -0.52, 0.38, 0.32, 1.2],
+    [0.58, -0.48, -0.32, 0.34, 1.28],
+    [-0.28, -0.45, -0.52, 0.26, 1.05],
+    [0.34, -0.5, 0.54, 0.28, 1.12],
+  ];
+  offsets.forEach(([ox, oy, oz, rad, h]) => {
+    const spike = new THREE.Mesh(new THREE.ConeGeometry(rad, h, 6), rockMat);
+    spike.rotation.x = Math.PI;
+    spike.position.set(ox, oy, oz);
+    spike.castShadow = true;
+    g.add(spike);
+  });
+
+  // Glowing stress fracture ring signaling destructible cave ceiling!
+  const seam = new THREE.Mesh(
+    new THREE.TorusGeometry(0.95, 0.075, 6, 14),
+    fissureMat,
+  );
+  seam.rotation.x = Math.PI / 2;
+  seam.position.y = 0.35;
+  g.add(seam);
+
+  g.userData.fissureMat = fissureMat;
+  return g;
+}
+
+
+
 

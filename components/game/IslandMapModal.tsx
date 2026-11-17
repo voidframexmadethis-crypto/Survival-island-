@@ -9,11 +9,14 @@ import {
   CAVE_POS,
   DEAD_OAK_POS,
   EXPEDITION_POS,
+  FARMER_POS,
+  HILL_HOUSE_POS,
   HOMESTEAD_POS,
   LAKE_CENTER,
   SNOWY_WOODLAND_POS,
   SWAMP_POS,
   WATERFALL_POS,
+  WHEATFIELD_POS,
   getBiomeAt,
   getTerrainHeight,
 } from '@/game/world/terrain';
@@ -60,8 +63,20 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
           const dSnow = Math.hypot(wx - SNOWY_WOODLAND_POS.x, wz - SNOWY_WOODLAND_POS.z);
           const dAutumn = Math.hypot(wx - AUTUMN_GROVE_POS.x, wz - AUTUMN_GROVE_POS.z);
           const dSwamp = Math.hypot(wx - SWAMP_POS.x, wz - SWAMP_POS.z);
+          const dWheat = Math.hypot(wx - WHEATFIELD_POS.x, wz - WHEATFIELD_POS.z);
+          const inHouse =
+            Math.abs(wx - HILL_HOUSE_POS.x) < 5.6 &&
+            Math.abs(wz - HILL_HOUSE_POS.z) < 4.6;
 
-          if (dSwamp < SWAMP_POS.radius + 1.5) {
+          if (inHouse) {
+            r = 165;
+            g = 96;
+            b = 58;
+          } else if (dWheat < 7.8) {
+            r = 212;
+            g = 172;
+            b = 64;
+          } else if (dSwamp < SWAMP_POS.radius + 1.5) {
             r = 45;
             g = 62;
             b = 34;
@@ -130,6 +145,9 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
       { label: 'Murky Swamp', pos: SWAMP_POS, color: '#65a30d' },
       { label: 'Dead Oak Perch', pos: DEAD_OAK_POS, color: '#d6d3d1' },
       { label: 'Homestead Pasture', pos: HOMESTEAD_POS, color: '#f59e0b' },
+      { label: 'Wheatfield', pos: WHEATFIELD_POS, color: '#facc15' },
+      { label: 'Farmer Market', pos: FARMER_POS, color: '#4ade80' },
+      { label: 'Hilltop House', pos: HILL_HOUSE_POS, color: '#fb923c' },
       { label: 'Azure Lake', pos: LAKE_CENTER, color: '#2dd4bf' },
     ];
     ctx.font = '600 10px sans-serif';

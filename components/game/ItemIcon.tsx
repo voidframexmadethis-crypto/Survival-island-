@@ -10,25 +10,43 @@ import {
   BedDouble,
   Bone,
   Box,
+  Cake,
+  Candy,
+  Car,
+  Carrot,
   Cherry,
+  CircleDot,
+  Cog,
   Compass,
+  Cookie,
   CookingPot,
+  Croissant,
   Crosshair,
+  Cylinder,
   Droplet,
   Drumstick,
+  Egg,
+  Factory,
   Feather,
   Fish,
   Flame,
   FlaskConical,
+  Gauge,
   Gem,
+  GitCommitHorizontal,
   GlassWater,
   Hammer,
   Home,
   Layers,
   Leaf,
+  Milk,
   Mountain,
   Nut,
+  Package,
   Pickaxe,
+  Salad,
+  Scissors,
+  Settings2,
   Shield,
   Soup,
   Sparkles,
@@ -39,6 +57,7 @@ import {
   Utensils,
   Waves,
   Wheat,
+  Wrench,
 } from 'lucide-react';
 import { ITEMS } from '@/game/data/items';
 import { ItemId } from '@/game/types';
@@ -66,9 +85,49 @@ export function ItemIcon({
       return <Sparkles {...props} />;
     case 'fiber':
     case 'grass':
+    case 'sugarcane':
+    case 'seed':
       return <Sprout {...props} />;
     case 'wheat':
       return <Wheat {...props} />;
+    case 'flour':
+    case 'sugar':
+    case 'salt':
+    case 'butter':
+      return <Package {...props} />;
+    case 'dough':
+    case 'bread':
+    case 'bread_loaf':
+      return <Croissant {...props} />;
+    case 'milk':
+      return <Milk {...props} />;
+    case 'egg':
+      return <Egg {...props} />;
+    case 'chocolate':
+      return <Candy {...props} />;
+    case 'cake':
+      return <Cake {...props} />;
+    case 'cookies':
+      return <Cookie {...props} />;
+    case 'lettuce':
+      return <Leaf {...props} />;
+    case 'tomato':
+    case 'onion':
+    case 'garlic':
+    case 'potato':
+    case 'pumpkin':
+      return <CircleDot {...props} />;
+    case 'cucumber':
+    case 'jalapeno':
+    case 'bell_pepper':
+    case 'corn':
+      return <Sprout {...props} />;
+    case 'carrot':
+      return <Carrot {...props} />;
+    case 'salad':
+      return <Salad {...props} />;
+    case 'sickle':
+      return <Scissors {...props} />;
     case 'clay':
       return <Layers {...props} />;
     case 'sand':
@@ -103,8 +162,6 @@ export function ItemIcon({
       return <Sparkles {...props} />;
     case 'berry_medley':
       return <Utensils {...props} />;
-    case 'bread':
-      return <Wheat {...props} />;
     case 'stew':
     case 'dino_feast':
       return <Soup {...props} />;
@@ -121,6 +178,7 @@ export function ItemIcon({
     case 'pickaxe':
       return <Pickaxe {...props} />;
     case 'club':
+    case 'warhammer':
       return <Hammer {...props} />;
     case 'knife':
     case 'spear':
@@ -155,6 +213,39 @@ export function ItemIcon({
       return <CookingPot {...props} />;
     case 'shelter':
       return <Home {...props} />;
+    case 'shovel':
+      return <Pickaxe {...props} />;
+    case 'powder_keg':
+      return <Flame {...props} />;
+    case 'water_torrent':
+      return <Waves {...props} />;
+    case 'stone_block':
+      return <Box {...props} />;
+    case 'stone_pillar':
+    case 'timber_pillar':
+      return <Layers {...props} />;
+    case 'stone_arch':
+      return <Anchor {...props} />;
+    case 'timber_beam':
+      return <Hammer {...props} />;
+    case 'water_wheel':
+      return <Settings2 {...props} />;
+    case 'steam_boiler':
+      return <Gauge {...props} />;
+    case 'steam_engine':
+      return <Cog {...props} />;
+    case 'drive_shaft':
+      return <GitCommitHorizontal {...props} />;
+    case 'gear_box':
+      return <Cog {...props} />;
+    case 'belt_pulley':
+      return <Wrench {...props} />;
+    case 'fluid_pipe':
+      return <Cylinder {...props} />;
+    case 'auto_assembler':
+      return <Factory {...props} />;
+    case 'vehicle_chassis_kit':
+      return <Car {...props} />;
     default:
       return <Box {...props} />;
   }
