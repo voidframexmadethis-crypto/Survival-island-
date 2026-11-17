@@ -13,6 +13,19 @@ export const CRAFTING_RECIPES: CraftingRecipe[] = [
     description: 'Twist tough plant fibers into braided survival rope.',
   },
   {
+    id: 'craft_soap',
+    resultItemId: 'soap',
+    resultQuantity: 3,
+    category: 'survival',
+    requiresTable: false,
+    craftTimeSeconds: 1.1,
+    ingredients: [
+      { itemId: 'leaves', quantity: 2 },
+      { itemId: 'fiber', quantity: 1 },
+    ],
+    description: 'Press aromatic canopy leaves and plant fiber into 3 bars of Natural Herbal Soap for washing raw meat in Azure Lake.',
+  },
+  {
     id: 'craft_wooden_club',
     resultItemId: 'wooden_club',
     resultQuantity: 1,
@@ -657,8 +670,8 @@ export const COOKING_RECIPES: CookingRecipe[] = [
     resultQuantity: 1,
     requiresStation: false,
     cookTimeSeconds: 2.8,
-    ingredients: [{ itemId: 'dino_meat', quantity: 1 }],
-    description: 'Sear raw dinosaur meat over campfire flames for massive nourishment.',
+    ingredients: [{ itemId: 'cut_dino_meat', quantity: 1 }],
+    description: 'Sear washed, dried & knife-cut dinosaur meat over campfire flames for massive nourishment.',
   },
   {
     id: 'cook_roasted_meat',
@@ -666,8 +679,8 @@ export const COOKING_RECIPES: CookingRecipe[] = [
     resultQuantity: 1,
     requiresStation: false,
     cookTimeSeconds: 2.2,
-    ingredients: [{ itemId: 'raw_meat', quantity: 1 }],
-    description: 'Sear raw meat over open flames into nourishing roasted steak.',
+    ingredients: [{ itemId: 'cut_meat', quantity: 1 }],
+    description: 'Sear washed, dried & knife-cut meat over open flames into nourishing roasted steak.',
   },
   {
     id: 'cook_grilled_fish',
@@ -950,11 +963,11 @@ export const COOKING_RECIPES: CookingRecipe[] = [
     cookTimeSeconds: 2.5,
     ingredients: [
       { itemId: 'bell_pepper', quantity: 1 },
-      { itemId: 'raw_meat', quantity: 1 },
+      { itemId: 'cut_meat', quantity: 1 },
       { itemId: 'tomato', quantity: 1 },
       { itemId: 'onion', quantity: 1 },
     ],
-    description: 'Roast a juicy Bell Pepper stuffed with seared meat, tomato, and onion.',
+    description: 'Roast a juicy Bell Pepper stuffed with washed, knife-cut seared meat, tomato, and onion.',
   },
   {
     id: 'cook_vegetable_soup',
@@ -978,12 +991,12 @@ export const COOKING_RECIPES: CookingRecipe[] = [
     requiresStation: false,
     cookTimeSeconds: 2.6,
     ingredients: [
-      { itemId: 'raw_meat', quantity: 1 },
+      { itemId: 'cut_meat', quantity: 1 },
       { itemId: 'potato', quantity: 1 },
       { itemId: 'butter', quantity: 1 },
       { itemId: 'garlic', quantity: 1 },
     ],
-    description: 'Pan-sear juicy steak with golden potatoes, garlic, and melted butter.',
+    description: 'Pan-sear juicy knife-cut steak with golden potatoes, garlic, and melted butter.',
   },
   {
     id: 'cook_hearty_stew',
@@ -992,7 +1005,7 @@ export const COOKING_RECIPES: CookingRecipe[] = [
     requiresStation: false,
     cookTimeSeconds: 3.0,
     ingredients: [
-      { itemId: 'raw_meat', quantity: 2 },
+      { itemId: 'cut_meat', quantity: 2 },
       { itemId: 'mushrooms', quantity: 1 },
       { itemId: 'berries', quantity: 1 },
     ],
@@ -1005,11 +1018,11 @@ export const COOKING_RECIPES: CookingRecipe[] = [
     requiresStation: false,
     cookTimeSeconds: 3.2,
     ingredients: [
-      { itemId: 'dino_meat', quantity: 1 },
+      { itemId: 'cut_dino_meat', quantity: 1 },
       { itemId: 'maple_syrup', quantity: 1 },
       { itemId: 'mushrooms', quantity: 1 },
     ],
-    description: 'Flame-sear prime Dinosaur Meat glazed in Maple Syrup with woodland mushrooms.',
+    description: 'Flame-sear prime knife-cut Dinosaur Steak glazed in Maple Syrup with woodland mushrooms.',
   },
 ];
 

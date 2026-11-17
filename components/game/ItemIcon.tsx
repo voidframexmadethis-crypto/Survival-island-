@@ -150,9 +150,19 @@ export function ItemIcon({
       return <Sprout {...props} />;
     case 'leaf':
       return <Leaf {...props} />;
+    case 'soap':
+      return <Sparkles {...props} />;
+    case 'washed_meat':
+    case 'washed_dino_meat':
+      return <Droplet {...props} />;
     case 'raw_meat':
     case 'dino_meat':
+    case 'dried_raw_meat':
+    case 'dried_dino_meat':
+    case 'cut_meat':
+    case 'cut_dino_meat':
       return <Beef {...props} />;
+    case 'dried_meat':
     case 'roasted_meat':
     case 'roasted_dino_meat':
       return <Drumstick {...props} />;

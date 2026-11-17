@@ -300,7 +300,8 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
     id: 'raw_meat',
     name: 'Raw Meat',
     category: 'resource',
-    description: 'Fresh meat from hunted wildlife. Roast over a campfire before eating.',
+    description:
+      'Fresh unwashed meat from hunted wildlife. Wash & scrub with Soap in Azure Lake water, dry on a Drying Rack, then cut with a Knife.',
     stackable: true,
     maxStack: 40,
     iconKey: 'raw_meat',
@@ -310,11 +311,95 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
     id: 'dino_meat',
     name: 'Raw Dinosaur Meat',
     category: 'resource',
-    description: 'Dense prehistoric prime cut harvested from dinosaurs. Sear over a campfire for massive nourishment.',
+    description:
+      'Dense unwashed dinosaur cut. Wash & scrub with Soap in Azure Lake water, dry on a Drying Rack, then cut with a Knife.',
     stackable: true,
     maxStack: 40,
     iconKey: 'dino_meat',
     color: '#dc2626',
+  },
+  soap: {
+    id: 'soap',
+    name: 'Natural Herbal Soap',
+    category: 'equipment',
+    description:
+      'Cleansing island soap bar made from leaves and fiber. Equip or carry to Azure Lake to wash and scrub raw meat clean before drying.',
+    stackable: true,
+    maxStack: 50,
+    iconKey: 'soap',
+    color: '#bae6fd',
+  },
+  washed_meat: {
+    id: 'washed_meat',
+    name: 'Washed Meat',
+    category: 'resource',
+    description:
+      'Scrubbed clean with Soap in freshwater from Azure Lake. Hang on a Meat Drying Rack to sun-dry before cutting with a Knife.',
+    stackable: true,
+    maxStack: 40,
+    iconKey: 'washed_meat',
+    color: '#fca5a5',
+  },
+  washed_dino_meat: {
+    id: 'washed_dino_meat',
+    name: 'Washed Dinosaur Meat',
+    category: 'resource',
+    description:
+      'Prehistoric cut scrubbed clean with Soap in Azure Lake water. Hang on a Meat Drying Rack to sun-dry before cutting with a Knife.',
+    stackable: true,
+    maxStack: 40,
+    iconKey: 'washed_dino_meat',
+    color: '#f87171',
+  },
+  dried_raw_meat: {
+    id: 'dried_raw_meat',
+    name: 'Sun-Dried Meat Slab',
+    category: 'resource',
+    description:
+      'Washed and dried meat slab cured on a Drying Rack. Equip your Basic Knife to cut it into cookable & edible cuts.',
+    stackable: true,
+    maxStack: 40,
+    iconKey: 'dried_raw_meat',
+    color: '#991b1b',
+  },
+  dried_dino_meat: {
+    id: 'dried_dino_meat',
+    name: 'Sun-Dried Dino Slab',
+    category: 'resource',
+    description:
+      'Washed and dried dinosaur meat slab cured on a Drying Rack. Equip your Basic Knife to cut it out into steaks.',
+    stackable: true,
+    maxStack: 40,
+    iconKey: 'dried_dino_meat',
+    color: '#7f1d1d',
+  },
+  cut_meat: {
+    id: 'cut_meat',
+    name: 'Knife-Cut Meat',
+    category: 'food',
+    description:
+      'Washed in lake water with soap, dried, and cleanly cut with a knife. Eat now or roast over a Campfire.',
+    stackable: true,
+    maxStack: 40,
+    iconKey: 'cut_meat',
+    color: '#ef4444',
+    hungerRestore: 22,
+    healthRestore: 8,
+    staminaRestore: 10,
+  },
+  cut_dino_meat: {
+    id: 'cut_dino_meat',
+    name: 'Knife-Cut Dino Steak',
+    category: 'food',
+    description:
+      'Washed in lake water with soap, dried, and carved cleanly with a knife. Eat now or sear over a Campfire.',
+    stackable: true,
+    maxStack: 40,
+    iconKey: 'cut_dino_meat',
+    color: '#dc2626',
+    hungerRestore: 32,
+    healthRestore: 14,
+    staminaRestore: 18,
   },
   hide: {
     id: 'hide',
@@ -2376,8 +2461,9 @@ export const FARM_SHOP_STOCK: FarmShopEntry[] = [
   { itemId: 'salt', price: 8, quantity: 3, group: 'baking' },
   { itemId: 'flour', price: 14, quantity: 2, group: 'baking' },
   { itemId: 'sugar', price: 14, quantity: 2, group: 'baking' },
-  // Harvesting tool
+  // Harvesting & Prep tools
   { itemId: 'sickle', price: 25, quantity: 1, group: 'tools' },
+  { itemId: 'soap', price: 8, quantity: 3, group: 'tools' },
 ];
 
 export const ITEM_SELL_PRICES: Partial<Record<ItemId, number>> = {
@@ -2412,6 +2498,9 @@ export const ITEM_SELL_PRICES: Partial<Record<ItemId, number>> = {
   garlic_herb_roast: 46,
   raw_meat: 10,
   dino_meat: 18,
+  cut_meat: 16,
+  cut_dino_meat: 26,
+  dried_meat: 18,
   freshwater_fish: 10,
   ocean_fish: 12,
   berries: 5,

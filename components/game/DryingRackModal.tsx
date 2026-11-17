@@ -26,17 +26,24 @@ export function DryingRackModal({
     | undefined;
 
   const dryingSlots = structure?.dryingSlots || [
-    { itemId: 'raw_meat' as ItemId, quantity: 1, progress: 0.45 },
-    { itemId: null as unknown as ItemId, quantity: 0, progress: 0 },
-    { itemId: null as unknown as ItemId, quantity: 0, progress: 0 },
-    { itemId: null as unknown as ItemId, quantity: 0, progress: 0 },
+    { itemId: 'washed_meat' as ItemId, quantity: 0, progress: 0 },
+    { itemId: 'washed_meat' as ItemId, quantity: 0, progress: 0 },
+    { itemId: 'washed_meat' as ItemId, quantity: 0, progress: 0 },
+    { itemId: 'washed_meat' as ItemId, quantity: 0, progress: 0 },
   ];
 
-  const rawMeatItems = hud.inventory.filter(
+  const washedMeatItems = hud.inventory.filter(
     (slot) =>
       slot.quantity > 0 &&
-      (slot.itemId === 'raw_meat' || slot.itemId === 'dino_meat'),
+      (slot.itemId === 'washed_meat' || slot.itemId === 'washed_dino_meat'),
   );
+  const unwashedMeatCount = hud.inventory
+    .filter(
+      (slot) =>
+        slot.quantity > 0 &&
+        (slot.itemId === 'raw_meat' || slot.itemId === 'dino_meat'),
+    )
+    .reduce((acc, s) => acc + s.quantity, 0);
 
   return (
     <div
@@ -52,7 +59,7 @@ export function DryingRackModal({
                 Meat Drying Rack
               </h2>
               <p className="text-xs text-stone-400">
-                Hang raw meat or dino meat to cure in the sun and wind into high-protein jerky.
+                Hang meat washed with soap in Azure Lake to air-dry into slabs, then cut them with your Hunting Knife.
               </p>
             </div>
           </div>
@@ -123,7 +130,7 @@ export function DryingRackModal({
                               : 'bg-stone-800 text-stone-400 cursor-not-allowed opacity-75'
                           }`}
                         >
-                          {isReady ? 'Collect Jerky' : `${Math.round(slot.progress * 100)}%`}
+                          {isReady ? 'Collect Dried Slab' : `${Math.round(slot.progress * 100)}%`}
                         </button>
                       )}
                     </div>
@@ -144,19 +151,31 @@ export function DryingRackModal({
             </div>
           </div>
 
-          {/* Backpack Raw Meat */}
+          {/* Backpack Washed Meat */}
           <div className="space-y-3 pt-3 border-t border-stone-800">
-            <div className="text-xs font-semibold text-stone-300 flex items-center gap-1.5">
-              <Utensils className="w-3.5 h-3.5" />
-              <span>Raw Meat in Backpack (Ready to Hang)</span>
+            <div className="text-xs font-semibold text-stone-300 flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5">
+                <Utensils className="w-3.5 h-3.5" />
+                <span>Washed Meat in Backpack (Ready to Hang)</span>
+              </span>
+              {unwashedMeatCount > 0 && (
+                <span className="text-[11px] text-cyan-300 font-normal">
+                  {unwashedMeatCount} unwashed cut{unwashedMeatCount > 1 ? 's' : ''} — wash with Soap in Azure Lake first
+                </span>
+              )}
             </div>
-            {rawMeatItems.length === 0 ? (
-              <div className="rounded-xl bg-stone-950/60 border border-stone-800 p-5 text-xs text-stone-400 text-center">
-                No raw meat or dino meat in backpack. Hunt wildlife or dinosaurs to harvest meat.
+            {washedMeatItems.length === 0 ? (
+              <div className="rounded-xl bg-stone-950/60 border border-stone-800 p-5 text-xs text-stone-400 text-center space-y-1">
+                <div>
+                  No washed meat in backpack yet.
+                </div>
+                <div className="text-cyan-300">
+                  Carry Raw Meat &amp; Soap to Azure Lake, wash &amp; scrub the meat clean, then hang it here to dry!
+                </div>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {rawMeatItems.map((slot, idx) => {
+                {washedMeatItems.map((slot, idx) => {
                   const def = ITEMS[slot.itemId];
                   return (
                     <div

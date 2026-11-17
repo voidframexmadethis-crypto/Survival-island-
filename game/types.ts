@@ -79,6 +79,13 @@ export type ItemId =
   | 'plant_material'
   | 'raw_meat'
   | 'dino_meat'
+  | 'soap'
+  | 'washed_meat'
+  | 'washed_dino_meat'
+  | 'dried_raw_meat'
+  | 'dried_dino_meat'
+  | 'cut_meat'
+  | 'cut_dino_meat'
   | 'hide'
   | 'bone'
   | 'freshwater_fish'
@@ -746,6 +753,7 @@ export interface GameStats {
 
 export type GraphicsPreset = 'ultra' | 'balanced' | 'performance';
 export type DrawDistanceTier = 'near' | 'medium' | 'far';
+export type TvSafetyMode = 'auto' | 'safe_mini' | 'full_3d';
 
 export interface GameSettings {
   masterVolume: number;
@@ -758,6 +766,7 @@ export interface GameSettings {
   particlesEnabled?: boolean;
   drawDistance?: DrawDistanceTier;
   dynamicAutoFps?: boolean;
+  tvSafetyMode?: TvSafetyMode;
   touchControlsMode: 'auto' | 'always' | 'off';
   cameraSensitivity: number;
   invertCameraY: boolean;
@@ -912,6 +921,8 @@ export interface NearbyInteraction {
     | 'expedition_journal'
     | 'gun_action'
     | 'clean_bottle'
+    | 'wash_meat'
+    | 'cut_meat'
     | 'tool_action'
     | 'farmer'
     | 'planted_crop'
@@ -980,6 +991,10 @@ export interface HUDStateSnapshot {
   isSheltered: boolean;
   nearFire: boolean;
   nearOceanWater: boolean;
+  nearLakeWater?: boolean;
+  hasWashableMeat?: boolean;
+  hasSoap?: boolean;
+  hasDriedMeatToCut?: boolean;
   visibilityPercent: number;
   isNight: boolean;
   nocturnalActiveCount: number;
@@ -1083,6 +1098,8 @@ export interface HUDStateSnapshot {
     youtubeTitle?: string;
     youtubeChannel?: string;
     spatialVolume?: number;
+    safetyMode?: TvSafetyMode;
+    effectiveSafetyMode?: TvSafetyMode;
   };
   buildGhost?: {
     visible: boolean;

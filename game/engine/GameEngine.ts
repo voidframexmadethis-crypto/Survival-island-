@@ -432,6 +432,12 @@ export class GameEngine {
   private eatBiteCount = 0;
   private drinkTimer = 0;
   private washBottleTimer = 0;
+  private washMeatTimer = 0;
+  private washMeatIsDino = false;
+  private washMeatSplashStep = 0;
+  private cutMeatTimer = 0;
+  private cutMeatIsDino = false;
+  private cutMeatSliceStep = 0;
   private activeConsumeColor = '#b91c1c';
   private footstepAccum = 0;
   private hurtFlash = 0;
@@ -2370,6 +2376,7 @@ export class GameEngine {
       { itemId: 'metal_ore', quantity: 2 },
       { itemId: 'hide', quantity: 2 },
       { itemId: 'rope', quantity: 2 },
+      { itemId: 'soap', quantity: 3 },
       { itemId: 'dirty_water_bottle', quantity: 1 },
       { itemId: 'sickle', quantity: 1 },
       { itemId: 'excavator_shovel', quantity: 1 },
@@ -2457,6 +2464,25 @@ export class GameEngine {
       z: EXPEDITION_POS.z + 2.4,
       rotationY: 0.4,
     });
+    // Lakeside Meat Drying Rack on Azure Lake's eastern shore
+    const rackX = LAKE_CENTER.x + LAKE_CENTER.radius + 5.5;
+    const rackZ = LAKE_CENTER.z + 3.5;
+    this.spawnStructure({
+      id: 'lake_drying_rack',
+      type: 'drying_rack',
+      x: rackX,
+      y: Math.max(LAKE_CENTER.waterY + 0.35, getTerrainHeight(rackX, rackZ)),
+      z: rackZ,
+      rotationY: -0.6,
+      dryingSlots: [
+        { itemId: 'washed_meat' as ItemId, quantity: 0, progress: 0 },
+        { itemId: 'washed_meat' as ItemId, quantity: 0, progress: 0 },
+        { itemId: 'washed_meat' as ItemId, quantity: 0, progress: 0 },
+        { itemId: 'washed_meat' as ItemId, quantity: 0, progress: 0 },
+      ],
+    });
+    // Meat Drying Rack right next to the premade shelter (Hilltop House front porch / yard)
+    this.ensurePremadeShelterDryingRack();
 
     this.visitedBiomes = new Set(['beach']);
     this.exploredCells = new Set();
@@ -2518,6 +2544,32 @@ export class GameEngine {
 
     this.ensurePlayerHasGun(true);
     this.emitHud();
+  }
+
+  private ensurePremadeShelterDryingRack(): void {
+    const sx = HILL_HOUSE_POS.x + 5.8;
+    const sz = HILL_HOUSE_POS.z + 4.8;
+    const alreadyPlacedNearShelter = this.structures.some(
+      (s) =>
+        s.id === 'shelter_drying_rack' ||
+        (s.type === 'drying_rack' &&
+          Math.hypot(s.x - HILL_HOUSE_POS.x, s.z - HILL_HOUSE_POS.z) < 12),
+    );
+    if (alreadyPlacedNearShelter) return;
+    this.spawnStructure({
+      id: 'shelter_drying_rack',
+      type: 'drying_rack',
+      x: sx,
+      y: getTerrainHeight(sx, sz),
+      z: sz,
+      rotationY: -0.35,
+      dryingSlots: [
+        { itemId: 'washed_meat' as ItemId, quantity: 0, progress: 0 },
+        { itemId: 'washed_meat' as ItemId, quantity: 0, progress: 0 },
+        { itemId: 'washed_meat' as ItemId, quantity: 0, progress: 0 },
+        { itemId: 'washed_meat' as ItemId, quantity: 0, progress: 0 },
+      ],
+    });
   }
 
   public loadFromSave(save: GameSaveData): void {
@@ -2685,6 +2737,7 @@ export class GameEngine {
 
     this.clearPlacedStructures();
     save.structures.forEach((st) => this.spawnStructure(st));
+    this.ensurePremadeShelterDryingRack();
 
     // Restore saved Smart TV channel, power state & playback controls
     if (typeof save.tvVolume === 'number') {
@@ -2910,10 +2963,13 @@ export class GameEngine {
       );
       this.handsRig.toolGroup.visible = hasWeaponOrTool;
       this.handsRig.gunMesh.visible = isGun;
+      this.handsRig.soapMesh.visible = false;
+      this.handsRig.leftMeatGroup.visible = false;
       if (!hasWeaponOrTool || isGun) {
         this.handsRig.shaft.visible = false;
         this.handsRig.axeHead.visible = false;
         this.handsRig.spearTip.visible = false;
+        this.handsRig.knifeBlade.visible = false;
         this.handsRig.clubHead.visible = false;
         this.handsRig.bowArc.visible = false;
         this.handsRig.rodTip.visible = false;
@@ -2938,6 +2994,7 @@ export class GameEngine {
       { itemId: 'metal_ore', minQty: 1 },
       { itemId: 'hide', minQty: 1 },
       { itemId: 'rope', minQty: 1 },
+      { itemId: 'soap', minQty: 2 },
       { itemId: 'stone_warhammer', minQty: 1 },
       { itemId: 'sickle', minQty: 1 },
       { itemId: 'excavator_shovel', minQty: 1 },
@@ -3029,6 +3086,208 @@ export class GameEngine {
       }
     }
     return false;
+  }
+
+  public isNearLakeWater(): boolean {
+    const dPlayer = Math.hypot(
+      this.playerX - LAKE_CENTER.x,
+      this.playerZ - LAKE_CENTER.z,
+    );
+    if (dPlayer <= LAKE_CENTER.radius + 5.8) {
+      return true;
+    }
+    const fwdX = -Math.sin(this.camYaw);
+    const fwdZ = -Math.cos(this.camYaw);
+    for (const dist of [2.2, 3.8]) {
+      const tx = this.playerX + fwdX * dist;
+      const tz = this.playerZ + fwdZ * dist;
+      const dAhead = Math.hypot(tx - LAKE_CENTER.x, tz - LAKE_CENTER.z);
+      if (dAhead <= LAKE_CENTER.radius + 3.2) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private getLakeDirectionHint(): string {
+    const dx = LAKE_CENTER.x - this.playerX;
+    const dz = LAKE_CENTER.z - this.playerZ;
+    const dist = Math.round(Math.max(0, Math.hypot(dx, dz) - LAKE_CENTER.radius));
+    const ns = dz < -4 ? 'North' : dz > 4 ? 'South' : '';
+    const ew = dx > 4 ? 'East' : dx < -4 ? 'West' : '';
+    const dir = ns && ew ? `${ns}-${ew}` : ns || ew || 'nearby';
+    return `Azure Lake (${dist}m ${dir})`;
+  }
+
+  public washAndScrubMeat(preferredItemId?: ItemId): boolean {
+    this.sound.unlock();
+    if (this.washMeatTimer > 0 || this.cutMeatTimer > 0) return false;
+
+    const rawCount = this.getItemCount('raw_meat');
+    const dinoCount = this.getItemCount('dino_meat');
+    let targetId: ItemId | null = null;
+    if (preferredItemId === 'dino_meat' && dinoCount > 0) {
+      targetId = 'dino_meat';
+    } else if (preferredItemId === 'raw_meat' && rawCount > 0) {
+      targetId = 'raw_meat';
+    } else if (dinoCount > 0) {
+      targetId = 'dino_meat';
+    } else if (rawCount > 0) {
+      targetId = 'raw_meat';
+    }
+
+    if (!targetId) {
+      this.toast(
+        'Hunt wildlife or dinosaurs to get Raw Meat or Dinosaur Meat first!',
+        'warning',
+      );
+      return false;
+    }
+
+    if (this.getItemCount('soap') <= 0) {
+      this.toast(
+        'You need Natural Soap to wash & scrub meat! Craft Soap (2 Leaves + 1 Fiber) or buy from the Farmer.',
+        'warning',
+      );
+      return false;
+    }
+
+    if (!this.isNearLakeWater()) {
+      this.toast(
+        `Walk to ${this.getLakeDirectionHint()} to wash & scrub meat in clean lake water with Soap!`,
+        'warning',
+      );
+      return false;
+    }
+
+    const isDino = targetId === 'dino_meat';
+    const outId: ItemId = isDino ? 'washed_dino_meat' : 'washed_meat';
+    this.removeItem(targetId, 1);
+    this.removeItem('soap', 1);
+    this.addItem(outId, 1, false);
+
+    this.washMeatTimer = 1.85;
+    this.washMeatIsDino = isDino;
+    this.washMeatSplashStep = 0;
+    this.actionCooldown = 1.25;
+    this.sound.playWashScrubMeat();
+
+    const fwdX = -Math.sin(this.camYaw);
+    const fwdZ = -Math.cos(this.camYaw);
+    this.spawnParticles(
+      this.playerX + fwdX * 1.05,
+      this.playerY + 0.55,
+      this.playerZ + fwdZ * 1.05,
+      0xf8fafc,
+      10,
+    );
+    this.spawnParticles(
+      this.playerX + fwdX * 1.15,
+      this.playerY + 0.45,
+      this.playerZ + fwdZ * 1.15,
+      0x7dd3fc,
+      10,
+    );
+    this.toast(
+      `Washed & scrubbed ${ITEMS[targetId].name} with Soap in Azure Lake! Hang it on a Drying Rack next.`,
+      'craft',
+      outId,
+      1,
+    );
+    this.emitHud();
+    return true;
+  }
+
+  public cutDriedMeatWithKnife(preferredItemId?: ItemId): boolean {
+    this.sound.unlock();
+    if (this.cutMeatTimer > 0 || this.washMeatTimer > 0) return false;
+
+    if (this.getItemCount('hunting_knife') <= 0) {
+      this.toast(
+        'You need a Hunting Knife to cut dried meat! Craft one at the Workbench.',
+        'warning',
+      );
+      return false;
+    }
+
+    const driedRawCount = this.getItemCount('dried_raw_meat');
+    const driedDinoCount = this.getItemCount('dried_dino_meat');
+    let targetId: ItemId | null = null;
+    if (preferredItemId === 'dried_dino_meat' && driedDinoCount > 0) {
+      targetId = 'dried_dino_meat';
+    } else if (preferredItemId === 'dried_raw_meat' && driedRawCount > 0) {
+      targetId = 'dried_raw_meat';
+    } else if (driedDinoCount > 0) {
+      targetId = 'dried_dino_meat';
+    } else if (driedRawCount > 0) {
+      targetId = 'dried_raw_meat';
+    }
+
+    if (!targetId) {
+      if (this.getItemCount('washed_meat') > 0 || this.getItemCount('washed_dino_meat') > 0) {
+        this.toast(
+          'Hang your Washed Meat on a Meat Drying Rack first so it dries before cutting with a knife!',
+          'warning',
+        );
+      } else if (this.getItemCount('raw_meat') > 0 || this.getItemCount('dino_meat') > 0) {
+        this.toast(
+          'Wash raw meat with Soap in Azure Lake, dry it on a Drying Rack, then cut it with a knife!',
+          'warning',
+        );
+      } else {
+        this.toast(
+          'Dry washed meat on a Meat Drying Rack first before cutting with your Hunting Knife.',
+          'warning',
+        );
+      }
+      return false;
+    }
+
+    // Equip Hunting Knife so the blade renders cleanly in the cutting animation
+    const knifeSlot = this.hotbarItemIds.indexOf('hunting_knife');
+    if (knifeSlot !== -1) {
+      this.equippedSlot = knifeSlot;
+    } else {
+      const emptyIdx = this.hotbarItemIds.indexOf(null);
+      if (emptyIdx !== -1) {
+        this.hotbarItemIds[emptyIdx] = 'hunting_knife';
+        this.equippedSlot = emptyIdx;
+      } else {
+        this.hotbarItemIds[this.equippedSlot] = 'hunting_knife';
+      }
+    }
+
+    const isDino = targetId === 'dried_dino_meat';
+    const outId: ItemId = isDino ? 'cut_dino_meat' : 'cut_meat';
+    this.removeItem(targetId, 1);
+    this.addItem(outId, 2, false);
+    this.addItem('dried_meat', 1, false);
+    this.stats.itemsCrafted += 1;
+
+    this.cutMeatTimer = 1.45;
+    this.cutMeatIsDino = isDino;
+    this.cutMeatSliceStep = 0;
+    this.actionCooldown = 1.05;
+    this.sound.playKnifeCutMeat();
+
+    const fwdX = -Math.sin(this.camYaw);
+    const fwdZ = -Math.cos(this.camYaw);
+    this.spawnParticles(
+      this.playerX + fwdX * 0.72,
+      this.playerY + this.currentEyeHeight - 0.25,
+      this.playerZ + fwdZ * 0.72,
+      isDino ? 0x991b1b : 0xdc2626,
+      10,
+    );
+    this.toast(
+      `Sliced ${ITEMS[targetId].name} with Hunting Knife → +2 ${ITEMS[outId].name} & +1 Dried Jerky!`,
+      'craft',
+      outId,
+      2,
+    );
+    this.evaluateMissions();
+    this.emitHud();
+    return true;
   }
 
   public cleanAndFilterWaterBottle(): boolean {
@@ -3415,6 +3674,58 @@ export class GameEngine {
     const def = ITEMS[itemId];
     if (this.getItemCount(itemId) <= 0) return;
 
+    if (itemId === 'raw_meat' || itemId === 'dino_meat' || itemId === 'soap') {
+      if (this.isNearLakeWater()) {
+        this.washAndScrubMeat(itemId === 'soap' ? undefined : itemId);
+        return;
+      }
+      const existingIdx = this.hotbarItemIds.indexOf(itemId);
+      if (existingIdx !== -1) {
+        this.equippedSlot = existingIdx;
+      } else {
+        this.hotbarItemIds[this.equippedSlot] = itemId;
+      }
+      this.toast(
+        `Walk to ${this.getLakeDirectionHint()} with Soap to wash & scrub meat clean!`,
+        'info',
+        itemId,
+        1,
+      );
+      this.emitHud();
+      return;
+    }
+
+    if (itemId === 'washed_meat' || itemId === 'washed_dino_meat') {
+      const nearRack = this.structures.find(
+        (s) =>
+          s.type === 'drying_rack' &&
+          Math.hypot(s.x - this.playerX, s.z - this.playerZ) < 4.5,
+      );
+      if (nearRack) {
+        this.callbacks.onOpenStation('drying_rack', nearRack.id);
+        return;
+      }
+      const existingIdx = this.hotbarItemIds.indexOf(itemId);
+      if (existingIdx !== -1) {
+        this.equippedSlot = existingIdx;
+      } else {
+        this.hotbarItemIds[this.equippedSlot] = itemId;
+      }
+      this.toast(
+        'Hang Washed Meat on a Meat Drying Rack (next to the premade shelter or by Azure Lake) to dry before cutting.',
+        'info',
+        itemId,
+        1,
+      );
+      this.emitHud();
+      return;
+    }
+
+    if (itemId === 'dried_raw_meat' || itemId === 'dried_dino_meat') {
+      this.cutDriedMeatWithKnife(itemId);
+      return;
+    }
+
     if (itemId === 'dirty_water_bottle') {
       if (this.isNearOceanWater()) {
         this.cleanAndFilterWaterBottle();
@@ -3555,10 +3866,10 @@ export class GameEngine {
       rotationY: this.camYaw,
       chestItems: def.structureType === 'storage_chest' ? [] : undefined,
       dryingSlots: def.structureType === 'drying_rack' ? [
-        { itemId: 'raw_meat' as ItemId, quantity: 0, progress: 0 },
-        { itemId: 'raw_meat' as ItemId, quantity: 0, progress: 0 },
-        { itemId: 'raw_meat' as ItemId, quantity: 0, progress: 0 },
-        { itemId: 'raw_meat' as ItemId, quantity: 0, progress: 0 },
+        { itemId: 'washed_meat' as ItemId, quantity: 0, progress: 0 },
+        { itemId: 'washed_meat' as ItemId, quantity: 0, progress: 0 },
+        { itemId: 'washed_meat' as ItemId, quantity: 0, progress: 0 },
+        { itemId: 'washed_meat' as ItemId, quantity: 0, progress: 0 },
       ] : undefined,
       lit:
         def.structureType === 'campfire' ||
@@ -3798,12 +4109,20 @@ export class GameEngine {
     const st = this.structures.find((s) => s.id === structureId && s.type === 'drying_rack');
     if (!st || !st.dryingSlots) return;
 
+    if (itemId !== 'washed_meat' && itemId !== 'washed_dino_meat') {
+      this.toast(
+        `Wash & scrub ${ITEMS[itemId].name} with Soap in Azure Lake before hanging it to dry!`,
+        'warning',
+      );
+      return;
+    }
+
     if (this.getItemCount(itemId) <= 0) {
       this.toast(`No ${ITEMS[itemId].name} in inventory`, 'warning');
       return;
     }
 
-    const emptySlot = st.dryingSlots.find((slot) => !slot.itemId || slot.quantity === 0 || slot.progress >= 1.0);
+    const emptySlot = st.dryingSlots.find((slot) => !slot.itemId || slot.quantity === 0);
     if (!emptySlot) {
       this.toast('All drying rack hooks are currently occupied', 'warning');
       return;
@@ -3814,7 +4133,7 @@ export class GameEngine {
     emptySlot.quantity = 1;
     emptySlot.progress = 0.0;
     this.sound.playCraftSuccess();
-    this.toast(`Hung ${ITEMS[itemId].name} to cure in the sun`, 'discovery');
+    this.toast(`Hung ${ITEMS[itemId].name} on Drying Rack to air-dry`, 'discovery');
     this.emitHud();
   }
 
@@ -3824,16 +4143,23 @@ export class GameEngine {
 
     const slot = st.dryingSlots[slotIdx];
     if (!slot.itemId || slot.quantity <= 0 || slot.progress < 1.0) {
-      this.toast('Meat is still curing on the rack', 'warning');
+      this.toast('Meat is still drying on the rack', 'warning');
       return;
     }
 
-    this.addItem('dried_meat', 1);
-    slot.itemId = 'raw_meat';
+    const isDino = slot.itemId === 'washed_dino_meat';
+    const outId: ItemId = isDino ? 'dried_dino_meat' : 'dried_raw_meat';
+    this.addItem(outId, 1, false);
+    slot.itemId = 'washed_meat';
     slot.quantity = 0;
     slot.progress = 0;
     this.sound.playCraftSuccess();
-    this.toast('Collected Delicious Dried Jerky (+1 Dried Meat)', 'discovery');
+    this.toast(
+      `Collected ${ITEMS[outId].name}! Now cut it with your Hunting Knife.`,
+      'discovery',
+      outId,
+      1,
+    );
     this.emitHud();
   }
 
@@ -4306,6 +4632,21 @@ export class GameEngine {
           this.harvestPlantedCrop(matureCrop.id);
           return;
         }
+        const creatureNearby = this.creatures.creatures.some(
+          (c) =>
+            c.alive &&
+            c.cycleActive &&
+            Math.hypot(c.x - this.playerX, c.z - this.playerZ) <= 4.2 &&
+            Math.abs(c.y - this.playerY) <= 3.8,
+        );
+        if (
+          !creatureNearby &&
+          (this.getItemCount('dried_raw_meat') > 0 ||
+            this.getItemCount('dried_dino_meat') > 0)
+        ) {
+          this.cutDriedMeatWithKnife();
+          return;
+        }
       }
       if (isFirearmItem(equippedId)) {
         this.fireGun(equippedId);
@@ -4437,6 +4778,38 @@ export class GameEngine {
 
     if (equippedId === 'dirty_water_bottle') {
       this.cleanAndFilterWaterBottle();
+      return;
+    }
+
+    if (
+      equippedId === 'raw_meat' ||
+      equippedId === 'dino_meat' ||
+      equippedId === 'soap'
+    ) {
+      this.washAndScrubMeat(equippedId === 'soap' ? undefined : equippedId);
+      return;
+    }
+
+    if (equippedId === 'washed_meat' || equippedId === 'washed_dino_meat') {
+      const nearRack = this.structures.find(
+        (s) =>
+          s.type === 'drying_rack' &&
+          Math.hypot(s.x - this.playerX, s.z - this.playerZ) < 4.5,
+      );
+      if (nearRack) {
+        this.callbacks.onOpenStation('drying_rack', nearRack.id);
+      } else {
+        this.toast(
+          'Bring Washed Meat to a Meat Drying Rack (next to the premade shelter or by Azure Lake) to dry it!',
+          'info',
+        );
+      }
+      this.actionCooldown = 0.45;
+      return;
+    }
+
+    if (equippedId === 'dried_raw_meat' || equippedId === 'dried_dino_meat') {
+      this.cutDriedMeatWithKnife(equippedId);
       return;
     }
 
@@ -4651,6 +5024,10 @@ export class GameEngine {
         this.actionCooldown = 0.6;
         this.evaluateMissions();
         this.emitHud();
+        return;
+      }
+      if (near.kind === 'wash_meat') {
+        this.washAndScrubMeat();
         return;
       }
       if (near.kind === 'clean_bottle') {
@@ -6286,7 +6663,7 @@ export class GameEngine {
       if (st.type === 'drying_rack' && st.dryingSlots) {
         for (const slot of st.dryingSlots) {
           if (slot.quantity > 0 && slot.itemId && slot.progress < 1.0) {
-            slot.progress += dt / 45;
+            slot.progress += dt / 10;
             if (slot.progress > 1.0) slot.progress = 1.0;
           }
         }
@@ -6410,6 +6787,40 @@ export class GameEngine {
     if (this.drinkTimer > 0) this.drinkTimer = Math.max(0, this.drinkTimer - dt);
     if (this.washBottleTimer > 0)
       this.washBottleTimer = Math.max(0, this.washBottleTimer - dt);
+    if (this.washMeatTimer > 0) {
+      this.washMeatTimer = Math.max(0, this.washMeatTimer - dt);
+      const washProgress = 1 - this.washMeatTimer / 1.85;
+      const expectedStep = Math.floor(washProgress * 4);
+      if (expectedStep > this.washMeatSplashStep && expectedStep <= 4) {
+        this.washMeatSplashStep = expectedStep;
+        const fwdX = -Math.sin(this.camYaw);
+        const fwdZ = -Math.cos(this.camYaw);
+        this.spawnParticles(
+          this.playerX + fwdX * 0.9,
+          this.playerY + 0.55,
+          this.playerZ + fwdZ * 0.9,
+          expectedStep % 2 === 0 ? 0xf8fafc : 0x7dd3fc,
+          6,
+        );
+      }
+    }
+    if (this.cutMeatTimer > 0) {
+      this.cutMeatTimer = Math.max(0, this.cutMeatTimer - dt);
+      const cutProgress = 1 - this.cutMeatTimer / 1.45;
+      const expectedSlice = Math.floor(cutProgress * 3);
+      if (expectedSlice > this.cutMeatSliceStep && expectedSlice <= 3) {
+        this.cutMeatSliceStep = expectedSlice;
+        const fwdX = -Math.sin(this.camYaw);
+        const fwdZ = -Math.cos(this.camYaw);
+        this.spawnParticles(
+          this.playerX + fwdX * 0.65,
+          this.playerY + this.currentEyeHeight - 0.24,
+          this.playerZ + fwdZ * 0.65,
+          this.cutMeatIsDino ? 0x991b1b : 0xdc2626,
+          5,
+        );
+      }
+    }
     if (this.hurtFlash > 0) this.hurtFlash -= dt;
     if (this.coldWarnCooldown > 0) this.coldWarnCooldown -= dt;
 
@@ -7191,22 +7602,37 @@ export class GameEngine {
     const isEating = this.eatTimer > 0;
     const isDrinking = this.drinkTimer > 0;
     const isWashing = this.washBottleTimer > 0;
+    const isWashingMeat = this.washMeatTimer > 0;
+    const isCuttingMeat = this.cutMeatTimer > 0;
     const isBottleEquipped =
       eqId === 'dirty_water_bottle' || eqId === 'filtered_water_bottle';
+    const isSoapEquipped = eqId === 'soap';
+    const isHeldPrepMeat =
+      eqId === 'raw_meat' ||
+      eqId === 'dino_meat' ||
+      eqId === 'washed_meat' ||
+      eqId === 'washed_dino_meat' ||
+      eqId === 'dried_raw_meat' ||
+      eqId === 'dried_dino_meat';
     const isFoodHeld = Boolean(
       eqDef && eqDef.category === 'food' && eqId !== 'filtered_water_bottle',
     );
 
     const showConsumable =
-      isEating || isDrinking || isWashing || isBottleEquipped || isFoodHeld;
-    const isGun = !showConsumable && isFirearmItem(eqId);
+      !isWashingMeat &&
+      !isCuttingMeat &&
+      (isEating || isDrinking || isWashing || isBottleEquipped || isFoodHeld);
+    const isGun =
+      !showConsumable && !isWashingMeat && !isCuttingMeat && isFirearmItem(eqId);
     const hasTool = Boolean(
-      !showConsumable &&
-        eqId &&
-        (isActiveWeaponItem(eqId) ||
-          ITEMS[eqId].category === 'tool' ||
-          eqId === 'fishing_rod' ||
-          eqId === 'lasso'),
+      isCuttingMeat ||
+        (!showConsumable &&
+          !isWashingMeat &&
+          eqId &&
+          (isActiveWeaponItem(eqId) ||
+            ITEMS[eqId].category === 'tool' ||
+            eqId === 'fishing_rod' ||
+            eqId === 'lasso')),
     );
 
     this.handsRig.toolGroup.visible = hasTool;
@@ -7229,22 +7655,40 @@ export class GameEngine {
     } else {
       this.handsRig.gunMesh.scale.set(1, 1, 1);
     }
-    this.handsRig.shaft.visible = !isGun && hasTool;
+    this.handsRig.shaft.visible =
+      !isCuttingMeat && !isGun && hasTool && eqId !== 'hunting_knife';
     this.handsRig.axeHead.visible =
-      !isGun && (eqId === 'stone_axe' || eqId === 'stone_pickaxe' || eqId === 'excavator_shovel');
+      !isCuttingMeat &&
+      !isGun &&
+      (eqId === 'stone_axe' || eqId === 'stone_pickaxe' || eqId === 'excavator_shovel');
     this.handsRig.spearTip.visible =
-      !isGun && (eqId === 'wooden_spear' || eqId === 'hunting_knife');
-    this.handsRig.clubHead.visible = !isGun && eqId === 'wooden_club';
-    this.handsRig.bowArc.visible = !isGun && eqId === 'primitive_bow';
+      !isCuttingMeat && !isGun && eqId === 'wooden_spear';
+    this.handsRig.knifeBlade.visible =
+      isCuttingMeat || (!isGun && eqId === 'hunting_knife');
+    this.handsRig.clubHead.visible = !isCuttingMeat && !isGun && eqId === 'wooden_club';
+    this.handsRig.bowArc.visible = !isCuttingMeat && !isGun && eqId === 'primitive_bow';
     this.handsRig.rodTip.visible =
+      !isCuttingMeat &&
       !isGun &&
       (eqId === 'fishing_rod' || eqId === 'rope_whip' || eqId === 'lasso');
-    this.handsRig.sickleBlade.visible = !isGun && eqId === 'sickle';
-    this.handsRig.warhammerHead.visible = !isGun && eqId === 'stone_warhammer';
+    this.handsRig.sickleBlade.visible = !isCuttingMeat && !isGun && eqId === 'sickle';
+    this.handsRig.warhammerHead.visible =
+      !isCuttingMeat && !isGun && eqId === 'stone_warhammer';
 
     this.handsRig.consumableGroup.visible = showConsumable;
-    this.handsRig.foodMesh.visible = isEating || (!isDrinking && !isWashing && !isBottleEquipped && isFoodHeld);
-    this.handsRig.bottleGroup.visible = !this.handsRig.foodMesh.visible && showConsumable;
+    this.handsRig.foodMesh.visible =
+      isEating || (!isDrinking && !isWashing && !isBottleEquipped && isFoodHeld);
+    this.handsRig.bottleGroup.visible =
+      !this.handsRig.foodMesh.visible && showConsumable;
+    this.handsRig.soapMesh.visible = isWashingMeat || (!isCuttingMeat && isSoapEquipped);
+    this.handsRig.leftMeatGroup.visible =
+      isWashingMeat || isCuttingMeat || isHeldPrepMeat;
+    this.handsRig.foamGroup.visible = isWashingMeat;
+    this.handsRig.cutStripsGroup.visible = isCuttingMeat;
+
+    if (isHeldPrepMeat && eqDef) {
+      this.handsRig.leftMeatMat.color.set(eqDef.color);
+    }
     if (isEating) {
       this.handsRig.foodMat.color.set(this.activeConsumeColor);
     } else if (isFoodHeld && eqDef) {
@@ -7266,6 +7710,74 @@ export class GameEngine {
     const moveBobY =
       inputMag > 0.08 ? Math.abs(Math.sin(this.walkBobPhase)) * 0.022 : 0;
 
+    if (isWashingMeat) {
+      const p = 1 - this.washMeatTimer / 1.85;
+      const plunge = Math.sin(p * Math.PI);
+      const scrubX = Math.sin(p * Math.PI * 10) * 0.075;
+      const scrubY = Math.cos(p * Math.PI * 10) * 0.036;
+      const scrubZ = Math.sin(p * Math.PI * 5) * 0.04;
+      const foamAmt =
+        p < 0.8 ? Math.sin(Math.min(1, p / 0.8) * Math.PI) : Math.max(0, 1 - (p - 0.8) / 0.2);
+
+      this.handsRig.leftHand.position.set(
+        -0.08 + scrubX * 0.22,
+        -0.24 - plunge * 0.14,
+        -0.4 - plunge * 0.12,
+      );
+      this.handsRig.leftHand.rotation.set(-0.38 * plunge, 0.28, -0.18);
+
+      this.handsRig.rightHand.position.set(
+        0.04 + scrubX,
+        -0.2 - plunge * 0.12 + scrubY,
+        -0.38 - plunge * 0.12 + scrubZ,
+      );
+      this.handsRig.rightHand.rotation.set(
+        -0.42 * plunge + scrubY * 3.5,
+        -0.32 + scrubX * 2.4,
+        scrubX * 3.0,
+      );
+
+      this.handsRig.leftMeatMat.color.setHex(
+        p > 0.72
+          ? this.washMeatIsDino
+            ? 0xbe123c
+            : 0xef4444
+          : this.washMeatIsDino
+            ? 0x7f1d1d
+            : 0x991b1b,
+      );
+      this.handsRig.foamGroup.scale.setScalar(Math.max(0.05, 0.45 + foamAmt * 0.95));
+      return;
+    }
+
+    if (isCuttingMeat) {
+      const p = 1 - this.cutMeatTimer / 1.45;
+      const slicePhase = (p * 3) % 1;
+      const downStroke = Math.sin(slicePhase * Math.PI);
+      const sliceOffset = (Math.floor(p * 3) - 1) * 0.032;
+
+      this.handsRig.leftHand.position.set(-0.08, -0.22, -0.37);
+      this.handsRig.leftHand.rotation.set(-0.18, 0.32, -0.1);
+      this.handsRig.leftMeatMat.color.setHex(this.cutMeatIsDino ? 0x7c2d12 : 0x9a3412);
+
+      this.handsRig.rightHand.position.set(
+        0.08 + sliceOffset,
+        -0.14 - downStroke * 0.13,
+        -0.34 - downStroke * 0.06,
+      );
+      this.handsRig.rightHand.rotation.set(
+        0.25 - downStroke * 1.15,
+        -0.28,
+        0.18,
+      );
+
+      const completedSlices = Math.min(3, Math.floor(p * 3 + 0.35));
+      this.handsRig.cutStripsGroup.children.forEach((strip, idx) => {
+        strip.visible = idx < completedSlices;
+      });
+      return;
+    }
+
     if (isEating) {
       const p = 1 - this.eatTimer / 0.92;
       const lift = Math.sin(p * Math.PI);
@@ -7282,7 +7794,7 @@ export class GameEngine {
         -0.27 + idleBob,
         -0.4,
       );
-      this.handsRig.leftHand.rotation.x = 0;
+      this.handsRig.leftHand.rotation.set(0, 0, 0);
       return;
     }
 
@@ -7297,7 +7809,7 @@ export class GameEngine {
       this.handsRig.rightHand.rotation.set(0.75 * lift, 0.25 * lift, 0.2 * lift);
       this.handsRig.consumableGroup.rotation.set(-0.35 * lift, 0, 0);
       this.handsRig.leftHand.position.set(-0.24, -0.27, -0.4);
-      this.handsRig.leftHand.rotation.x = 0;
+      this.handsRig.leftHand.rotation.set(0, 0, 0);
       return;
     }
 
@@ -7317,12 +7829,14 @@ export class GameEngine {
         -0.27 - plunge * 0.08,
         -0.42 - plunge * 0.1,
       );
-      this.handsRig.leftHand.rotation.x = -0.35 * plunge;
+      this.handsRig.leftHand.rotation.set(-0.35 * plunge, 0, 0);
       return;
     }
 
     this.handsRig.rightHand.rotation.y = 0;
     this.handsRig.rightHand.rotation.z = 0;
+    this.handsRig.leftHand.rotation.y = 0;
+    this.handsRig.leftHand.rotation.z = 0;
     this.handsRig.consumableGroup.rotation.set(0, 0, 0);
 
     const swingWave =
@@ -7416,6 +7930,30 @@ export class GameEngine {
             targetX: matureCrop.x,
             targetY: matureCrop.y,
             targetZ: matureCrop.z,
+          };
+        }
+        const creatureNearby = this.creatures.creatures.some(
+          (c) =>
+            c.alive &&
+            c.cycleActive &&
+            Math.hypot(c.x - this.playerX, c.z - this.playerZ) <= 4.2 &&
+            Math.abs(c.y - this.playerY) <= 3.8,
+        );
+        if (
+          !creatureNearby &&
+          (this.getItemCount('dried_raw_meat') > 0 ||
+            this.getItemCount('dried_dino_meat') > 0)
+        ) {
+          return {
+            id: 'cut_dried_meat',
+            label: 'Cut Dried Meat with Knife',
+            sublabel: 'Slices Dried Slab into Cut Meat',
+            kind: 'cut_meat',
+            actionCategory: 'harvest',
+            distance: 0,
+            targetX: this.playerX,
+            targetY: this.playerY,
+            targetZ: this.playerZ,
           };
         }
       }
@@ -7700,6 +8238,58 @@ export class GameEngine {
         sublabel: nearOcean ? 'Ocean Surf → Filtered Water' : 'Requires Ocean Waves',
         kind: 'clean_bottle',
         actionCategory: 'clean',
+        distance: 0,
+        targetX: this.playerX,
+        targetY: this.playerY,
+        targetZ: this.playerZ,
+      };
+    }
+
+    if (
+      equippedId === 'raw_meat' ||
+      equippedId === 'dino_meat' ||
+      equippedId === 'soap'
+    ) {
+      const nearLake = this.isNearLakeWater();
+      return {
+        id: 'wash_meat_lake',
+        label: nearLake
+          ? 'Wash & Scrub Meat with Soap'
+          : 'Wash Meat (Walk to Azure Lake)',
+        sublabel: nearLake
+          ? 'Azure Lake Water + Soap → Washed Meat'
+          : `${this.getLakeDirectionHint()} · Needs Soap & Meat`,
+        kind: 'wash_meat',
+        actionCategory: 'clean',
+        distance: 0,
+        targetX: LAKE_CENTER.x,
+        targetY: LAKE_CENTER.waterY,
+        targetZ: LAKE_CENTER.z,
+      };
+    }
+
+    if (equippedId === 'washed_meat' || equippedId === 'washed_dino_meat') {
+      return {
+        id: `dry_${equippedId}`,
+        label: 'Hang Washed Meat on Drying Rack',
+        sublabel: 'Dry into Slabs before cutting with Knife',
+        kind: 'tool_action',
+        actionCategory: 'use',
+        distance: 0,
+        targetX: this.playerX,
+        targetY: this.playerY,
+        targetZ: this.playerZ,
+      };
+    }
+
+    if (equippedId === 'dried_raw_meat' || equippedId === 'dried_dino_meat') {
+      const hasKnife = this.getItemCount('hunting_knife') > 0;
+      return {
+        id: 'cut_dried_meat',
+        label: hasKnife ? 'Cut Dried Meat with Knife' : 'Need Hunting Knife to Cut',
+        sublabel: hasKnife ? 'Slices Slab into Ready-to-Cook Cut Meat' : 'Craft Hunting Knife first',
+        kind: 'cut_meat',
+        actionCategory: 'harvest',
         distance: 0,
         targetX: this.playerX,
         targetY: this.playerY,
@@ -8332,6 +8922,23 @@ export class GameEngine {
     const fwdZ = -Math.cos(this.camYaw);
     const aheadX = this.playerX + fwdX * 1.8;
     const aheadZ = this.playerZ + fwdZ * 1.8;
+
+    const hasWashable =
+      this.getItemCount('raw_meat') > 0 || this.getItemCount('dino_meat') > 0;
+    if (this.isNearLakeWater() && hasWashable && this.getItemCount('soap') > 0) {
+      return {
+        id: 'wash_meat_lake',
+        label: 'Wash & Scrub Meat with Soap',
+        sublabel: 'Azure Lake Water → Washed Meat',
+        kind: 'wash_meat',
+        actionCategory: 'clean',
+        distance: 1.4,
+        targetX: aheadX,
+        targetY: LAKE_CENTER.waterY,
+        targetZ: aheadZ,
+      };
+    }
+
     if (
       isFreshwaterAt(this.playerX, this.playerZ) ||
       isFreshwaterAt(aheadX, aheadZ)
@@ -8939,7 +9546,9 @@ export class GameEngine {
     const washDip =
       this.washBottleTimer > 0
         ? -Math.sin((1 - this.washBottleTimer / 1.25) * Math.PI) * 0.12
-        : 0;
+        : this.washMeatTimer > 0
+          ? -Math.sin((1 - this.washMeatTimer / 1.85) * Math.PI) * 0.14
+          : 0;
 
     const blastShakeX =
       this.cameraShakeTimer > 0
@@ -8976,6 +9585,13 @@ export class GameEngine {
         Math.hypot(s.x - this.playerX, s.z - this.playerZ) < 8,
     );
     const nearOceanWater = this.isNearOceanWater();
+    const nearLakeWater = this.isNearLakeWater();
+    const hasWashableMeat =
+      this.getItemCount('raw_meat') > 0 || this.getItemCount('dino_meat') > 0;
+    const hasSoap = this.getItemCount('soap') > 0;
+    const hasDriedMeatToCut =
+      this.getItemCount('dried_raw_meat') > 0 ||
+      this.getItemCount('dried_dino_meat') > 0;
     const sunElev = Math.sin((this.timeOfDay - 0.25) * Math.PI * 2);
     const isNight = sunElev < -0.05;
     const nearbyCarcassNode = this.findNearbyCarcass();
@@ -9120,6 +9736,10 @@ export class GameEngine {
       isSheltered: sheltered,
       nearFire,
       nearOceanWater,
+      nearLakeWater,
+      hasWashableMeat,
+      hasSoap,
+      hasDriedMeatToCut,
       visibilityPercent: Math.round(this.playerVisibility * 100),
       isNight,
       nocturnalActiveCount: this.nocturnalActiveCount,

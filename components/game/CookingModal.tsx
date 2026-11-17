@@ -69,6 +69,12 @@ export function CookingModal({
         (id) =>
           id === 'dino_meat' ||
           id === 'raw_meat' ||
+          id === 'washed_meat' ||
+          id === 'washed_dino_meat' ||
+          id === 'dried_raw_meat' ||
+          id === 'dried_dino_meat' ||
+          id === 'cut_meat' ||
+          id === 'cut_dino_meat' ||
           id === 'roasted_dino_meat' ||
           id === 'roasted_meat' ||
           id === 'dino_feast' ||

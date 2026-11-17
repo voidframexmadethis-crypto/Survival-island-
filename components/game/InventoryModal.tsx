@@ -16,7 +16,9 @@ import {
   Lock,
   Plus,
   Shield,
+  Sparkles,
   Trash2,
+  Utensils,
   X,
 } from 'lucide-react';
 import { ITEMS } from '@/game/data/items';
@@ -46,6 +48,9 @@ const RESOURCE_ORDER: ItemId[] = [
   'hide',
   'bone',
   'raw_meat',
+  'washed_meat',
+  'dried_raw_meat',
+  'soap',
   'rope',
 ];
 
@@ -53,9 +58,12 @@ interface InventoryModalProps {
   hud: HUDStateSnapshot;
   nearTable?: boolean;
   nearOceanWater?: boolean;
+  nearLakeWater?: boolean;
   chestStructureId?: string;
   onUseOrEquip: (itemId: ItemId) => void;
   onCleanBottle?: () => void;
+  onWashMeat?: (itemId?: ItemId) => void;
+  onCutMeat?: (itemId?: ItemId) => void;
   onDropItem?: (itemId: ItemId) => void;
   onAssignHotbar: (slotIdx: number, itemId: ItemId | null) => void;
   onSelectHotbarSlot?: (slotIdx: number) => void;
@@ -74,9 +82,12 @@ export function InventoryModal({
   hud,
   nearTable = false,
   nearOceanWater = false,
+  nearLakeWater = false,
   chestStructureId,
   onUseOrEquip,
   onCleanBottle,
+  onWashMeat,
+  onCutMeat,
   onDropItem,
   onAssignHotbar,
   onSelectHotbarSlot,
@@ -906,6 +917,48 @@ export function InventoryModal({
                         </span>
                       </button>
                     )}
+
+                    {(selectedDef.id === 'raw_meat' ||
+                      selectedDef.id === 'dino_meat' ||
+                      selectedDef.id === 'soap') &&
+                      onWashMeat && (
+                        <button
+                          onClick={() => {
+                            const ok = onWashMeat(
+                              selectedDef.id === 'soap' ? undefined : selectedDef.id,
+                            );
+                            if (nearLakeWater) onClose();
+                            void ok;
+                          }}
+                          className={`w-full min-h-[46px] rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-colors ${
+                            nearLakeWater
+                              ? 'bg-cyan-500 hover:bg-cyan-400 text-stone-950'
+                              : 'bg-cyan-950/70 hover:bg-cyan-900/80 border border-cyan-700/70 text-cyan-200'
+                          }`}
+                        >
+                          <Sparkles className="w-4 h-4" />
+                          <span>
+                            {nearLakeWater
+                              ? 'Wash & Scrub Meat with Soap'
+                              : 'Wash Meat with Soap (Walk to Azure Lake)'}
+                          </span>
+                        </button>
+                      )}
+
+                    {(selectedDef.id === 'dried_raw_meat' ||
+                      selectedDef.id === 'dried_dino_meat') &&
+                      onCutMeat && (
+                        <button
+                          onClick={() => {
+                            onCutMeat(selectedDef.id);
+                            onClose();
+                          }}
+                          className="w-full min-h-[46px] rounded-xl font-semibold text-sm flex items-center justify-center gap-2 bg-rose-500 hover:bg-rose-400 text-stone-950 transition-colors"
+                        >
+                          <Utensils className="w-4 h-4" />
+                          <span>Cut Dried Meat with Knife</span>
+                        </button>
+                      )}
 
                     {(selectedDef.category === 'food' ||
                       selectedDef.category === 'tool' ||

@@ -97,6 +97,13 @@ export interface FirstPersonHandsRig {
   bottleGroup: THREE.Group;
   bottleWaterMesh: THREE.Mesh;
   bottleWaterMat: THREE.MeshStandardMaterial;
+  knifeBlade: THREE.Group;
+  soapMesh: THREE.Group;
+  leftMeatGroup: THREE.Group;
+  leftMeatMesh: THREE.Mesh;
+  leftMeatMat: THREE.MeshStandardMaterial;
+  foamGroup: THREE.Group;
+  cutStripsGroup: THREE.Group;
 }
 
 export interface CreatureRig {
@@ -285,6 +292,38 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
   warhammerHead.visible = false;
   toolGroup.add(warhammerHead);
 
+  // Forged Hunting Knife Blade & Crossguard
+  const knifeBlade = new THREE.Group();
+  knifeBlade.position.set(0, 0.04, -0.06);
+  const knifeHandle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.015, 0.017, 0.13, 8),
+    new THREE.MeshStandardMaterial({ color: 0x451a03, roughness: 0.78 }),
+  );
+  knifeHandle.rotation.x = -Math.PI / 4;
+  knifeHandle.position.set(0, 0.02, -0.03);
+  const knifeGuard = new THREE.Mesh(
+    new THREE.BoxGeometry(0.042, 0.014, 0.024),
+    new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.35, metalness: 0.75 }),
+  );
+  knifeGuard.rotation.x = -Math.PI / 4;
+  knifeGuard.position.set(0, 0.068, -0.078);
+  const bladeBody = new THREE.Mesh(
+    new THREE.BoxGeometry(0.008, 0.032, 0.2),
+    sickleSteelMat,
+  );
+  bladeBody.rotation.x = Math.PI / 4;
+  bladeBody.position.set(0, 0.145, -0.155);
+  const bladeTip = new THREE.Mesh(
+    new THREE.ConeGeometry(0.016, 0.06, 4),
+    sickleSteelMat,
+  );
+  bladeTip.rotation.x = -Math.PI / 4;
+  bladeTip.scale.set(0.35, 1, 1);
+  bladeTip.position.set(0, 0.225, -0.235);
+  knifeBlade.add(knifeHandle, knifeGuard, bladeBody, bladeTip);
+  knifeBlade.visible = false;
+  toolGroup.add(knifeBlade);
+
   // 3D Realistic Survival Sidearm (Gun)
   const gunMesh = new THREE.Group();
   gunMesh.position.set(0, 0.02, -0.06);
@@ -413,6 +452,75 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
   bottleGroup.visible = false;
   consumableGroup.add(bottleGroup);
 
+  // Hand-held Soap Bar in right hand for washing & scrubbing meat in lake water
+  const soapMesh = new THREE.Group();
+  soapMesh.position.set(0, 0.045, -0.15);
+  const soapMat = new THREE.MeshStandardMaterial({
+    color: 0xa7f3d0,
+    roughness: 0.24,
+    metalness: 0.05,
+  });
+  const soapBar = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.028, 0.078), soapMat);
+  const soapTopBevel = new THREE.Mesh(new THREE.SphereGeometry(0.028, 10, 8), soapMat);
+  soapTopBevel.scale.set(1.02, 0.52, 1.32);
+  soapMesh.add(soapBar, soapTopBevel);
+  soapMesh.visible = false;
+  rightHand.add(soapMesh);
+
+  // Left-hand Meat Slab + Soap Foam + Cut Strips for washing & knife-cutting animations
+  const leftMeatGroup = new THREE.Group();
+  leftMeatGroup.position.set(0.02, 0.05, -0.15);
+  const leftMeatMat = new THREE.MeshStandardMaterial({
+    color: 0xb91c1c,
+    roughness: 0.58,
+  });
+  const leftMeatMesh = new THREE.Mesh(
+    new THREE.DodecahedronGeometry(0.068, 1),
+    leftMeatMat,
+  );
+  leftMeatMesh.scale.set(1.25, 0.52, 1.45);
+  leftMeatGroup.add(leftMeatMesh);
+
+  const foamGroup = new THREE.Group();
+  const foamMat = new THREE.MeshStandardMaterial({
+    color: 0xf8fafc,
+    transparent: true,
+    opacity: 0.88,
+    roughness: 0.35,
+  });
+  const foamOffsets: [number, number, number, number][] = [
+    [-0.032, 0.034, -0.022, 0.026],
+    [0.035, 0.032, 0.014, 0.024],
+    [0.0, 0.042, 0.028, 0.028],
+    [-0.024, 0.028, 0.042, 0.02],
+    [0.028, 0.036, -0.036, 0.022],
+  ];
+  for (const [fx, fy, fz, fr] of foamOffsets) {
+    const bubble = new THREE.Mesh(new THREE.SphereGeometry(fr, 8, 8), foamMat);
+    bubble.position.set(fx, fy, fz);
+    foamGroup.add(bubble);
+  }
+  foamGroup.visible = false;
+  leftMeatGroup.add(foamGroup);
+
+  const cutStripsGroup = new THREE.Group();
+  const stripMat = new THREE.MeshStandardMaterial({
+    color: 0xdc2626,
+    roughness: 0.5,
+  });
+  for (let sIdx = 0; sIdx < 3; sIdx++) {
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.026, 0.115), stripMat);
+    strip.position.set(0.055 + sIdx * 0.026, 0.008, 0);
+    strip.rotation.z = -0.15 * (sIdx + 1);
+    strip.visible = false;
+    cutStripsGroup.add(strip);
+  }
+  cutStripsGroup.visible = false;
+  leftMeatGroup.add(cutStripsGroup);
+
+  leftMeatGroup.visible = false;
+  leftHand.add(leftMeatGroup);
+
   return {
     root,
     leftHand,
@@ -436,6 +544,13 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
     bottleGroup,
     bottleWaterMesh,
     bottleWaterMat,
+    knifeBlade,
+    soapMesh,
+    leftMeatGroup,
+    leftMeatMesh,
+    leftMeatMat,
+    foamGroup,
+    cutStripsGroup,
   };
 }
 

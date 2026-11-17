@@ -844,6 +844,124 @@ export class SoundEngine {
     });
   }
 
+  public playWashScrubMeat(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    // Rhythmic soapy scrubbing strokes in lake water
+    [0, 0.24, 0.48, 0.72, 0.96].forEach((offset, idx) => {
+      if (!this.ctx || !this.masterGain) return;
+      const dur = 0.16;
+      const buf = this.ctx.createBuffer(
+        1,
+        Math.floor(this.ctx.sampleRate * dur),
+        this.ctx.sampleRate,
+      );
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) {
+        d[i] =
+          (Math.random() * 2 - 1) *
+          Math.sin((i / d.length) * Math.PI) *
+          0.95;
+      }
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      const baseFreq = idx % 2 === 0 ? 1150 : 1550;
+      bp.frequency.setValueAtTime(baseFreq, now + offset);
+      bp.frequency.exponentialRampToValueAtTime(baseFreq * 1.45, now + offset + dur);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.22, now + offset);
+      g.gain.exponentialRampToValueAtTime(0.001, now + offset + dur);
+      src.connect(bp);
+      bp.connect(g);
+      g.connect(this.masterGain);
+      src.start(now + offset);
+    });
+    // Final lake rinse splash + fresh chime
+    const splashDur = 0.32;
+    const sBuf = this.ctx.createBuffer(
+      1,
+      Math.floor(this.ctx.sampleRate * splashDur),
+      this.ctx.sampleRate,
+    );
+    const sd = sBuf.getChannelData(0);
+    for (let i = 0; i < sd.length; i++) {
+      sd[i] = (Math.random() * 2 - 1) * (1 - i / sd.length) * 0.85;
+    }
+    const sSrc = this.ctx.createBufferSource();
+    sSrc.buffer = sBuf;
+    const sBp = this.ctx.createBiquadFilter();
+    sBp.type = 'lowpass';
+    sBp.frequency.setValueAtTime(1400, now + 1.28);
+    const sg = this.ctx.createGain();
+    sg.gain.setValueAtTime(0.22, now + 1.28);
+    sg.gain.exponentialRampToValueAtTime(0.001, now + 1.28 + splashDur);
+    sSrc.connect(sBp);
+    sBp.connect(sg);
+    sg.connect(this.masterGain);
+    sSrc.start(now + 1.28);
+
+    [587.33, 739.99, 880].forEach((freq, i) => {
+      if (!this.ctx || !this.masterGain) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + 1.48 + i * 0.07);
+      g.gain.setValueAtTime(0.1, now + 1.48 + i * 0.07);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 1.48 + i * 0.07 + 0.2);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now + 1.48 + i * 0.07);
+      osc.stop(now + 1.48 + i * 0.07 + 0.22);
+    });
+  }
+
+  public playKnifeCutMeat(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    // 3 crisp knife-slicing strokes through dried meat
+    [0.14, 0.56, 0.98].forEach((offset) => {
+      if (!this.ctx || !this.masterGain) return;
+      const dur = 0.14;
+      const buf = this.ctx.createBuffer(
+        1,
+        Math.floor(this.ctx.sampleRate * dur),
+        this.ctx.sampleRate,
+      );
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) {
+        d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+      }
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      const hp = this.ctx.createBiquadFilter();
+      hp.type = 'bandpass';
+      hp.frequency.setValueAtTime(2600, now + offset);
+      hp.frequency.exponentialRampToValueAtTime(900, now + offset + dur);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.24, now + offset);
+      g.gain.exponentialRampToValueAtTime(0.001, now + offset + dur);
+      src.connect(hp);
+      hp.connect(g);
+      g.connect(this.masterGain);
+      src.start(now + offset);
+
+      // Subtle knife-to-board tap at end of slice
+      const tap = this.ctx.createOscillator();
+      const tapGain = this.ctx.createGain();
+      tap.type = 'triangle';
+      tap.frequency.setValueAtTime(160, now + offset + 0.09);
+      tap.frequency.exponentialRampToValueAtTime(75, now + offset + 0.15);
+      tapGain.gain.setValueAtTime(0.14, now + offset + 0.09);
+      tapGain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.16);
+      tap.connect(tapGain);
+      tapGain.connect(this.masterGain);
+      tap.start(now + offset + 0.09);
+      tap.stop(now + offset + 0.17);
+    });
+  }
+
   public playScavengerBite(dist: number, isBird: boolean): void {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain || dist > 38) return;
     const volScale = Math.max(0.12, 1 - dist / 38);

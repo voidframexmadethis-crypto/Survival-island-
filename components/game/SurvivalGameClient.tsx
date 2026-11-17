@@ -1519,6 +1519,39 @@ export function SurvivalGameClient() {
                     </span>
                   </button>
                 )}
+
+              {hud.nearLakeWater &&
+                hud.hasWashableMeat &&
+                !activeModal &&
+                hud.nearbyInteraction?.kind !== 'wash_meat' && (
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => engineRef.current?.washAndScrubMeat()}
+                    className="pointer-events-auto min-h-[44px] px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-stone-950 font-bold text-xs sm:text-sm shadow-xl flex items-center gap-2 whitespace-nowrap shrink-0"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    <span>
+                      {hud.hasSoap
+                        ? 'Wash & Scrub Meat (Soap + Lake)'
+                        : 'Need Soap to Wash Meat'}
+                    </span>
+                  </button>
+                )}
+
+              {hud.hasDriedMeatToCut &&
+                !activeModal &&
+                hud.nearbyInteraction?.kind !== 'cut_meat' && (
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => engineRef.current?.cutDriedMeatWithKnife()}
+                    className="pointer-events-auto min-h-[44px] px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-stone-950 font-bold text-xs sm:text-sm shadow-xl flex items-center gap-2 whitespace-nowrap shrink-0"
+                  >
+                    <Utensils className="w-4 h-4" />
+                    <span>Cut Dried Meat with Knife</span>
+                  </button>
+                )}
             </div>
 
             {/* Active Vehicle Driving HUD (Lowrider Hydraulics, DONK 30" Clearance, SLAB Trunk Bass, Aircraft Flight) */}
@@ -2374,8 +2407,11 @@ export function SurvivalGameClient() {
           hud={hud}
           nearTable={nearCraftingTable}
           nearOceanWater={hud.nearOceanWater}
+          nearLakeWater={hud.nearLakeWater}
           onUseOrEquip={(id) => engineRef.current?.useOrEquipItem(id)}
           onCleanBottle={() => engineRef.current?.cleanAndFilterWaterBottle()}
+          onWashMeat={(id) => engineRef.current?.washAndScrubMeat(id)}
+          onCutMeat={(id) => engineRef.current?.cutDriedMeatWithKnife(id)}
           onDropItem={(id) => engineRef.current?.dropItem(id, 1)}
           onAssignHotbar={(slotIdx, id) =>
             engineRef.current?.assignHotbarSlot(slotIdx, id)
@@ -2406,9 +2442,12 @@ export function SurvivalGameClient() {
           hud={hud}
           nearTable={nearCraftingTable}
           nearOceanWater={hud.nearOceanWater}
+          nearLakeWater={hud.nearLakeWater}
           chestStructureId={activeStationStructureId}
           onUseOrEquip={(id) => engineRef.current?.useOrEquipItem(id)}
           onCleanBottle={() => engineRef.current?.cleanAndFilterWaterBottle()}
+          onWashMeat={(id) => engineRef.current?.washAndScrubMeat(id)}
+          onCutMeat={(id) => engineRef.current?.cutDriedMeatWithKnife(id)}
           onDropItem={(id) => engineRef.current?.dropItem(id, 1)}
           onAssignHotbar={(slotIdx, id) =>
             engineRef.current?.assignHotbarSlot(slotIdx, id)

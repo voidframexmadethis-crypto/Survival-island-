@@ -306,6 +306,7 @@ export function loadGameFromSlot(slotId: string): GameSaveData | null {
         { itemId: 'metal_ore', minQty: 1 },
         { itemId: 'hide', minQty: 1 },
         { itemId: 'rope', minQty: 1 },
+        { itemId: 'soap', minQty: 2 },
       ];
       for (const mat of baselineMaterials) {
         const current = data.inventory
