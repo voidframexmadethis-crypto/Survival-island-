@@ -293,6 +293,7 @@ export interface EngineCallbacks {
     >,
     structureId?: string,
   ) => void;
+  onYouTubeError?: (videoId: string, errorCode: number) => void;
 }
 
 function formatTimePhase(t: number): string {
@@ -332,6 +333,9 @@ export class GameEngine {
   private tvRaycaster = new THREE.Raycaster();
   private tvIsZoomed = false;
   private tvModalOpen = false;
+  private tvInlinePlayerActive = false;
+  private tvYouTubeStartSec = 0;
+  private tvMessageListenerBound = false;
   private _tvWorldPos = new THREE.Vector3();
   private _tvWorldQuat = new THREE.Quaternion();
   private _tvForward = new THREE.Vector3();
@@ -2002,8 +2006,13 @@ export class GameEngine {
     videoId: string,
     title = 'YouTube',
     channel = 'YouTube',
+    startSec = 0,
   ): void {
+    this.tvYouTubeStartSec = Math.max(0, Math.floor(startSec));
     this.smartTv.setYouTubeStream(videoId, title, channel);
+    if (this.tvYouTubeStartSec > 0) {
+      this.smartTv.currentTimestamp = this.tvYouTubeStartSec;
+    }
     this.toast(`YouTube on TV: ${title}`, 'info');
     this.emitHud();
   }
@@ -2012,10 +2021,73 @@ export class GameEngine {
     this.tvModalOpen = open;
     if (open) {
       this.smartTv.unlockAudio();
+    } else if (this.tvInlinePlayerActive) {
+      this.tvInlinePlayerActive = false;
     }
   }
 
+  public setTvInlinePlayerActive(active: boolean, syncTimeSec?: number): void {
+    if (typeof syncTimeSec === 'number' && Number.isFinite(syncTimeSec) && syncTimeSec >= 0) {
+      this.tvYouTubeStartSec = Math.floor(syncTimeSec);
+      this.smartTv.currentTimestamp = syncTimeSec;
+    }
+    this.tvInlinePlayerActive = active;
+    if (!active) {
+      this.activeYoutubeIframeId = '';
+      this.syncTvCssOverlay();
+    }
+  }
+
+  public syncTvYouTubeTime(sec: number): void {
+    if (!Number.isFinite(sec) || sec < 0) return;
+    this.smartTv.currentTimestamp = sec;
+    this.tvYouTubeStartSec = Math.floor(sec);
+  }
+
+  private handleYouTubeWindowMessage = (event: MessageEvent): void => {
+    if (this.disposed) return;
+    if (
+      typeof event.origin !== 'string' ||
+      (!event.origin.includes('youtube.com') &&
+        !event.origin.includes('youtube-nocookie.com'))
+    ) {
+      return;
+    }
+    let payload: unknown = event.data;
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload);
+      } catch {
+        return;
+      }
+    }
+    if (!payload || typeof payload !== 'object') return;
+    const msg = payload as {
+      event?: string;
+      info?: number | { currentTime?: number };
+    };
+    if (msg.event === 'infoDelivery' && msg.info && typeof msg.info === 'object') {
+      if (
+        typeof msg.info.currentTime === 'number' &&
+        Number.isFinite(msg.info.currentTime)
+      ) {
+        this.smartTv.currentTimestamp = msg.info.currentTime;
+        this.tvYouTubeStartSec = Math.floor(msg.info.currentTime);
+      }
+    } else if (msg.event === 'onError' && typeof msg.info === 'number') {
+      const failedId = this.smartTv.youtubeVideoId;
+      if (failedId && !this.tvInlinePlayerActive) {
+        this.callbacks.onYouTubeError?.(failedId, msg.info);
+      }
+    }
+  };
+
   private initPersistentTvCssPlayer(): void {
+    if (!this.tvMessageListenerBound && typeof window !== 'undefined') {
+      window.addEventListener('message', this.handleYouTubeWindowMessage);
+      this.tvMessageListenerBound = true;
+    }
+
     const wrapper = document.createElement('div');
     wrapper.style.width = '800px';
     wrapper.style.height = '430px';
@@ -2032,8 +2104,9 @@ export class GameEngine {
     iframe.style.border = '0';
     iframe.style.display = 'block';
     iframe.style.pointerEvents = 'none';
+    iframe.referrerPolicy = 'strict-origin-when-cross-origin';
     iframe.allow =
-      'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+      'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen';
     iframe.allowFullscreen = true;
     iframe.src = 'about:blank';
 
@@ -2108,7 +2181,8 @@ export class GameEngine {
     const shouldPlayYouTube =
       this.smartTv.power &&
       this.smartTv.isUsingYouTube &&
-      Boolean(this.smartTv.youtubeVideoId);
+      Boolean(this.smartTv.youtubeVideoId) &&
+      !this.tvInlinePlayerActive;
 
     if (!shouldPlayYouTube) {
       if (this.activeYoutubeIframeId !== '') {
@@ -2142,7 +2216,9 @@ export class GameEngine {
         typeof window !== 'undefined' && window.location?.origin
           ? `&origin=${encodeURIComponent(window.location.origin)}`
           : '';
-      this.tvYoutubeIframe.src = `https://www.youtube.com/embed/${targetVideoId}?autoplay=1&rel=0&playsinline=1&enablejsapi=1${originParam}`;
+      const startParam =
+        this.tvYouTubeStartSec > 0 ? `&start=${this.tvYouTubeStartSec}` : '';
+      this.tvYoutubeIframe.src = `https://www.youtube.com/embed/${targetVideoId}?autoplay=1&rel=0&playsinline=1&enablejsapi=1&modestbranding=1${startParam}${originParam}`;
       this.tvYoutubeIframe.title = this.smartTv.youtubeTitle || 'YouTube TV';
     }
 
@@ -13440,6 +13516,10 @@ export class GameEngine {
         }
       }
     });
+    if (this.tvMessageListenerBound && typeof window !== 'undefined') {
+      window.removeEventListener('message', this.handleYouTubeWindowMessage);
+      this.tvMessageListenerBound = false;
+    }
     if (this.tvYoutubeIframe) {
       this.tvYoutubeIframe.src = 'about:blank';
       this.tvYoutubeIframe = null;

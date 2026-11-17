@@ -1,14 +1,19 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import {
+  AlertCircle,
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
+  ExternalLink,
   FileVideo,
   Gamepad2,
   Loader2,
+  Maximize2,
+  Minimize2,
+  Monitor,
   Music,
   Newspaper,
   Pause,
@@ -17,6 +22,7 @@ import {
   Radio,
   Repeat,
   Search,
+  SkipForward,
   Square,
   Trees,
   Tv,
@@ -37,62 +43,55 @@ export interface YouTubeStreamSelection {
   title: string;
   channel: string;
   thumbnail?: string;
+  duration?: string;
+  embedVerified?: boolean;
 }
 
 interface YouTubePreset extends YouTubeStreamSelection {
   label: string;
-  keywords: string[];
 }
 
-// Verified embeddable fallback YouTube videos so keyword searches & quick channels always play reliably
+// Verified embeddable quick-start channels for 1-tap tuning
 const VERIFIED_YOUTUBE_PRESETS: YouTubePreset[] = [
   {
     label: 'Lo-Fi Radio',
     videoId: 'jfKfPfyJRdk',
     title: 'lofi hip hop radio - beats to relax/study to',
     channel: 'Lofi Girl',
+    duration: 'LIVE',
     thumbnail: 'https://i.ytimg.com/vi/jfKfPfyJRdk/hqdefault.jpg',
-    keywords: ['lofi', 'lo-fi', 'chill', 'beats', 'study', 'music', 'radio', 'relax'],
   },
   {
     label: 'Nature 4K',
     videoId: 'BHACKCNDMW8',
     title: 'Relaxing Nature & Tropical Wildlife 4K',
     channel: '4K Relaxation',
+    duration: 'VIDEO',
     thumbnail: 'https://i.ytimg.com/vi/BHACKCNDMW8/hqdefault.jpg',
-    keywords: ['nature', 'wildlife', 'forest', 'island', 'jungle', 'animals', '4k', 'dinosaur'],
   },
   {
     label: 'Ocean Waves',
     videoId: 'Nep1qytq9JM',
     title: 'Tropical Ocean Waves & Island Beach Sounds',
     channel: 'Ocean Ambience',
+    duration: 'VIDEO',
     thumbnail: 'https://i.ytimg.com/vi/Nep1qytq9JM/hqdefault.jpg',
-    keywords: ['ocean', 'beach', 'waves', 'water', 'sea', 'rain', 'ambient'],
   },
   {
     label: 'Fireplace',
     videoId: 'L_LUpnjgPso',
     title: 'Cozy Crackling Cabin Fireplace 4K',
     channel: 'Cozy Ambience',
+    duration: 'VIDEO',
     thumbnail: 'https://i.ytimg.com/vi/L_LUpnjgPso/hqdefault.jpg',
-    keywords: ['fire', 'fireplace', 'campfire', 'cabin', 'cozy', 'night'],
   },
   {
     label: 'Gaming',
     videoId: 'jSJrZU5Xv9k',
     title: 'Retro Synthwave Arcade & Gaming Mix',
     channel: 'Synthwave Live',
+    duration: 'VIDEO',
     thumbnail: 'https://i.ytimg.com/vi/jSJrZU5Xv9k/hqdefault.jpg',
-    keywords: ['gaming', 'game', 'minecraft', 'gta', 'arcade', 'gameplay', 'survival', 'guide'],
-  },
-  {
-    label: 'Kitchen / Food',
-    videoId: 'u8p3j0j2X2I',
-    title: 'Island Campfire Cooking & Survival Kitchen',
-    channel: 'Campfire Kitchen',
-    thumbnail: 'https://i.ytimg.com/vi/u8p3j0j2X2I/hqdefault.jpg',
-    keywords: ['kitchen', 'cooking', 'food', 'recipe', 'chef', 'steak', 'bbq'],
   },
 ];
 
@@ -107,6 +106,7 @@ function extractYouTubeVideoId(input: string): string | null {
     /(?:youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
     /(?:youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
     /(?:youtube\.com\/live\/)([a-zA-Z0-9_-]{11})/,
+    /(?:youtube\.com\/v\/)([a-zA-Z0-9_-]{11})/,
   ];
   for (const regex of patterns) {
     const match = trimmed.match(regex);
@@ -116,9 +116,13 @@ function extractYouTubeVideoId(input: string): string | null {
 }
 
 function normalizeThumbnailUrl(url: string | undefined, videoId: string): string {
-  if (!url) return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-  if (url.startsWith('//')) return `https:${url}`;
-  return url;
+  const fallback = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+  if (!url) return fallback;
+  const normalized = url.startsWith('//') ? `https:${url}` : url;
+  if (/^https:\/\/[a-z0-9-]+\.ytimg\.com\//i.test(normalized)) {
+    return normalized;
+  }
+  return fallback;
 }
 
 function formatDurationSeconds(sec: number): string {
@@ -126,23 +130,6 @@ function formatDurationSeconds(sec: number): string {
   const mins = Math.floor(safe / 60);
   const rem = safe % 60;
   return `${mins}:${rem.toString().padStart(2, '0')}`;
-}
-
-function findFallbackYouTubePresets(query: string): YouTubeStreamSelection[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return VERIFIED_YOUTUBE_PRESETS;
-  const words = q.split(/\s+/).filter(Boolean);
-  const scored = VERIFIED_YOUTUBE_PRESETS.map((preset) => {
-    let score = 0;
-    for (const w of words) {
-      if (preset.label.toLowerCase().includes(w)) score += 3;
-      if (preset.title.toLowerCase().includes(w)) score += 2;
-      if (preset.keywords.some((kw) => kw.includes(w) || w.includes(kw))) score += 4;
-    }
-    return { preset, score };
-  });
-  scored.sort((a, b) => b.score - a.score);
-  return scored.map((s) => s.preset);
 }
 
 interface TvPlayerModalProps {
@@ -154,7 +141,10 @@ interface TvPlayerModalProps {
   searchStatus?: string;
   onSearchStatusChange?: (status: string) => void;
   onSelectChannel: (ch: TvChannelId) => void;
-  onSelectYouTube?: (stream: YouTubeStreamSelection) => void;
+  onSelectYouTube?: (stream: YouTubeStreamSelection, startSec?: number) => void;
+  onInlinePlayerChange?: (active: boolean, syncTimeSec?: number) => void;
+  onSyncYouTubeTime?: (sec: number) => void;
+  youtubeErrorSignal?: { videoId: string; code: number; seq: number } | null;
   onTogglePower: () => void;
   onTogglePlayPause: () => void;
   onStop?: () => void;
@@ -193,6 +183,9 @@ export function TvPlayerModal({
   onSearchStatusChange,
   onSelectChannel,
   onSelectYouTube,
+  onInlinePlayerChange,
+  onSyncYouTubeTime,
+  youtubeErrorSignal,
   onTogglePower,
   onTogglePlayPause,
   onStop,
@@ -206,12 +199,27 @@ export function TvPlayerModal({
   onClose,
 }: TvPlayerModalProps) {
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const inlineIframeRef = useRef<HTMLIFrameElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
 
   const [localSearchQuery, setLocalSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
-  const [localSearchResults, setLocalSearchResults] = useState<YouTubeStreamSelection[]>([]);
+  const [localSearchResults, setLocalSearchResults] = useState<
+    YouTubeStreamSelection[]
+  >([]);
   const [localSearchStatus, setLocalSearchStatus] = useState<string>('');
+  const [viewMode, setViewMode] = useState<'inline' | 'world3d'>('inline');
+  const [expandedTheater, setExpandedTheater] = useState(false);
+  const [embedStartSec, setEmbedStartSec] = useState(0);
+  const [nocookieVideoId, setNocookieVideoId] = useState<string | null>(null);
+  const [restrictedNoticeState, setRestrictedNoticeState] = useState<{
+    videoId: string;
+    text: string;
+  } | null>(null);
+
+  const triedFailedIdsRef = useRef<Set<string>>(new Set());
+  const latestInlineTimeRef = useRef(0);
+  const inlineReadyRef = useRef(false);
 
   const searchQuery = controlledSearchQuery ?? localSearchQuery;
   const setSearchQuery = onSearchQueryChange ?? setLocalSearchQuery;
@@ -238,9 +246,92 @@ export function TvPlayerModal({
   const activeMeta =
     TV_CHANNELS.find((c) => c.id === activeChannel) || TV_CHANNELS[0];
 
-  // Mirror the live Three.js CanvasTexture onto the Remote Monitor preview when not displaying YouTube
+  const useNocookieDomain = Boolean(
+    youtubeVideoId && nocookieVideoId === youtubeVideoId,
+  );
+  const embedRestrictedNotice =
+    youtubeVideoId && restrictedNoticeState?.videoId === youtubeVideoId
+      ? restrictedNoticeState.text
+      : '';
+
+  const showInlineYouTube =
+    viewMode === 'inline' &&
+    isPowerOn &&
+    !isStopped &&
+    isYouTubeActive &&
+    Boolean(youtubeVideoId);
+
+  // Keep engine informed whether the inline modal player owns the YouTube audio/iframe
   useEffect(() => {
-    if (!onDrawPreview || (isPowerOn && isYouTubeActive && youtubeVideoId)) return;
+    if (showInlineYouTube) {
+      onInlinePlayerChange?.(true);
+    } else {
+      onInlinePlayerChange?.(false, latestInlineTimeRef.current);
+    }
+  }, [showInlineYouTube, onInlinePlayerChange]);
+
+  // Ensure handoff back to 3D Wall TV whenever modal closes/unmounts
+  useEffect(() => {
+    return () => {
+      onInlinePlayerChange?.(false, latestInlineTimeRef.current);
+    };
+  }, [onInlinePlayerChange]);
+
+  useEffect(() => {
+    inlineReadyRef.current = false;
+  }, [youtubeVideoId, useNocookieDomain]);
+
+  const playYouTubeSelection = useCallback(
+    (selection: YouTubeStreamSelection, startSec = 0) => {
+      latestInlineTimeRef.current = startSec;
+      setEmbedStartSec(Math.max(0, Math.floor(startSec)));
+      setRestrictedNoticeState(null);
+      onSelectYouTube?.(selection, startSec);
+    },
+    [onSelectYouTube],
+  );
+
+  const tryNextPlayableResult = useCallback(
+    (failedVideoId: string, errorCode?: number) => {
+      triedFailedIdsRef.current.add(failedVideoId);
+      const nextCandidate = searchResults.find(
+        (item) =>
+          item.videoId !== failedVideoId &&
+          !triedFailedIdsRef.current.has(item.videoId),
+      );
+      if (nextCandidate) {
+        setSearchStatus(
+          `Skipped restricted clip · Playing: ${nextCandidate.title}`,
+        );
+        playYouTubeSelection(nextCandidate, 0);
+        return true;
+      }
+      setRestrictedNoticeState({
+        videoId: failedVideoId,
+        text:
+          errorCode === 101 || errorCode === 150
+            ? 'Video owner disabled embedded playback. Pick another result or open directly on YouTube.'
+            : 'YouTube player could not load this clip. Try another result or open directly on YouTube.',
+      });
+      return false;
+    },
+    [searchResults, setSearchStatus, playYouTubeSelection],
+  );
+
+  // Handle 3D Wall TV YouTube errors forwarded from GameEngine
+  useEffect(() => {
+    if (!youtubeErrorSignal) return;
+    if (youtubeErrorSignal.videoId === youtubeVideoId) {
+      const id = window.setTimeout(() => {
+        tryNextPlayableResult(youtubeErrorSignal.videoId, youtubeErrorSignal.code);
+      }, 0);
+      return () => window.clearTimeout(id);
+    }
+  }, [youtubeErrorSignal, youtubeVideoId, tryNextPlayableResult]);
+
+  // Mirror Three.js CanvasTexture onto Monitor preview when viewing native channels or 3D Wall mode
+  useEffect(() => {
+    if (!onDrawPreview || showInlineYouTube) return;
     let rafId = 0;
     const renderLoop = () => {
       if (previewCanvasRef.current) {
@@ -250,41 +341,148 @@ export function TvPlayerModal({
     };
     rafId = window.requestAnimationFrame(renderLoop);
     return () => window.cancelAnimationFrame(rafId);
-  }, [onDrawPreview, isPowerOn, isYouTubeActive, youtubeVideoId]);
+  }, [onDrawPreview, showInlineYouTube]);
 
-  const playYouTubeSelection = useCallback(
-    (selection: YouTubeStreamSelection) => {
-      onSelectYouTube?.(selection);
-    },
-    [onSelectYouTube],
-  );
+  const sendInlineCommand = useCallback((func: string, args: unknown[] = []) => {
+    const win = inlineIframeRef.current?.contentWindow;
+    if (!win) return;
+    try {
+      win.postMessage(
+        JSON.stringify({
+          event: 'command',
+          func,
+          args,
+        }),
+        '*',
+      );
+    } catch {
+      // Ignore cross-origin timing before iframe finishes loading
+    }
+  }, []);
+
+  // Sync Play/Pause, Mute & Volume with the inline YouTube iframe
+  useEffect(() => {
+    if (!showInlineYouTube || !inlineReadyRef.current) return;
+    sendInlineCommand(isPaused ? 'pauseVideo' : 'playVideo');
+    const volPct = Math.max(0, Math.min(100, Math.round(volume * 100)));
+    if (isMuted) {
+      sendInlineCommand('mute');
+    } else {
+      sendInlineCommand('unMute');
+      sendInlineCommand('setVolume', [volPct]);
+    }
+  }, [showInlineYouTube, isPaused, isMuted, volume, sendInlineCommand]);
+
+  // Listen for YouTube inline iframe telemetry & errors
+  useEffect(() => {
+    if (!showInlineYouTube) return;
+    const onMessage = (event: MessageEvent) => {
+      if (
+        typeof event.origin !== 'string' ||
+        (!event.origin.includes('youtube.com') &&
+          !event.origin.includes('youtube-nocookie.com'))
+      ) {
+        return;
+      }
+      if (
+        inlineIframeRef.current?.contentWindow &&
+        event.source !== inlineIframeRef.current.contentWindow
+      ) {
+        return;
+      }
+      let payload: unknown = event.data;
+      if (typeof payload === 'string') {
+        try {
+          payload = JSON.parse(payload);
+        } catch {
+          return;
+        }
+      }
+      if (!payload || typeof payload !== 'object') return;
+      const msg = payload as {
+        event?: string;
+        info?: number | { currentTime?: number };
+      };
+      if (
+        msg.event === 'infoDelivery' &&
+        msg.info &&
+        typeof msg.info === 'object' &&
+        typeof msg.info.currentTime === 'number' &&
+        Number.isFinite(msg.info.currentTime)
+      ) {
+        latestInlineTimeRef.current = msg.info.currentTime;
+        onSyncYouTubeTime?.(msg.info.currentTime);
+      } else if (msg.event === 'onError' && typeof msg.info === 'number') {
+        if (msg.info === 153 && !useNocookieDomain) {
+          setNocookieVideoId(youtubeVideoId);
+          return;
+        }
+        tryNextPlayableResult(youtubeVideoId, msg.info);
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [
+    showInlineYouTube,
+    youtubeVideoId,
+    useNocookieDomain,
+    onSyncYouTubeTime,
+    tryNextPlayableResult,
+  ]);
+
+  const inlineEmbedUrl = useMemo(() => {
+    if (!youtubeVideoId) return 'about:blank';
+    const host = useNocookieDomain
+      ? 'https://www.youtube-nocookie.com'
+      : 'https://www.youtube.com';
+    const params = new URLSearchParams({
+      autoplay: isPaused ? '0' : '1',
+      rel: '0',
+      playsinline: '1',
+      enablejsapi: '1',
+      modestbranding: '1',
+    });
+    if (embedStartSec > 0) {
+      params.set('start', String(embedStartSec));
+    }
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      params.set('origin', window.location.origin);
+    }
+    return `${host}/embed/${youtubeVideoId}?${params.toString()}`;
+  }, [youtubeVideoId, useNocookieDomain, isPaused, embedStartSec]);
+
+  const handleToggleViewMode = () => {
+    if (viewMode === 'inline') {
+      onInlinePlayerChange?.(false, latestInlineTimeRef.current);
+      setViewMode('world3d');
+      setExpandedTheater(false);
+    } else {
+      setEmbedStartSec(Math.max(0, Math.floor(currentTime)));
+      latestInlineTimeRef.current = currentTime;
+      setViewMode('inline');
+    }
+  };
 
   const handleYouTubeSearchSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const raw = searchQuery.trim();
     if (!raw) {
-      // Empty submit plays featured Lo-Fi stream
-      playYouTubeSelection(VERIFIED_YOUTUBE_PRESETS[0]);
+      playYouTubeSelection(VERIFIED_YOUTUBE_PRESETS[0], 0);
       setSearchStatus('Tuned to Lo-Fi Chill Radio');
       return;
     }
 
-    const directId = extractYouTubeVideoId(raw);
-    if (directId) {
-      const directItem: YouTubeStreamSelection = {
-        videoId: directId,
-        title: `YouTube Video (${directId})`,
-        channel: 'YouTube Direct',
-        thumbnail: `https://i.ytimg.com/vi/${directId}/hqdefault.jpg`,
-      };
-      setSearchResults([directItem]);
-      playYouTubeSelection(directItem);
-      setSearchStatus('Loaded direct YouTube link onto 3D TV');
-      return;
-    }
+    triedFailedIdsRef.current.clear();
+    setRestrictedNoticeState(null);
 
+    const directId = extractYouTubeVideoId(raw);
     setIsSearching(true);
-    setSearchStatus(`Searching YouTube for "${raw}"...`);
+    setSearchStatus(
+      directId
+        ? 'Loading YouTube video...'
+        : `Searching YouTube for "${raw}"...`,
+    );
+
     try {
       const res = await fetch(
         `/api/youtube/search?q=${encodeURIComponent(raw)}`,
@@ -295,42 +493,76 @@ export function TvPlayerModal({
             videoId: string;
             title: string;
             channel: string;
+            duration?: string;
             thumbnail?: string;
+            embedVerified?: boolean;
           }>;
         };
-        const apiResults = (data.results || []).map((item) => ({
-          videoId: item.videoId,
-          title: item.title,
-          channel: item.channel,
-          thumbnail: normalizeThumbnailUrl(item.thumbnail, item.videoId),
-        }));
+        const apiResults: YouTubeStreamSelection[] = (data.results || []).map(
+          (item) => ({
+            videoId: item.videoId,
+            title: item.title,
+            channel: item.channel,
+            duration: item.duration,
+            embedVerified: item.embedVerified,
+            thumbnail: normalizeThumbnailUrl(item.thumbnail, item.videoId),
+          }),
+        );
         if (apiResults.length > 0) {
           setSearchResults(apiResults);
-          playYouTubeSelection(apiResults[0]);
-          setSearchStatus(`Playing on 3D TV: ${apiResults[0].title}`);
+          setViewMode('inline');
+          playYouTubeSelection(apiResults[0], 0);
+          setSearchStatus(`Playing: ${apiResults[0].title}`);
           setIsSearching(false);
           return;
         }
       }
     } catch {
-      // Fall through cleanly to verified curated matches
+      // Handled below
     }
 
-    const fallbackMatches = findFallbackYouTubePresets(raw);
-    setSearchResults(fallbackMatches);
-    playYouTubeSelection(fallbackMatches[0]);
-    setSearchStatus(`Playing curated YouTube match on 3D TV: ${fallbackMatches[0].title}`);
+    // If user pasted a direct URL/ID and metadata fetch failed, still play the video ID directly!
+    if (directId) {
+      const directItem: YouTubeStreamSelection = {
+        videoId: directId,
+        title: `YouTube Video (${directId})`,
+        channel: 'YouTube Direct',
+        duration: 'VIDEO',
+        thumbnail: `https://i.ytimg.com/vi/${directId}/hqdefault.jpg`,
+      };
+      setSearchResults([directItem]);
+      setViewMode('inline');
+      playYouTubeSelection(directItem, 0);
+      setSearchStatus('Loaded direct YouTube link');
+      setIsSearching(false);
+      return;
+    }
+
+    setSearchResults([]);
+    setSearchStatus(
+      `No playable YouTube videos found for "${raw}". Try another search or paste any YouTube link.`,
+    );
     setIsSearching(false);
   };
 
   return (
     <div
       onPointerDown={(e) => e.stopPropagation()}
-      className="fixed inset-0 z-50 pointer-events-none flex flex-col justify-end sm:flex-row sm:items-stretch sm:justify-end p-2.5 sm:p-4"
+      className={`fixed inset-0 z-50 flex ${
+        expandedTheater
+          ? 'items-center justify-center bg-black/75 p-2 sm:p-5 pointer-events-auto'
+          : 'flex-col justify-end sm:flex-row sm:items-stretch sm:justify-end p-2.5 sm:p-4 pointer-events-none'
+      }`}
     >
-      <div className="w-full sm:w-[410px] max-h-[78vh] sm:max-h-full rounded-2xl bg-stone-950/95 backdrop-blur-md border border-stone-700/80 shadow-2xl overflow-hidden flex flex-col pointer-events-auto">
+      <div
+        className={`${
+          expandedTheater
+            ? 'w-full max-w-3xl max-h-[92vh]'
+            : 'w-full sm:w-[430px] max-h-[82vh] sm:max-h-full'
+        } rounded-2xl bg-stone-950/95 border border-stone-700/80 shadow-2xl overflow-hidden flex flex-col pointer-events-auto transition-all duration-200`}
+      >
         {/* Remote Header + Close (X) */}
-        <div className="flex items-center justify-between gap-2.5 px-4 py-3 border-b border-stone-800 bg-stone-900/90 shrink-0">
+        <div className="flex items-center justify-between gap-2.5 px-4 py-3 border-b border-stone-800 bg-stone-900/95 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <div
               className={`w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 ${
@@ -404,56 +636,187 @@ export function TvPlayerModal({
 
         {/* Scrollable Remote Deck */}
         <div className="p-3.5 sm:p-4 overflow-y-auto survival-scroll space-y-3.5 flex-1">
-          {/* Remote Status Monitor (Mirrors 3D TV state without mounting a second video player) */}
-          <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-stone-700/80 bg-stone-950 shadow-inner">
-            {isPowerOn && isYouTubeActive && youtubeVideoId ? (
-              <div className="relative w-full h-full bg-stone-950">
-                <Image
-                  src={`https://i.ytimg.com/vi/${youtubeVideoId}/hqdefault.jpg`}
-                  alt={youtubeTitle}
-                  fill
-                  sizes="400px"
-                  referrerPolicy="no-referrer"
-                  className="object-cover opacity-55"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-stone-950 via-stone-950/50 to-stone-950/60 p-3 flex flex-col justify-between">
-                  <div className="flex items-center justify-between gap-2">
-                    <span
-                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border ${
-                        isPaused
-                          ? 'bg-amber-950/90 border-amber-500/50 text-amber-300'
-                          : 'bg-red-600/90 border-red-400/60 text-white'
-                      }`}
-                    >
-                      {isPaused ? 'Paused on 3D TV' : 'Playing on 3D TV'}
-                    </span>
-                    <span className="px-2 py-0.5 rounded-md bg-stone-950/85 border border-stone-700 text-[10px] font-mono-tabular text-stone-200">
-                      {formatDurationSeconds(currentTime)} · {isMuted ? 'MUTED' : `VOL ${spatialVol}%`}
-                    </span>
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs font-bold text-stone-50 line-clamp-2 leading-snug">
-                      {youtubeTitle}
-                    </p>
-                    <p className="text-[11px] text-red-300 truncate mt-0.5">
-                      {youtubeChannel}
-                    </p>
-                  </div>
+          {/* Smart TV Screen: Live YouTube Player OR 3D Wall TV Preview */}
+          <div className="space-y-1.5">
+            {isPowerOn && isYouTubeActive && youtubeVideoId && !isStopped && (
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="px-2 py-0.5 rounded-md bg-red-600/20 border border-red-500/40 text-red-300 font-bold uppercase text-[10px] shrink-0">
+                    {viewMode === 'inline' ? 'TV Screen' : '3D Wall TV'}
+                  </span>
+                  <span className="text-stone-400 truncate font-mono-tabular">
+                    {formatDurationSeconds(currentTime)} ·{' '}
+                    {isMuted
+                      ? 'MUTED'
+                      : `VOL ${viewMode === 'inline' ? Math.round(volume * 100) : spatialVol}%`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleToggleViewMode}
+                    className="px-2 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-700 text-stone-200 font-semibold text-[10px] flex items-center gap-1 transition-colors"
+                    title={
+                      viewMode === 'inline'
+                        ? 'Preview on the 3D wall TV inside your base'
+                        : 'Watch directly on the Smart TV screen here'
+                    }
+                  >
+                    <Monitor className="w-3 h-3 text-sky-400" />
+                    <span>{viewMode === 'inline' ? '3D Wall' : 'TV Screen'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (viewMode !== 'inline') {
+                        setEmbedStartSec(Math.max(0, Math.floor(currentTime)));
+                        setViewMode('inline');
+                      }
+                      setExpandedTheater((v) => !v);
+                    }}
+                    className="px-2 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-700 text-stone-200 font-semibold text-[10px] flex items-center gap-1 transition-colors"
+                    title={expandedTheater ? 'Compact Drawer' : 'Expand Theater View'}
+                  >
+                    {expandedTheater ? (
+                      <>
+                        <Minimize2 className="w-3 h-3 text-amber-400" />
+                        <span>Compact</span>
+                      </>
+                    ) : (
+                      <>
+                        <Maximize2 className="w-3 h-3 text-amber-400" />
+                        <span>Theater</span>
+                      </>
+                    )}
+                  </button>
                 </div>
               </div>
-            ) : (
-              <canvas
-                ref={previewCanvasRef}
-                width={512}
-                height={288}
-                className="w-full h-full block object-cover"
-              />
             )}
-            {!isPowerOn && (
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <span className="px-3 py-1 rounded-lg bg-stone-950/80 border border-red-700/60 text-[11px] font-mono-tabular font-bold text-red-300">
-                  STANDBY
-                </span>
+
+            <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-stone-700/80 bg-black shadow-inner">
+              {showInlineYouTube ? (
+                <iframe
+                  key={`${youtubeVideoId}_${useNocookieDomain ? 'nc' : 'yt'}`}
+                  ref={inlineIframeRef}
+                  src={inlineEmbedUrl}
+                  title={youtubeTitle || 'YouTube TV Player'}
+                  className="w-full h-full border-0 block"
+                  referrerPolicy="strict-origin-when-cross-origin"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+                  allowFullScreen
+                  onLoad={() => {
+                    inlineReadyRef.current = true;
+                    try {
+                      inlineIframeRef.current?.contentWindow?.postMessage(
+                        JSON.stringify({
+                          event: 'listening',
+                          id: 2,
+                          channel: 'widget',
+                        }),
+                        '*',
+                      );
+                    } catch {
+                      // Ignore cross-origin timing
+                    }
+                    const volPct = Math.max(
+                      0,
+                      Math.min(100, Math.round(volume * 100)),
+                    );
+                    if (isMuted) {
+                      sendInlineCommand('mute');
+                    } else {
+                      sendInlineCommand('unMute');
+                      sendInlineCommand('setVolume', [volPct]);
+                    }
+                    sendInlineCommand(isPaused ? 'pauseVideo' : 'playVideo');
+                  }}
+                />
+              ) : isPowerOn && isYouTubeActive && youtubeVideoId && !isStopped ? (
+                <div className="relative w-full h-full bg-stone-950">
+                  <Image
+                    src={`https://i.ytimg.com/vi/${youtubeVideoId}/hqdefault.jpg`}
+                    alt={youtubeTitle}
+                    fill
+                    sizes="420px"
+                    referrerPolicy="no-referrer"
+                    className="object-cover opacity-55"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-stone-950 via-stone-950/50 to-stone-950/60 p-3 flex flex-col justify-between">
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border ${
+                          isPaused
+                            ? 'bg-amber-950/90 border-amber-500/50 text-amber-300'
+                            : 'bg-red-600/90 border-red-400/60 text-white'
+                        }`}
+                      >
+                        {isPaused ? 'Paused on 3D TV' : 'Playing on 3D Wall TV'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleToggleViewMode}
+                        className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold flex items-center gap-1 shadow"
+                      >
+                        <Play className="w-3 h-3 fill-current" />
+                        <span>Watch on Screen</span>
+                      </button>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-stone-50 line-clamp-2 leading-snug">
+                        {youtubeTitle}
+                      </p>
+                      <p className="text-[11px] text-red-300 truncate mt-0.5">
+                        {youtubeChannel}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <canvas
+                  ref={previewCanvasRef}
+                  width={512}
+                  height={288}
+                  className="w-full h-full block object-cover"
+                />
+              )}
+
+              {!isPowerOn && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <span className="px-3 py-1 rounded-lg bg-stone-950/80 border border-red-700/60 text-[11px] font-mono-tabular font-bold text-red-300">
+                    STANDBY
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Helpful fallback bar ONLY if YouTube itself reports an embed restriction */}
+            {embedRestrictedNotice && youtubeVideoId && (
+              <div className="rounded-xl bg-amber-950/70 border border-amber-600/60 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-amber-100">
+                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                  <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span className="truncate">{embedRestrictedNotice}</span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {searchResults.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => tryNextPlayableResult(youtubeVideoId)}
+                      className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-[10px] flex items-center gap-1"
+                    >
+                      <SkipForward className="w-3 h-3" />
+                      <span>Next Video</span>
+                    </button>
+                  )}
+                  <a
+                    href={`https://www.youtube.com/watch?v=${youtubeVideoId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2.5 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-600 text-stone-100 font-semibold text-[10px] flex items-center gap-1"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    <span>YouTube</span>
+                  </a>
+                </div>
               </div>
             )}
           </div>
@@ -482,7 +845,7 @@ export function TvPlayerModal({
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search YouTube or paste URL..."
+                    placeholder="Search anything on YouTube or paste URL..."
                     className="w-full min-h-[44px] pl-8 pr-2.5 rounded-xl bg-stone-950 border border-stone-700 focus:border-red-500 focus:outline-none text-xs text-stone-100 placeholder:text-stone-500"
                   />
                 </div>
@@ -504,14 +867,17 @@ export function TvPlayerModal({
               <div className="flex flex-wrap gap-1.5">
                 {VERIFIED_YOUTUBE_PRESETS.map((preset) => {
                   const selected =
-                    isPowerOn && isYouTubeActive && youtubeVideoId === preset.videoId;
+                    isPowerOn &&
+                    isYouTubeActive &&
+                    youtubeVideoId === preset.videoId;
                   return (
                     <button
                       key={preset.videoId}
                       type="button"
                       onClick={() => {
-                        playYouTubeSelection(preset);
-                        setSearchStatus(`Playing ${preset.label} on 3D TV`);
+                        setViewMode('inline');
+                        playYouTubeSelection(preset, 0);
+                        setSearchStatus(`Playing ${preset.label} on TV`);
                       }}
                       className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors ${
                         selected
@@ -533,17 +899,20 @@ export function TvPlayerModal({
 
               {/* Search Results Strip */}
               {searchResults.length > 0 && (
-                <div className="space-y-1.5 max-h-40 overflow-y-auto survival-scroll pr-0.5">
+                <div className="space-y-1.5 max-h-56 overflow-y-auto survival-scroll pr-0.5">
                   {searchResults.map((item) => {
                     const selected =
-                      isPowerOn && isYouTubeActive && youtubeVideoId === item.videoId;
+                      isPowerOn &&
+                      isYouTubeActive &&
+                      youtubeVideoId === item.videoId;
                     return (
                       <button
                         key={item.videoId}
                         type="button"
                         onClick={() => {
-                          playYouTubeSelection(item);
-                          setSearchStatus(`Playing on 3D TV: ${item.title}`);
+                          setViewMode('inline');
+                          playYouTubeSelection(item, 0);
+                          setSearchStatus(`Playing: ${item.title}`);
                         }}
                         className={`w-full p-1.5 rounded-xl border text-left flex items-center gap-2.5 transition-colors ${
                           selected
@@ -551,21 +920,35 @@ export function TvPlayerModal({
                             : 'bg-stone-950/80 hover:bg-stone-900 border-stone-800 text-stone-200'
                         }`}
                       >
-                        <div className="relative w-16 h-10 rounded-lg overflow-hidden bg-stone-900 shrink-0">
+                        <div className="relative w-20 h-11 rounded-lg overflow-hidden bg-stone-900 shrink-0">
                           <Image
-                            src={normalizeThumbnailUrl(item.thumbnail, item.videoId)}
+                            src={normalizeThumbnailUrl(
+                              item.thumbnail,
+                              item.videoId,
+                            )}
                             alt={item.title}
                             fill
-                            sizes="64px"
+                            sizes="80px"
                             referrerPolicy="no-referrer"
                             className="object-cover"
                           />
+                          {item.duration && (
+                            <span
+                              className={`absolute bottom-0.5 right-0.5 px-1 py-0.2 rounded text-[9px] font-mono-tabular font-bold ${
+                                item.duration === 'LIVE'
+                                  ? 'bg-red-600 text-white'
+                                  : 'bg-black/80 text-stone-100'
+                              }`}
+                            >
+                              {item.duration}
+                            </span>
+                          )}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <div className="text-[11px] font-semibold truncate">
+                          <div className="text-[11px] font-semibold line-clamp-2 leading-tight">
                             {item.title}
                           </div>
-                          <div className="text-[10px] text-stone-400 truncate">
+                          <div className="text-[10px] text-stone-400 truncate mt-0.5">
                             {item.channel}
                           </div>
                         </div>
@@ -747,7 +1130,9 @@ export function TvPlayerModal({
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-bold truncate">{ch.name}</span>
+                        <span className="text-xs font-bold truncate">
+                          {ch.name}
+                        </span>
                         <span
                           className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded text-white shrink-0"
                           style={{ backgroundColor: ch.color }}
@@ -767,7 +1152,7 @@ export function TvPlayerModal({
         </div>
 
         {/* Bottom Audio & Hide Remote Footer */}
-        <div className="p-3 border-t border-stone-800 bg-stone-900/90 space-y-2.5 shrink-0">
+        <div className="p-3 border-t border-stone-800 bg-stone-900/95 space-y-2.5 shrink-0">
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -803,11 +1188,10 @@ export function TvPlayerModal({
             className="w-full min-h-[44px] px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
-            <span>Hide Remote (Keep TV Playing)</span>
+            <span>Hide Remote (Keep TV Playing on 3D Wall)</span>
           </button>
         </div>
       </div>
     </div>
   );
 }
-

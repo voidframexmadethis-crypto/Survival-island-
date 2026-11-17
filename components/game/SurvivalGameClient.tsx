@@ -146,12 +146,29 @@ export function SurvivalGameClient() {
   const [tvSearchQuery, setTvSearchQuery] = useState('');
   const [tvSearchResults, setTvSearchResults] = useState<YouTubeStreamSelection[]>([]);
   const [tvSearchStatus, setTvSearchStatus] = useState('');
+  const [youtubeErrorSignal, setYoutubeErrorSignal] = useState<{
+    videoId: string;
+    code: number;
+    seq: number;
+  } | null>(null);
   const [gamepadConnected, setGamepadConnected] = useState(false);
   const [gamepadJoystickOffset, setGamepadJoystickOffset] = useState({ x: 0, y: 0 });
   const hudRef = useRef<HUDStateSnapshot | null>(null);
   const activeModalRef = useRef<ActiveModal>(null);
   const lastGpKnobRef = useRef({ x: 0, y: 0 });
   const gamepadConnectedRef = useRef(false);
+  const ytErrSeqRef = useRef(0);
+
+  const handleTvInlinePlayerChange = useCallback(
+    (active: boolean, syncTimeSec?: number) => {
+      engineRef.current?.setTvInlinePlayerActive(active, syncTimeSec);
+    },
+    [],
+  );
+
+  const handleTvSyncYouTubeTime = useCallback((sec: number) => {
+    engineRef.current?.syncTvYouTubeTime(sec);
+  }, []);
 
   useEffect(() => {
     hudRef.current = hud;
@@ -411,6 +428,14 @@ export function SurvivalGameClient() {
         setActiveStationStructureId(structureId);
         setActiveModal(station);
         engine.setMode('paused');
+      },
+      onYouTubeError: (videoId, errorCode) => {
+        ytErrSeqRef.current += 1;
+        setYoutubeErrorSignal({
+          videoId,
+          code: errorCode,
+          seq: ytErrSeqRef.current,
+        });
       },
     });
     engineRef.current = engine;
@@ -1260,10 +1285,15 @@ export function SurvivalGameClient() {
                 </div>
               )}
               {hud.cozyComfort?.active && (
-                <div className="px-2.5 py-0.5 rounded-lg bg-amber-950/90 border border-amber-500/65 text-[11px] font-medium text-amber-200 flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => openModal('tv')}
+                  className="pointer-events-auto px-2.5 py-0.5 rounded-lg bg-amber-950/90 hover:bg-amber-900 border border-amber-500/65 text-[11px] font-medium text-amber-200 flex items-center gap-1.5 transition"
+                  title="Open Smart TV Remote"
+                >
                   <Tv className="w-3.5 h-3.5 text-amber-300" />
-                  <span>Cozy Base · {hud.cozyComfort.label}</span>
-                </div>
+                  <span>Cozy Base · Watch TV</span>
+                </button>
               )}
               {hud.nearFire && (
                 <div className="px-2.5 py-0.5 rounded-lg bg-orange-950/85 border border-orange-700/60 text-[11px] font-medium text-orange-200 flex items-center gap-1.5">
@@ -2403,13 +2433,17 @@ export function SurvivalGameClient() {
           searchStatus={tvSearchStatus}
           onSearchStatusChange={setTvSearchStatus}
           onSelectChannel={(ch) => engineRef.current?.setTvChannel(ch)}
-          onSelectYouTube={(stream) =>
+          onSelectYouTube={(stream, startSec) =>
             engineRef.current?.setTvYouTubeStream(
               stream.videoId,
               stream.title,
               stream.channel,
+              startSec,
             )
           }
+          onInlinePlayerChange={handleTvInlinePlayerChange}
+          onSyncYouTubeTime={handleTvSyncYouTubeTime}
+          youtubeErrorSignal={youtubeErrorSignal}
           onTogglePower={() => engineRef.current?.toggleTvPower()}
           onTogglePlayPause={() => engineRef.current?.toggleTvPlayPause()}
           onStop={() => engineRef.current?.stopTvPlayback()}
