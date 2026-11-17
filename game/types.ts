@@ -612,6 +612,16 @@ export interface SaveSlotSummary {
   missionsCompleted: number;
 }
 
+export const TOTAL_BACKPACK_COMPARTMENTS = 1_000_005_000;
+export const MAX_HUD_BAR_SLOTS = 5000;
+export const DEFAULT_HUD_BAR_SLOTS = 9;
+
+export interface BackpackCompartmentEntry {
+  compartmentId: number; // 1 .. TOTAL_BACKPACK_COMPARTMENTS
+  itemId: ItemId;
+  quantity: number;
+}
+
 export interface GameSaveData {
   version: number;
   slotId: string;
@@ -625,11 +635,13 @@ export interface GameSaveData {
     vitals: PlayerVitals;
     equippedSlot: number;
     hotbarItemIds: (ItemId | null)[];
+    hudBarCapacity?: number;
   };
   dayCount: number;
   timeOfDay: number;
   weather?: WeatherType;
   inventory: InventorySlot[];
+  backpackCompartments?: BackpackCompartmentEntry[];
   structures: PlacedStructure[];
   structuralBlocks?: StructuralBlock[];
   kineticNodes?: KineticNode[];
@@ -647,6 +659,18 @@ export interface GameSaveData {
   stats: GameStats;
   completedMissionIds: string[];
   discoveredLocations: string[];
+  gameMode?: GameMode;
+  tvChannel?: number;
+  tvPower?: boolean;
+  tvEmbedSrc?: string;
+  tvTitle?: string;
+  tvCategory?: string;
+  tvTimestamp?: number;
+  tvVolume?: number;
+  tvIsMuted?: boolean;
+  tvAutoCycle?: boolean;
+  tvPaused?: boolean;
+  tamedCreatures?: { species: CreatureSpecies; name: string }[];
 }
 
 export interface CarcassSaveData {
@@ -791,6 +815,11 @@ export interface HUDStateSnapshot {
   inventory: InventorySlot[];
   hotbarItemIds: (ItemId | null)[];
   equippedSlot: number;
+  hudBarCapacity: number;
+  maxHudBarCapacity: number;
+  backpackCompartments: BackpackCompartmentEntry[];
+  totalBackpackCompartments: number;
+  emptyCompartmentsCount: number;
   structures: PlacedStructure[];
   visitedBiomes: BiomeId[];
   exploredCells: number[];
@@ -830,8 +859,38 @@ export interface HUDStateSnapshot {
     power: boolean;
     channel: number;
     channelName: string;
+    title: string;
+    category: string;
+    embedSrc: string;
     volume: number;
     isMuted: boolean;
     isZoomedToTv: boolean;
+    autoCycle: boolean;
+    isPaused: boolean;
+    currentTime: number;
+    isLocalVideo?: boolean;
+    localVideoName?: string;
+    isYouTubeActive?: boolean;
+    youtubeVideoId?: string;
+    youtubeTitle?: string;
+    youtubeChannel?: string;
+    spatialVolume?: number;
   };
+  buildGhost?: {
+    visible: boolean;
+    valid: boolean;
+    x: number;
+    y: number;
+    z: number;
+    rotationY: number;
+    label: string;
+    snapGrid: boolean;
+  } | null;
+  currentBossTarget?: {
+    name: string;
+    biome: string;
+    distance: number;
+    hp: number;
+    maxHp: number;
+  } | null;
 }

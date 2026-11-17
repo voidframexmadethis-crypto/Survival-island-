@@ -2,15 +2,19 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowDownToLine,
   ArrowLeftRight,
   Backpack,
   Box,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Droplets,
   Hammer,
   Layers,
   Lock,
+  Plus,
   Shield,
   Trash2,
   X,
@@ -55,6 +59,10 @@ interface InventoryModalProps {
   onDropItem?: (itemId: ItemId) => void;
   onAssignHotbar: (slotIdx: number, itemId: ItemId | null) => void;
   onSelectHotbarSlot?: (slotIdx: number) => void;
+  onExpandHudBar?: (targetOrDelta: number, isAbsolute?: boolean) => void;
+  onMoveHotbarSlotToCompartment?: (hotbarSlotIdx: number, targetCompartmentId?: number) => void;
+  onEmptyAllHudBar?: () => void;
+  onMoveCompartmentToHotbar?: (compartmentId: number, targetHotbarSlot?: number) => void;
   onCraft?: (recipeId: string) => void;
   onCraftSound?: () => void;
   onTransferToChest?: (structureId: string, itemId: ItemId) => void;
@@ -72,6 +80,10 @@ export function InventoryModal({
   onDropItem,
   onAssignHotbar,
   onSelectHotbarSlot,
+  onExpandHudBar,
+  onMoveHotbarSlotToCompartment,
+  onEmptyAllHudBar,
+  onMoveCompartmentToHotbar,
   onCraft,
   onCraftSound,
   onTransferToChest,
@@ -90,6 +102,57 @@ export function InventoryModal({
     pct: number;
   } | null>(null);
   const craftTimerRef = useRef<number | null>(null);
+
+  // Pagination & Drag-and-Drop state for 1B+ Compartments and 5,000-Slot HUD Bar
+  const [hudPage, setHudPage] = useState(0);
+  const [hudJumpInput, setHudJumpInput] = useState('');
+  const [customHudSizeInput, setCustomHudSizeInput] = useState('5000');
+  const [compartmentPage, setCompartmentPage] = useState(0);
+  const [compartmentJumpInput, setCompartmentJumpInput] = useState('');
+  const [selectedHudSlotForStore, setSelectedHudSlotForStore] = useState<number | null>(null);
+  const [dropZoneActive, setDropZoneActive] = useState(false);
+
+  const HUD_PAGE_SIZE = 18;
+  const COMPARTMENT_PAGE_SIZE = 12;
+
+  const totalCompartments = hud.totalBackpackCompartments ?? 1_000_005_000;
+  const emptyCompartments = hud.emptyCompartmentsCount ?? totalCompartments;
+  const maxHudSlots = hud.maxHudBarCapacity ?? 5000;
+  const hudBarSlots = hud.hotbarItemIds;
+  const occupiedHudCount = useMemo(
+    () => hudBarSlots.filter((id) => id !== null).length,
+    [hudBarSlots],
+  );
+  const hudTotalPages = Math.max(1, Math.ceil(hudBarSlots.length / HUD_PAGE_SIZE));
+  const safeHudPage = Math.min(hudPage, hudTotalPages - 1);
+  const visibleHudSlots = useMemo(() => {
+    const start = safeHudPage * HUD_PAGE_SIZE;
+    return hudBarSlots.slice(start, start + HUD_PAGE_SIZE).map((itemId, offset) => ({
+      itemId,
+      slotIdx: start + offset,
+    }));
+  }, [hudBarSlots, safeHudPage]);
+
+  const backpackCompartments = hud.backpackCompartments;
+  const compartmentMap = useMemo(() => {
+    const map = new Map<number, (typeof backpackCompartments)[number]>();
+    for (const c of backpackCompartments || []) {
+      map.set(c.compartmentId, c);
+    }
+    return map;
+  }, [backpackCompartments]);
+
+  const maxCompartmentPage = Math.floor((totalCompartments - 1) / COMPARTMENT_PAGE_SIZE);
+  const safeCompartmentPage = Math.max(0, Math.min(compartmentPage, maxCompartmentPage));
+  const visibleCompartmentIds = useMemo(() => {
+    const start = safeCompartmentPage * COMPARTMENT_PAGE_SIZE + 1;
+    const ids: number[] = [];
+    for (let i = 0; i < COMPARTMENT_PAGE_SIZE; i++) {
+      const id = start + i;
+      if (id <= totalCompartments) ids.push(id);
+    }
+    return ids;
+  }, [safeCompartmentPage, totalCompartments]);
 
   useEffect(() => {
     return () => {
@@ -219,7 +282,7 @@ export function InventoryModal({
                 {chest ? 'Storage Box & Explorer Backpack' : 'Explorer Backpack'}
               </h2>
               <p className="text-[11px] text-stone-400">
-                {hud.inventory.length} carried stacks ·{' '}
+                {hud.inventory.length} carried stacks · <span className="text-emerald-400 font-semibold">1,000,000,000+ Empty Compartments</span> ·{' '}
                 {hud.equippedSlot >= 0
                   ? `Equipped Slot ${hud.equippedSlot + 1}`
                   : 'Bare Hands'}{' '}
@@ -262,8 +325,423 @@ export function InventoryModal({
           <div className="flex-1 overflow-y-auto survival-scroll grid grid-cols-1 md:grid-cols-12">
             {/* Explorer Inventory Grid */}
             <div className="md:col-span-7 p-4 border-b md:border-b-0 md:border-r border-stone-800 space-y-4">
+              {/* Interactive HUD Bar -> Empty Quantum Compartments Transfer & 5,000-Slot Expander */}
+              <div className="rounded-xl bg-gradient-to-br from-amber-950/50 via-stone-950/90 to-emerald-950/35 border border-amber-600/50 p-3.5 space-y-3 shadow-inner">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Backpack className="w-5 h-5 text-amber-400 shrink-0" />
+                    <div>
+                      <div className="text-xs font-bold text-amber-300">
+                        HUD Bar &amp; 1B+ Empty Compartments
+                      </div>
+                      <div className="text-[11px] text-stone-300">
+                        Drag or drop HUD bar items into an empty compartment below to empty your HUD bar.
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-mono-tabular font-bold text-emerald-300 bg-emerald-950/80 px-2 py-1 rounded-lg border border-emerald-700/50">
+                      {emptyCompartments.toLocaleString()} Free
+                    </span>
+                  </div>
+                </div>
+
+                {/* Expand HUD Bar Controls (Up to 5,000 items) */}
+                {onExpandHudBar && (
+                  <div className="rounded-lg bg-stone-900/90 border border-stone-800 p-2.5 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-stone-200">
+                        HUD Bar Size:{' '}
+                        <span className="font-mono-tabular text-amber-300">
+                          {hudBarSlots.length.toLocaleString()} / {maxHudSlots.toLocaleString()} items
+                        </span>
+                      </span>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => onExpandHudBar(10, false)}
+                          className="px-2 py-1 rounded bg-stone-800 hover:bg-stone-700 text-[10px] font-mono-tabular font-semibold text-stone-200"
+                        >
+                          +10
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onExpandHudBar(100, false)}
+                          className="px-2 py-1 rounded bg-stone-800 hover:bg-stone-700 text-[10px] font-mono-tabular font-semibold text-stone-200"
+                        >
+                          +100
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onExpandHudBar(1000, false)}
+                          className="px-2 py-1 rounded bg-stone-800 hover:bg-stone-700 text-[10px] font-mono-tabular font-semibold text-stone-200"
+                        >
+                          +1,000
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onExpandHudBar(maxHudSlots, true)}
+                          className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-[10px] font-mono-tabular font-bold text-stone-950 flex items-center gap-1"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span>Expand to 5,000</span>
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={9}
+                        max={maxHudSlots}
+                        value={customHudSizeInput}
+                        onChange={(e) => setCustomHudSizeInput(e.target.value)}
+                        className="w-24 px-2 py-1 rounded bg-stone-950 border border-stone-700 text-[11px] font-mono-tabular text-stone-100"
+                        placeholder="9 - 5000"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const val = parseInt(customHudSizeInput, 10);
+                          if (!Number.isNaN(val)) onExpandHudBar(val, true);
+                        }}
+                        className="px-2.5 py-1 rounded bg-stone-800 hover:bg-stone-700 text-[11px] font-semibold text-amber-300"
+                      >
+                        Set HUD Slots
+                      </button>
+                      {onEmptyAllHudBar && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedHudSlotForStore(null);
+                            onEmptyAllHudBar();
+                          }}
+                          disabled={occupiedHudCount === 0}
+                          className={`ml-auto px-2.5 py-1 rounded text-[11px] font-bold flex items-center gap-1 ${
+                            occupiedHudCount > 0
+                              ? 'bg-emerald-700 hover:bg-emerald-600 text-stone-50'
+                              : 'bg-stone-800 text-stone-500 cursor-not-allowed'
+                          }`}
+                        >
+                          <ArrowDownToLine className="w-3.5 h-3.5" />
+                          <span>Empty All HUD ({occupiedHudCount})</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Draggable HUD Bar Strip */}
+                <div className="space-y-1.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <span className="font-semibold text-stone-300">
+                      Current HUD Bar (Slots {safeHudPage * HUD_PAGE_SIZE + 1}–
+                      {Math.min(hudBarSlots.length, (safeHudPage + 1) * HUD_PAGE_SIZE)} of{' '}
+                      {hudBarSlots.length.toLocaleString()})
+                    </span>
+                    {hudTotalPages > 1 && (
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          min={1}
+                          max={hudBarSlots.length}
+                          value={hudJumpInput}
+                          onChange={(e) => setHudJumpInput(e.target.value)}
+                          placeholder="Slot #"
+                          className="w-16 px-1.5 py-0.5 rounded bg-stone-950 border border-stone-700 text-[10px] font-mono-tabular text-stone-200"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const s = parseInt(hudJumpInput, 10);
+                            if (!Number.isNaN(s) && s >= 1 && s <= hudBarSlots.length) {
+                              setHudPage(Math.floor((s - 1) / HUD_PAGE_SIZE));
+                            }
+                          }}
+                          className="px-1.5 py-0.5 rounded bg-stone-800 hover:bg-stone-700 text-[10px] text-amber-300"
+                        >
+                          Go
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setHudPage((p) => Math.max(0, p - 1))}
+                          disabled={safeHudPage === 0}
+                          className="p-1 rounded bg-stone-800 disabled:opacity-40"
+                          aria-label="Previous HUD Page"
+                        >
+                          <ChevronLeft className="w-3.5 h-3.5" />
+                        </button>
+                        <span className="font-mono-tabular text-[10px] text-stone-400">
+                          {safeHudPage + 1}/{hudTotalPages}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setHudPage((p) => Math.min(hudTotalPages - 1, p + 1))}
+                          disabled={safeHudPage >= hudTotalPages - 1}
+                          className="p-1 rounded bg-stone-800 disabled:opacity-40"
+                          aria-label="Next HUD Page"
+                        >
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-6 sm:grid-cols-9 gap-1.5">
+                    {visibleHudSlots.map(({ itemId, slotIdx }) => {
+                      const def = itemId ? ITEMS[itemId] : null;
+                      const qty = itemId ? countOf(itemId) : 0;
+                      const isPicked = selectedHudSlotForStore === slotIdx;
+                      return (
+                        <div
+                          key={slotIdx}
+                          draggable={Boolean(itemId && qty > 0)}
+                          onDragStart={(e) => {
+                            if (!itemId) return;
+                            e.dataTransfer.setData('text/hud-slot', String(slotIdx));
+                            setSelectedHudSlotForStore(slotIdx);
+                          }}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            const compStr = e.dataTransfer.getData('text/compartment-id');
+                            if (compStr && onMoveCompartmentToHotbar) {
+                              const cid = parseInt(compStr, 10);
+                              if (!Number.isNaN(cid)) {
+                                onMoveCompartmentToHotbar(cid, slotIdx);
+                              }
+                            }
+                          }}
+                          className={`relative min-h-[54px] p-1 rounded-lg border flex flex-col items-center justify-center transition-colors ${
+                            isPicked
+                              ? 'bg-emerald-950/70 border-emerald-400'
+                              : itemId && qty > 0
+                                ? 'bg-stone-900 border-stone-700 hover:border-amber-400 cursor-grab active:cursor-grabbing'
+                                : 'bg-stone-950/60 border-stone-800/80 border-dashed'
+                          }`}
+                          title={
+                            def && qty > 0
+                              ? `${def.name} (Drag or click to drop into an Empty Compartment)`
+                              : `Empty HUD Slot ${slotIdx + 1}`
+                          }
+                        >
+                          <span className="text-[9px] font-mono-tabular text-stone-500 leading-none">
+                            {slotIdx + 1}
+                          </span>
+                          {def && qty > 0 ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSelectedHudSlotForStore(isPicked ? null : slotIdx)
+                                }
+                                className="flex flex-col items-center w-full"
+                              >
+                                <ItemIcon itemId={def.id} className="w-4 h-4 my-0.5" />
+                                <span className="text-[9px] font-mono-tabular text-amber-300 leading-none">
+                                  ×{qty}
+                                </span>
+                              </button>
+                              {onMoveHotbarSlotToCompartment && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedHudSlotForStore(null);
+                                    onMoveHotbarSlotToCompartment(slotIdx);
+                                  }}
+                                  className="mt-0.5 text-[8px] px-1 rounded bg-emerald-900/80 hover:bg-emerald-700 text-emerald-200"
+                                  title="Drop into next Empty Compartment"
+                                >
+                                  Store
+                                </button>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-[9px] text-stone-600 mt-1">Empty</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Quick Drop Zone into Next Empty Compartment */}
+                {onMoveHotbarSlotToCompartment && (
+                  <div
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setDropZoneActive(true);
+                    }}
+                    onDragLeave={() => setDropZoneActive(false)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setDropZoneActive(false);
+                      const slotStr = e.dataTransfer.getData('text/hud-slot');
+                      if (slotStr) {
+                        const idx = parseInt(slotStr, 10);
+                        if (!Number.isNaN(idx)) {
+                          onMoveHotbarSlotToCompartment(idx);
+                          setSelectedHudSlotForStore(null);
+                        }
+                      }
+                    }}
+                    onClick={() => {
+                      if (selectedHudSlotForStore !== null) {
+                        onMoveHotbarSlotToCompartment(selectedHudSlotForStore);
+                        setSelectedHudSlotForStore(null);
+                      }
+                    }}
+                    className={`rounded-xl border-2 border-dashed px-3 py-2.5 text-center transition-colors ${
+                      dropZoneActive || selectedHudSlotForStore !== null
+                        ? 'bg-emerald-950/70 border-emerald-400 text-emerald-200 cursor-pointer'
+                        : 'bg-stone-950/60 border-stone-700 text-stone-400'
+                    }`}
+                  >
+                    <div className="text-xs font-semibold flex items-center justify-center gap-1.5">
+                      <ArrowDownToLine className="w-4 h-4 text-emerald-400" />
+                      <span>
+                        {selectedHudSlotForStore !== null
+                          ? `Click here (or any Empty Compartment below) to drop HUD Slot ${selectedHudSlotForStore + 1}`
+                          : 'Drop HUD Bar Item Here → Empties HUD Slot into Empty Compartment'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Paginated 1,000,000,000+ Quantum Compartments Grid */}
+                <div className="space-y-2 pt-1 border-t border-stone-800/80">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <span className="font-semibold text-emerald-300">
+                      Compartments #{(safeCompartmentPage * COMPARTMENT_PAGE_SIZE + 1).toLocaleString()}–
+                      {Math.min(
+                        totalCompartments,
+                        (safeCompartmentPage + 1) * COMPARTMENT_PAGE_SIZE,
+                      ).toLocaleString()}{' '}
+                      <span className="text-stone-400 font-normal">
+                        ({(hud.backpackCompartments?.length || 0).toLocaleString()} used)
+                      </span>
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={1}
+                        max={totalCompartments}
+                        value={compartmentJumpInput}
+                        onChange={(e) => setCompartmentJumpInput(e.target.value)}
+                        placeholder="Jump #1B"
+                        className="w-24 px-1.5 py-0.5 rounded bg-stone-950 border border-stone-700 text-[10px] font-mono-tabular text-stone-200"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const c = parseInt(compartmentJumpInput, 10);
+                          if (!Number.isNaN(c) && c >= 1 && c <= totalCompartments) {
+                            setCompartmentPage(Math.floor((c - 1) / COMPARTMENT_PAGE_SIZE));
+                          }
+                        }}
+                        className="px-1.5 py-0.5 rounded bg-stone-800 hover:bg-stone-700 text-[10px] text-emerald-300"
+                      >
+                        Go
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCompartmentPage((p) => Math.max(0, p - 1))}
+                        disabled={safeCompartmentPage === 0}
+                        className="p-1 rounded bg-stone-800 disabled:opacity-40"
+                        aria-label="Previous Compartments Page"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCompartmentPage((p) => Math.min(maxCompartmentPage, p + 1))
+                        }
+                        disabled={safeCompartmentPage >= maxCompartmentPage}
+                        className="p-1 rounded bg-stone-800 disabled:opacity-40"
+                        aria-label="Next Compartments Page"
+                      >
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5">
+                    {visibleCompartmentIds.map((cid) => {
+                      const stored = compartmentMap.get(cid);
+                      const def = stored ? ITEMS[stored.itemId] : null;
+                      return (
+                        <div
+                          key={cid}
+                          draggable={Boolean(stored)}
+                          onDragStart={(e) => {
+                            if (!stored) return;
+                            e.dataTransfer.setData('text/compartment-id', String(cid));
+                          }}
+                          onDragOver={(e) => {
+                            if (!stored) e.preventDefault();
+                          }}
+                          onDrop={(e) => {
+                            if (stored || !onMoveHotbarSlotToCompartment) return;
+                            e.preventDefault();
+                            const slotStr = e.dataTransfer.getData('text/hud-slot');
+                            if (slotStr) {
+                              const idx = parseInt(slotStr, 10);
+                              if (!Number.isNaN(idx)) {
+                                onMoveHotbarSlotToCompartment(idx, cid);
+                                setSelectedHudSlotForStore(null);
+                              }
+                            }
+                          }}
+                          onClick={() => {
+                            if (!stored && selectedHudSlotForStore !== null && onMoveHotbarSlotToCompartment) {
+                              onMoveHotbarSlotToCompartment(selectedHudSlotForStore, cid);
+                              setSelectedHudSlotForStore(null);
+                            }
+                          }}
+                          className={`rounded-lg border p-1.5 flex flex-col items-center justify-center min-h-[64px] text-center transition-colors ${
+                            stored && def
+                              ? 'bg-stone-900 border-amber-700/70'
+                              : selectedHudSlotForStore !== null
+                                ? 'bg-emerald-950/40 border-dashed border-emerald-500/80 hover:bg-emerald-900/50 cursor-pointer'
+                                : 'bg-stone-950/50 border-dashed border-stone-800'
+                          }`}
+                        >
+                          <span className="text-[9px] font-mono-tabular text-stone-500">
+                            #{cid.toLocaleString()}
+                          </span>
+                          {stored && def ? (
+                            <>
+                              <ItemIcon itemId={def.id} className="w-4 h-4 my-0.5" />
+                              <div className="text-[10px] font-medium text-stone-200 truncate w-full">
+                                {def.name}
+                              </div>
+                              {onMoveCompartmentToHotbar && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onMoveCompartmentToHotbar(cid);
+                                  }}
+                                  className="mt-0.5 text-[9px] px-1.5 py-0.5 rounded bg-amber-600/90 hover:bg-amber-500 text-stone-950 font-bold"
+                                >
+                                  → HUD
+                                </button>
+                              )}
+                            </>
+                          ) : (
+                            <div className="text-[10px] text-emerald-400/70 mt-1">
+                              Empty Compartment
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
               <div className="flex items-center justify-between text-xs font-semibold text-stone-400">
-                <span>Carried Items ({hud.inventory.length} stacks)</span>
+                <span>Carried Items ({hud.inventory.length} stacks active)</span>
                 <span className="font-mono-tabular text-stone-500">
                   Qty / Max Stack
                 </span>
@@ -477,18 +955,33 @@ export function InventoryModal({
                     )}
 
                     <div>
-                      <div className="text-[11px] text-stone-400 mb-1.5">
-                        Move / Pin to Hotbar Slot
+                      <div className="flex items-center justify-between text-[11px] text-stone-400 mb-1.5">
+                        <span>
+                          Move / Pin to Hotbar Slot ({hudBarSlots.length.toLocaleString()} total)
+                        </span>
+                        {hudBarSlots.indexOf(selectedDef.id) !== -1 &&
+                          onMoveHotbarSlotToCompartment && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const idx = hudBarSlots.indexOf(selectedDef.id);
+                                if (idx !== -1) onMoveHotbarSlotToCompartment(idx);
+                              }}
+                              className="text-[10px] px-2 py-0.5 rounded bg-emerald-800 hover:bg-emerald-700 text-emerald-100 font-semibold"
+                            >
+                              Move off HUD → Empty Compartment
+                            </button>
+                          )}
                       </div>
-                      <div className="grid grid-cols-5 sm:grid-cols-9 gap-1.5">
-                        {hud.hotbarItemIds.map((_, slotIdx) => (
+                      <div className="grid grid-cols-6 sm:grid-cols-9 gap-1.5">
+                        {visibleHudSlots.map(({ slotIdx }) => (
                           <button
                             key={slotIdx}
                             onClick={() =>
                               onAssignHotbar(slotIdx, selectedDef.id)
                             }
-                            className={`min-h-[38px] rounded-lg text-xs font-mono-tabular font-semibold transition-colors ${
-                              hud.hotbarItemIds[slotIdx] === selectedDef.id
+                            className={`min-h-[34px] rounded-lg text-xs font-mono-tabular font-semibold transition-colors ${
+                              hudBarSlots[slotIdx] === selectedDef.id
                                 ? 'bg-amber-600 text-stone-950'
                                 : 'bg-stone-800 hover:bg-amber-600 hover:text-stone-950 text-stone-200'
                             }`}
@@ -686,17 +1179,40 @@ export function InventoryModal({
         {activeTab === 'equipment' && (
           <div className="flex-1 overflow-y-auto survival-scroll p-5 space-y-5">
             <div>
-              <div className="text-xs font-semibold text-stone-400 mb-2.5">
-                Active {hud.hotbarItemIds.length}-Slot Hotbar Loadout (Scroll Wheel or 1–{hud.hotbarItemIds.length} to equip)
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
+                <div className="text-xs font-semibold text-stone-400">
+                  Active {hud.hotbarItemIds.length.toLocaleString()}-Slot Hotbar Loadout
+                  (Page {safeHudPage + 1} of {hudTotalPages})
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {onExpandHudBar && hud.hotbarItemIds.length < maxHudSlots && (
+                    <button
+                      type="button"
+                      onClick={() => onExpandHudBar(maxHudSlots, true)}
+                      className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-stone-950 text-[11px] font-bold"
+                    >
+                      Expand to 5,000 Slots
+                    </button>
+                  )}
+                  {onEmptyAllHudBar && (
+                    <button
+                      type="button"
+                      onClick={onEmptyAllHudBar}
+                      className="px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-stone-50 text-[11px] font-bold"
+                    >
+                      Empty HUD Bar → Compartments
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-9 gap-2">
-                {hud.hotbarItemIds.map((itemId, idx) => {
-                  const active = hud.equippedSlot === idx;
+              <div className="grid grid-cols-3 sm:grid-cols-6 md:grid-cols-9 gap-2">
+                {visibleHudSlots.map(({ itemId, slotIdx }) => {
+                  const active = hud.equippedSlot === slotIdx;
                   const def = itemId ? ITEMS[itemId] : null;
                   const qty = itemId ? countOf(itemId) : 0;
                   return (
                     <div
-                      key={idx}
+                      key={slotIdx}
                       className={`rounded-xl border p-3 flex flex-col items-center justify-between gap-2 ${
                         active
                           ? 'bg-amber-950/50 border-amber-500'
@@ -704,11 +1220,11 @@ export function InventoryModal({
                       }`}
                     >
                       <button
-                        onClick={() => onSelectHotbarSlot?.(idx)}
+                        onClick={() => onSelectHotbarSlot?.(slotIdx)}
                         className="w-full flex flex-col items-center gap-1.5"
                       >
                         <div className="text-[10px] font-mono-tabular text-stone-400">
-                          Slot {idx + 1} {active ? '· Equipped' : ''}
+                          Slot {slotIdx + 1} {active ? '· Equipped' : ''}
                         </div>
                         {def && qty > 0 ? (
                           <>
@@ -725,10 +1241,14 @@ export function InventoryModal({
                       </button>
                       {def && (
                         <button
-                          onClick={() => onAssignHotbar(idx, null)}
-                          className="text-[10px] text-stone-400 hover:text-red-300"
+                          onClick={() =>
+                            onMoveHotbarSlotToCompartment
+                              ? onMoveHotbarSlotToCompartment(slotIdx)
+                              : onAssignHotbar(slotIdx, null)
+                          }
+                          className="text-[10px] text-emerald-400 hover:text-emerald-300"
                         >
-                          Clear
+                          → Compartment
                         </button>
                       )}
                     </div>

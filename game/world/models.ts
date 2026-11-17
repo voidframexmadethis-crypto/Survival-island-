@@ -2684,12 +2684,19 @@ export function createCampStructureModel(
   }
 
   if (type === 'smart_tv') {
-    const plasticMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.3, metalness: 0.6 });
+    const plasticMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.25, metalness: 0.65 });
     const screenMat = new THREE.MeshStandardMaterial({
-      color: 0x0284c7,
-      emissive: 0x0369a1,
+      color: 0xffffff,
+      emissive: 0xffffff,
       emissiveIntensity: 0.9,
-      roughness: 0.1,
+      roughness: 0.14,
+      metalness: 0.2,
+    });
+    const standbyLedMat = new THREE.MeshStandardMaterial({
+      color: 0x22c55e,
+      emissive: 0x22c55e,
+      emissiveIntensity: 1.4,
+      roughness: 0.2,
     });
 
     const standBase = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.04, 0.4), plasticMat);
@@ -2709,9 +2716,16 @@ export function createCampStructureModel(
     screen.position.set(0, 0.95, 0.045);
     group.add(screen);
 
+    const standbyLed = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.018, 0.015), standbyLedMat);
+    standbyLed.position.set(0.78, 0.445, 0.046);
+    group.add(standbyLed);
+
     const tvGlow = new THREE.PointLight(0x38bdf8, 1.8, 8, 1.5);
     tvGlow.position.set(0, 0.95, 0.4);
     group.add(tvGlow);
+
+    group.userData.tvScreenMat = screenMat;
+    group.userData.standbyLedMat = standbyLedMat;
 
     return { group, fireLight: tvGlow };
   }
@@ -3624,7 +3638,16 @@ export function createHilltopHouse(
   tvFrame.castShadow = true;
   const tvScreenMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.86), tvScreenMat);
   tvScreenMesh.position.set(1.4, 1.24, 0.41);
-  group.add(tvStand, tvFrame, tvScreenMesh);
+  const tvStandbyLedMat = new THREE.MeshStandardMaterial({
+    color: 0x22c55e,
+    emissive: 0x22c55e,
+    emissiveIntensity: 1.5,
+    roughness: 0.2,
+  });
+  const tvStandbyLed = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.018, 0.015), tvStandbyLedMat);
+  tvStandbyLed.position.set(2.14, 0.76, 0.405);
+  tvScreenMesh.userData.standbyLedMat = tvStandbyLedMat;
+  group.add(tvStand, tvFrame, tvScreenMesh, tvStandbyLed);
   addLocalCollider(1.4, 0.35, 0.55);
 
   // D. Kitchen (North-East wall Z=-3.55): Refrigerator, Stove/Oven, Kitchen Counter & Sink

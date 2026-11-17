@@ -195,10 +195,10 @@ export function TouchControls({
   return (
     <div className="pointer-events-none fixed inset-0 z-20 touch-surface select-none overflow-hidden">
       {/* LEFT ZONE: Unobstructed Movement Joystick */}
-      <div className="pointer-events-auto absolute bottom-28 left-6 sm:left-8 safe-bottom">
+      <div className="pointer-events-auto absolute bottom-32 left-3 sm:left-6 safe-bottom">
         <div
           ref={joyPadRef}
-          className="relative w-36 h-36 sm:w-40 sm:h-40 rounded-full bg-stone-950/75 border-2 border-amber-500/35 flex items-center justify-center touch-surface shadow-2xl backdrop-blur-md"
+          className="relative w-32 h-32 sm:w-38 sm:h-38 rounded-full bg-stone-950/75 border-2 border-amber-500/35 flex items-center justify-center touch-surface shadow-2xl backdrop-blur-md"
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
@@ -206,7 +206,7 @@ export function TouchControls({
           onLostPointerCapture={handlePointerUp}
         >
           <div
-            className="w-16 h-16 sm:w-18 sm:h-18 rounded-full bg-amber-500 border-2 border-amber-200 shadow-xl flex items-center justify-center pointer-events-none transition-transform duration-75"
+            className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-amber-500 border-2 border-amber-200 shadow-xl flex items-center justify-center pointer-events-none transition-transform duration-75"
             style={{
               transform: `translate(${knobOffset.x}px, ${knobOffset.y}px)`,
             }}
@@ -217,7 +217,7 @@ export function TouchControls({
       </div>
 
       {/* MID-LEFT ZONE: Sprint, Crouch & Jump / Vault Arc */}
-      <div className="pointer-events-auto absolute bottom-28 left-48 sm:left-56 safe-bottom flex items-end gap-2.5">
+      <div className="pointer-events-auto absolute bottom-32 left-38 sm:left-50 safe-bottom flex items-end gap-2">
         <button
           type="button"
           aria-label="Sprint"
@@ -226,13 +226,13 @@ export function TouchControls({
             e.stopPropagation();
             onSprintToggle(!isSprinting);
           }}
-          className={`w-12 h-12 sm:w-13 sm:h-13 rounded-full border-2 flex items-center justify-center shadow-lg transition-colors ${
+          className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full border-2 flex items-center justify-center shadow-lg transition-colors ${
             isSprinting
               ? 'bg-amber-500 border-amber-200 text-stone-950'
               : 'bg-stone-950/80 border-stone-500/60 text-stone-100'
           }`}
         >
-          <Zap className="w-5 h-5 sm:w-6 sm:h-6" />
+          <Zap className="w-5 h-5" />
         </button>
 
         <button
@@ -243,13 +243,13 @@ export function TouchControls({
             e.stopPropagation();
             onCrouchToggle(!isCrouching);
           }}
-          className={`w-12 h-12 sm:w-13 sm:h-13 rounded-full border-2 flex items-center justify-center shadow-lg transition-colors ${
+          className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full border-2 flex items-center justify-center shadow-lg transition-colors ${
             isCrouching
               ? 'bg-emerald-500 border-emerald-200 text-stone-950'
               : 'bg-stone-950/80 border-stone-500/60 text-stone-100'
           }`}
         >
-          <ArrowDown className="w-5 h-5 sm:w-6 sm:h-6" />
+          <ArrowDown className="w-5 h-5" />
         </button>
 
         <button
@@ -260,17 +260,17 @@ export function TouchControls({
             e.stopPropagation();
             onJump();
           }}
-          className="w-14 h-14 sm:w-15 sm:h-15 rounded-full bg-stone-950/85 border-2 border-amber-500/70 text-amber-300 active:bg-amber-600 active:text-stone-950 flex items-center justify-center shadow-2xl"
+          className="w-13 h-13 sm:w-14 sm:h-14 rounded-full bg-stone-950/85 border-2 border-amber-500/70 text-amber-300 active:bg-amber-600 active:text-stone-950 flex items-center justify-center shadow-2xl"
         >
-          <ArrowUp className="w-7 h-7" />
+          <ArrowUp className="w-6 h-6 sm:w-7 sm:h-7" />
         </button>
       </div>
 
-      {/* RIGHT ZONE: Ergonomic Arc for Action, Secondary Dynamic Context, Backpack/Craft, and Single Build Toggle */}
-      <div className="pointer-events-auto absolute bottom-28 right-6 sm:right-8 safe-bottom flex items-end gap-3.5">
-        <div className="flex flex-col items-end gap-2.5">
-          {/* Top row of right-side arc: Quick Backpack, Craft, and Single Build / Place Toggle (No duplicates) */}
-          <div className="flex items-center gap-2">
+      {/* RIGHT ZONE: Lifted & Right-Aligned Action Arc (Clear of Empty Hands & Status Badges) */}
+      <div className="pointer-events-auto absolute bottom-40 sm:bottom-36 right-2.5 sm:right-5 safe-bottom flex items-end gap-2.5">
+        <div className="flex flex-col items-end gap-2">
+          {/* Top row of right-side arc: Quick Backpack, Craft, and Build / Place Toggle */}
+          <div className="flex items-center gap-1.5">
             {onOpenBackpack && (
               <button
                 type="button"
@@ -280,7 +280,7 @@ export function TouchControls({
                   e.stopPropagation();
                   onOpenBackpack();
                 }}
-                className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-stone-950/85 border-2 border-stone-500/60 text-amber-300 active:bg-stone-800 flex items-center justify-center shadow-lg"
+                className="w-11 h-11 rounded-full bg-stone-950/85 border-2 border-stone-500/60 text-amber-300 active:bg-stone-800 flex items-center justify-center shadow-lg"
               >
                 <Backpack className="w-5 h-5" />
               </button>
@@ -294,7 +294,7 @@ export function TouchControls({
                   e.stopPropagation();
                   onOpenCraft();
                 }}
-                className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-stone-950/85 border-2 border-stone-500/60 text-amber-300 active:bg-stone-800 flex items-center justify-center shadow-lg"
+                className="w-11 h-11 rounded-full bg-stone-950/85 border-2 border-stone-500/60 text-amber-300 active:bg-stone-800 flex items-center justify-center shadow-lg"
               >
                 <Hammer className="w-5 h-5" />
               </button>
@@ -308,9 +308,9 @@ export function TouchControls({
                   e.stopPropagation();
                   onOpenPlace();
                 }}
-                className="h-11 sm:h-12 px-3.5 rounded-full bg-amber-950/90 border-2 border-amber-400/80 text-amber-200 active:bg-amber-800 flex items-center gap-1.5 shadow-lg"
+                className="h-11 px-3 rounded-full bg-amber-950/90 border-2 border-amber-400/80 text-amber-200 active:bg-amber-800 flex items-center gap-1.5 shadow-lg"
               >
-                <PackageOpen className="w-5 h-5" />
+                <PackageOpen className="w-4 h-4" />
                 <span className="text-[11px] font-bold uppercase tracking-wider">
                   Build
                 </span>
@@ -318,8 +318,8 @@ export function TouchControls({
             )}
           </div>
 
-          {/* Bottom row of right-side arc: Secondary Dynamic Context (Kick / Interact) + Primary Shoot/Use Button */}
-          <div className="flex items-center gap-3">
+          {/* Bottom row of right-side arc: KICK + Primary USE/Shoot Button shifted up & right */}
+          <div className="flex items-center gap-2">
             {onKickDebris && (
               <button
                 type="button"
@@ -330,13 +330,13 @@ export function TouchControls({
                   e.stopPropagation();
                   onKickDebris();
                 }}
-                className={`h-14 sm:h-16 px-4 rounded-full border-2 flex items-center gap-2 shadow-xl transition-colors ${
+                className={`h-13 sm:h-14 px-3.5 rounded-full border-2 flex items-center gap-1.5 shadow-xl transition-colors ${
                   kickCooldown > 0
                     ? 'bg-stone-950/60 border-stone-700 text-stone-500'
                     : 'bg-stone-950/90 border-amber-400/85 text-amber-300 active:bg-amber-700 active:text-stone-950'
                 }`}
               >
-                <Wind className="w-5 h-5" />
+                <Wind className="w-4 h-4 sm:w-5 sm:h-5" />
                 <span className="text-xs font-extrabold uppercase tracking-wide">
                   {kickCooldown > 0 ? `${kickCooldown.toFixed(0)}s` : 'Kick'}
                 </span>
@@ -351,7 +351,7 @@ export function TouchControls({
                 e.stopPropagation();
                 onAction();
               }}
-              className="w-20 h-20 sm:w-22 sm:h-22 rounded-full bg-amber-600 hover:bg-amber-500 active:bg-amber-400 border-3 border-amber-200 text-stone-950 font-extrabold shadow-2xl flex flex-col items-center justify-center gap-0.5"
+              className="w-[74px] h-[74px] sm:w-20 sm:h-20 rounded-full bg-amber-600 hover:bg-amber-500 active:bg-amber-400 border-3 border-amber-200 text-stone-950 font-extrabold shadow-2xl flex flex-col items-center justify-center gap-0.5"
             >
               {renderActionIcon()}
               <span className="text-[11px] uppercase tracking-wider leading-none">

@@ -11,7 +11,7 @@ export interface SmartTvTelemetry {
   playerBiome: string;
 }
 
-export type TvChannelId = 1 | 2 | 3 | 4;
+export type TvChannelId = 1 | 2 | 3 | 4 | 5;
 
 export interface TvChannelMeta {
   id: TvChannelId;
@@ -24,73 +24,137 @@ export interface TvChannelMeta {
 export const TV_CHANNELS: TvChannelMeta[] = [
   {
     id: 1,
-    name: 'Island Live TV',
-    tagline: 'Breaking News & Island Radar',
-    badge: 'LIVE',
-    color: '#ef4444',
-  },
-  {
-    id: 2,
-    name: 'Toon+',
-    tagline: 'Chompy & Rexy Cartoon Shorts',
-    badge: 'RETRO',
+    name: 'Lo-Fi Chill Radio',
+    tagline: 'Retro Sunset Visualizer & Chill Synth Beats',
+    badge: 'CH 1 · LO-FI',
     color: '#a855f7',
   },
   {
+    id: 2,
+    name: 'Lost World Survival News',
+    tagline: 'Blood Moon Radar, Weather & Island Alerts',
+    badge: 'CH 2 · NEWS',
+    color: '#ef4444',
+  },
+  {
     id: 3,
-    name: 'Net-Free Cinema',
-    tagline: 'Chrono-Strike: Lost Horizon',
-    badge: 'SCI-FI',
-    color: '#06b6d4',
+    name: 'Nature & Wildlife Cam',
+    tagline: 'Island Ocean Waves, Forest & Wildlife Audio',
+    badge: 'CH 3 · NATURE',
+    color: '#10b981',
   },
   {
     id: 4,
-    name: 'TubeCast',
-    tagline: 'Lo-Fi Visualizer & Local Video Player',
-    badge: 'MUSIC/VID',
-    color: '#3b82f6',
+    name: 'Retro Arcade & Gaming',
+    tagline: 'Cyber-Dino Starfighter 3D/Pixel Action Loop',
+    badge: 'CH 4 · ARCADE',
+    color: '#06b6d4',
+  },
+  {
+    id: 5,
+    name: 'Static / Standby',
+    tagline: 'CRT Snow Signal & Ambient Tube Hum',
+    badge: 'CH 5 · STATIC',
+    color: '#64748b',
   },
 ];
+
+export function normalizeChannelId(ch: number | undefined): TvChannelId {
+  if (ch === 1 || ch === 2 || ch === 3 || ch === 4 || ch === 5) return ch;
+  return 1;
+}
+
+export function setupVirtualTV(
+  mesh: THREE.Mesh,
+  videoElement: HTMLVideoElement,
+): () => void {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1280;
+  canvas.height = 720;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return () => {};
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+
+  const mat = mesh.material as THREE.MeshStandardMaterial;
+  mat.map = texture;
+  mat.emissiveMap = texture;
+  mat.emissive = new THREE.Color(0xffffff);
+  mat.emissiveIntensity = 1.0;
+  mat.needsUpdate = true;
+
+  let rafId = 0;
+  let active = true;
+  const updateTV = () => {
+    if (!active) return;
+    if (videoElement.readyState >= videoElement.HAVE_CURRENT_DATA) {
+      ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+      texture.needsUpdate = true;
+    }
+    rafId = window.requestAnimationFrame(updateTV);
+  };
+  rafId = window.requestAnimationFrame(updateTV);
+
+  return () => {
+    active = false;
+    window.cancelAnimationFrame(rafId);
+    texture.dispose();
+  };
+}
 
 export class SmartTvSystem {
   public canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   public canvasTexture: THREE.CanvasTexture;
-  public videoTexture: THREE.VideoTexture | null = null;
   public localVideoElement: HTMLVideoElement | null = null;
+  private localVideoObjectUrl: string | null = null;
   public isUsingLocalVideo = false;
+  public localVideoName = '';
+  public isUsingYouTube = false;
+  public youtubeVideoId = '';
+  public youtubeTitle = 'YouTube';
+  public youtubeChannel = 'YouTube';
 
   public power = true;
+  public isPaused = false;
   public currentChannel: TvChannelId = 1;
   public volume = 0.75;
   public isMuted = false;
+  public autoCycleChannels = false;
+  public currentTimestamp = 0;
+
   private turnOnProgress = 1.0;
   private turnOffProgress = 0.0;
   private isPoweringTransition = false;
+  private segmentTimer = 0;
+  private onAutoAdvanceCallback?: (ch: TvChannelMeta) => void;
 
   // Web Audio Synthesizer
   private audioCtx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
-  private synthTimer: number | null = null;
   private lastAudioNoteTime = 0;
   private audioStep = 0;
+  private lastSpatialMult = 1.0;
 
   // TV Screen mesh & Light references
   private screenMesh: THREE.Mesh | null = null;
   private screenMat: THREE.MeshStandardMaterial | null = null;
+  private standbyLedMat: THREE.MeshStandardMaterial | null = null;
   public tvGlowLight: THREE.PointLight | null = null;
   public tvWorldPos = new THREE.Vector3(1.4, 1.24, 0.41);
 
-  // Animation clocks
+  // Animation clocks (frozen cleanly when isPaused === true)
   private animClock = 0;
   private newsTickerOffset = 0;
-  private cartoonStep = 0;
-  private scifiCamCut = 0;
 
   constructor() {
     this.canvas = document.createElement('canvas');
-    this.canvas.width = 1024;
-    this.canvas.height = 576;
+    this.canvas.width = 1280;
+    this.canvas.height = 720;
     const ctx = this.canvas.getContext('2d', { alpha: false });
     if (!ctx) {
       throw new Error('Failed to create 2D context for Smart TV');
@@ -103,8 +167,54 @@ export class SmartTvSystem {
     this.canvasTexture.magFilter = THREE.LinearFilter;
     this.canvasTexture.generateMipmaps = false;
 
-    this.tvGlowLight = new THREE.PointLight(0x38bdf8, 1.4, 7.5);
+    this.tvGlowLight = new THREE.PointLight(0xa855f7, 1.5, 8.0);
     this.tvGlowLight.castShadow = false;
+  }
+
+  public setAutoAdvanceCallback(cb?: (ch: TvChannelMeta) => void): void {
+    this.onAutoAdvanceCallback = cb;
+  }
+
+  public unlockAudio(): void {
+    this.initAudioContext();
+  }
+
+  public getCurrentChannelMeta(): TvChannelMeta {
+    return TV_CHANNELS.find((c) => c.id === this.currentChannel) || TV_CHANNELS[0];
+  }
+
+  public syncPlacedTvVisual(group: THREE.Group): void {
+    const mat = group.userData.tvScreenMat as THREE.MeshStandardMaterial | undefined;
+    if (mat) {
+      mat.map = this.canvasTexture;
+      mat.emissiveMap = this.canvasTexture;
+      if (this.power) {
+        mat.color.setHex(0xffffff);
+        mat.emissive.setHex(0xffffff);
+        mat.emissiveIntensity = 1.0;
+        mat.roughness = 0.18;
+        mat.metalness = 0.1;
+      } else {
+        mat.color.setHex(0x94a3b8);
+        mat.emissive.setHex(0xffffff);
+        mat.emissiveIntensity = 0.22;
+        mat.roughness = 0.07;
+        mat.metalness = 0.88;
+      }
+    }
+    const ledMat = group.userData.standbyLedMat as THREE.MeshStandardMaterial | undefined;
+    if (ledMat) {
+      if (this.power) {
+        ledMat.color.setHex(this.isPaused ? 0xf59e0b : 0x22c55e);
+        ledMat.emissive.setHex(this.isPaused ? 0xf59e0b : 0x22c55e);
+        ledMat.emissiveIntensity = 1.45;
+      } else {
+        const pulse = 0.9 + Math.sin(this.animClock * 2.4) * 0.45;
+        ledMat.color.setHex(0xef4444);
+        ledMat.emissive.setHex(0xef4444);
+        ledMat.emissiveIntensity = pulse;
+      }
+    }
   }
 
   public attachToMesh(
@@ -114,6 +224,8 @@ export class SmartTvSystem {
   ): void {
     this.screenMesh = mesh;
     this.screenMat = material;
+    this.standbyLedMat =
+      (mesh.userData.standbyLedMat as THREE.MeshStandardMaterial | undefined) || null;
     if (worldPos) {
       this.tvWorldPos.copy(worldPos);
     } else {
@@ -133,28 +245,41 @@ export class SmartTvSystem {
 
   private applyMaterialTexture(): void {
     if (!this.screenMat) return;
-    if (this.power && this.isUsingLocalVideo && this.videoTexture) {
-      this.screenMat.map = this.videoTexture;
-      this.screenMat.emissiveMap = this.videoTexture;
+    // Always bind CanvasTexture to both map and emissiveMap so WebGL works identically on iOS Safari & desktop
+    this.screenMat.map = this.canvasTexture;
+    this.screenMat.emissiveMap = this.canvasTexture;
+    if (this.power) {
+      this.screenMat.color.setHex(0xffffff);
       this.screenMat.emissive.setHex(0xffffff);
-      this.screenMat.emissiveIntensity = 0.95;
+      this.screenMat.emissiveIntensity = 1.0;
       this.screenMat.roughness = 0.2;
-    } else if (this.power) {
-      this.screenMat.map = this.canvasTexture;
-      this.screenMat.emissiveMap = this.canvasTexture;
-      this.screenMat.emissive.setHex(0xffffff);
-      this.screenMat.emissiveIntensity = 0.88;
-      this.screenMat.roughness = 0.25;
+      this.screenMat.metalness = 0.1;
     } else {
-      this.screenMat.map = null;
-      this.screenMat.emissiveMap = null;
-      this.screenMat.emissive.setHex(0x000000);
-      this.screenMat.emissiveIntensity = 0;
-      this.screenMat.color.setHex(0x080808);
-      this.screenMat.roughness = 0.15;
-      this.screenMat.metalness = 0.85;
+      // Keep canvasTexture bound so realistic dark glass sheen + red standby LED render crisply
+      this.screenMat.color.setHex(0x94a3b8);
+      this.screenMat.emissive.setHex(0xffffff);
+      this.screenMat.emissiveIntensity = 0.24;
+      this.screenMat.roughness = 0.07;
+      this.screenMat.metalness = 0.88;
     }
     this.screenMat.needsUpdate = true;
+
+    if (this.standbyLedMat) {
+      if (this.power) {
+        this.standbyLedMat.color.setHex(this.isPaused ? 0xf59e0b : 0x22c55e);
+        this.standbyLedMat.emissive.setHex(this.isPaused ? 0xf59e0b : 0x22c55e);
+        this.standbyLedMat.emissiveIntensity = 1.5;
+      } else {
+        this.standbyLedMat.color.setHex(0xef4444);
+        this.standbyLedMat.emissive.setHex(0xef4444);
+        this.standbyLedMat.emissiveIntensity = 1.25;
+      }
+    }
+  }
+
+  public setAutoCycle(enabled: boolean): void {
+    this.autoCycleChannels = enabled;
+    this.segmentTimer = 0;
   }
 
   public togglePower(): boolean {
@@ -162,47 +287,133 @@ export class SmartTvSystem {
     this.power = !this.power;
     this.isPoweringTransition = true;
     if (this.power) {
+      this.isPaused = false;
       this.turnOnProgress = 0.0;
       this.turnOffProgress = 0.0;
+      if (this.localVideoElement && this.isUsingLocalVideo) {
+        this.localVideoElement.play().catch(() => {});
+      }
     } else {
       this.turnOffProgress = 0.0;
       if (this.localVideoElement) {
         this.localVideoElement.pause();
       }
     }
+    this.updateSpatialAudioGain(this.lastSpatialMult);
     this.applyMaterialTexture();
     return this.power;
   }
 
-  public setChannel(ch: TvChannelId): void {
+  public setPaused(paused: boolean): void {
     this.initAudioContext();
-    this.currentChannel = ch;
-    if (this.isUsingLocalVideo && this.localVideoElement) {
-      this.localVideoElement.pause();
-      this.isUsingLocalVideo = false;
+    if (paused) {
+      if (!this.power) return;
+      this.isPaused = true;
+      if (this.localVideoElement) {
+        this.localVideoElement.pause();
+      }
+      this.updateSpatialAudioGain(0);
+    } else {
+      if (!this.power) {
+        this.power = true;
+        this.isPoweringTransition = true;
+        this.turnOnProgress = 0.25;
+      }
+      this.isPaused = false;
+      if (this.localVideoElement && this.isUsingLocalVideo) {
+        this.localVideoElement.play().catch(() => {});
+      }
+      this.updateSpatialAudioGain(this.lastSpatialMult);
     }
     this.applyMaterialTexture();
   }
 
-  public nextChannel(): void {
-    const next = (this.currentChannel % 4) + 1;
-    this.setChannel(next as TvChannelId);
+  public togglePlayPause(): boolean {
+    if (!this.power) {
+      this.setPaused(false);
+      return true;
+    }
+    this.setPaused(!this.isPaused);
+    return !this.isPaused;
   }
 
-  public prevChannel(): void {
-    const prev = this.currentChannel === 1 ? 4 : this.currentChannel - 1;
-    this.setChannel(prev as TvChannelId);
+  public setChannel(ch: TvChannelId): void {
+    this.initAudioContext();
+    const wasOff = !this.power;
+    this.currentChannel = normalizeChannelId(ch);
+    this.power = true;
+    this.isPaused = false;
+    this.segmentTimer = 0;
+    if (wasOff) {
+      this.isPoweringTransition = true;
+      this.turnOnProgress = 0.25;
+    }
+    if (this.isUsingLocalVideo && this.localVideoElement) {
+      this.localVideoElement.pause();
+      this.isUsingLocalVideo = false;
+      this.localVideoName = '';
+    }
+    this.isUsingYouTube = false;
+    this.updateSpatialAudioGain(this.lastSpatialMult);
+    this.applyMaterialTexture();
+  }
+
+  public setYouTubeStream(
+    videoId: string,
+    title = 'YouTube',
+    channel = 'YouTube',
+  ): void {
+    this.initAudioContext();
+    if (this.localVideoElement) {
+      this.localVideoElement.pause();
+    }
+    this.isUsingLocalVideo = false;
+    this.localVideoName = '';
+    this.isUsingYouTube = true;
+    this.youtubeVideoId = videoId;
+    this.youtubeTitle = title;
+    this.youtubeChannel = channel;
+
+    const wasOff = !this.power;
+    this.power = true;
+    this.isPaused = false;
+    if (wasOff) {
+      this.isPoweringTransition = true;
+      this.turnOnProgress = 0.25;
+    }
+    this.updateSpatialAudioGain(0);
+    this.applyMaterialTexture();
+  }
+
+  public getSpatialMultiplier(): number {
+    return this.lastSpatialMult;
+  }
+
+  public nextChannel(): TvChannelMeta {
+    const next = ((this.currentChannel % TV_CHANNELS.length) + 1) as TvChannelId;
+    this.setChannel(next);
+    return this.getCurrentChannelMeta();
+  }
+
+  public prevChannel(): TvChannelMeta {
+    const prev = (
+      this.currentChannel === 1 ? TV_CHANNELS.length : this.currentChannel - 1
+    ) as TvChannelId;
+    this.setChannel(prev);
+    return this.getCurrentChannelMeta();
   }
 
   public setVolume(vol: number): void {
+    this.initAudioContext();
     this.volume = Math.max(0, Math.min(1, vol));
     if (this.volume > 0) this.isMuted = false;
-    this.updateSpatialAudioGain(1.0);
+    this.updateSpatialAudioGain(this.lastSpatialMult);
   }
 
   public toggleMute(): boolean {
+    this.initAudioContext();
     this.isMuted = !this.isMuted;
-    this.updateSpatialAudioGain(1.0);
+    this.updateSpatialAudioGain(this.lastSpatialMult);
     return this.isMuted;
   }
 
@@ -213,29 +424,37 @@ export class SmartTvSystem {
       this.localVideoElement.remove();
       this.localVideoElement = null;
     }
-    if (this.videoTexture) {
-      this.videoTexture.dispose();
-      this.videoTexture = null;
+    if (this.localVideoObjectUrl) {
+      URL.revokeObjectURL(this.localVideoObjectUrl);
+      this.localVideoObjectUrl = null;
     }
 
+    const objectUrl = URL.createObjectURL(file);
+    this.localVideoObjectUrl = objectUrl;
+
     const video = document.createElement('video');
-    video.src = URL.createObjectURL(file);
+    video.src = objectUrl;
     video.crossOrigin = 'anonymous';
     video.loop = true;
-    video.muted = false;
+    video.muted = this.isMuted;
+    video.volume = Math.max(0, Math.min(1, this.volume * this.lastSpatialMult));
     video.playsInline = true;
+    video.setAttribute('playsinline', 'true');
+    video.setAttribute('webkit-playsinline', 'true');
     video.autoplay = true;
+
+    this.localVideoName = file.name.replace(/\.[^/.]+$/, '') || 'Custom Video';
+    this.isUsingYouTube = false;
+    this.isUsingLocalVideo = true;
+    this.power = true;
+    this.isPaused = false;
+    this.applyMaterialTexture();
 
     video.addEventListener('canplay', () => {
       video.play().catch(() => {});
-      this.videoTexture = new THREE.VideoTexture(video);
-      this.videoTexture.colorSpace = THREE.SRGBColorSpace;
-      this.videoTexture.minFilter = THREE.LinearFilter;
-      this.videoTexture.magFilter = THREE.LinearFilter;
-      this.isUsingLocalVideo = true;
-      this.currentChannel = 4;
-      this.applyMaterialTexture();
     });
+    video.load();
+    video.play().catch(() => {});
 
     this.localVideoElement = video;
   }
@@ -258,58 +477,141 @@ export class SmartTvSystem {
     }
   }
 
-  private playTone(freq: number, type: OscillatorType, dur: number, gainVal: number): void {
-    if (!this.audioCtx || !this.masterGain || !this.power || this.isMuted) return;
+  private playTone(
+    freq: number,
+    type: OscillatorType,
+    dur: number,
+    gainVal: number,
+  ): void {
+    if (
+      !this.audioCtx ||
+      !this.masterGain ||
+      this.audioCtx.state !== 'running' ||
+      !this.power ||
+      this.isMuted ||
+      this.isPaused
+    ) {
+      return;
+    }
     try {
+      const now = this.audioCtx.currentTime;
       const osc = this.audioCtx.createOscillator();
       const gain = this.audioCtx.createGain();
       osc.type = type;
-      osc.frequency.setValueAtTime(freq, this.audioCtx.currentTime);
+      osc.frequency.setValueAtTime(freq, now);
 
-      gain.gain.setValueAtTime(gainVal * this.volume, this.audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(
-        0.001,
-        this.audioCtx.currentTime + dur,
-      );
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.linearRampToValueAtTime(Math.max(0.001, gainVal * this.volume), now + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0008, now + dur);
 
       osc.connect(gain);
       gain.connect(this.masterGain);
-      osc.start();
-      osc.stop(this.audioCtx.currentTime + dur);
+      osc.start(now);
+      osc.stop(now + dur + 0.01);
     } catch {
-      // Ignore audio glitches
+      // Ignore audio scheduling edge cases
     }
   }
 
-  public updateSpatialAudio(playerX: number, playerY: number, playerZ: number): void {
+  private playStaticBurst(dur: number, gainVal: number): void {
+    if (
+      !this.audioCtx ||
+      !this.masterGain ||
+      this.audioCtx.state !== 'running' ||
+      !this.power ||
+      this.isMuted ||
+      this.isPaused
+    ) {
+      return;
+    }
+    try {
+      const sampleCount = Math.max(256, Math.floor(this.audioCtx.sampleRate * dur));
+      const buffer = this.audioCtx.createBuffer(1, sampleCount, this.audioCtx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < sampleCount; i++) {
+        data[i] = (Math.random() * 2 - 1) * 0.35;
+      }
+      const src = this.audioCtx.createBufferSource();
+      src.buffer = buffer;
+
+      const filter = this.audioCtx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = 1200;
+      filter.Q.value = 0.8;
+
+      const gain = this.audioCtx.createGain();
+      gain.gain.value = gainVal * this.volume;
+
+      src.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.masterGain);
+      src.start();
+    } catch {
+      // Ignore audio edge cases
+    }
+  }
+
+  public updateSpatialAudio(
+    playerX: number,
+    playerY: number,
+    playerZ: number,
+  ): void {
     const dist = Math.hypot(
       playerX - this.tvWorldPos.x,
-      playerY - this.tvWorldPos.y,
+      playerY + 1.2 - this.tvWorldPos.y,
       playerZ - this.tvWorldPos.z,
     );
 
-    // Within 3.5m = 100% volume; roll off to 0% at 22m
+    // Within 4.5m = 100% volume; smooth roll off to 0% at 30m
     let spatialMult = 1.0;
-    if (dist > 3.5) {
-      spatialMult = Math.max(0, 1.0 - (dist - 3.5) / 18.5);
+    if (dist > 4.5) {
+      spatialMult = Math.max(0, 1.0 - (dist - 4.5) / 25.5);
     }
+    this.lastSpatialMult = spatialMult;
     this.updateSpatialAudioGain(spatialMult);
 
     if (this.localVideoElement) {
-      const effectiveVol = this.isMuted ? 0 : this.volume * spatialMult;
+      const effectiveVol =
+        !this.power || this.isMuted || this.isPaused ? 0 : this.volume * spatialMult;
       this.localVideoElement.volume = Math.max(0, Math.min(1, effectiveVol));
     }
   }
 
   private updateSpatialAudioGain(spatialMult: number): void {
+    if (this.localVideoElement) {
+      this.localVideoElement.muted = this.isMuted;
+      const effectiveVol =
+        !this.power || this.isMuted || this.isPaused ? 0 : this.volume * spatialMult;
+      this.localVideoElement.volume = Math.max(0, Math.min(1, effectiveVol));
+    }
     if (!this.masterGain || !this.audioCtx) return;
-    const finalGain = !this.power || this.isMuted ? 0 : this.volume * spatialMult * 0.22;
+    const finalGain =
+      !this.power || this.isMuted || this.isPaused ? 0 : this.volume * spatialMult * 0.24;
     this.masterGain.gain.setTargetAtTime(finalGain, this.audioCtx.currentTime, 0.05);
   }
 
+  public drawPreviewToCanvas(targetCanvas: HTMLCanvasElement): void {
+    const tCtx = targetCanvas.getContext('2d');
+    if (!tCtx) return;
+    tCtx.drawImage(this.canvas, 0, 0, targetCanvas.width, targetCanvas.height);
+  }
+
   public update(dt: number, telemetry: SmartTvTelemetry): void {
-    this.animClock += dt;
-    this.newsTickerOffset += dt * 82;
+    if (!this.power || !this.isPaused) {
+      this.animClock += dt;
+    }
+    if (this.power && !this.isPaused) {
+      this.currentTimestamp += dt;
+      this.newsTickerOffset += dt * 88;
+      if (this.autoCycleChannels && !this.isUsingLocalVideo) {
+        this.segmentTimer += dt;
+        if (this.segmentTimer >= 45) {
+          this.segmentTimer = 0;
+          const next = this.nextChannel();
+          this.onAutoAdvanceCallback?.(next);
+        }
+      }
+    }
 
     if (!this.power) {
       if (this.isPoweringTransition) {
@@ -324,6 +626,12 @@ export class SmartTvSystem {
         this.drawPowerOffAnimation(this.turnOffProgress);
         this.canvasTexture.needsUpdate = true;
       } else {
+        this.drawOffScreen();
+        this.canvasTexture.needsUpdate = true;
+        if (this.standbyLedMat) {
+          this.standbyLedMat.emissiveIntensity =
+            0.85 + Math.sin(this.animClock * 2.2) * 0.4;
+        }
         if (this.tvGlowLight) this.tvGlowLight.intensity = 0;
       }
       return;
@@ -337,16 +645,53 @@ export class SmartTvSystem {
       }
     }
 
-    if (this.isUsingLocalVideo && this.videoTexture) {
-      // Local video handles its own frames
+    if (this.isUsingLocalVideo && this.localVideoElement) {
+      const w = this.canvas.width;
+      const h = this.canvas.height;
+      const ctx = this.ctx;
+      const vid = this.localVideoElement;
+      if (vid.readyState >= vid.HAVE_CURRENT_DATA) {
+        ctx.drawImage(vid, 0, 0, w, h);
+        this.drawSmartTvOsOverlay(ctx, w, h, telemetry);
+        if (this.turnOnProgress < 1.0) {
+          this.drawPowerOnAnimation(this.turnOnProgress);
+        }
+        this.canvasTexture.needsUpdate = true;
+      } else {
+        ctx.fillStyle = '#020617';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = '#e2e8f0';
+        ctx.font = 'bold 28px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`LOADING VIDEO: ${this.localVideoName.toUpperCase()}...`, w / 2, h / 2);
+        ctx.textAlign = 'left';
+        this.drawSmartTvOsOverlay(ctx, w, h, telemetry);
+        this.canvasTexture.needsUpdate = true;
+      }
       if (this.tvGlowLight) {
-        this.tvGlowLight.intensity = 1.2;
+        this.tvGlowLight.intensity = 1.45;
         this.tvGlowLight.color.setHex(0x38bdf8);
       }
       return;
     }
 
-    // Render Procedural TV OS Channels
+    if (this.isUsingYouTube) {
+      const w = this.canvas.width;
+      const h = this.canvas.height;
+      const ctx = this.ctx;
+      this.drawYouTubeBroadcast(ctx, w, h);
+      this.drawSmartTvOsOverlay(ctx, w, h, telemetry);
+      if (this.turnOnProgress < 1.0) {
+        this.drawPowerOnAnimation(this.turnOnProgress);
+      }
+      this.canvasTexture.needsUpdate = true;
+      if (this.tvGlowLight) {
+        this.tvGlowLight.intensity = 1.5;
+        this.tvGlowLight.color.setHex(0xef4444);
+      }
+      return;
+    }
+
     const w = this.canvas.width;
     const h = this.canvas.height;
     const ctx = this.ctx;
@@ -356,46 +701,49 @@ export class SmartTvSystem {
 
     switch (this.currentChannel) {
       case 1:
-        this.drawIslandLiveNews(ctx, w, h, telemetry);
+        this.drawLoFiChillRadio(ctx, w, h);
         if (this.tvGlowLight) {
-          this.tvGlowLight.intensity = 1.35;
-          this.tvGlowLight.color.setHex(0xef4444);
-        }
-        break;
-      case 2:
-        this.drawToonPlusCartoons(ctx, w, h);
-        if (this.tvGlowLight) {
-          this.tvGlowLight.intensity = 1.45;
+          this.tvGlowLight.intensity = 1.5;
           this.tvGlowLight.color.setHex(0xa855f7);
         }
         break;
-      case 3:
-        this.drawNetFreeSciFi(ctx, w, h);
+      case 2:
+        this.drawSurvivalNewsChannel(ctx, w, h, telemetry);
         if (this.tvGlowLight) {
-          this.tvGlowLight.intensity = 1.5;
-          this.tvGlowLight.color.setHex(0x06b6d4);
+          this.tvGlowLight.intensity = 1.45;
+          this.tvGlowLight.color.setHex(0xef4444);
+        }
+        break;
+      case 3:
+        this.drawNatureWildlifeCam(ctx, w, h, telemetry);
+        if (this.tvGlowLight) {
+          this.tvGlowLight.intensity = 1.45;
+          this.tvGlowLight.color.setHex(0x10b981);
         }
         break;
       case 4:
-        this.drawTubeCastVisualizer(ctx, w, h);
+        this.drawRetroArcadeGaming(ctx, w, h);
         if (this.tvGlowLight) {
-          this.tvGlowLight.intensity = 1.3;
-          this.tvGlowLight.color.setHex(0x3b82f6);
+          this.tvGlowLight.intensity = 1.55;
+          this.tvGlowLight.color.setHex(0x06b6d4);
+        }
+        break;
+      case 5:
+        this.drawStaticStandbyChannel(ctx, w, h);
+        if (this.tvGlowLight) {
+          this.tvGlowLight.intensity = 0.85;
+          this.tvGlowLight.color.setHex(0x94a3b8);
         }
         break;
     }
 
-    // Samsung Tizen-Style Smart Hub Top Header & Bottom Dock
-    this.drawSamsungSmartHubOverlay(ctx, w, h, telemetry);
+    this.drawSmartTvOsOverlay(ctx, w, h, telemetry);
 
-    // If powering on, apply CRT expansion line
     if (this.turnOnProgress < 1.0) {
       this.drawPowerOnAnimation(this.turnOnProgress);
     }
 
     this.canvasTexture.needsUpdate = true;
-
-    // Web Audio Sound Loop (gentle procedural synth music per channel)
     this.updateProceduralAudio();
   }
 
@@ -431,7 +779,7 @@ export class SmartTvSystem {
     ctx.fillRect(0, 0, w, maskH);
     ctx.fillRect(0, h - maskH, w, maskH);
     if (p > 0.6) {
-      const flash = (1 - (p - 0.6) / 0.4);
+      const flash = 1 - (p - 0.6) / 0.4;
       ctx.fillStyle = `rgba(255, 255, 255, ${flash})`;
       ctx.fillRect(w / 2 - 20, h / 2 - 2, 40, 4);
     }
@@ -442,18 +790,219 @@ export class SmartTvSystem {
     const ctx = this.ctx;
     const w = this.canvas.width;
     const h = this.canvas.height;
-    ctx.fillStyle = '#050507';
+
+    const baseGrad = ctx.createLinearGradient(0, 0, w, h);
+    baseGrad.addColorStop(0, '#070a10');
+    baseGrad.addColorStop(0.5, '#030407');
+    baseGrad.addColorStop(1, '#090d14');
+    ctx.fillStyle = baseGrad;
     ctx.fillRect(0, 0, w, h);
+
+    ctx.save();
+    const streak1 = ctx.createLinearGradient(w * 0.1, 0, w * 0.55, h);
+    streak1.addColorStop(0, 'rgba(148, 163, 184, 0.09)');
+    streak1.addColorStop(0.5, 'rgba(226, 232, 240, 0.03)');
+    streak1.addColorStop(1, 'rgba(148, 163, 184, 0)');
+    ctx.fillStyle = streak1;
+    ctx.beginPath();
+    ctx.moveTo(w * 0.08, 0);
+    ctx.lineTo(w * 0.36, 0);
+    ctx.lineTo(w * 0.62, h);
+    ctx.lineTo(w * 0.32, h);
+    ctx.closePath();
+    ctx.fill();
+
+    const streak2 = ctx.createLinearGradient(w * 0.45, 0, w * 0.85, h);
+    streak2.addColorStop(0, 'rgba(186, 230, 253, 0.05)');
+    streak2.addColorStop(1, 'rgba(186, 230, 253, 0)');
+    ctx.fillStyle = streak2;
+    ctx.beginPath();
+    ctx.moveTo(w * 0.56, 0);
+    ctx.lineTo(w * 0.66, 0);
+    ctx.lineTo(w * 0.88, h);
+    ctx.lineTo(w * 0.78, h);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+    ctx.lineWidth = 6;
+    ctx.strokeRect(3, 3, w - 6, h - 6);
+
+    const pulse = 0.68 + Math.sin(this.animClock * 2.2) * 0.25;
+    const ledX = w - 34;
+    const ledY = h - 24;
+    const ledGlow = ctx.createRadialGradient(ledX, ledY, 2, ledX, ledY, 22);
+    ledGlow.addColorStop(0, `rgba(239, 68, 68, ${pulse * 0.85})`);
+    ledGlow.addColorStop(1, 'rgba(239, 68, 68, 0)');
+    ctx.fillStyle = ledGlow;
+    ctx.beginPath();
+    ctx.arc(ledX, ledY, 22, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = `rgba(248, 113, 113, ${Math.min(1, pulse + 0.2)})`;
+    ctx.beginPath();
+    ctx.arc(ledX, ledY, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
-  // CHANNEL 1: ISLAND LIVE TV (NEWS & RADAR)
-  private drawIslandLiveNews(
+  // CHANNEL 1: LO-FI CHILL RADIO (ANIMATED RETRO SUNSET / STUDIO VISUALIZER)
+  private drawLoFiChillRadio(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    const t = this.animClock;
+    const sky = ctx.createLinearGradient(0, 0, 0, h * 0.68);
+    sky.addColorStop(0, '#1e1b4b');
+    sky.addColorStop(0.45, '#581c87');
+    sky.addColorStop(0.82, '#be185d');
+    sky.addColorStop(1, '#f97316');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, h);
+
+    // Twinkling night stars above sunset
+    for (let i = 0; i < 42; i++) {
+      const sx = ((i * 197 + 41) % w);
+      const sy = 50 + ((i * 89) % (h * 0.34));
+      const alpha = 0.35 + 0.55 * Math.abs(Math.sin(t * 1.4 + i));
+      ctx.fillStyle = `rgba(248, 250, 252, ${alpha.toFixed(2)})`;
+      ctx.fillRect(sx, sy, 3, 3);
+    }
+
+    // Striped Synthwave Sun
+    const sunX = w / 2;
+    const sunY = h * 0.44 + Math.sin(t * 0.6) * 6;
+    const sunR = 112;
+    const sunGrad = ctx.createLinearGradient(sunX, sunY - sunR, sunX, sunY + sunR);
+    sunGrad.addColorStop(0, '#fde047');
+    sunGrad.addColorStop(0.55, '#fb923c');
+    sunGrad.addColorStop(1, '#ec4899');
+    ctx.save();
+    ctx.fillStyle = sunGrad;
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, sunR, 0, Math.PI * 2);
+    ctx.fill();
+    // Horizon slice cutouts
+    ctx.fillStyle = '#3b0764';
+    for (let k = 0; k < 5; k++) {
+      const bandY = sunY + 12 + k * 20;
+      const bandH = 3 + k * 2.1;
+      ctx.fillRect(sunX - sunR - 4, bandY, sunR * 2 + 8, bandH);
+    }
+    ctx.restore();
+
+    // Distant volcanic island silhouette (scaled to 1280x720)
+    ctx.fillStyle = '#0f0728';
+    ctx.beginPath();
+    ctx.moveTo(0, h * 0.62);
+    ctx.lineTo(w * 0.14, h * 0.53);
+    ctx.lineTo(w * 0.28, h * 0.61);
+    ctx.lineTo(w * 0.42, h * 0.56);
+    ctx.lineTo(w * 0.61, h * 0.59);
+    ctx.lineTo(w * 0.78, h * 0.51);
+    ctx.lineTo(w, h * 0.62);
+    ctx.lineTo(w, h);
+    ctx.lineTo(0, h);
+    ctx.closePath();
+    ctx.fill();
+
+    // Scrolling Synthwave Grid Floor
+    const horizonY = h * 0.62;
+    const groundGrad = ctx.createLinearGradient(0, horizonY, 0, h);
+    groundGrad.addColorStop(0, '#1e1b4b');
+    groundGrad.addColorStop(1, '#020617');
+    ctx.fillStyle = groundGrad;
+    ctx.fillRect(0, horizonY, w, h - horizonY);
+
+    ctx.strokeStyle = 'rgba(232, 121, 249, 0.55)';
+    ctx.lineWidth = 2;
+    for (let i = -12; i <= 12; i++) {
+      ctx.beginPath();
+      ctx.moveTo(w / 2 + i * 24, horizonY);
+      ctx.lineTo(w / 2 + i * 115, h);
+      ctx.stroke();
+    }
+    const scroll = (t * 0.65) % 1;
+    for (let j = 0; j < 7; j++) {
+      const p = ((j + scroll) / 7);
+      const y = horizonY + Math.pow(p, 1.8) * (h - horizonY);
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(w, y);
+      ctx.stroke();
+    }
+
+    // Center Floating Lo-Fi Vinyl & Studio Deck
+    const deckX = w / 2;
+    const deckY = h * 0.45;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+    ctx.strokeStyle = '#c084fc';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.roundRect(deckX - 185, deckY - 72, 370, 144, 18);
+    ctx.fill();
+    ctx.stroke();
+
+    // Spinning vinyl platter
+    const vx = deckX - 105;
+    const vy = deckY;
+    ctx.fillStyle = '#09090b';
+    ctx.beginPath();
+    ctx.arc(vx, vy, 50, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#a855f7';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(vx, vy, 36, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = '#f43f5e';
+    ctx.beginPath();
+    ctx.arc(vx, vy, 16, 0, Math.PI * 2);
+    ctx.fill();
+    // Spinning strobe dot
+    const spin = t * 2.6;
+    ctx.fillStyle = '#fde047';
+    ctx.beginPath();
+    ctx.arc(vx + Math.cos(spin) * 28, vy + Math.sin(spin) * 28, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Track Meta inside Deck
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 21px sans-serif';
+    ctx.fillText('LO-FI CHILL RADIO', deckX - 38, deckY - 20);
+    ctx.fillStyle = '#f0abfc';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText('NOW SPINNING: SUNSET COVE', deckX - 38, deckY + 8);
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '13px monospace';
+    ctx.fillText('WARM SYNTH · 24/7 LOOP', deckX - 38, deckY + 34);
+
+    // 28-Bar Spectrum Equalizer across bottom
+    const barCount = 28;
+    const barW = (w - 120) / barCount - 6;
+    for (let i = 0; i < barCount; i++) {
+      const wave =
+        Math.sin(t * 4.5 + i * 0.45) * 0.4 +
+        Math.cos(t * 2.8 - i * 0.25) * 0.25 +
+        0.5;
+      const barH = 18 + Math.max(0.08, wave) * 112;
+      const bx = 60 + i * (barW + 6);
+      const by = h - 34 - barH;
+      const barGrad = ctx.createLinearGradient(0, by, 0, by + barH);
+      barGrad.addColorStop(0, '#fde047');
+      barGrad.addColorStop(0.5, '#ec4899');
+      barGrad.addColorStop(1, '#7e22ce');
+      ctx.fillStyle = barGrad;
+      ctx.beginPath();
+      ctx.roundRect(bx, by, barW, barH, 4);
+      ctx.fill();
+    }
+  }
+
+  // CHANNEL 2: LOST WORLD SURVIVAL NEWS (TICKER, BLOOD MOON RADAR & ISLAND ALERTS)
+  private drawSurvivalNewsChannel(
     ctx: CanvasRenderingContext2D,
     w: number,
     h: number,
     telemetry: SmartTvTelemetry,
   ): void {
-    // Studio backdrop gradient
     const grad = ctx.createLinearGradient(0, 0, 0, h);
     grad.addColorStop(0, '#091e3a');
     grad.addColorStop(0.55, '#1e293b');
@@ -461,76 +1010,74 @@ export class SmartTvSystem {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);
 
-    // Studio window view of Lost World volcano & storm clouds
+    // Studio backdrop volcano window
     ctx.save();
     ctx.fillStyle = '#020617';
-    ctx.fillRect(40, 40, w - 80, 320);
+    ctx.fillRect(40, 52, w - 80, 325);
 
-    // Moving sky clouds
-    const cloudOffset = (this.animClock * 15) % (w - 80);
+    const cloudOffset = (this.animClock * 16) % (w - 80);
     ctx.fillStyle = '#1e293b';
     ctx.beginPath();
-    ctx.arc(120 + cloudOffset, 120, 70, 0, Math.PI * 2);
-    ctx.arc(190 + cloudOffset, 100, 90, 0, Math.PI * 2);
-    ctx.arc(270 + cloudOffset, 130, 65, 0, Math.PI * 2);
+    ctx.arc(120 + cloudOffset, 125, 68, 0, Math.PI * 2);
+    ctx.arc(195 + cloudOffset, 108, 86, 0, Math.PI * 2);
+    ctx.arc(270 + cloudOffset, 134, 60, 0, Math.PI * 2);
     ctx.fill();
 
-    // Volcanic Mountain silhouette
     ctx.fillStyle = '#0f172a';
     ctx.beginPath();
-    ctx.moveTo(80, 360);
-    ctx.lineTo(240, 160);
-    ctx.lineTo(320, 220);
-    ctx.lineTo(440, 130);
-    ctx.lineTo(580, 360);
+    ctx.moveTo(80, 377);
+    ctx.lineTo(240, 175);
+    ctx.lineTo(320, 232);
+    ctx.lineTo(440, 142);
+    ctx.lineTo(580, 377);
     ctx.fill();
 
-    // Lava glow on volcano peak
-    ctx.fillStyle = '#ef4444';
+    const bloodMoonUrgent = telemetry.daysUntilBloodMoon <= 1;
+    ctx.fillStyle = bloodMoonUrgent ? '#dc2626' : '#ef4444';
     ctx.beginPath();
-    ctx.arc(440, 135, 12 + Math.sin(this.animClock * 4) * 3, 0, Math.PI * 2);
+    ctx.arc(
+      440,
+      147,
+      (bloodMoonUrgent ? 18 : 12) + Math.sin(this.animClock * 4.5) * 4,
+      0,
+      Math.PI * 2,
+    );
     ctx.fill();
     ctx.restore();
 
-    // Animated News Anchor Desk (Center-Left)
+    // Animated Raptor News Anchor
     const anchorBob = Math.sin(this.animClock * 3.5) * 4;
-    // Anchor Body
     ctx.fillStyle = '#1e3a8a';
     ctx.beginPath();
-    ctx.ellipse(320, 270 + anchorBob, 55, 75, 0, 0, Math.PI * 2);
+    ctx.ellipse(295, 275 + anchorBob, 55, 75, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Head
-    ctx.fillStyle = '#fde047';
+    ctx.fillStyle = '#16a34a';
     ctx.beginPath();
-    ctx.arc(320, 175 + anchorBob, 36, 0, Math.PI * 2);
+    ctx.arc(295, 180 + anchorBob, 36, 0, Math.PI * 2);
     ctx.fill();
-
-    // Raptor Snout & Sunglasses (Lost World News Anchor!)
     ctx.fillStyle = '#15803d';
     ctx.beginPath();
-    ctx.ellipse(345, 180 + anchorBob, 22, 14, 0, 0, Math.PI * 2);
+    ctx.ellipse(322, 185 + anchorBob, 22, 14, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Eyes / Glasses
+    // Sunglasses
     ctx.fillStyle = '#0f172a';
-    ctx.fillRect(310, 165 + anchorBob, 32, 12);
+    ctx.fillRect(284, 170 + anchorBob, 34, 12);
     ctx.fillStyle = '#38bdf8';
-    ctx.fillRect(312, 168 + anchorBob, 12, 5);
-    ctx.fillRect(328, 168 + anchorBob, 12, 5);
+    ctx.fillRect(286, 173 + anchorBob, 12, 5);
+    ctx.fillRect(303, 173 + anchorBob, 12, 5);
 
-    // Mouth talking
-    const mouthOpen = Math.abs(Math.sin(this.animClock * 12)) * 8;
+    const mouthOpen = this.isPaused ? 3 : Math.abs(Math.sin(this.animClock * 12)) * 8;
     ctx.fillStyle = '#991b1b';
-    ctx.fillRect(342, 186 + anchorBob, 18, Math.max(3, mouthOpen));
+    ctx.fillRect(318, 191 + anchorBob, 18, Math.max(3, mouthOpen));
 
-    // News Desk Glass Top
-    const deskGrad = ctx.createLinearGradient(120, 290, 520, 390);
+    const deskGrad = ctx.createLinearGradient(110, 295, 490, 390);
     deskGrad.addColorStop(0, '#0284c7');
     deskGrad.addColorStop(1, '#0369a1');
     ctx.fillStyle = deskGrad;
     ctx.beginPath();
-    ctx.roundRect(140, 290, 360, 95, 12);
+    ctx.roundRect(110, 295, 370, 92, 12);
     ctx.fill();
     ctx.strokeStyle = '#38bdf8';
     ctx.lineWidth = 3;
@@ -538,419 +1085,531 @@ export class SmartTvSystem {
 
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 22px sans-serif';
-    ctx.fillText('ISLAND 7 NEWS', 230, 345);
+    ctx.fillText('LOST WORLD NEWS', 188, 348);
 
-    // Picture-in-Picture: Live Island Weather Radar (Top-Right)
-    const rx = w - 340;
-    const ry = 60;
-    const rw = 260;
-    const rh = 210;
+    // Live Blood Moon & Predator Weather Radar (Top-Right)
+    const rx = w - 370;
+    const ry = 66;
+    const rw = 290;
+    const rh = 240;
 
-    ctx.fillStyle = 'rgba(2, 6, 23, 0.9)';
-    ctx.strokeStyle = '#22c55e';
-    ctx.lineWidth = 2;
+    ctx.fillStyle = 'rgba(2, 6, 23, 0.92)';
+    ctx.strokeStyle = bloodMoonUrgent ? '#ef4444' : '#22c55e';
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.roundRect(rx, ry, rw, rh, 8);
+    ctx.roundRect(rx, ry, rw, rh, 10);
     ctx.fill();
     ctx.stroke();
 
-    // Radar concentric circles
     const cx = rx + rw / 2;
-    const cy = ry + rh / 2;
-    ctx.strokeStyle = 'rgba(34, 197, 94, 0.35)';
+    const cy = ry + rh / 2 + 6;
+    ctx.strokeStyle = bloodMoonUrgent
+      ? 'rgba(239, 68, 68, 0.35)'
+      : 'rgba(34, 197, 94, 0.35)';
     ctx.lineWidth = 1;
-    [30, 60, 90].forEach((rad) => {
+    [32, 62, 92].forEach((rad) => {
       ctx.beginPath();
       ctx.arc(cx, cy, rad, 0, Math.PI * 2);
       ctx.stroke();
     });
 
-    // Radar sweeping beam
     const sweepAngle = (this.animClock * 2.2) % (Math.PI * 2);
-    ctx.strokeStyle = '#4ade80';
+    ctx.strokeStyle = bloodMoonUrgent ? '#f87171' : '#4ade80';
     ctx.lineWidth = 2.5;
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.lineTo(cx + Math.cos(sweepAngle) * 92, cy + Math.sin(sweepAngle) * 92);
     ctx.stroke();
 
-    // Island landmass blip
     ctx.fillStyle = '#166534';
     ctx.beginPath();
-    ctx.ellipse(cx - 10, cy + 5, 42, 28, 0.2, 0, Math.PI * 2);
+    ctx.ellipse(cx - 8, cy + 4, 44, 29, 0.2, 0, Math.PI * 2);
     ctx.fill();
 
-    // Red blips (predators)
+    // Predator Blips
     ctx.fillStyle = '#ef4444';
     ctx.beginPath();
-    ctx.arc(cx + 25, cy - 15, 4, 0, Math.PI * 2);
-    ctx.arc(cx - 30, cy + 18, 4, 0, Math.PI * 2);
+    ctx.arc(cx + 28, cy - 16, 4.5, 0, Math.PI * 2);
+    ctx.arc(cx - 32, cy + 19, 4.5, 0, Math.PI * 2);
+    ctx.arc(cx + 12, cy + 32, 4.5, 0, Math.PI * 2);
     ctx.fill();
 
-    // Green blip (Player Shelter)
+    // Shelter Blip
     ctx.fillStyle = '#22c55e';
     ctx.beginPath();
-    ctx.arc(cx + 5, cy + 8, 5, 0, Math.PI * 2);
+    ctx.arc(cx + 4, cy + 8, 5, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = '#4ade80';
+    ctx.fillStyle = bloodMoonUrgent ? '#fca5a5' : '#4ade80';
     ctx.font = 'bold 12px monospace';
-    ctx.fillText('LIVE SATELLITE RADAR', rx + 14, ry + 22);
+    ctx.fillText(
+      `BLOOD MOON RADAR · IN ${telemetry.daysUntilBloodMoon}D`,
+      rx + 14,
+      ry + 22,
+    );
 
-    // Lower-Third News Banner
-    ctx.fillStyle = '#b91c1c';
+    // Island Alert Banner
+    ctx.fillStyle = bloodMoonUrgent ? '#991b1b' : '#b91c1c';
     ctx.fillRect(40, h - 165, w - 80, 48);
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 24px sans-serif';
-    ctx.fillText('BREAKING: LOST WORLD SPECIAL REPORT', 65, h - 132);
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillText(
+      bloodMoonUrgent
+        ? 'ALERT: CRIMSON BLOOD MOON IMMINENT — FORTIFY SHELTER!'
+        : `ISLAND ALERT: DAY ${telemetry.dayCount} · WEATHER ${telemetry.weather.toUpperCase()}`,
+      62,
+      h - 133,
+    );
 
-    // Scrolling Ticker Bar
+    // Scrolling Ticker
     ctx.fillStyle = '#090d16';
-    ctx.fillRect(40, h - 117, w - 80, 36);
-
-    const tickerText = `DAY ${telemetry.dayCount} IN PROGRESS · WEATHER: ${telemetry.weather.toUpperCase()} · FLUID EROSION: ${
-      telemetry.erosionActive ? 'CARVING ACTIVE CHANNELS' : 'CALM'
-    } · MEGAGAUNA: ${telemetry.dinoCount} PREDATORS TRACKED · TAMED ALLIES: ${telemetry.tamedCount} · BLOOD MOON IN: ${telemetry.daysUntilBloodMoon} DAYS · SEEK SHELTER BEFORE SUNSET · BIOME: ${telemetry.playerBiome}`;
+    ctx.fillRect(40, h - 117, w - 80, 38);
+    const tickerText = `DAY ${telemetry.dayCount} · WEATHER: ${telemetry.weather.toUpperCase()} · BLOOD MOON IN ${
+      telemetry.daysUntilBloodMoon
+    } DAYS · FLUID EROSION: ${
+      telemetry.erosionActive ? 'ACTIVE' : 'CALM'
+    } · PREDATORS TRACKED: ${telemetry.dinoCount} · TAMED ALLIES: ${
+      telemetry.tamedCount
+    } · BIOME: ${telemetry.playerBiome.toUpperCase()} · STAY HYDRATED & FORTIFY PERIMETER`;
 
     ctx.save();
     ctx.beginPath();
-    ctx.rect(40, h - 117, w - 80, 36);
+    ctx.rect(40, h - 117, w - 80, 38);
     ctx.clip();
     ctx.fillStyle = '#facc15';
     ctx.font = 'bold 16px monospace';
-    const tickerX = w - 80 - (this.newsTickerOffset % (ctx.measureText(tickerText).width + w));
-    ctx.fillText(tickerText, tickerX, h - 93);
+    const textW = ctx.measureText(tickerText).width;
+    const tickerX = w - 80 - (this.newsTickerOffset % (textW + w));
+    ctx.fillText(tickerText, tickerX, h - 92);
     ctx.restore();
   }
 
-  // CHANNEL 2: TOON+ (ANIMATED CARTOONS)
-  private drawToonPlusCartoons(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-    // Vibrant sunny cartoon jungle backdrop
-    const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, '#38bdf8');
-    grad.addColorStop(0.65, '#fef08a');
-    grad.addColorStop(1, '#84cc16');
-    ctx.fillStyle = grad;
+  // CHANNEL 3: NATURE & WILDLIFE CAM (ISLAND OCEAN/FOREST SCENERY)
+  private drawNatureWildlifeCam(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    telemetry: SmartTvTelemetry,
+  ): void {
+    const t = this.animClock;
+    const sky = ctx.createLinearGradient(0, 0, 0, h * 0.62);
+    sky.addColorStop(0, '#0284c7');
+    sky.addColorStop(0.55, '#38bdf8');
+    sky.addColorStop(1, '#bae6fd');
+    ctx.fillStyle = sky;
     ctx.fillRect(0, 0, w, h);
 
-    // Smiling Cartoon Sun
-    const sunGlow = Math.sin(this.animClock * 3) * 6;
-    ctx.fillStyle = '#f59e0b';
+    // Warm Tropical Sun (scaled to 1280x720)
+    const sunCenterX = w * 0.74;
+    const sunCenterY = h * 0.25;
+    ctx.fillStyle = 'rgba(254, 240, 138, 0.35)';
     ctx.beginPath();
-    ctx.arc(140, 110, 48 + sunGlow, 0, Math.PI * 2);
+    ctx.arc(sunCenterX, sunCenterY, 82 + Math.sin(t * 1.5) * 5, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#fbbf24';
+    ctx.fillStyle = '#fef08a';
     ctx.beginPath();
-    ctx.arc(140, 110, 40, 0, Math.PI * 2);
-    ctx.fill();
-    // Sun sunglasses
-    ctx.fillStyle = '#1e293b';
-    ctx.fillRect(115, 100, 50, 12);
-
-    // Lush cartoon palm trees
-    ctx.fillStyle = '#78350f';
-    ctx.fillRect(220, 210, 22, 190);
-    ctx.fillRect(w - 240, 190, 24, 210);
-
-    // Palm leaves
-    ctx.fillStyle = '#15803d';
-    ctx.beginPath();
-    ctx.arc(230, 200, 60, 0, Math.PI * 2);
-    ctx.arc(w - 230, 180, 65, 0, Math.PI * 2);
+    ctx.arc(sunCenterX, sunCenterY, 54, 0, Math.PI * 2);
     ctx.fill();
 
-    // Animated Rolling Coconut
-    const coconutX = ((this.animClock * 240) % (w - 180)) + 60;
-    const coconutY = 380 - Math.abs(Math.sin(this.animClock * 7)) * 55;
-    ctx.fillStyle = '#451a03';
-    ctx.beginPath();
-    ctx.arc(coconutX, coconutY, 26, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#78350f';
-    ctx.beginPath();
-    ctx.arc(coconutX + 6, coconutY - 6, 8, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Animated Baby T-Rex Chasing the Coconut
-    const rexX = Math.max(60, coconutX - 160);
-    const rexBob = Math.sin(this.animClock * 14) * 16;
-    const rexLegSwing = Math.sin(this.animClock * 14) * 22;
-
-    // Tail
-    ctx.fillStyle = '#16a34a';
-    ctx.beginPath();
-    ctx.moveTo(rexX - 50, 370 + rexBob);
-    ctx.quadraticCurveTo(rexX - 90, 360, rexX - 120, 330);
-    ctx.lineTo(rexX - 45, 385 + rexBob);
-    ctx.fill();
-
-    // Body
-    ctx.beginPath();
-    ctx.ellipse(rexX, 360 + rexBob, 48, 38, -0.2, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Head with big goofy cartoon eye
-    ctx.beginPath();
-    ctx.ellipse(rexX + 45, 320 + rexBob, 36, 28, 0.1, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Big eye
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.arc(rexX + 50, 310 + rexBob, 14, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#000000';
-    ctx.beginPath();
-    ctx.arc(rexX + 54, 310 + rexBob, 6, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Sharp goofy teeth
-    ctx.fillStyle = '#ffffff';
-    for (let i = 0; i < 4; i++) {
+    // Drifting Tropical Clouds
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+    for (let c = 0; c < 3; c++) {
+      const cx = ((t * (18 + c * 7) + c * 420) % (w + 260)) - 130;
+      const cy = 105 + c * 42;
       ctx.beginPath();
-      ctx.moveTo(rexX + 35 + i * 10, 335 + rexBob);
-      ctx.lineTo(rexX + 40 + i * 10, 347 + rexBob);
-      ctx.lineTo(rexX + 45 + i * 10, 335 + rexBob);
+      ctx.arc(cx, cy, 32, 0, Math.PI * 2);
+      ctx.arc(cx + 34, cy - 12, 38, 0, Math.PI * 2);
+      ctx.arc(cx + 68, cy, 28, 0, Math.PI * 2);
       ctx.fill();
     }
 
-    // Legs
-    ctx.strokeStyle = '#15803d';
-    ctx.lineWidth = 10;
+    // Distant Emerald Jungle Ridge (full width)
+    ctx.fillStyle = '#065f46';
+    ctx.beginPath();
+    ctx.moveTo(0, h * 0.56);
+    ctx.quadraticCurveTo(w * 0.2, h * 0.35, w * 0.44, h * 0.54);
+    ctx.quadraticCurveTo(w * 0.68, h * 0.41, w * 0.94, h * 0.56);
+    ctx.lineTo(0, h * 0.56);
+    ctx.fill();
+
+    // Ocean Waves (3 shimmering parallax bands)
+    const waveColors = ['#0369a1', '#0284c7', '#0ea5e9'];
+    for (let layer = 0; layer < 3; layer++) {
+      const baseY = h * (0.56 + layer * 0.11);
+      ctx.fillStyle = waveColors[layer];
+      ctx.beginPath();
+      ctx.moveTo(0, h);
+      ctx.lineTo(0, baseY);
+      for (let x = 0; x <= w; x += 32) {
+        const y =
+          baseY +
+          Math.sin(x * 0.015 + t * (1.8 + layer * 0.4) + layer * 2) * (8 + layer * 3);
+        ctx.lineTo(x, y);
+      }
+      ctx.lineTo(w, h);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Animated Leaping Dolphin in the Cove
+    const leapCycle = (t * 0.42) % 1;
+    if (leapCycle < 0.55) {
+      const u = leapCycle / 0.55;
+      const dx = 340 + u * 290;
+      const dy = h * 0.65 - Math.sin(u * Math.PI) * 95;
+      const rot = (0.5 - u) * -1.1;
+      ctx.save();
+      ctx.translate(dx, dy);
+      ctx.rotate(rot);
+      ctx.fillStyle = '#334155';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 34, 12, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-6, -10);
+      ctx.lineTo(-14, -24);
+      ctx.lineTo(4, -10);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Golden Sandy Shoreline Foreground
+    ctx.fillStyle = '#eab308';
+    ctx.beginPath();
+    ctx.moveTo(0, h * 0.78);
+    ctx.quadraticCurveTo(220, h * 0.85, 520, h);
+    ctx.lineTo(0, h);
+    ctx.closePath();
+    ctx.fill();
+
+    // Swaying Left Palm Tree Silhouette
+    const sway = Math.sin(t * 1.6) * 14;
+    ctx.strokeStyle = '#78350f';
+    ctx.lineWidth = 22;
     ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(rexX - 15, 390 + rexBob);
-    ctx.lineTo(rexX - 25 - rexLegSwing, 430);
-    ctx.moveTo(rexX + 20, 390 + rexBob);
-    ctx.lineTo(rexX + 15 + rexLegSwing, 430);
+    ctx.moveTo(75, h);
+    ctx.quadraticCurveTo(95, h * 0.58, 145 + sway, 150);
     ctx.stroke();
 
-    // Comic Onomatopoeia Caption Pop
-    const popCycle = Math.floor(this.animClock * 1.5) % 3;
-    const popWords = ['BOING!!', 'ZOOM!!', 'ROAR!!'];
-    ctx.save();
-    ctx.translate(coconutX, coconutY - 60);
-    ctx.rotate(-0.15 + Math.sin(this.animClock * 6) * 0.1);
-    ctx.fillStyle = '#f43f5e';
-    ctx.font = '900 36px sans-serif';
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 6;
-    ctx.strokeText(popWords[popCycle], 0, 0);
-    ctx.fillText(popWords[popCycle], 0, 0);
-    ctx.restore();
+    const tipX = 145 + sway;
+    const tipY = 150;
+    ctx.fillStyle = '#15803d';
+    for (let f = 0; f < 6; f++) {
+      const a = (f / 6) * Math.PI * 2 + Math.sin(t * 1.8) * 0.08;
+      ctx.save();
+      ctx.translate(tipX, tipY);
+      ctx.rotate(a);
+      ctx.beginPath();
+      ctx.ellipse(54, 0, 62, 16, 0.15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
 
-    // Show Title Watermark
-    ctx.fillStyle = '#a855f7';
-    ctx.font = 'bold 20px sans-serif';
-    ctx.fillText('TOON+ : CHOMPY & REXY', 50, 65);
+    // Wildlife Cam Soaring Tropical Birds
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 3;
+    for (let b = 0; b < 4; b++) {
+      const bx = ((t * 55 + b * 220) % (w + 120)) - 60;
+      const by = 110 + Math.sin(t * 2.5 + b) * 24 + b * 18;
+      const flap = Math.sin(t * 8 + b * 2) * 8;
+      ctx.beginPath();
+      ctx.moveTo(bx - 12, by + flap);
+      ctx.quadraticCurveTo(bx - 6, by - 6, bx, by);
+      ctx.quadraticCurveTo(bx + 6, by - 6, bx + 12, by + flap);
+      ctx.stroke();
+    }
+
+    // Wildlife Cam Viewfinder Frame & REC Badge
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.lineWidth = 2;
+    const pad = 28;
+    ctx.strokeRect(pad, 58, w - pad * 2, h - 86);
+
+    const recBlink = Math.sin(t * 4) > 0;
+    ctx.fillStyle = 'rgba(2, 6, 23, 0.72)';
+    ctx.beginPath();
+    ctx.roundRect(44, 72, 260, 34, 8);
+    ctx.fill();
+    if (recBlink && !this.isPaused) {
+      ctx.fillStyle = '#ef4444';
+      ctx.beginPath();
+      ctx.arc(62, 89, 6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText(
+      `CAM-04 · ${telemetry.playerBiome.toUpperCase()} COVE`,
+      78,
+      94,
+    );
   }
 
-  // CHANNEL 3: NET-FREE SCI-FI CINEMA
-  private drawNetFreeSciFi(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-    // Deep Space Starfield Warp
+  // CHANNEL 4: RETRO ARCADE & GAMING (ANIMATED PIXEL/3D GAMEPLAY LOOP)
+  private drawRetroArcadeGaming(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    const t = this.animClock;
     ctx.fillStyle = '#020617';
     ctx.fillRect(0, 0, w, h);
 
-    // Dynamic 3D Warp Stars
-    const starCount = 90;
-    ctx.fillStyle = '#38bdf8';
+    // 3D Starfield Warp
+    const starCount = 85;
     for (let i = 0; i < starCount; i++) {
       const angle = (i / starCount) * Math.PI * 2;
-      const speed = ((this.animClock * 140 + i * 35) % 480);
+      const speed = (t * 165 + i * 35) % 480;
       const sx = w / 2 + Math.cos(angle) * speed * 1.6;
       const sy = h / 2 + Math.sin(angle) * speed;
-      const starSize = Math.max(1, (speed / 480) * 4.5);
-      ctx.beginPath();
-      ctx.arc(sx, sy, starSize, 0, Math.PI * 2);
-      ctx.fill();
+      const starSize = Math.max(1.5, (speed / 480) * 5);
+      ctx.fillStyle = i % 3 === 0 ? '#22d3ee' : '#a5f3fc';
+      ctx.fillRect(sx, sy, starSize, starSize);
     }
 
-    // Neon Cyberpunk Horizon Grid
+    // Perspective Neon Grid
     ctx.strokeStyle = '#06b6d4';
     ctx.lineWidth = 1.5;
     const gridY = h * 0.68;
     for (let i = -10; i <= 10; i++) {
       ctx.beginPath();
       ctx.moveTo(w / 2, gridY);
-      ctx.lineTo(w / 2 + i * 90, h);
+      ctx.lineTo(w / 2 + i * 95, h);
       ctx.stroke();
     }
-    for (let j = 0; j < 5; j++) {
-      const lineY = gridY + (j / 5) * (h - gridY);
+    const gridScroll = (t * 1.1) % 1;
+    for (let j = 0; j < 6; j++) {
+      const lineY = gridY + ((j + gridScroll) / 6) * (h - gridY);
       ctx.beginPath();
       ctx.moveTo(0, lineY);
       ctx.lineTo(w, lineY);
       ctx.stroke();
     }
 
-    // Futuristic Fighter Jet (Center Stage)
-    const jetX = w / 2 + Math.sin(this.animClock * 2.5) * 60;
-    const jetY = h * 0.52 + Math.cos(this.animClock * 3.2) * 20;
+    // Animated Enemy Pixel Dino-Boss Target (Right)
+    const enemyX = w * 0.76;
+    const enemyY = h * 0.45 + Math.sin(t * 2.4) * 52;
+    ctx.fillStyle = '#ef4444';
+    ctx.fillRect(enemyX - 38, enemyY - 34, 76, 68);
+    ctx.fillStyle = '#f97316';
+    ctx.fillRect(enemyX - 24, enemyY - 22, 48, 44);
+    // Pixel eyes
+    ctx.fillStyle = '#fef08a';
+    ctx.fillRect(enemyX - 18, enemyY - 12, 12, 10);
+    ctx.fillRect(enemyX + 4, enemyY - 12, 12, 10);
 
-    // Thruster Flames
-    ctx.fillStyle = '#06b6d4';
+    // Player Neon Fighter Jet (Left-Center)
+    const jetX = w * 0.28 + Math.sin(t * 2.1) * 44;
+    const jetY = h * 0.46 + Math.cos(t * 2.8) * 38;
+
+    ctx.fillStyle = '#22d3ee';
     ctx.beginPath();
-    ctx.moveTo(jetX - 45, jetY + 12);
-    ctx.lineTo(jetX - 90 - Math.random() * 35, jetY + 12);
-    ctx.lineTo(jetX - 45, jetY + 22);
+    ctx.moveTo(jetX - 44, jetY + 8);
+    ctx.lineTo(jetX - 88 - Math.abs(Math.sin(t * 25)) * 28, jetY + 14);
+    ctx.lineTo(jetX - 44, jetY + 22);
     ctx.fill();
 
-    // Jet Body
     ctx.fillStyle = '#e2e8f0';
     ctx.beginPath();
-    ctx.moveTo(jetX + 75, jetY + 15);
-    ctx.lineTo(jetX - 45, jetY - 18);
-    ctx.lineTo(jetX - 35, jetY + 15);
-    ctx.lineTo(jetX - 45, jetY + 45);
+    ctx.moveTo(jetX + 72, jetY + 15);
+    ctx.lineTo(jetX - 42, jetY - 18);
+    ctx.lineTo(jetX - 32, jetY + 15);
+    ctx.lineTo(jetX - 42, jetY + 46);
     ctx.closePath();
     ctx.fill();
 
-    // Cockpit Canopy
     ctx.fillStyle = '#0284c7';
     ctx.beginPath();
-    ctx.ellipse(jetX + 15, jetY + 15, 24, 9, 0, 0, Math.PI * 2);
+    ctx.ellipse(jetX + 16, jetY + 15, 22, 9, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Laser Blasts from Jet
-    ctx.strokeStyle = '#22d3ee';
+    // Laser Salvos + Hit Spark
+    ctx.strokeStyle = '#fde047';
     ctx.lineWidth = 4;
-    const laserOffset = (this.animClock * 600) % w;
+    const span = enemyX - jetX;
+    const shotProg = (t * 2.4) % 1;
+    const lx = jetX + 64 + shotProg * Math.max(120, span - 80);
     ctx.beginPath();
-    ctx.moveTo(jetX + laserOffset, jetY + 8);
-    ctx.lineTo(jetX + laserOffset + 70, jetY + 8);
-    ctx.moveTo(jetX + laserOffset, jetY + 22);
-    ctx.lineTo(jetX + laserOffset + 70, jetY + 22);
+    ctx.moveTo(lx, jetY + 8);
+    ctx.lineTo(lx + 54, jetY + 8);
+    ctx.moveTo(lx, jetY + 22);
+    ctx.lineTo(lx + 54, jetY + 22);
     ctx.stroke();
 
-    // Cinematic Letterbox Subtitles
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
-    ctx.fillRect(0, h - 90, w, 90);
+    if (shotProg > 0.8) {
+      ctx.fillStyle = '#fde047';
+      ctx.beginPath();
+      ctx.arc(enemyX - 24, enemyY, 26 * (1 - (shotProg - 0.8) * 4), 0, Math.PI * 2);
+      ctx.fill();
+    }
 
-    const subStep = Math.floor(this.animClock * 0.4) % 3;
-    const subtitles = [
-      '[COMMANDER] All fighter units: The Apex Cyber-Titan has entered Sector 9!',
-      '[PILOT] Engaging quantum warp thrusters! Weapons locked onto target!',
-      '[TACTICAL] Plasma shields at maximum. Fire all torpedoes on my mark!',
-    ];
+    // Retro Arcade HUD Bar
+    const score = 98450 + Math.floor(t * 120) * 10;
+    ctx.fillStyle = 'rgba(2, 6, 23, 0.85)';
+    ctx.fillRect(36, 62, w - 72, 42);
+    ctx.strokeStyle = '#22d3ee';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(36, 62, w - 72, 42);
 
-    ctx.fillStyle = '#fde047';
-    ctx.font = 'bold 18px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(subtitles[subStep], w / 2, h - 42);
-    ctx.textAlign = 'left';
-
-    // Cinematic Stamp
-    ctx.fillStyle = '#06b6d4';
+    ctx.fillStyle = '#22d3ee';
     ctx.font = 'bold 18px monospace';
-    ctx.fillText('NET-FREE CINEMA · CHRONO-STRIKE', 50, 65);
+    ctx.fillText('1UP · DINO STARFIGHTER', 54, 89);
+    ctx.fillStyle = '#fde047';
+    ctx.fillText(`SCORE ${score.toString().padStart(7, '0')}`, w - 340, 89);
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+    ctx.fillRect(0, h - 68, w, 68);
+    ctx.fillStyle = '#38bdf8';
+    ctx.font = 'bold 17px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(
+      'INSERT COIN · WAVE 07 · LASER TURBO CHARGED [COMBO x4]',
+      w / 2,
+      h - 28,
+    );
+    ctx.textAlign = 'left';
   }
 
-  // CHANNEL 4: TUBECAST (NEON AUDIO VISUALIZER & LOCAL VIDEO)
-  private drawTubeCastVisualizer(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-    // Cyberpunk Dark Gradient
-    const grad = ctx.createLinearGradient(0, 0, w, h);
-    grad.addColorStop(0, '#0f172a');
-    grad.addColorStop(0.5, '#1e1b4b');
-    grad.addColorStop(1, '#020617');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, w, h);
+  // CHANNEL 5: STATIC / STANDBY (CRT SNOW & HORIZONTAL SYNC ROLL)
+  private drawStaticStandbyChannel(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    const step = 16;
+    const seedBase = Math.floor(this.animClock * 24);
+    for (let y = 0; y < h; y += step) {
+      for (let x = 0; x < w; x += step) {
+        const hash = ((x * 73856093) ^ (y * 19349663) ^ (seedBase * 83492791)) >>> 0;
+        const v = 26 + (hash % 150);
+        ctx.fillStyle = `rgb(${v}, ${v}, ${Math.min(255, v + 8)})`;
+        ctx.fillRect(x, y, step, step);
+      }
+    }
 
-    // Retro Neon Cassette Tape in Center
-    const cx = w / 2;
-    const cy = h * 0.42;
+    // Rolling VHS horizontal interference band
+    const rollY = ((this.animClock * 170) % (h + 90)) - 45;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
+    ctx.fillRect(0, rollY, w, 28);
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.45)';
+    ctx.fillRect(0, rollY + 28, w, 12);
 
-    // Cassette Body
-    ctx.fillStyle = '#1e293b';
-    ctx.strokeStyle = '#3b82f6';
+    // Classic Center Blue/Dark OSD Box
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+    ctx.strokeStyle = '#94a3b8';
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.roundRect(cx - 160, cy - 90, 320, 180, 14);
+    ctx.roundRect(w / 2 - 220, h / 2 - 64, 440, 128, 14);
     ctx.fill();
     ctx.stroke();
 
-    // Cassette Label
     ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 28px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('CH 05 · STATIC / STANDBY', w / 2, h / 2 - 8);
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = 'bold 15px monospace';
+    ctx.fillText('NO BROADCAST SIGNAL · SWITCH CH 1–4', w / 2, h / 2 + 28);
+    ctx.textAlign = 'left';
+  }
+
+  private drawYouTubeBroadcast(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+  ): void {
+    const t = this.animClock;
+    const bg = ctx.createLinearGradient(0, 0, w, h);
+    bg.addColorStop(0, '#0f0709');
+    bg.addColorStop(0.5, '#1f0b12');
+    bg.addColorStop(1, '#09090b');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+
+    // Ambient Crimson Glow behind YouTube Player Card
+    const glow = ctx.createRadialGradient(w / 2, h * 0.48, 30, w / 2, h * 0.48, 360);
+    glow.addColorStop(0, 'rgba(239, 68, 68, 0.36)');
+    glow.addColorStop(0.6, 'rgba(220, 38, 38, 0.12)');
+    glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, w, h);
+
+    // Center YouTube Red Play Badge
+    const cardW = 200;
+    const cardH = 136;
+    const cardX = w / 2 - cardW / 2;
+    const cardY = h * 0.33 - cardH / 2 + Math.sin(t * 2.1) * 5;
+    ctx.fillStyle = '#dc2626';
     ctx.beginPath();
-    ctx.roundRect(cx - 130, cy - 70, 260, 80, 6);
+    ctx.roundRect(cardX, cardY, cardW, cardH, 32);
     ctx.fill();
 
-    ctx.fillStyle = '#1e293b';
-    ctx.font = 'bold 16px sans-serif';
-    ctx.fillText('SIDE A · LOST WORLD CHILLWAVE', cx - 110, cy - 42);
-    ctx.font = '12px monospace';
-    ctx.fillText('STEREO DOLBY SURROUND · TUBECAST', cx - 110, cy - 16);
-
-    // Spinning Tape Spools
-    const spoolAngle = this.animClock * 3.5;
-    [-65, 65].forEach((offset) => {
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(cx + offset, cy + 32, 24, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    if (this.isPaused) {
+      ctx.fillRect(w / 2 - 26, cardY + 38, 18, 60);
+      ctx.fillRect(w / 2 + 8, cardY + 38, 18, 60);
+    } else {
+      ctx.moveTo(w / 2 - 22, cardY + 36);
+      ctx.lineTo(w / 2 + 34, cardY + cardH / 2);
+      ctx.lineTo(w / 2 - 22, cardY + cardH - 36);
+      ctx.closePath();
       ctx.fill();
-      ctx.strokeStyle = '#0284c7';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(cx + offset, cy + 32, 14, 0, Math.PI * 2);
-      ctx.stroke();
+    }
 
-      // Spokes
-      for (let s = 0; s < 3; s++) {
-        const a = spoolAngle + (s * Math.PI * 2) / 3;
-        ctx.beginPath();
-        ctx.moveTo(cx + offset, cy + 32);
-        ctx.lineTo(cx + offset + Math.cos(a) * 22, cy + 32 + Math.sin(a) * 22);
-        ctx.stroke();
-      }
-    });
+    // Active Video Title & Channel
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 34px sans-serif';
+    ctx.textAlign = 'center';
+    const clippedTitle =
+      this.youtubeTitle.length > 42
+        ? `${this.youtubeTitle.slice(0, 40)}…`
+        : this.youtubeTitle;
+    ctx.fillText(clippedTitle, w / 2, h * 0.56);
 
-    // 24-Bar Spectrum Equalizer at Bottom
-    const barCount = 28;
-    const barW = (w - 120) / barCount - 6;
+    ctx.fillStyle = '#fca5a5';
+    ctx.font = 'bold 20px monospace';
+    ctx.fillText(
+      `YOUTUBE · ${this.youtubeChannel.toUpperCase()}`,
+      w / 2,
+      h * 0.63,
+    );
+    ctx.textAlign = 'left';
+
+    // Audio-Reactive Visualizer Bars at bottom
+    const barCount = 32;
+    const barW = (w - 160) / barCount - 6;
     for (let i = 0; i < barCount; i++) {
-      const freq = Math.sin(this.animClock * 5 + i * 0.4) * 0.5 + 0.5;
-      const barH = 20 + freq * 95;
-      const bx = 60 + i * (barW + 6);
-      const by = h - 140 - barH;
-
+      const amp = this.isPaused
+        ? 0.14
+        : 0.25 + 0.65 * Math.abs(Math.sin(t * 4.2 + i * 0.52));
+      const barH = 14 + amp * 95;
+      const bx = 80 + i * (barW + 6);
+      const by = h - 48 - barH;
       const barGrad = ctx.createLinearGradient(0, by, 0, by + barH);
-      barGrad.addColorStop(0, '#38bdf8');
-      barGrad.addColorStop(0.5, '#6366f1');
-      barGrad.addColorStop(1, '#ec4899');
+      barGrad.addColorStop(0, '#f87171');
+      barGrad.addColorStop(1, '#991b1b');
       ctx.fillStyle = barGrad;
       ctx.beginPath();
       ctx.roundRect(bx, by, barW, barH, 4);
       ctx.fill();
     }
-
-    // Now Playing Tracker
-    ctx.fillStyle = '#38bdf8';
-    ctx.font = 'bold 18px monospace';
-    ctx.fillText('NOW PLAYING: SURVIVAL BEATS · 100% NATIVE AUDIO', 50, 65);
   }
 
-  // SAMSUNG TIZEN SMART HUB OVERLAY (STATUS BAR & DOCK)
-  private drawSamsungSmartHubOverlay(
+  // SMART TV OS TOP STATUS BAR
+  private drawSmartTvOsOverlay(
     ctx: CanvasRenderingContext2D,
     w: number,
     h: number,
     telemetry: SmartTvTelemetry,
   ): void {
-    // Sleek Samsung Top Status Bar
-    ctx.fillStyle = 'rgba(2, 6, 23, 0.7)';
-    ctx.fillRect(0, 0, w, 44);
+    ctx.fillStyle = 'rgba(2, 6, 23, 0.78)';
+    ctx.fillRect(0, 0, w, 46);
 
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 15px sans-serif';
-    ctx.fillText('SAMSUNG Smart Hub', 32, 28);
+    ctx.fillText('LOST WORLD SMART TV', 26, 29);
 
-    // Live Satellite signal icon
     ctx.fillStyle = '#22c55e';
-    ctx.fillRect(w - 220, 24, 4, 10);
-    ctx.fillRect(w - 212, 20, 4, 14);
-    ctx.fillRect(w - 204, 16, 4, 18);
-    ctx.fillRect(w - 196, 12, 4, 22);
+    ctx.fillRect(w - 216, 25, 4, 10);
+    ctx.fillRect(w - 208, 21, 4, 14);
+    ctx.fillRect(w - 200, 17, 4, 18);
+    ctx.fillRect(w - 192, 13, 4, 22);
 
-    ctx.fillStyle = '#94a3b8';
+    ctx.fillStyle = '#cbd5e1';
     ctx.font = '13px monospace';
     const timeHr = Math.floor(telemetry.timeOfDay * 24);
     const timeMin = Math.floor((telemetry.timeOfDay * 24 - timeHr) * 60);
@@ -958,62 +1617,116 @@ export class SmartTvSystem {
       `${timeHr.toString().padStart(2, '0')}:${timeMin
         .toString()
         .padStart(2, '0')} · DAY ${telemetry.dayCount}`,
-      w - 180,
-      28,
+      w - 174,
+      29,
     );
 
-    // Active Channel Pill
-    const curMeta = TV_CHANNELS.find((x) => x.id === this.currentChannel);
-    if (curMeta) {
-      ctx.fillStyle = curMeta.color;
+    const curMeta = this.getCurrentChannelMeta();
+    const activeBadgeText = this.isUsingYouTube
+      ? `YOUTUBE · ${this.youtubeTitle.slice(0, 26).toUpperCase()}`
+      : this.isUsingLocalVideo
+        ? `USB VIDEO · ${this.localVideoName.toUpperCase()}`
+        : `${curMeta.badge} · ${curMeta.name.toUpperCase()}`;
+    ctx.fillStyle = this.isPaused
+      ? '#d97706'
+      : this.isUsingYouTube
+        ? '#dc2626'
+        : this.isUsingLocalVideo
+          ? '#0284c7'
+          : curMeta.color;
+    ctx.beginPath();
+    ctx.roundRect(w / 2 - 225, 8, 450, 30, 15);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'center';
+    const prefix = this.isPaused ? 'PAUSED · ' : '';
+    ctx.fillText(`${prefix}${activeBadgeText}`, w / 2, 28);
+    ctx.textAlign = 'left';
+
+    // Crisp translucent Pause Badge if paused
+    if (this.isPaused) {
+      ctx.fillStyle = 'rgba(2, 6, 23, 0.76)';
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.roundRect(w / 2 - 80, 8, 160, 28, 14);
+      ctx.roundRect(w - 190, h - 72, 162, 46, 12);
       ctx.fill();
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 12px sans-serif';
+      ctx.stroke();
+      ctx.fillStyle = '#fbbf24';
+      ctx.font = 'bold 18px monospace';
       ctx.textAlign = 'center';
-      ctx.fillText(`CH ${curMeta.id} · ${curMeta.badge}`, w / 2, 26);
+      ctx.fillText('|| PAUSED', w - 109, h - 43);
       ctx.textAlign = 'left';
     }
   }
 
-  // PROCEDURAL WEB AUDIO SYNTH MUSIC
+  // PROCEDURAL WEB AUDIO SYNTH PER CHANNEL
   private updateProceduralAudio(): void {
-    if (!this.audioCtx || !this.power || this.isMuted) return;
+    if (
+      !this.audioCtx ||
+      this.audioCtx.state !== 'running' ||
+      !this.power ||
+      this.isMuted ||
+      this.isPaused
+    ) {
+      return;
+    }
     const now = this.audioCtx.currentTime;
-    if (now - this.lastAudioNoteTime < 0.28) return;
+    const stepInterval =
+      this.currentChannel === 1
+        ? 0.44
+        : this.currentChannel === 3
+          ? 0.68
+          : this.currentChannel === 4
+            ? 0.22
+            : 0.34;
+    if (now - this.lastAudioNoteTime < stepInterval) return;
     this.lastAudioNoteTime = now;
     this.audioStep = (this.audioStep + 1) % 16;
 
     switch (this.currentChannel) {
       case 1: {
-        // News Anchor Arpeggio
-        const scale = [220, 277.18, 329.63, 440, 554.37];
-        const freq = scale[this.audioStep % scale.length];
-        this.playTone(freq, 'triangle', 0.18, 0.08);
+        // Lo-Fi Chill Radio warm Maj7 chords
+        const lofiNotes = [220.0, 261.63, 329.63, 392.0, 440.0, 329.63, 293.66, 261.63];
+        const freq = lofiNotes[this.audioStep % lofiNotes.length];
+        this.playTone(freq, 'sine', 0.42, 0.11);
+        if (this.audioStep % 4 === 0) {
+          this.playTone(110.0, 'triangle', 0.55, 0.08);
+        }
         break;
       }
       case 2: {
-        // Playful Cartoon Xylophone Boings
-        const cartoonScale = [329.63, 392.0, 440.0, 493.88, 587.33, 659.25];
-        const freq = cartoonScale[(this.audioStep * 2) % cartoonScale.length];
-        this.playTone(freq, 'sine', 0.14, 0.12);
+        // Lost World Survival News crisp broadcast pulse & radar ping
+        if (this.audioStep % 4 === 0) {
+          const newsScale = [440, 554.37, 659.25, 880];
+          this.playTone(newsScale[(this.audioStep / 4) % newsScale.length], 'triangle', 0.2, 0.07);
+        } else if (this.audioStep % 8 === 2) {
+          this.playTone(1174.66, 'sine', 0.14, 0.04);
+        }
         break;
       }
       case 3: {
-        // Deep Sci-Fi Synth Bass & Lead
-        const bassFreq = this.audioStep % 4 === 0 ? 110 : 130.81;
-        this.playTone(bassFreq, 'sawtooth', 0.26, 0.09);
-        if (this.audioStep % 2 === 0) {
-          this.playTone(440 + (this.audioStep % 8) * 44, 'square', 0.12, 0.05);
+        // Nature & Wildlife Cam serene pentatonic wind chimes & surf wash
+        const natureScale = [261.63, 293.66, 329.63, 392.0, 440.0, 523.25];
+        const freq = natureScale[(this.audioStep * 3) % natureScale.length];
+        this.playTone(freq, 'sine', 0.65, 0.06);
+        if (this.audioStep % 4 === 0) {
+          this.playStaticBurst(0.35, 0.035);
         }
         break;
       }
       case 4: {
-        // Lo-Fi Chillwave Chords
-        const lofiScale = [174.61, 220.0, 261.63, 329.63];
-        const freq = lofiScale[this.audioStep % lofiScale.length];
-        this.playTone(freq, 'sine', 0.35, 0.11);
+        // Retro Arcade & Gaming energetic chiptune synth
+        const bass = this.audioStep % 4 === 0 ? 110 : 146.83;
+        this.playTone(bass, 'sawtooth', 0.18, 0.07);
+        const lead = [329.63, 392.0, 440.0, 523.25, 587.33, 659.25];
+        this.playTone(lead[(this.audioStep * 2) % lead.length], 'square', 0.12, 0.045);
+        break;
+      }
+      case 5: {
+        // Static / Standby gentle CRT static
+        this.playStaticBurst(0.28, 0.06);
         break;
       }
     }
@@ -1029,9 +1742,9 @@ export class SmartTvSystem {
       this.localVideoElement.remove();
       this.localVideoElement = null;
     }
-    if (this.videoTexture) {
-      this.videoTexture.dispose();
-      this.videoTexture = null;
+    if (this.localVideoObjectUrl) {
+      URL.revokeObjectURL(this.localVideoObjectUrl);
+      this.localVideoObjectUrl = null;
     }
     this.canvasTexture.dispose();
     if (this.tvGlowLight && this.tvGlowLight.parent) {

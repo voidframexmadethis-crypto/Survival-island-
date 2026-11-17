@@ -2,6 +2,11 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { SoundEngine } from '../audio/soundEngine';
 import {
+  SmartTvSystem,
+  TvChannelId,
+  normalizeChannelId,
+} from '../systems/smartTvSystem';
+import {
   FARM_SHOP_STOCK,
   ITEMS,
   ITEM_SELL_PRICES,
@@ -47,12 +52,15 @@ import { VolumetricTerrainEngine } from '../systems/terrainPhysics';
 import {
   ActiveModal,
   ActiveVehicleHudState,
+  BackpackCompartmentEntry,
   BeltLink,
   BiomeId,
   BodyZone,
   CampStructureType,
   CarcassSaveData,
   CreatureSpecies,
+  DEFAULT_HUD_BAR_SLOTS,
+  GameMode,
   GameSaveData,
   GameSettings,
   GameStats,
@@ -60,6 +68,8 @@ import {
   InventorySlot,
   ItemDefinition,
   ItemId,
+  MAX_HUD_BAR_SLOTS,
+  TOTAL_BACKPACK_COMPARTMENTS,
   KineticHudSummary,
   KineticNode,
   KineticNodeKind,
@@ -236,6 +246,15 @@ export class GameEngine {
   private renderer!: THREE.WebGLRenderer;
   private scene!: THREE.Scene;
   private camera!: THREE.PerspectiveCamera;
+  private smartTv!: SmartTvSystem;
+  private tvIsZoomed = false;
+  private tvModalOpen = false;
+  private _tvWorldPos = new THREE.Vector3();
+  private _tvWorldQuat = new THREE.Quaternion();
+  private _tvForward = new THREE.Vector3();
+  private _tvRight = new THREE.Vector3();
+  private _tvLookTarget = new THREE.Vector3();
+  private _tvTmpVec = new THREE.Vector3();
   private sunLight!: THREE.DirectionalLight;
   private moonLight!: THREE.DirectionalLight;
   private nightVisionLight!: THREE.PointLight;
@@ -347,6 +366,7 @@ export class GameEngine {
   private dayCount = 1;
   private timeOfDay = 0.36;
   private inventory: InventorySlot[] = [];
+  private backpackCompartments: BackpackCompartmentEntry[] = [];
   private hotbarItemIds: (ItemId | null)[] = [
     null,
     null,
@@ -375,6 +395,8 @@ export class GameEngine {
   private gameOver = false;
   private gameOverReason = '';
   private currentSlotId = 'slot_1';
+  private gameMode: GameMode = 'survival';
+  private hitMarkerActive = false;
   private nearbyInteraction: NearbyInteraction | null = null;
 
   // Farming, Economy, Hilltop House Fridge & Interactive Seating
@@ -559,6 +581,8 @@ export class GameEngine {
     this.renderer.domElement.style.display = 'block';
     this.renderer.domElement.style.width = '100%';
     this.renderer.domElement.style.height = '100%';
+    this.renderer.domElement.style.position = 'relative';
+    this.renderer.domElement.style.zIndex = '1';
     this.renderer.domElement.style.touchAction = 'none';
 
     this.renderer.domElement.addEventListener('webglcontextlost', (e) => {
@@ -619,6 +643,19 @@ export class GameEngine {
     this.world = buildIslandWorld(this.scene, this.renderer);
     this.world.resourceNodes.forEach((n) => this.nodeById.set(n.id, n));
     this.terrainEngine = new VolumetricTerrainEngine(this.scene);
+
+    // Initialize Persistent Native 3D CanvasTexture Smart TV OS
+    this.smartTv = new SmartTvSystem();
+    if (this.world.tvScreenMesh && this.world.tvScreenMat) {
+      this.smartTv.attachToMesh(this.world.tvScreenMesh, this.world.tvScreenMat);
+    }
+    if (this.smartTv.tvGlowLight) {
+      this.scene.add(this.smartTv.tvGlowLight);
+    }
+    this.smartTv.setAutoAdvanceCallback((ch) => {
+      this.toast(`3D TV Auto-Next: ${ch.badge} · ${ch.name}`, 'info');
+      this.emitHud();
+    });
 
     this.shipModel = createSailingShipModel();
     this.shipModel.visible = false;
@@ -794,6 +831,7 @@ export class GameEngine {
 
   public unlockAudio(): void {
     this.sound.unlock();
+    this.smartTv?.unlockAudio();
   }
 
   public setMode(mode: 'menu' | 'playing' | 'paused'): void {
@@ -803,6 +841,7 @@ export class GameEngine {
       this.clearMovementInputs();
     } else {
       this.sound.unlock();
+      this.smartTv?.unlockAudio();
       if (wasNotPlaying) {
         this.ensurePlayerHasGun(false);
       }
@@ -943,9 +982,373 @@ export class GameEngine {
 
   public assignHotbarSlot(slotIndex: number, itemId: ItemId | null): void {
     if (slotIndex < 0 || slotIndex >= this.hotbarItemIds.length) return;
+    if (itemId === null) {
+      if (this.hotbarItemIds[slotIndex] !== null) {
+        this.moveHotbarSlotToCompartment(slotIndex);
+      } else {
+        this.hotbarItemIds[slotIndex] = null;
+        if (this.equippedSlot === slotIndex) {
+          this.equippedSlot = -1;
+        }
+        this.emitHud();
+      }
+      return;
+    }
     this.hotbarItemIds[slotIndex] = itemId;
     this.equippedSlot = slotIndex;
     this.emitHud();
+  }
+
+  private findNextEmptyCompartmentId(startFrom = 1): number {
+    const used = new Set(this.backpackCompartments.map((c) => c.compartmentId));
+    let candidate = Math.max(1, Math.min(TOTAL_BACKPACK_COMPARTMENTS, Math.floor(startFrom)));
+    while (used.has(candidate) && candidate < TOTAL_BACKPACK_COMPARTMENTS) {
+      candidate++;
+    }
+    return candidate;
+  }
+
+  public expandHudBar(targetOrDelta: number, isAbsolute = false): void {
+    const rawTarget = isAbsolute
+      ? Math.round(targetOrDelta)
+      : this.hotbarItemIds.length + Math.round(targetOrDelta);
+    const target = Math.max(
+      DEFAULT_HUD_BAR_SLOTS,
+      Math.min(MAX_HUD_BAR_SLOTS, rawTarget),
+    );
+    if (target === this.hotbarItemIds.length) {
+      this.toast(`HUD Bar is at ${target.toLocaleString()} slots (Max ${MAX_HUD_BAR_SLOTS.toLocaleString()}).`, 'info');
+      return;
+    }
+    if (target > this.hotbarItemIds.length) {
+      const added = target - this.hotbarItemIds.length;
+      for (let i = 0; i < added; i++) {
+        this.hotbarItemIds.push(null);
+      }
+      this.sound.playPickup();
+      this.toast(
+        `HUD Bar expanded to ${target.toLocaleString()} item slots!`,
+        'discovery',
+      );
+    } else {
+      // Move any items in trimmed trailing slots safely into empty backpack compartments
+      for (let i = target; i < this.hotbarItemIds.length; i++) {
+        const displaced = this.hotbarItemIds[i];
+        if (displaced) {
+          const cid = this.findNextEmptyCompartmentId();
+          this.backpackCompartments.push({
+            compartmentId: cid,
+            itemId: displaced,
+            quantity: Math.max(1, this.getItemCount(displaced)),
+          });
+        }
+      }
+      this.hotbarItemIds = this.hotbarItemIds.slice(0, target);
+      if (this.equippedSlot >= target) {
+        this.equippedSlot = -1;
+      }
+      this.toast(`HUD Bar resized to ${target.toLocaleString()} slots.`, 'info');
+    }
+    this.emitHud();
+  }
+
+  public moveHotbarSlotToCompartment(
+    hotbarSlotIdx: number,
+    targetCompartmentId?: number,
+  ): boolean {
+    if (hotbarSlotIdx < 0 || hotbarSlotIdx >= this.hotbarItemIds.length) {
+      return false;
+    }
+    const itemId = this.hotbarItemIds[hotbarSlotIdx];
+    if (!itemId) return false;
+
+    const usedIds = new Set(this.backpackCompartments.map((c) => c.compartmentId));
+    let cid: number;
+    if (
+      targetCompartmentId !== undefined &&
+      targetCompartmentId >= 1 &&
+      targetCompartmentId <= TOTAL_BACKPACK_COMPARTMENTS &&
+      !usedIds.has(targetCompartmentId)
+    ) {
+      cid = Math.floor(targetCompartmentId);
+    } else {
+      cid = this.findNextEmptyCompartmentId(1);
+    }
+
+    const qty = Math.max(1, this.getItemCount(itemId));
+    this.backpackCompartments.push({
+      compartmentId: cid,
+      itemId,
+      quantity: qty,
+    });
+    this.hotbarItemIds[hotbarSlotIdx] = null;
+    if (this.equippedSlot === hotbarSlotIdx) {
+      this.equippedSlot = -1;
+    }
+    this.sound.playPickup();
+    this.toast(
+      `Dropped ${ITEMS[itemId].name} into Empty Compartment #${cid.toLocaleString()} (HUD slot ${hotbarSlotIdx + 1} emptied)`,
+      'info',
+      itemId,
+      qty,
+    );
+    this.emitHud();
+    return true;
+  }
+
+  public emptyAllHudBarToCompartments(): void {
+    let movedCount = 0;
+    let nextCid = 1;
+    const usedIds = new Set(this.backpackCompartments.map((c) => c.compartmentId));
+    for (let i = 0; i < this.hotbarItemIds.length; i++) {
+      const itemId = this.hotbarItemIds[i];
+      if (!itemId) continue;
+      while (usedIds.has(nextCid) && nextCid < TOTAL_BACKPACK_COMPARTMENTS) {
+        nextCid++;
+      }
+      usedIds.add(nextCid);
+      this.backpackCompartments.push({
+        compartmentId: nextCid,
+        itemId,
+        quantity: Math.max(1, this.getItemCount(itemId)),
+      });
+      this.hotbarItemIds[i] = null;
+      movedCount++;
+    }
+    this.equippedSlot = -1;
+    this.sound.playPickup();
+    this.toast(
+      movedCount > 0
+        ? `Emptied ${movedCount} HUD bar item${movedCount === 1 ? '' : 's'} into Backpack Compartments!`
+        : 'HUD bar is already completely empty.',
+      'discovery',
+    );
+    this.emitHud();
+  }
+
+  public moveCompartmentToHotbar(
+    compartmentId: number,
+    targetHotbarSlot?: number,
+  ): boolean {
+    const idx = this.backpackCompartments.findIndex(
+      (c) => c.compartmentId === compartmentId,
+    );
+    if (idx === -1) return false;
+    const entry = this.backpackCompartments[idx];
+
+    let destSlot: number;
+    if (
+      targetHotbarSlot !== undefined &&
+      targetHotbarSlot >= 0 &&
+      targetHotbarSlot < this.hotbarItemIds.length
+    ) {
+      destSlot = targetHotbarSlot;
+    } else {
+      const emptyIdx = this.hotbarItemIds.indexOf(null);
+      destSlot = emptyIdx !== -1 ? emptyIdx : 0;
+    }
+
+    const displaced = this.hotbarItemIds[destSlot];
+    this.backpackCompartments.splice(idx, 1);
+    if (displaced && displaced !== entry.itemId) {
+      this.backpackCompartments.push({
+        compartmentId,
+        itemId: displaced,
+        quantity: Math.max(1, this.getItemCount(displaced)),
+      });
+    }
+
+    this.hotbarItemIds[destSlot] = entry.itemId;
+    this.equippedSlot = destSlot;
+    this.sound.playPickup();
+    this.toast(
+      `Moved ${ITEMS[entry.itemId].name} to HUD Slot ${destSlot + 1}`,
+      'info',
+      entry.itemId,
+    );
+    this.emitHud();
+    return true;
+  }
+
+  public setTvChannel(ch: TvChannelId): void {
+    this.smartTv.setChannel(ch);
+    const meta = this.smartTv.getCurrentChannelMeta();
+    this.toast(`3D TV Tuned: ${meta.badge} · ${meta.name}`, 'info');
+    this.emitHud();
+  }
+
+  public toggleTvPower(): boolean {
+    const powerOn = this.smartTv.togglePower();
+    this.toast(powerOn ? 'Smart TV Powered On' : 'Smart TV Standby (Off)', 'info');
+    this.emitHud();
+    return powerOn;
+  }
+
+  public toggleTvPlayPause(): boolean {
+    const isPlaying = this.smartTv.togglePlayPause();
+    this.toast(isPlaying ? '3D TV Playing' : '3D TV Paused', 'info');
+    this.emitHud();
+    return isPlaying;
+  }
+
+  public setTvVolume(vol: number): void {
+    this.smartTv.setVolume(vol);
+    this.emitHud();
+  }
+
+  public toggleTvMute(): boolean {
+    const muted = this.smartTv.toggleMute();
+    this.emitHud();
+    return muted;
+  }
+
+  public setTvAutoCycle(enabled: boolean): void {
+    this.smartTv.setAutoCycle(enabled);
+    this.emitHud();
+  }
+
+  public nextTvChannel(): void {
+    const next = this.smartTv.nextChannel();
+    this.toast(`3D TV Tuned: ${next.badge} · ${next.name}`, 'info');
+    this.emitHud();
+  }
+
+  public prevTvChannel(): void {
+    const prev = this.smartTv.prevChannel();
+    this.toast(`3D TV Tuned: ${prev.badge} · ${prev.name}`, 'info');
+    this.emitHud();
+  }
+
+  public drawTvPreview(targetCanvas: HTMLCanvasElement): void {
+    this.smartTv?.drawPreviewToCanvas(targetCanvas);
+  }
+
+  public loadLocalTvVideo(file: File): void {
+    this.smartTv.loadLocalVideoFile(file);
+    this.toast(`Playing local video on 3D TV: ${file.name}`, 'info');
+    this.emitHud();
+  }
+
+  public setTvYouTubeStream(
+    videoId: string,
+    title = 'YouTube',
+    channel = 'YouTube',
+  ): void {
+    this.smartTv.setYouTubeStream(videoId, title, channel);
+    this.toast(`YouTube on TV: ${title}`, 'info');
+    this.emitHud();
+  }
+
+  public setTvModalOpen(open: boolean): void {
+    this.tvModalOpen = open;
+    if (open) {
+      this.smartTv.unlockAudio();
+    }
+  }
+
+  private resolveNearestTvTarget(usePlayerAnchor = false): {
+    dist: number;
+    worldPos: THREE.Vector3;
+    worldQuat: THREE.Quaternion;
+    forward: THREE.Vector3;
+    right: THREE.Vector3;
+    scaleX: number;
+    scaleY: number;
+  } | null {
+    const refX = usePlayerAnchor ? this.playerX : this.camera.position.x;
+    const refY = usePlayerAnchor ? this.playerY + 1.4 : this.camera.position.y;
+    const refZ = usePlayerAnchor ? this.playerZ : this.camera.position.z;
+
+    let bestDist = Infinity;
+    let hasTarget = false;
+    let scaleX = 1.6 / 800;
+    let scaleY = 0.86 / 430;
+
+    for (const st of this.structures) {
+      if (st.type !== 'smart_tv') continue;
+      const d = Math.hypot(st.x - refX, st.y + 0.95 - refY, st.z - refZ);
+      if (d < bestDist) {
+        bestDist = d;
+        this._tvWorldQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), st.rotationY);
+        this._tvForward.set(0, 0, 1).applyQuaternion(this._tvWorldQuat);
+        this._tvRight.set(1, 0, 0).applyQuaternion(this._tvWorldQuat);
+        this._tvWorldPos.set(st.x, st.y + 0.95, st.z).addScaledVector(this._tvForward, 0.05);
+        scaleX = 1.68 / 800;
+        scaleY = 0.93 / 430;
+        hasTarget = true;
+      }
+    }
+
+    if (this.world.tvScreenMesh) {
+      this.world.tvScreenMesh.getWorldPosition(this._tvTmpVec);
+      const houseDist = Math.hypot(
+        this._tvTmpVec.x - refX,
+        this._tvTmpVec.y - refY,
+        this._tvTmpVec.z - refZ,
+      );
+      if (houseDist < bestDist) {
+        bestDist = houseDist;
+        this._tvWorldPos.copy(this._tvTmpVec);
+        this.world.tvScreenMesh.getWorldQuaternion(this._tvWorldQuat);
+        this._tvForward.set(0, 0, 1).applyQuaternion(this._tvWorldQuat);
+        this._tvRight.set(1, 0, 0).applyQuaternion(this._tvWorldQuat);
+        this._tvWorldPos.addScaledVector(this._tvForward, 0.015);
+        scaleX = 1.6 / 800;
+        scaleY = 0.86 / 430;
+        hasTarget = true;
+      }
+    }
+
+    if (!hasTarget) return null;
+    return {
+      dist: bestDist,
+      worldPos: this._tvWorldPos,
+      worldQuat: this._tvWorldQuat,
+      forward: this._tvForward,
+      right: this._tvRight,
+      scaleX,
+      scaleY,
+    };
+  }
+
+  public setGameMode(mode: GameMode): void {
+    this.gameMode = mode;
+    if (mode === 'boss_hunt') {
+      this.creatures.spawnGuardianBosses();
+      this.toast('Guardian Boss Hunt active: 4 colossal Lost World Titans spawned across biomes!', 'discovery');
+    } else if (mode === 'sandbox') {
+      this.vitals.health = 9999;
+      this.vitals.maxHealth = 9999;
+      this.vitals.hunger = 100;
+      this.vitals.thirst = 100;
+      this.toast('Sandbox / God Mode active: Unlimited vitals, flight & Smart TV access', 'discovery');
+    } else {
+      this.toast('Survival Mode active: Biological survival, Fluid Erosion & Blood Moon Sieges', 'discovery');
+    }
+    this.emitHud();
+  }
+
+  private isBloodMoonNight(): boolean {
+    const sunElev = Math.sin((this.timeOfDay - 0.25) * Math.PI * 2);
+    const isNight = sunElev < -0.05;
+    return isNight && (this.dayCount % 7 === 0);
+  }
+
+  private computeObjectiveText(): string {
+    if (this.isBloodMoonNight()) {
+      return `BLOOD MOON SIEGE: Defend your base from nocturnal predators!`;
+    }
+    if (this.gameMode === 'boss_hunt') {
+      const aliveBosses = this.creatures.creatures.filter((c) => c.isBoss && c.alive).length;
+      return `Boss Hunt: Defeat remaining Guardian Titans (${aliveBosses}/4 remaining)`;
+    }
+    if (this.gameMode === 'sandbox') {
+      return `Sandbox Mode: Unlimited resources, flight & Smart TV active`;
+    }
+    if (this.dayCount === 1) {
+      return `Day 1: Build a Campfire & Basic Shelter before nightfall`;
+    }
+    return `Day ${this.dayCount}: Expand homestead, craft gear & survive`;
   }
 
   public startNewWorldState(slotId = 'slot_1', playCinematic = true): void {
@@ -1021,6 +1424,7 @@ export class GameEngine {
       { itemId: 'auto_assembler', quantity: 1 },
       { itemId: 'vehicle_chassis_kit', quantity: 14 },
     ];
+    this.backpackCompartments = [];
     this.hotbarItemIds = [
       'gun',
       'hunting_knife',
@@ -1151,15 +1555,22 @@ export class GameEngine {
     };
     this.equippedSlot = save.player.equippedSlot;
     this.hotbarItemIds = [...save.player.hotbarItemIds];
-    while (this.hotbarItemIds.length < 9) {
+    while (this.hotbarItemIds.length < DEFAULT_HUD_BAR_SLOTS) {
       this.hotbarItemIds.push(null);
+    }
+    if (this.hotbarItemIds.length > MAX_HUD_BAR_SLOTS) {
+      this.hotbarItemIds = this.hotbarItemIds.slice(0, MAX_HUD_BAR_SLOTS);
     }
     this.dayCount = save.dayCount;
     this.timeOfDay = save.timeOfDay;
+    this.gameMode = save.gameMode || 'survival';
     this.lastIsNight =
       Math.sin((this.timeOfDay - 0.25) * Math.PI * 2) < -0.05;
     this.weather = save.weather || 'clear';
     this.inventory = save.inventory.map((s) => ({ ...s }));
+    this.backpackCompartments = Array.isArray(save.backpackCompartments)
+      ? save.backpackCompartments.map((c) => ({ ...c }))
+      : [];
     this.coins = typeof save.coins === 'number' ? save.coins : 150;
     this.fridgeItems = Array.isArray(save.fridgeItems)
       ? save.fridgeItems.map((s) => ({ ...s }))
@@ -1237,6 +1648,25 @@ export class GameEngine {
     this.clearPlacedStructures();
     save.structures.forEach((st) => this.spawnStructure(st));
 
+    // Restore saved Smart TV channel, power state & playback controls
+    if (typeof save.tvVolume === 'number') {
+      this.smartTv.setVolume(save.tvVolume);
+    }
+    if (typeof save.tvIsMuted === 'boolean' && save.tvIsMuted !== this.smartTv.isMuted) {
+      this.smartTv.toggleMute();
+    }
+    if (typeof save.tvAutoCycle === 'boolean') {
+      this.smartTv.setAutoCycle(save.tvAutoCycle);
+    }
+    if (typeof save.tvChannel === 'number') {
+      this.smartTv.setChannel(normalizeChannelId(save.tvChannel));
+    }
+    if (save.tvPower === false && this.smartTv.power) {
+      this.smartTv.togglePower();
+    } else if (save.tvPaused && this.smartTv.power) {
+      this.smartTv.setPaused(true);
+    }
+
     // Restore resource node states (felled stumps, rock damage, depleted nodes)
     const savedNodeMap = new Map<string, SavedResourceNodeState>();
     if (save.resourceStates) {
@@ -1285,8 +1715,8 @@ export class GameEngine {
       });
     }
 
-    // CRITICAL REQUIREMENT: Character starts with a gun even on previous / last saved games
-    this.ensurePlayerHasGun(true);
+    // Ensure vital survival gear exists in backpack without overriding emptied HUD bar
+    this.ensurePlayerHasGun(false);
     const hasBeachBottle = this.pickups.some(
       (p) =>
         p.itemId === 'dirty_water_bottle' ||
@@ -1358,50 +1788,47 @@ export class GameEngine {
       this.ensureStarterMaterials();
     }
 
-    // 5. Ensure Gun on hotbar (prioritize slot 0)
-    let hotbarGunIdx = this.hotbarItemIds.indexOf('gun');
-    if (hotbarGunIdx === -1) {
-      const emptyIdx = this.hotbarItemIds.findIndex((id) => id === null);
-      if (emptyIdx !== -1) {
-        this.hotbarItemIds[emptyIdx] = 'gun';
-        hotbarGunIdx = emptyIdx;
-      } else {
-        const displaced = this.hotbarItemIds[0];
-        if (displaced && !this.inventory.some((s) => s.itemId === displaced)) {
-          this.inventory.push({ itemId: displaced, quantity: 1 });
-        }
-        this.hotbarItemIds[0] = 'gun';
-        hotbarGunIdx = 0;
-      }
-    }
-
-    // 6. Ensure Knife on hotbar (slot 1 when forceEquip is active)
-    let hotbarKnifeIdx = this.hotbarItemIds.indexOf('hunting_knife');
-    if (hotbarKnifeIdx === -1) {
-      const emptyIdx = this.hotbarItemIds.findIndex((id) => id === null);
-      if (emptyIdx !== -1) {
-        this.hotbarItemIds[emptyIdx] = 'hunting_knife';
-        hotbarKnifeIdx = emptyIdx;
-      } else if (forceEquip) {
-        const displaced = this.hotbarItemIds[1];
-        if (displaced && !this.inventory.some((s) => s.itemId === displaced)) {
-          this.inventory.push({ itemId: displaced, quantity: 1 });
-        }
-        this.hotbarItemIds[1] = 'hunting_knife';
-        hotbarKnifeIdx = 1;
-      }
-    }
-
-    // 7. Ensure Ammo on hotbar if space available
-    if (!this.hotbarItemIds.includes('ammo')) {
-      const emptyIdx = this.hotbarItemIds.findIndex((id) => id === null);
-      if (emptyIdx !== -1) {
-        this.hotbarItemIds[emptyIdx] = 'ammo';
-      }
-    }
-
-    // 8. Equip Gun at slot 0 and place Knife at slot 1
+    // 5. Only force Gun / Knife / Ammo onto hotbar when forceEquip is true (e.g. new game)
     if (forceEquip) {
+      let hotbarGunIdx = this.hotbarItemIds.indexOf('gun');
+      if (hotbarGunIdx === -1) {
+        const emptyIdx = this.hotbarItemIds.findIndex((id) => id === null);
+        if (emptyIdx !== -1) {
+          this.hotbarItemIds[emptyIdx] = 'gun';
+          hotbarGunIdx = emptyIdx;
+        } else {
+          const displaced = this.hotbarItemIds[0];
+          if (displaced && !this.inventory.some((s) => s.itemId === displaced)) {
+            this.inventory.push({ itemId: displaced, quantity: 1 });
+          }
+          this.hotbarItemIds[0] = 'gun';
+          hotbarGunIdx = 0;
+        }
+      }
+
+      let hotbarKnifeIdx = this.hotbarItemIds.indexOf('hunting_knife');
+      if (hotbarKnifeIdx === -1) {
+        const emptyIdx = this.hotbarItemIds.findIndex((id) => id === null);
+        if (emptyIdx !== -1) {
+          this.hotbarItemIds[emptyIdx] = 'hunting_knife';
+          hotbarKnifeIdx = emptyIdx;
+        } else {
+          const displaced = this.hotbarItemIds[1];
+          if (displaced && !this.inventory.some((s) => s.itemId === displaced)) {
+            this.inventory.push({ itemId: displaced, quantity: 1 });
+          }
+          this.hotbarItemIds[1] = 'hunting_knife';
+          hotbarKnifeIdx = 1;
+        }
+      }
+
+      if (!this.hotbarItemIds.includes('ammo')) {
+        const emptyIdx = this.hotbarItemIds.findIndex((id) => id === null);
+        if (emptyIdx !== -1) {
+          this.hotbarItemIds[emptyIdx] = 'ammo';
+        }
+      }
+
       if (hotbarGunIdx !== 0) {
         const displaced = this.hotbarItemIds[0];
         this.hotbarItemIds[0] = 'gun';
@@ -1419,7 +1846,7 @@ export class GameEngine {
       this.equippedSlot < -1 ||
       this.equippedSlot >= this.hotbarItemIds.length
     ) {
-      this.equippedSlot = hotbarGunIdx;
+      this.equippedSlot = -1;
     }
 
     // Update hands rig mesh immediately so equipped tool/gun is visible in hands
@@ -1676,11 +2103,13 @@ export class GameEngine {
         vitals: { ...this.vitals },
         equippedSlot: this.equippedSlot,
         hotbarItemIds: [...this.hotbarItemIds],
+        hudBarCapacity: this.hotbarItemIds.length,
       },
       dayCount: this.dayCount,
       timeOfDay: this.timeOfDay,
       weather: this.weather,
       inventory: this.inventory.map((s) => ({ ...s })),
+      backpackCompartments: this.backpackCompartments.map((c) => ({ ...c })),
       structures: this.structures.map((s) => ({
         ...s,
         chestItems: s.chestItems ? s.chestItems.map((c) => ({ ...c })) : undefined,
@@ -1709,8 +2138,18 @@ export class GameEngine {
       completedMissionIds: Array.from(this.completedMissionIds),
       discoveredLocations: Array.from(this.discoveredLocations),
       coins: this.coins,
+      gameMode: this.gameMode,
       plantedCrops: this.plantedCrops.map((c) => ({ ...c })),
       fridgeItems: this.fridgeItems.map((s) => ({ ...s })),
+      tvChannel: this.smartTv.currentChannel,
+      tvPower: this.smartTv.power,
+      tvTitle: this.smartTv.getCurrentChannelMeta().name,
+      tvCategory: this.smartTv.getCurrentChannelMeta().badge,
+      tvTimestamp: Math.floor(this.smartTv.currentTimestamp),
+      tvVolume: this.smartTv.volume,
+      tvIsMuted: this.smartTv.isMuted,
+      tvAutoCycle: this.smartTv.autoCycleChannels,
+      tvPaused: this.smartTv.isPaused,
     };
   }
 
@@ -1778,7 +2217,15 @@ export class GameEngine {
       remaining -= add;
     }
 
-    if (
+    const storedInCompartment = this.backpackCompartments.some(
+      (c) => c.itemId === itemId,
+    );
+    if (storedInCompartment) {
+      const totalNow = this.getItemCount(itemId);
+      for (const comp of this.backpackCompartments) {
+        if (comp.itemId === itemId) comp.quantity = totalNow;
+      }
+    } else if (
       (def.category !== 'resource' || itemId === 'wheat' || itemId === 'sugarcane') &&
       !this.hotbarItemIds.includes(itemId)
     ) {
@@ -1812,8 +2259,16 @@ export class GameEngine {
         }
       }
     }
-    if (this.getItemCount(itemId) === 0) {
+    const remainingQty = this.getItemCount(itemId);
+    if (remainingQty === 0) {
       this.hotbarItemIds = this.hotbarItemIds.map((h) => (h === itemId ? null : h));
+      this.backpackCompartments = this.backpackCompartments.filter(
+        (c) => c.itemId !== itemId,
+      );
+    } else {
+      for (const comp of this.backpackCompartments) {
+        if (comp.itemId === itemId) comp.quantity = remainingQty;
+      }
     }
     return true;
   }
@@ -6615,6 +7070,34 @@ export class GameEngine {
       return;
     }
 
+    if (this.tvModalOpen) {
+      const tvTarget = this.resolveNearestTvTarget(true);
+      if (tvTarget) {
+        this.handsRig.root.visible = false;
+        const viewportW = this.renderer.domElement.clientWidth || 1024;
+        if (viewportW >= 640) {
+          _vec3A
+            .copy(tvTarget.worldPos)
+            .addScaledVector(tvTarget.forward, 2.05)
+            .addScaledVector(tvTarget.right, 0.56);
+          _vec3A.y += 0.04;
+          this._tvLookTarget
+            .copy(tvTarget.worldPos)
+            .addScaledVector(tvTarget.right, 0.52);
+        } else {
+          _vec3A
+            .copy(tvTarget.worldPos)
+            .addScaledVector(tvTarget.forward, 2.2);
+          _vec3A.y -= 0.34;
+          this._tvLookTarget.copy(tvTarget.worldPos);
+          this._tvLookTarget.y -= 0.44;
+        }
+        this.camera.position.lerp(_vec3A, 0.24);
+        this.camera.lookAt(this._tvLookTarget);
+        return;
+      }
+    }
+
     if (this.activeVehicleId) {
       const activeV = this.vehicles.find((v) => v.id === this.activeVehicleId);
       if (activeV) {
@@ -6869,6 +7352,12 @@ export class GameEngine {
       inventory: this.inventory.map((s) => ({ ...s })),
       hotbarItemIds: [...this.hotbarItemIds],
       equippedSlot: this.equippedSlot,
+      hudBarCapacity: this.hotbarItemIds.length,
+      maxHudBarCapacity: MAX_HUD_BAR_SLOTS,
+      backpackCompartments: this.backpackCompartments.map((c) => ({ ...c })),
+      totalBackpackCompartments: TOTAL_BACKPACK_COMPARTMENTS,
+      emptyCompartmentsCount:
+        TOTAL_BACKPACK_COMPARTMENTS - this.backpackCompartments.length,
       structures: this.structures.map((s) => ({
         ...s,
         chestItems: s.chestItems ? s.chestItems.map((c) => ({ ...c })) : undefined,
@@ -6898,6 +7387,54 @@ export class GameEngine {
       })),
       activeVehicle,
       selectedCargoVehicleId: this.selectedCargoVehicleId,
+      gameMode: this.gameMode,
+      bloodMoonActive: this.isBloodMoonNight(),
+      daysUntilBloodMoon: 7 - ((this.dayCount - 1) % 7),
+      bossesDefeatedCount: this.creatures.creatures.filter((c) => c.isBoss && !c.alive).length,
+      objectiveText: this.computeObjectiveText(),
+      hitMarkerActive: this.hitMarkerActive,
+      tvState: (() => {
+        const meta = this.smartTv.getCurrentChannelMeta();
+        const isYt = this.smartTv.isUsingYouTube;
+        const isLocal = this.smartTv.isUsingLocalVideo;
+        const localName = this.smartTv.localVideoName;
+        return {
+          power: this.smartTv.power,
+          channel: this.smartTv.currentChannel,
+          channelName: isYt
+            ? this.smartTv.youtubeChannel || 'YouTube'
+            : isLocal
+              ? localName || 'Custom Video'
+              : meta.name,
+          title: isYt
+            ? this.smartTv.youtubeTitle || 'YouTube'
+            : isLocal
+              ? localName || 'Custom Video'
+              : meta.name,
+          category: isYt
+            ? 'YOUTUBE'
+            : isLocal
+              ? 'USB VIDEO'
+              : meta.badge,
+          embedSrc: isYt && this.smartTv.youtubeVideoId
+            ? `https://www.youtube.com/embed/${this.smartTv.youtubeVideoId}?autoplay=1&rel=0&playsinline=1&enablejsapi=1`
+            : '',
+          volume: this.smartTv.volume,
+          isMuted: this.smartTv.isMuted,
+          isZoomedToTv: this.tvIsZoomed,
+          autoCycle: this.smartTv.autoCycleChannels,
+          isPaused: this.smartTv.isPaused,
+          currentTime: Math.floor(this.smartTv.currentTimestamp),
+          isLocalVideo: isLocal,
+          localVideoName: localName,
+          isYouTubeActive: isYt,
+          youtubeVideoId: this.smartTv.youtubeVideoId,
+          youtubeTitle: this.smartTv.youtubeTitle,
+          youtubeChannel: this.smartTv.youtubeChannel,
+          spatialVolume:
+            Math.round(this.smartTv.volume * this.smartTv.getSpatialMultiplier() * 100),
+        };
+      })(),
     });
   }
 
@@ -7014,9 +7551,48 @@ export class GameEngine {
         this.world.farmerHead.rotation.y = Math.sin(this.elapsed * 0.8) * 0.22;
       }
     }
-    if (this.world.tvScreenMat) {
-      const hue = (this.elapsed * 0.07) % 1;
-      this.world.tvScreenMat.emissive.setHSL(hue, 0.55, 0.42);
+    // Update 3D Smart TV OS CanvasTexture & Sync CSS3DRenderer YouTube Frame onto the physical 3D TV screen
+    this.smartTv.update(dt, {
+      dayCount: this.dayCount,
+      timeOfDay: this.timeOfDay,
+      weather: this.weather,
+      erosionActive: this.terrainEngine.getActiveStreamCount() > 0,
+      tamedCount: this.creatures.creatures.filter((c) => c.alive && c.tamed).length,
+      dinoCount: this.creatures.creatures.filter(
+        (c) =>
+          c.alive &&
+          (c.spec.species === 'trex' ||
+            c.spec.species === 'triceratops' ||
+            c.spec.species === 'velociraptor' ||
+            c.spec.species === 'stegosaurus' ||
+            c.spec.species === 'brachiosaurus' ||
+            c.spec.species === 'parasaurolophus'),
+      ).length,
+      daysUntilBloodMoon: 7 - ((this.dayCount - 1) % 7),
+      playerBiome: BIOME_INFO[getBiomeAt(this.playerX, this.playerZ)].name,
+    });
+    if (this.mode !== 'menu' && !this.cinematicActive) {
+      this.smartTv.updateSpatialAudio(this.playerX, this.playerY, this.playerZ);
+    }
+
+    // Sync placed smart_tv structure materials & standby LEDs with global SmartTvSystem
+    for (const st of this.structures) {
+      if (st.type !== 'smart_tv') continue;
+      const visual = this.structureVisuals.get(st.id);
+      if (visual) {
+        this.smartTv.syncPlacedTvVisual(visual.group);
+        if (visual.fireLight) {
+          visual.fireLight.intensity = this.smartTv.power ? 1.65 : 0;
+        }
+      }
+    }
+
+    if (this.tvModalOpen) {
+      this.hudSyncTimer += dt;
+      if (this.hudSyncTimer >= 0.85) {
+        this.hudSyncTimer = 0;
+        this.emitHud();
+      }
     }
 
     this.updateCamera();
@@ -9317,6 +9893,9 @@ export class GameEngine {
         }
       }
     });
+    if (this.smartTv) {
+      this.smartTv.dispose();
+    }
     this.renderer.dispose();
   }
 }

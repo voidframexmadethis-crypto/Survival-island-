@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowDownToLine,
   Axe,
   Backpack,
   Car,
@@ -33,6 +34,7 @@ import {
   Pause,
   Pickaxe,
   Play,
+  Plus,
   RotateCcw,
   RotateCw,
   Settings,
@@ -64,6 +66,7 @@ import {
 } from '@/game/systems/saveManager';
 import {
   ActiveModal,
+  GameMode,
   GameSettings,
   HUDStateSnapshot,
   ItemId,
@@ -120,6 +123,11 @@ export function SurvivalGameClient() {
   const [hud, setHud] = useState<HUDStateSnapshot | null>(null);
   const [toasts, setToasts] = useState<ResourceToast[]>([]);
   const [telemetryExpanded, setTelemetryExpanded] = useState(false);
+  const [hudWindowStart, setHudWindowStart] = useState(0);
+  const [hudManagerOpen, setHudManagerOpen] = useState(false);
+  const [hudSlotJumpInput, setHudSlotJumpInput] = useState('');
+  const [draggingHudSlot, setDraggingHudSlot] = useState<number | null>(null);
+  const [hudDropHover, setHudDropHover] = useState(false);
 
   const refreshSaves = useCallback(() => {
     setSaveSlots(listSaveSlots());
@@ -161,6 +169,16 @@ export function SurvivalGameClient() {
     const engine = new GameEngine(mountEl, initialSettings, {
       onHudUpdate: (snapshot) => {
         setHud(snapshot);
+        const eq = snapshot.equippedSlot;
+        const total = snapshot.hotbarItemIds.length;
+        if (eq >= 0) {
+          setHudWindowStart((prev) => {
+            const maxStart = Math.max(0, total - 9);
+            if (eq < prev) return Math.min(maxStart, eq);
+            if (eq >= prev + 9) return Math.min(maxStart, eq - 9 + 1);
+            return Math.min(maxStart, prev);
+          });
+        }
       },
       onToast: pushToast,
       onOpenStation: (station, structureId) => {
@@ -180,6 +198,7 @@ export function SurvivalGameClient() {
   // Keep engine mode strictly synchronized with active screen & modal state
   useEffect(() => {
     if (!engineRef.current) return;
+    engineRef.current.setTvModalOpen(screen === 'playing' && activeModal === 'tv');
     if (screen !== 'playing') {
       lookPointerId.current = null;
       engineRef.current.setMode('menu');
@@ -243,14 +262,15 @@ export function SurvivalGameClient() {
     return () => window.clearInterval(id);
   }, [screen, refreshSaves]);
 
-  // Smoothly keep the wheel-selected slot centered in the scrollable HUD bar
+  // Smoothly keep the wheel-selected slot centered in the scrollable HUD bar (supports up to 5,000 HUD slots at 60 FPS)
+  const HUD_BAR_WINDOW = 9;
   const equippedSlot = hud?.equippedSlot ?? -1;
   useEffect(() => {
     if (equippedSlot < 0) {
       hotbarScrollRef.current?.scrollTo({ left: 0, behavior: 'smooth' });
       return;
     }
-    const btn = slotButtonRefs.current[equippedSlot];
+    const btn = slotButtonRefs.current[equippedSlot - hudWindowStart];
     if (btn) {
       btn.scrollIntoView({
         behavior: 'smooth',
@@ -258,11 +278,12 @@ export function SurvivalGameClient() {
         inline: 'center',
       });
     }
-  }, [equippedSlot]);
+  }, [equippedSlot, hudWindowStart]);
 
-  const handleStartNewGame = () => {
+  const handleStartNewGame = (mode: GameMode = 'survival') => {
     if (!engineRef.current) return;
     engineRef.current.unlockAudio();
+    engineRef.current.setGameMode(mode);
     engineRef.current.startNewWorldState('slot_1', true);
     engineRef.current.ensurePlayerHasGun(true);
     engineRef.current.setMode('playing');
@@ -278,7 +299,7 @@ export function SurvivalGameClient() {
     if (!data) return;
     engineRef.current.unlockAudio();
     engineRef.current.loadFromSave(data);
-    engineRef.current.ensurePlayerHasGun(true);
+    engineRef.current.ensurePlayerHasGun(false);
     if (data.hudPreferences) {
       const merged: GameSettings = {
         ...settings,
@@ -385,6 +406,7 @@ export function SurvivalGameClient() {
         ref={canvasMountRef}
         className="absolute inset-0 w-full h-full touch-surface touch-none"
         onPointerDown={(e) => {
+          engineRef.current?.unlockAudio();
           if (screen === 'playing' && !activeModal && !hud?.cinematicActive) {
             if (document.activeElement instanceof HTMLElement) {
               document.activeElement.blur();
@@ -447,12 +469,12 @@ export function SurvivalGameClient() {
         }}
       />
 
-      {/* MAIN MENU OVERLAY */}
+      {/* MAIN MENU / TITLE SCREEN OVERLAY */}
       {screen === 'menu' && (
-        <div className="relative z-10 w-full h-full flex flex-col justify-between p-5 sm:p-10 bg-gradient-to-t from-stone-950/90 via-stone-950/35 to-stone-950/65">
+        <div className="relative z-10 w-full h-full flex flex-col justify-between p-5 sm:p-10 bg-gradient-to-t from-stone-950/90 via-stone-950/40 to-stone-950/70 overflow-y-auto survival-scroll">
           <div className="flex items-center justify-between safe-top">
             <div className="text-xs font-semibold tracking-wider text-amber-300 uppercase">
-              AdventureForgeGames · Stage 1
+              AdventureForgeGames · Stage 1 Final Polish
             </div>
             <button
               onClick={() => setActiveModal('settings')}
@@ -463,42 +485,108 @@ export function SurvivalGameClient() {
             </button>
           </div>
 
-          <div className="max-w-xl space-y-6 my-auto">
+          <div className="max-w-3xl space-y-6 my-auto py-6">
             <div className="space-y-3">
               <h1 className="font-display text-4xl sm:text-6xl font-bold tracking-tight text-stone-50 leading-[1.05] text-balance drop-shadow-lg">
                 SURVIVAL ISLAND: LOST WORLD
               </h1>
-              <p className="text-sm sm:text-base text-stone-200 max-w-lg leading-relaxed">
-                Stranded across uncharted prehistoric shores. Gather timber and
-                ore, craft primitive weapons, roast hunted meals, and outlast
-                roaming dinosaurs.
+              <p className="text-sm sm:text-base text-stone-200 max-w-xl leading-relaxed">
+                Realistic 3D prehistoric survival simulator — gather timber and ore, craft tools, hunt wildlife, roast meals, and outlast 7-Day Blood Moon Sieges.
               </p>
             </div>
 
-            <div className="flex flex-col sm:flex-row gap-3 pt-1">
-              {latestSave && (
+            {latestSave && (
+              <div className="flex items-center gap-3">
                 <button
                   onClick={() => handleContinueGame(latestSave.slotId)}
-                  className="min-h-[54px] px-6 py-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-sm flex items-center justify-center gap-2.5 shadow-xl whitespace-nowrap shrink-0"
+                  className="min-h-[52px] px-6 py-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-sm flex items-center gap-2.5 shadow-xl whitespace-nowrap"
                 >
                   <Play className="w-5 h-5" />
                   <span>
-                    Continue (Day {latestSave.dayCount} · HP {latestSave.health})
+                    Continue Expedition (Day {latestSave.dayCount} · HP {latestSave.health})
                   </span>
                 </button>
-              )}
+              </div>
+            )}
 
-              <button
-                onClick={handleStartNewGame}
-                className={`min-h-[54px] px-6 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2.5 shadow-xl whitespace-nowrap shrink-0 ${
-                  latestSave
-                    ? 'bg-stone-900/95 hover:bg-stone-800 border border-stone-600 text-stone-100'
-                    : 'bg-amber-600 hover:bg-amber-500 text-stone-950'
-                }`}
-              >
-                <Compass className="w-5 h-5" />
-                <span>New Game</span>
-              </button>
+            {/* 3 Playable Game Modes */}
+            <div className="space-y-2.5 pt-2">
+              <div className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                Select Game Mode
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <button
+                  onClick={() => handleStartNewGame('survival')}
+                  className="p-4 rounded-2xl bg-stone-900/90 hover:bg-stone-800 border border-amber-500/50 hover:border-amber-400 text-left transition shadow-xl flex flex-col justify-between group"
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-amber-600 font-extrabold text-stone-950 uppercase">
+                        Hardcore
+                      </span>
+                      <Compass className="w-4 h-4 text-amber-400 group-hover:scale-110 transition" />
+                    </div>
+                    <h3 className="text-sm font-bold text-stone-100 font-display">
+                      Survival Mode
+                    </h3>
+                    <p className="text-[11px] text-stone-300 mt-1 leading-relaxed">
+                      Full biological survival, Fluid Erosion, and 7-Day Blood Moon Sieges with nocturnal predator attacks.
+                    </p>
+                  </div>
+                  <div className="mt-4 text-xs font-bold text-amber-400 flex items-center gap-1">
+                    <span>Play Survival</span>
+                    <Play className="w-3.5 h-3.5" />
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => handleStartNewGame('boss_hunt')}
+                  className="p-4 rounded-2xl bg-stone-900/90 hover:bg-stone-800 border border-red-500/50 hover:border-red-400 text-left transition shadow-xl flex flex-col justify-between group"
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-red-600 font-extrabold text-white uppercase">
+                        Action
+                      </span>
+                      <Skull className="w-4 h-4 text-red-400 group-hover:scale-110 transition" />
+                    </div>
+                    <h3 className="text-sm font-bold text-stone-100 font-display">
+                      Guardian Boss Hunt
+                    </h3>
+                    <p className="text-[11px] text-stone-300 mt-1 leading-relaxed">
+                      Track and defeat 4 colossal Lost World Guardian Bosses across distinct biomes to claim Core Shards.
+                    </p>
+                  </div>
+                  <div className="mt-4 text-xs font-bold text-red-400 flex items-center gap-1">
+                    <span>Hunt Bosses</span>
+                    <Play className="w-3.5 h-3.5" />
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => handleStartNewGame('sandbox')}
+                  className="p-4 rounded-2xl bg-stone-900/90 hover:bg-stone-800 border border-sky-500/50 hover:border-sky-400 text-left transition shadow-xl flex flex-col justify-between group"
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-sky-600 font-extrabold text-stone-950 uppercase">
+                        Creative
+                      </span>
+                      <Zap className="w-4 h-4 text-sky-400 group-hover:scale-110 transition" />
+                    </div>
+                    <h3 className="text-sm font-bold text-stone-100 font-display">
+                      Sandbox / God Mode
+                    </h3>
+                    <p className="text-[11px] text-stone-300 mt-1 leading-relaxed">
+                      Unlimited resources, flight, instant Creator Relic spawner, and full Smart TV access.
+                    </p>
+                  </div>
+                  <div className="mt-4 text-xs font-bold text-sky-400 flex items-center gap-1">
+                    <span>Enter Sandbox</span>
+                    <Play className="w-3.5 h-3.5" />
+                  </div>
+                </button>
+              </div>
             </div>
 
             {saveSlots.length > 0 && (
@@ -776,26 +864,20 @@ export function SurvivalGameClient() {
               </div>
             </div>
 
-            {/* Top-Center Horizontal Compass & Active Mission Hint */}
+            {/* Top-Center Horizontal Compass & Active Objective Tracker */}
             <div className="flex flex-col items-center gap-1.5 max-w-sm">
               {settings.showCompass !== false && (
                 <CompassStrip playerYaw={hud.playerYaw} />
               )}
-              {currentMissionInfo && !settings.compactHud && (
-                <button
-                  onClick={() => openModal('missions')}
-                  className="hidden md:block pointer-events-auto px-3.5 py-1.5 rounded-xl bg-stone-950/85 border border-stone-700/70 hover:border-amber-500/70 text-center"
-                >
-                  <div className="text-[11px] font-semibold text-amber-400">
-                    {currentMissionInfo.mission.title} (
-                    {currentMissionInfo.progress}/
-                    {currentMissionInfo.mission.targetCount})
+              {hud.objectiveText && (
+                <div className="pointer-events-auto px-4 py-1.5 rounded-xl bg-stone-950/90 border border-amber-500/60 shadow-xl text-center">
+                  <div className="text-[10px] font-bold text-amber-300 uppercase tracking-wide">
+                    Active Objective
                   </div>
-                  <div className="text-[11px] text-stone-200 truncate max-w-xs">
-                    {currentMissionInfo.nextStep ||
-                      currentMissionInfo.mission.description}
+                  <div className="text-xs text-stone-100 font-medium">
+                    {hud.objectiveText}
                   </div>
-                </button>
+                </div>
               )}
             </div>
 
@@ -839,34 +921,34 @@ export function SurvivalGameClient() {
             </div>
           </div>
 
-          {/* Status & Resource Toasts */}
-          <div className="flex flex-col items-center gap-1.5 my-auto pointer-events-none">
-            <div className="flex items-center gap-2">
+          {/* Upper Status Badges & Resource Toasts (Clear of Bottom Touch Controls & Empty Hands Banner) */}
+          <div className="flex flex-col items-center gap-1.5 mt-1 mb-auto pointer-events-none">
+            <div className="flex flex-wrap items-center justify-center gap-1.5">
               {hud.isSheltered && (
-                <div className="px-3 py-1 rounded-lg bg-emerald-950/85 border border-emerald-700/60 text-[11px] font-medium text-emerald-200 flex items-center gap-1.5">
+                <div className="px-2.5 py-0.5 rounded-lg bg-emerald-950/85 border border-emerald-700/60 text-[11px] font-medium text-emerald-200 flex items-center gap-1.5">
                   <Shield className="w-3.5 h-3.5" />
                   <span>Sheltered</span>
                 </div>
               )}
               {hud.nearFire && (
-                <div className="px-3 py-1 rounded-lg bg-orange-950/85 border border-orange-700/60 text-[11px] font-medium text-orange-200 flex items-center gap-1.5">
+                <div className="px-2.5 py-0.5 rounded-lg bg-orange-950/85 border border-orange-700/60 text-[11px] font-medium text-orange-200 flex items-center gap-1.5">
                   <Flame className="w-3.5 h-3.5" />
                   <span>Fire Warmth</span>
                 </div>
               )}
               {hud.isCrouching && (
-                <div className="px-3 py-1 rounded-lg bg-stone-900/90 border border-stone-600 text-[11px] font-medium text-stone-200">
+                <div className="px-2.5 py-0.5 rounded-lg bg-stone-900/90 border border-stone-600 text-[11px] font-medium text-stone-200">
                   Crouching (Stealth)
                 </div>
               )}
               {hud.isNight && hud.nocturnalActiveCount > 0 && (
-                <div className="px-3 py-1 rounded-lg bg-indigo-950/85 border border-indigo-700/60 text-[11px] font-medium text-indigo-200 flex items-center gap-1.5">
+                <div className="px-2.5 py-0.5 rounded-lg bg-indigo-950/85 border border-indigo-700/60 text-[11px] font-medium text-indigo-200 flex items-center gap-1.5">
                   <Moon className="w-3.5 h-3.5" />
                   <span>Nocturnal Stalkers Active</span>
                 </div>
               )}
               {hud.structuralSummary && hud.structuralSummary.bucklingCount > 0 && (
-                <div className="px-3 py-1 rounded-lg bg-red-950/90 border border-red-600/80 text-[11px] font-bold text-red-200 flex items-center gap-1.5">
+                <div className="px-2.5 py-0.5 rounded-lg bg-red-950/90 border border-red-600/80 text-[11px] font-bold text-red-200 flex items-center gap-1.5">
                   <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
                   <span>
                     Structural Buckling ({hud.structuralSummary.bucklingCount})
@@ -874,13 +956,13 @@ export function SurvivalGameClient() {
                 </div>
               )}
               {hud.terrainSummary && hud.terrainSummary.activeWaterStreams > 0 && (
-                <div className="px-3 py-1 rounded-lg bg-sky-950/85 border border-sky-700/70 text-[11px] font-medium text-sky-200 flex items-center gap-1.5">
+                <div className="px-2.5 py-0.5 rounded-lg bg-sky-950/85 border border-sky-700/70 text-[11px] font-medium text-sky-200 flex items-center gap-1.5">
                   <Waves className="w-3.5 h-3.5 text-sky-400" />
                   <span>Fluid Erosion Active</span>
                 </div>
               )}
               {hud.momentumState?.wallRunning && (
-                <div className="px-3 py-1 rounded-lg bg-emerald-950/90 border border-emerald-500/80 text-[11px] font-bold text-emerald-200 flex items-center gap-1.5">
+                <div className="px-2.5 py-0.5 rounded-lg bg-emerald-950/90 border border-emerald-500/80 text-[11px] font-bold text-emerald-200 flex items-center gap-1.5">
                   <Footprints className="w-3.5 h-3.5 text-emerald-300" />
                   <span>
                     Wall-Run ({hud.momentumState.wallSide < 0 ? 'Left' : 'Right'}) · Space Wall-Kick
@@ -888,13 +970,13 @@ export function SurvivalGameClient() {
                 </div>
               )}
               {hud.momentumState?.vaulting && (
-                <div className="px-3 py-1 rounded-lg bg-sky-950/90 border border-sky-500/80 text-[11px] font-bold text-sky-200 flex items-center gap-1.5">
+                <div className="px-2.5 py-0.5 rounded-lg bg-sky-950/90 border border-sky-500/80 text-[11px] font-bold text-sky-200 flex items-center gap-1.5">
                   <Zap className="w-3.5 h-3.5 text-sky-300" />
                   <span>Obstacle Vault</span>
                 </div>
               )}
               {hud.momentumState?.nearCaveBoss && (
-                <div className="px-3 py-1 rounded-lg bg-red-950/90 border border-red-500/80 text-[11px] font-bold text-amber-200 flex items-center gap-1.5">
+                <div className="px-2.5 py-0.5 rounded-lg bg-red-950/90 border border-red-500/80 text-[11px] font-bold text-amber-200 flex items-center gap-1.5">
                   <Skull className="w-3.5 h-3.5 text-red-400" />
                   <span>
                     Cave Boss Lair · Shoot/Strike Glowing Ceiling Stalactites to Crush Armor!
@@ -1043,29 +1125,34 @@ export function SurvivalGameClient() {
                     ) : (
                       <span className="text-stone-300 flex items-center gap-1.5">
                         <Hand className="w-3.5 h-3.5 text-amber-300" />
-                        <span>Bare Hands (Gather, Cook &amp; Carcasses)</span>
+                        <span className="sm:hidden">Empty Hands</span>
+                        <span className="hidden sm:inline">
+                          Bare Hands (Gather, Cook &amp; Carcasses)
+                        </span>
                       </span>
                     )}
                   </div>
-                  <button
-                    type="button"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={() => engineRef.current?.triggerDebrisKick()}
-                    disabled={(hud.momentumState?.kickCooldown ?? 0) > 0}
-                    className={`px-2.5 py-1 rounded-lg font-bold text-[11px] shadow-md flex items-center gap-1 whitespace-nowrap shrink-0 border transition-colors ${
-                      (hud.momentumState?.kickCooldown ?? 0) > 0
-                        ? 'bg-stone-900/75 border-stone-700 text-stone-500 cursor-not-allowed'
-                        : 'bg-stone-900/90 hover:bg-amber-600 hover:text-stone-950 border-amber-500/60 text-amber-300'
-                    }`}
-                    title="Kick dust & gravel debris into enemies' faces to blind them & open armor gaps (V)"
-                  >
-                    <Footprints className="w-3.5 h-3.5" />
-                    <span>
-                      {(hud.momentumState?.kickCooldown ?? 0) > 0
-                        ? `Kick ${hud.momentumState?.kickCooldown.toFixed(1)}s`
-                        : 'Kick Debris [V]'}
-                    </span>
-                  </button>
+                  {!showTouchControls && (
+                    <button
+                      type="button"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={() => engineRef.current?.triggerDebrisKick()}
+                      disabled={(hud.momentumState?.kickCooldown ?? 0) > 0}
+                      className={`px-2.5 py-1 rounded-lg font-bold text-[11px] shadow-md flex items-center gap-1 whitespace-nowrap shrink-0 border transition-colors ${
+                        (hud.momentumState?.kickCooldown ?? 0) > 0
+                          ? 'bg-stone-900/75 border-stone-700 text-stone-500 cursor-not-allowed'
+                          : 'bg-stone-900/90 hover:bg-amber-600 hover:text-stone-950 border-amber-500/60 text-amber-300'
+                      }`}
+                      title="Kick dust & gravel debris into enemies' faces to blind them & open armor gaps (V)"
+                    >
+                      <Footprints className="w-3.5 h-3.5" />
+                      <span>
+                        {(hud.momentumState?.kickCooldown ?? 0) > 0
+                          ? `Kick ${hud.momentumState?.kickCooldown.toFixed(1)}s`
+                          : 'Kick Debris [V]'}
+                      </span>
+                    </button>
+                  )}
                   {!weaponActive &&
                     dirtyBottleCount > 0 &&
                     (eqDef?.id === 'dirty_water_bottle' || !eqDef) && (
@@ -1168,10 +1255,109 @@ export function SurvivalGameClient() {
               );
             })()}
 
-            {/* Bare Hands Toggle + Scrollable 9-Slot HUD Bar + Scroll Arrows + Dedicated Place Button */}
+            {/* HUD Bar Manager Popover (Expand up to 5,000 + Empty HUD Bar + Slot Jump) */}
+            {hudManagerOpen && (
+              <div
+                onPointerDown={(e) => e.stopPropagation()}
+                className="pointer-events-auto mb-1 w-[min(94vw,430px)] rounded-xl bg-stone-950/95 border border-amber-500/60 p-3 shadow-2xl space-y-2.5"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-xs font-bold text-amber-300">
+                    HUD Bar Capacity: {hud.hotbarItemIds.length.toLocaleString()} /{' '}
+                    {(hud.maxHudBarCapacity ?? 5000).toLocaleString()} Items
+                  </div>
+                  <div className="text-[10px] font-mono-tabular text-emerald-300">
+                    {(hud.emptyCompartmentsCount ?? 1_000_005_000).toLocaleString()} Empty Compartments
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => engineRef.current?.expandHudBar(10, false)}
+                    className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-[11px] font-mono-tabular font-semibold text-stone-100"
+                  >
+                    +10
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => engineRef.current?.expandHudBar(100, false)}
+                    className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-[11px] font-mono-tabular font-semibold text-stone-100"
+                  >
+                    +100
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => engineRef.current?.expandHudBar(1000, false)}
+                    className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-[11px] font-mono-tabular font-semibold text-stone-100"
+                  >
+                    +1,000
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => engineRef.current?.expandHudBar(5000, true)}
+                    className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-[11px] font-mono-tabular font-bold text-stone-950"
+                  >
+                    Expand to 5,000
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => engineRef.current?.emptyAllHudBarToCompartments()}
+                    className="ml-auto px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-[11px] font-bold text-stone-50 flex items-center gap-1"
+                  >
+                    <ArrowDownToLine className="w-3.5 h-3.5" />
+                    <span>Empty All → Pack</span>
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-stone-800">
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      min={1}
+                      max={hud.hotbarItemIds.length}
+                      value={hudSlotJumpInput}
+                      onChange={(e) => setHudSlotJumpInput(e.target.value)}
+                      placeholder={`Jump 1–${hud.hotbarItemIds.length}`}
+                      className="w-28 px-2 py-1 rounded bg-stone-900 border border-stone-700 text-[11px] font-mono-tabular text-stone-100"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = parseInt(hudSlotJumpInput, 10);
+                        if (!Number.isNaN(target) && target >= 1 && target <= hud.hotbarItemIds.length) {
+                          const slotIdx = target - 1;
+                          setHudWindowStart(
+                            Math.min(
+                              Math.max(0, hud.hotbarItemIds.length - HUD_BAR_WINDOW),
+                              slotIdx,
+                            ),
+                          );
+                          engineRef.current?.selectHotbarSlot(slotIdx);
+                        }
+                      }}
+                      className="px-2.5 py-1 rounded bg-stone-800 hover:bg-stone-700 text-[11px] font-semibold text-amber-300"
+                    >
+                      Go Slot
+                    </button>
+                  </div>
+                  {hud.equippedSlot >= 0 && hud.hotbarItemIds[hud.equippedSlot] && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        engineRef.current?.moveHotbarSlotToCompartment(hud.equippedSlot)
+                      }
+                      className="px-2.5 py-1 rounded bg-emerald-900/80 hover:bg-emerald-800 border border-emerald-600/60 text-[11px] font-semibold text-emerald-200"
+                    >
+                      Drop Equipped → Compartment
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Bare Hands Toggle + Windowed HUD Bar (up to 5,000 Slots) + Empty Compartment Drop Target */}
             <div
               className="pointer-events-auto flex items-center gap-1 p-1.5 rounded-xl bg-stone-950/88 border border-stone-700/80 shadow-xl max-w-[96vw]"
-              title="Use Mouse Wheel or keys 1–9 to scroll through your HUD bar"
+              title="Drag any HUD slot to the Compartment drop icon (or right-click) to move it to your 1B+ Backpack Compartments"
             >
               <button
                 type="button"
@@ -1198,9 +1384,15 @@ export function SurvivalGameClient() {
                 type="button"
                 aria-label="Previous HUD Slot"
                 onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => engineRef.current?.cycleHotbarSlot(-1)}
+                onClick={() => {
+                  if (hud.hotbarItemIds.length > HUD_BAR_WINDOW && hudWindowStart > 0) {
+                    setHudWindowStart((p) => Math.max(0, p - HUD_BAR_WINDOW));
+                  } else {
+                    engineRef.current?.cycleHotbarSlot(-1);
+                  }
+                }}
                 className="w-6 h-11 sm:h-12 shrink-0 rounded-lg bg-stone-900/90 hover:bg-stone-800 border border-stone-800 hover:border-stone-600 text-stone-300 flex items-center justify-center transition-colors"
-                title="Scroll Previous Slot (Mouse Wheel Up)"
+                title="Scroll Previous Slots"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
@@ -1208,73 +1400,155 @@ export function SurvivalGameClient() {
               <div
                 ref={hotbarScrollRef}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="flex items-center gap-1.5 overflow-x-auto survival-scroll pb-1 max-w-[min(52vw,290px)] sm:max-w-[336px] snap-x snap-mandatory"
+                className="flex items-center gap-1.5 overflow-x-auto survival-scroll pb-1 max-w-[min(46vw,290px)] sm:max-w-[336px] snap-x snap-mandatory"
               >
-                {hud.hotbarItemIds.map((itemId, idx) => {
-                  const isSelected = hud.equippedSlot === idx;
-                  const qty = itemId ? countOf(itemId) : 0;
-                  return (
-                    <button
-                      key={idx}
-                      ref={(el) => {
-                        slotButtonRefs.current[idx] = el;
-                      }}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={() => {
-                        if (
-                          isSelected &&
-                          itemId &&
-                          qty > 0 &&
-                          ITEMS[itemId].category === 'food'
-                        ) {
-                          engineRef.current?.useOrEquipItem(itemId);
-                        } else {
-                          engineRef.current?.selectHotbarSlot(idx);
-                        }
-                      }}
-                      className={`relative w-11 h-11 sm:w-12 sm:h-12 shrink-0 snap-center rounded-lg border flex flex-col items-center justify-center transition-colors ${
-                        isSelected
-                          ? 'bg-amber-950/75 border-amber-400'
-                          : 'bg-stone-900 border-stone-800 hover:border-stone-600'
-                      }`}
-                      title={
-                        itemId && qty > 0
-                          ? `${ITEMS[itemId].name}${
-                              isSelected && ITEMS[itemId].category === 'food'
-                                ? ' (Tap again to consume)'
-                                : ''
-                            }`
-                          : `Empty Slot ${idx + 1}`
-                      }
-                    >
-                      <span className="absolute top-0.5 left-1 text-[9px] font-mono-tabular text-stone-500">
-                        {idx + 1}
-                      </span>
-                      {itemId && qty > 0 ? (
-                        <>
-                          <ItemIcon itemId={itemId} className="w-5 h-5" />
-                          <span className="absolute bottom-0.5 right-1 text-[10px] font-mono-tabular font-bold text-stone-200">
-                            {qty > 1 ? qty : ''}
-                          </span>
-                        </>
-                      ) : (
-                        <span className="text-[10px] text-stone-700">—</span>
-                      )}
-                    </button>
+                {(() => {
+                  const clampedStart = Math.min(
+                    hudWindowStart,
+                    Math.max(0, hud.hotbarItemIds.length - HUD_BAR_WINDOW),
                   );
-                })}
+                  return hud.hotbarItemIds
+                    .slice(clampedStart, clampedStart + HUD_BAR_WINDOW)
+                    .map((itemId, localIdx) => {
+                      const idx = clampedStart + localIdx;
+                      const isSelected = hud.equippedSlot === idx;
+                      const qty = itemId ? countOf(itemId) : 0;
+                      return (
+                        <button
+                          key={idx}
+                          ref={(el) => {
+                            slotButtonRefs.current[localIdx] = el;
+                          }}
+                          draggable={Boolean(itemId && qty > 0)}
+                          onDragStart={(e) => {
+                            if (!itemId) return;
+                            e.dataTransfer.setData('text/hud-slot', String(idx));
+                            setDraggingHudSlot(idx);
+                          }}
+                          onDragEnd={() => {
+                            setDraggingHudSlot(null);
+                            setHudDropHover(false);
+                          }}
+                          onContextMenu={(e) => {
+                            if (itemId && qty > 0) {
+                              e.preventDefault();
+                              engineRef.current?.moveHotbarSlotToCompartment(idx);
+                            }
+                          }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={() => {
+                            if (
+                              isSelected &&
+                              itemId &&
+                              qty > 0 &&
+                              ITEMS[itemId].category === 'food'
+                            ) {
+                              engineRef.current?.useOrEquipItem(itemId);
+                            } else {
+                              engineRef.current?.selectHotbarSlot(idx);
+                            }
+                          }}
+                          className={`relative w-11 h-11 sm:w-12 sm:h-12 shrink-0 snap-center rounded-lg border flex flex-col items-center justify-center transition-colors ${
+                            isSelected
+                              ? 'bg-amber-950/75 border-amber-400'
+                              : 'bg-stone-900 border-stone-800 hover:border-stone-600'
+                          }`}
+                          title={
+                            itemId && qty > 0
+                              ? `${ITEMS[itemId].name} (Right-click or drag to Empty Compartment icon to remove from HUD bar)`
+                              : `Empty Slot ${idx + 1}`
+                          }
+                        >
+                          <span className="absolute top-0.5 left-1 text-[9px] font-mono-tabular text-stone-500">
+                            {idx + 1}
+                          </span>
+                          {itemId && qty > 0 ? (
+                            <>
+                              <ItemIcon itemId={itemId} className="w-5 h-5" />
+                              <span className="absolute bottom-0.5 right-1 text-[10px] font-mono-tabular font-bold text-stone-200">
+                                {qty > 1 ? qty : ''}
+                              </span>
+                            </>
+                          ) : (
+                            <span className="text-[10px] text-stone-700">—</span>
+                          )}
+                        </button>
+                      );
+                    });
+                })()}
               </div>
 
               <button
                 type="button"
                 aria-label="Next HUD Slot"
                 onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => engineRef.current?.cycleHotbarSlot(1)}
+                onClick={() => {
+                  if (
+                    hud.hotbarItemIds.length > HUD_BAR_WINDOW &&
+                    hudWindowStart + HUD_BAR_WINDOW < hud.hotbarItemIds.length
+                  ) {
+                    setHudWindowStart((p) =>
+                      Math.min(hud.hotbarItemIds.length - HUD_BAR_WINDOW, p + HUD_BAR_WINDOW),
+                    );
+                  } else {
+                    engineRef.current?.cycleHotbarSlot(1);
+                  }
+                }}
                 className="w-6 h-11 sm:h-12 shrink-0 rounded-lg bg-stone-900/90 hover:bg-stone-800 border border-stone-800 hover:border-stone-600 text-stone-300 flex items-center justify-center transition-colors"
-                title="Scroll Next Slot (Mouse Wheel Down)"
+                title="Scroll Next Slots"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>
+
+              {/* Empty Compartment Drop Zone & Expand to 5,000 Button */}
+              <div
+                onPointerDown={(e) => e.stopPropagation()}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setHudDropHover(true);
+                }}
+                onDragLeave={() => setHudDropHover(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setHudDropHover(false);
+                  const slotStr = e.dataTransfer.getData('text/hud-slot');
+                  const slotIdx = slotStr ? parseInt(slotStr, 10) : draggingHudSlot;
+                  if (slotIdx !== null && !Number.isNaN(slotIdx)) {
+                    engineRef.current?.moveHotbarSlotToCompartment(slotIdx);
+                  }
+                  setDraggingHudSlot(null);
+                }}
+                className="flex items-center gap-1 shrink-0"
+              >
+                <button
+                  type="button"
+                  onClick={() => setHudManagerOpen((v) => !v)}
+                  className={`h-11 sm:h-12 px-2 shrink-0 rounded-lg border flex flex-col items-center justify-center transition-colors ${
+                    hudDropHover || draggingHudSlot !== null
+                      ? 'bg-emerald-900 border-emerald-400 text-emerald-100 animate-pulse'
+                      : hudManagerOpen
+                        ? 'bg-amber-950/80 border-amber-400 text-amber-200'
+                        : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-emerald-300'
+                  }`}
+                  title="Drop HUD items here into Empty Backpack Compartments, or click to expand HUD Bar up to 5,000 slots"
+                >
+                  <div className="flex items-center gap-0.5 text-[10px] font-bold">
+                    {draggingHudSlot !== null ? (
+                      <ArrowDownToLine className="w-4 h-4" />
+                    ) : (
+                      <Plus className="w-3.5 h-3.5" />
+                    )}
+                    <span className="font-mono-tabular">
+                      {hud.hotbarItemIds.length >= 1000
+                        ? `${(hud.hotbarItemIds.length / 1000).toFixed(1)}K`
+                        : hud.hotbarItemIds.length}
+                    </span>
+                  </div>
+                  <span className="text-[8px] font-mono-tabular text-stone-400 leading-none mt-0.5">
+                    {draggingHudSlot !== null ? 'Drop Pack' : '5K / Pack'}
+                  </span>
+                </button>
+              </div>
 
               <button
                 type="button"
@@ -1329,6 +1603,18 @@ export function SurvivalGameClient() {
           onSelectHotbarSlot={(slotIdx) =>
             engineRef.current?.selectHotbarSlot(slotIdx)
           }
+          onExpandHudBar={(val, isAbs) =>
+            engineRef.current?.expandHudBar(val, isAbs)
+          }
+          onMoveHotbarSlotToCompartment={(slotIdx, cid) =>
+            engineRef.current?.moveHotbarSlotToCompartment(slotIdx, cid)
+          }
+          onEmptyAllHudBar={() =>
+            engineRef.current?.emptyAllHudBarToCompartments()
+          }
+          onMoveCompartmentToHotbar={(cid, targetSlot) =>
+            engineRef.current?.moveCompartmentToHotbar(cid, targetSlot)
+          }
           onCraft={(recipeId) => engineRef.current?.craftRecipe(recipeId)}
           onCraftSound={() => engineRef.current?.playWorkbenchCraftSound()}
           onClose={closeModal}
@@ -1349,6 +1635,18 @@ export function SurvivalGameClient() {
           }
           onSelectHotbarSlot={(slotIdx) =>
             engineRef.current?.selectHotbarSlot(slotIdx)
+          }
+          onExpandHudBar={(val, isAbs) =>
+            engineRef.current?.expandHudBar(val, isAbs)
+          }
+          onMoveHotbarSlotToCompartment={(slotIdx, cid) =>
+            engineRef.current?.moveHotbarSlotToCompartment(slotIdx, cid)
+          }
+          onEmptyAllHudBar={() =>
+            engineRef.current?.emptyAllHudBarToCompartments()
+          }
+          onMoveCompartmentToHotbar={(cid, targetSlot) =>
+            engineRef.current?.moveCompartmentToHotbar(cid, targetSlot)
           }
           onCraft={(recipeId) => engineRef.current?.craftRecipe(recipeId)}
           onCraftSound={() => engineRef.current?.playWorkbenchCraftSound()}
@@ -1410,7 +1708,30 @@ export function SurvivalGameClient() {
         />
       )}
 
-      {activeModal === 'tv' && <TvPlayerModal onClose={closeModal} />}
+      {screen === 'playing' && (
+        <TvPlayerModal
+          isOpen={activeModal === 'tv'}
+          tvState={hud?.tvState}
+          onSelectChannel={(ch) => engineRef.current?.setTvChannel(ch)}
+          onSelectYouTube={(stream) =>
+            engineRef.current?.setTvYouTubeStream(
+              stream.videoId,
+              stream.title,
+              stream.channel,
+            )
+          }
+          onTogglePower={() => engineRef.current?.toggleTvPower()}
+          onTogglePlayPause={() => engineRef.current?.toggleTvPlayPause()}
+          onSetVolume={(vol) => engineRef.current?.setTvVolume(vol)}
+          onToggleMute={() => engineRef.current?.toggleTvMute()}
+          onNextChannel={() => engineRef.current?.nextTvChannel()}
+          onPrevChannel={() => engineRef.current?.prevTvChannel()}
+          onToggleAutoCycle={(enabled) => engineRef.current?.setTvAutoCycle(enabled)}
+          onLoadLocalVideo={(file) => engineRef.current?.loadLocalTvVideo(file)}
+          onDrawPreview={(canvas) => engineRef.current?.drawTvPreview(canvas)}
+          onClose={closeModal}
+        />
+      )}
 
       {activeModal === 'place' && hud && (
         <PlaceModal
@@ -1516,7 +1837,7 @@ export function SurvivalGameClient() {
                 </button>
               )}
               <button
-                onClick={handleStartNewGame}
+                onClick={() => handleStartNewGame()}
                 className="w-full min-h-[48px] rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-100 font-semibold text-sm flex items-center justify-center gap-2"
               >
                 <RotateCcw className="w-4 h-4" />

@@ -161,7 +161,7 @@ export function loadGameFromSlot(slotId: string): GameSaveData | null {
         data.inventory.push({ itemId: 'dirty_water_bottle', quantity: 1 });
       }
 
-      if (!Array.isArray(data.player.hotbarItemIds)) {
+      if (!Array.isArray(data.player.hotbarItemIds) || data.player.hotbarItemIds.length === 0) {
         data.player.hotbarItemIds = [
           'gun',
           'hunting_knife',
@@ -173,47 +173,19 @@ export function loadGameFromSlot(slotId: string): GameSaveData | null {
           null,
           null,
         ];
+        const gunIdx = data.player.hotbarItemIds.indexOf('gun');
+        if (gunIdx !== -1) {
+          data.player.equippedSlot = gunIdx;
+        }
       }
       while (data.player.hotbarItemIds.length < 9) {
         data.player.hotbarItemIds.push(null);
       }
-      if (!data.player.hotbarItemIds.includes('gun')) {
-        const emptyIdx = data.player.hotbarItemIds.indexOf(null);
-        if (emptyIdx !== -1) {
-          data.player.hotbarItemIds[emptyIdx] = 'gun';
-        } else {
-          data.player.hotbarItemIds[0] = 'gun';
-        }
+      if (data.player.hotbarItemIds.length > 5000) {
+        data.player.hotbarItemIds = data.player.hotbarItemIds.slice(0, 5000);
       }
-      if (!data.player.hotbarItemIds.includes('hunting_knife')) {
-        const emptyIdx = data.player.hotbarItemIds.indexOf(null);
-        if (emptyIdx !== -1) {
-          data.player.hotbarItemIds[emptyIdx] = 'hunting_knife';
-        }
-      }
-      if (
-        !data.player.hotbarItemIds.includes('dirty_water_bottle') &&
-        !data.player.hotbarItemIds.includes('filtered_water_bottle')
-      ) {
-        const emptyIdx = data.player.hotbarItemIds.indexOf(null);
-        if (emptyIdx !== -1) {
-          data.player.hotbarItemIds[emptyIdx] = data.inventory.some(
-            (s) => s.itemId === 'filtered_water_bottle',
-          )
-            ? 'filtered_water_bottle'
-            : 'dirty_water_bottle';
-        }
-      }
-      if (!data.player.hotbarItemIds.includes('sickle')) {
-        const emptyIdx = data.player.hotbarItemIds.indexOf(null);
-        if (emptyIdx !== -1) {
-          data.player.hotbarItemIds[emptyIdx] = 'sickle';
-        }
-      }
-      // Ensure gun is the active equipped slot on start of game
-      const gunIdx = data.player.hotbarItemIds.indexOf('gun');
-      if (gunIdx !== -1) {
-        data.player.equippedSlot = gunIdx;
+      if (!Array.isArray(data.backpackCompartments)) {
+        data.backpackCompartments = [];
       }
     }
     return data;

@@ -20,6 +20,7 @@ import {
   FARMER_POS,
   getTerrainHeight,
   HILL_HOUSE_POS,
+  HOMESTEAD_POS,
   LAKE_CENTER,
   OCEAN_LEVEL,
   SNOWY_WOODLAND_POS,
@@ -887,6 +888,101 @@ export class CreatureManager {
       startledTimer: 0,
       velY: 0,
     });
+  }
+
+  public spawnGuardianBosses(): void {
+    const bossDefs: {
+      species: CreatureSpecies;
+      name: string;
+      x: number;
+      z: number;
+      hp: number;
+      scale: number;
+    }[] = [
+      {
+        species: 'trex',
+        name: 'Apex Rex Sovereign',
+        x: AUTUMN_GROVE_POS.x,
+        z: AUTUMN_GROVE_POS.z,
+        hp: 850,
+        scale: 1.6,
+      },
+      {
+        species: 'saltwater_crocodile',
+        name: 'Spinosaurus River Titan',
+        x: SWAMP_POS.x,
+        z: SWAMP_POS.z,
+        hp: 750,
+        scale: 1.5,
+      },
+      {
+        species: 'triceratops',
+        name: 'Ancient Horned Juggernaut',
+        x: HOMESTEAD_POS.x + 35,
+        z: HOMESTEAD_POS.z + 40,
+        hp: 680,
+        scale: 1.45,
+      },
+      {
+        species: 'velociraptor',
+        name: 'Obsidian Cave Megaraptor',
+        x: CAVE_POS.x,
+        z: CAVE_POS.z,
+        hp: 550,
+        scale: 1.4,
+      },
+    ];
+
+    for (const b of bossDefs) {
+      const spec = SPECIES_SPECS[b.species];
+      const rig = createCreatureModel(b.species);
+      const y = getTerrainHeight(b.x, b.z);
+      rig.root.position.set(b.x, y, b.z);
+      rig.root.scale.multiplyScalar(b.scale);
+      rig.root.visible = true;
+      const zoneArmor = getCreatureDefaultArmor(b.species, true);
+      attachCreatureArmorPlates(rig, b.species, zoneArmor);
+      this.scene.add(rig.root);
+
+      this.creatures.push({
+        id: `boss_${b.species}_${++this.dynamicSeq}`,
+        species: b.species,
+        spec,
+        rig,
+        x: b.x,
+        y,
+        z: b.z,
+        yaw: 0,
+        homeX: b.x,
+        homeZ: b.z,
+        targetX: b.x,
+        targetZ: b.z,
+        hp: b.hp,
+        maxHp: b.hp,
+        alive: true,
+        spawnCycle: 'always',
+        cycleActive: true,
+        respawnTimer: 0,
+        state: 'idle',
+        stateTimer: 3,
+        attackCooldown: 0,
+        provokedTimer: 0,
+        snaredTimer: 0,
+        stunTimer: 0,
+        blindTimer: 0,
+        isBoss: true,
+        displayNameOverride: b.name,
+        zoneArmor,
+        stepAccum: 0,
+        callCooldown: 5,
+        leapPhase: 0,
+        leaping: false,
+        swoopOffsetAngle: 0,
+        feedTimer: 0,
+        startledTimer: 0,
+        velY: 0,
+      });
+    }
   }
 
   public syncArmorVisuals(creature: ActiveCreature): void {

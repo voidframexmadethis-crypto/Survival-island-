@@ -84,6 +84,8 @@ export interface WorldHandles {
   soilPlots: { x: number; y: number; z: number }[];
   houseStations: HouseStationTarget[];
   tvScreenMat: THREE.MeshStandardMaterial;
+  tvScreenMesh: THREE.Mesh;
+  tvWorldPos: THREE.Vector3;
   hillHousePos: THREE.Vector3;
   wheatfieldPos: THREE.Vector3;
   caveCeilings: CaveCeilingCluster[];
@@ -1869,6 +1871,8 @@ export function buildIslandWorld(
     soilPlots,
     houseStations: hillHouse.stations,
     tvScreenMat: hillHouse.tvScreenMat,
+    tvScreenMesh: hillHouse.tvScreenMesh,
+    tvWorldPos: new THREE.Vector3(HILL_HOUSE_POS.x + 1.4, HILL_HOUSE_Y + 1.24, HILL_HOUSE_POS.z + 0.41),
     hillHousePos: new THREE.Vector3(HILL_HOUSE_POS.x, HILL_HOUSE_Y, HILL_HOUSE_POS.z),
     wheatfieldPos: new THREE.Vector3(WHEATFIELD_POS.x, wheatY, WHEATFIELD_POS.z),
     caveCeilings,

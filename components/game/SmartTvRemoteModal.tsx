@@ -89,8 +89,10 @@ export const SmartTvRemoteModal: React.FC<SmartTvRemoteModalProps> = ({
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="p-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 transition"
+            className="min-w-[44px] min-h-[44px] px-3 rounded-xl bg-stone-800 hover:bg-stone-700 border border-stone-600/80 text-stone-100 flex items-center justify-center gap-1.5 text-xs font-semibold transition"
+            aria-label="Close TV Remote"
             title="Close Remote & Keep TV Playing"
           >
             <X className="w-5 h-5" />
