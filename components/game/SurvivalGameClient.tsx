@@ -85,6 +85,7 @@ import {
   SaveSlotSummary,
 } from '@/game/types';
 import { CookingModal } from './CookingModal';
+import { DryingRackModal } from './DryingRackModal';
 import { CraftingModal } from './CraftingModal';
 import { FarmerShopModal } from './FarmerShopModal';
 import { FridgeModal } from './FridgeModal';
@@ -2483,6 +2484,16 @@ export function SurvivalGameClient() {
           onTake={(itemId) => engineRef.current?.transferFromFridge(itemId, 1)}
           onStore={(itemId) => engineRef.current?.transferToFridge(itemId, 1)}
           onEat={(itemId) => engineRef.current?.useOrEquipItem(itemId)}
+          onClose={closeModal}
+        />
+      )}
+
+      {activeModal === 'drying_rack' && hud && (
+        <DryingRackModal
+          hud={hud}
+          structureId={activeStationStructureId}
+          onHangMeat={(structId, itemId) => engineRef.current?.hangMeatOnDryingRack(structId, itemId)}
+          onCollectMeat={(structId, slotIdx) => engineRef.current?.collectDriedMeatFromRack(structId, slotIdx)}
           onClose={closeModal}
         />
       )}

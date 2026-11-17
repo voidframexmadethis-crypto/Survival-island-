@@ -22,6 +22,7 @@ import {
   Radio,
   Repeat,
   Search,
+  Shield,
   SkipForward,
   Square,
   Trees,
@@ -36,7 +37,7 @@ import {
   TvChannelId,
   normalizeChannelId,
 } from '@/game/systems/smartTvSystem';
-import type { HUDStateSnapshot } from '@/game/types';
+import type { HUDStateSnapshot, TvSafetyMode } from '@/game/types';
 
 export interface YouTubeStreamSelection {
   videoId: string;
@@ -157,6 +158,9 @@ interface TvPlayerModalProps {
   onToggleAutoCycle: (enabled: boolean) => void;
   onLoadLocalVideo?: (file: File) => void;
   onDrawPreview?: (canvas: HTMLCanvasElement) => void;
+  tvSafetyMode?: TvSafetyMode;
+  effectiveTvSafetyMode?: TvSafetyMode;
+  onChangeTvSafetyMode?: (mode: TvSafetyMode) => void;
   onClose: () => void;
 }
 
@@ -200,10 +204,14 @@ export function TvPlayerModal({
   onToggleAutoCycle,
   onLoadLocalVideo,
   onDrawPreview,
+  tvSafetyMode,
+  effectiveTvSafetyMode,
+  onChangeTvSafetyMode,
   onClose,
 }: TvPlayerModalProps) {
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
+  const searchAbortRef = useRef<AbortController | null>(null);
 
   const [localSearchQuery, setLocalSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
@@ -226,7 +234,13 @@ export function TvPlayerModal({
   const setSearchResults = onSearchResultsChange ?? setLocalSearchResults;
   const searchStatus = controlledSearchStatus ?? localSearchStatus;
   const setSearchStatus = onSearchStatusChange ?? setLocalSearchStatus;
-  const viewMode = controlledViewMode ?? localViewMode;
+  const resolvedSafetyMode: TvSafetyMode =
+    tvSafetyMode ?? tvState?.safetyMode ?? 'auto';
+  const resolvedEffectiveSafety: TvSafetyMode =
+    effectiveTvSafetyMode ?? tvState?.effectiveSafetyMode ?? resolvedSafetyMode;
+  const rawViewMode = controlledViewMode ?? localViewMode;
+  const viewMode: 'inline' | 'world3d' =
+    resolvedEffectiveSafety === 'safe_mini' ? 'inline' : rawViewMode;
   const setViewMode = onViewModeChange ?? setLocalViewMode;
 
   const isPowerOn = tvState ? tvState.power : true;
@@ -271,9 +285,11 @@ export function TvPlayerModal({
     onInlinePlayerChange?.(showInlineYouTube);
   }, [showInlineYouTube, onInlinePlayerChange]);
 
-  // Ensure handoff back to 3D Wall TV / Floating PiP whenever modal closes/unmounts
+  // Ensure handoff back to 3D Wall TV / Floating PiP and abort pending fetches whenever modal closes/unmounts
   useEffect(() => {
     return () => {
+      searchAbortRef.current?.abort();
+      searchAbortRef.current = null;
       onInlineSlotChange?.(null);
       onInlinePlayerChange?.(false);
     };
@@ -325,13 +341,17 @@ export function TvPlayerModal({
     }
   }, [youtubeErrorSignal, youtubeVideoId, tryNextPlayableResult]);
 
-  // Mirror Three.js CanvasTexture onto Monitor preview when viewing native channels or 3D Wall mode
+  // Mirror Three.js CanvasTexture onto Monitor preview at a steady 15 FPS to keep GPU usage low
   useEffect(() => {
     if (!onDrawPreview || showInlineYouTube) return;
     let rafId = 0;
-    const renderLoop = () => {
-      if (previewCanvasRef.current) {
-        onDrawPreview(previewCanvasRef.current);
+    let lastDrawMs = 0;
+    const renderLoop = (now: number) => {
+      if (now - lastDrawMs >= 66) {
+        lastDrawMs = now;
+        if (previewCanvasRef.current) {
+          onDrawPreview(previewCanvasRef.current);
+        }
       }
       rafId = window.requestAnimationFrame(renderLoop);
     };
@@ -340,12 +360,36 @@ export function TvPlayerModal({
   }, [onDrawPreview, showInlineYouTube]);
 
   const handleToggleViewMode = () => {
+    if (resolvedEffectiveSafety === 'safe_mini') {
+      setViewMode('inline');
+      setSearchStatus('Safe Mini-TV active — floating Mini-TV plays when exiting remote');
+      return;
+    }
     if (viewMode === 'inline') {
       onInlinePlayerChange?.(false);
       setViewMode('world3d');
       setExpandedTheater(false);
     } else {
       setViewMode('inline');
+    }
+  };
+
+  const handleCycleSafetyMode = () => {
+    if (!onChangeTvSafetyMode) return;
+    const next: TvSafetyMode =
+      resolvedSafetyMode === 'auto'
+        ? 'safe_mini'
+        : resolvedSafetyMode === 'safe_mini'
+          ? 'full_3d'
+          : 'auto';
+    onChangeTvSafetyMode(next);
+    if (next === 'safe_mini') {
+      setViewMode('inline');
+      setSearchStatus('Safe Mini-TV enabled — prevents 3D Wall TV crashes');
+    } else if (next === 'full_3d') {
+      setSearchStatus('Full 3D Wall TV enabled');
+    } else {
+      setSearchStatus('TV Auto-Protection enabled');
     }
   };
 
@@ -357,6 +401,10 @@ export function TvPlayerModal({
       setSearchStatus('Tuned to Lo-Fi Chill Radio');
       return;
     }
+
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
 
     triedFailedIdsRef.current.clear();
     setRestrictedNoticeState(null);
@@ -372,6 +420,7 @@ export function TvPlayerModal({
     try {
       const res = await fetch(
         `/api/youtube/search?q=${encodeURIComponent(raw)}`,
+        { signal: controller.signal },
       );
       if (res.ok) {
         const data = (await res.json()) as {
@@ -403,7 +452,10 @@ export function TvPlayerModal({
           return;
         }
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return;
+      }
       // Handled below
     }
 
@@ -508,16 +560,44 @@ export function TvPlayerModal({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="min-w-[44px] min-h-[44px] px-3 rounded-xl bg-stone-800 hover:bg-stone-700 active:bg-stone-600 border border-stone-600 text-stone-100 font-semibold text-xs flex items-center justify-center gap-1.5 shrink-0 transition-colors"
-            aria-label="Close TV Remote"
-            title="Hide remote overlay and keep TV playing"
-          >
-            <X className="w-5 h-5" />
-            <span className="hidden sm:inline">Close</span>
-          </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {onChangeTvSafetyMode && (
+                <button
+                  type="button"
+                  onClick={handleCycleSafetyMode}
+                  className={`min-h-[36px] px-2.5 rounded-xl border text-[10px] font-bold flex items-center gap-1 transition-colors ${
+                    resolvedEffectiveSafety === 'safe_mini'
+                      ? 'bg-emerald-950/70 hover:bg-emerald-900/70 border-emerald-500/60 text-emerald-200'
+                      : resolvedSafetyMode === 'full_3d'
+                        ? 'bg-sky-950/70 hover:bg-sky-900/70 border-sky-500/50 text-sky-200'
+                        : 'bg-stone-800 hover:bg-stone-700 border-stone-600 text-stone-200'
+                  }`}
+                  title="Cycle Smart TV Stability Mode: Auto-Protected, Safe Mini-TV, or Full 3D Wall"
+                >
+                  <Shield className="w-3.5 h-3.5 shrink-0" />
+                  <span>
+                    {resolvedSafetyMode === 'safe_mini'
+                      ? 'Safe Mini'
+                      : resolvedSafetyMode === 'full_3d'
+                        ? '3D Wall'
+                        : resolvedEffectiveSafety === 'safe_mini'
+                          ? 'Auto: Mini'
+                          : 'Auto Safe'}
+                  </span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="min-w-[44px] min-h-[44px] px-3 rounded-xl bg-stone-800 hover:bg-stone-700 active:bg-stone-600 border border-stone-600 text-stone-100 font-semibold text-xs flex items-center justify-center gap-1.5 shrink-0 transition-colors"
+                aria-label="Close TV Remote"
+                title="Hide remote overlay and keep TV playing"
+              >
+                <X className="w-5 h-5" />
+                <span className="hidden sm:inline">Close</span>
+              </button>
+            </div>
         </div>
 
         {/* Scrollable Remote Deck */}
@@ -541,15 +621,24 @@ export function TvPlayerModal({
                   <button
                     type="button"
                     onClick={handleToggleViewMode}
-                    className="px-2 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-700 text-stone-200 font-semibold text-[10px] flex items-center gap-1 transition-colors"
+                    disabled={resolvedEffectiveSafety === 'safe_mini'}
+                    className="px-2 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 disabled:opacity-55 border border-stone-700 text-stone-200 font-semibold text-[10px] flex items-center gap-1 transition-colors"
                     title={
-                      viewMode === 'inline'
-                        ? 'Preview on the 3D wall TV inside your base'
-                        : 'Watch directly on the Smart TV screen here'
+                      resolvedEffectiveSafety === 'safe_mini'
+                        ? 'Safe Mini-TV active — switches to Floating Mini-TV when exiting remote'
+                        : viewMode === 'inline'
+                          ? 'Preview on the 3D wall TV inside your base'
+                          : 'Watch directly on the Smart TV screen here'
                     }
                   >
                     <Monitor className="w-3 h-3 text-sky-400" />
-                    <span>{viewMode === 'inline' ? '3D Wall' : 'TV Screen'}</span>
+                    <span>
+                      {resolvedEffectiveSafety === 'safe_mini'
+                        ? 'Mini-TV Safe'
+                        : viewMode === 'inline'
+                          ? '3D Wall'
+                          : 'TV Screen'}
+                    </span>
                   </button>
                   <button
                     type="button"

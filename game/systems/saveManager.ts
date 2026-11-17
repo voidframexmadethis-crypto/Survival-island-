@@ -1,14 +1,17 @@
 import {
   DrawDistanceTier,
+  GameMode,
   GameSaveData,
   GameSettings,
   GraphicsPreset,
   SaveSlotSummary,
+  TvSafetyMode,
 } from '../types';
 
 const SAVE_INDEX_KEY = 'survival_island_lost_world_saves_v1';
 const SAVE_SLOT_PREFIX = 'survival_island_slot_v1_';
 const SETTINGS_KEY = 'survival_island_settings_v1';
+const ACTIVE_SESSION_KEY = 'survival_island_active_session_v1';
 
 export interface GraphicsPresetProfile {
   graphicsQuality: 'balanced' | 'high';
@@ -18,6 +21,7 @@ export interface GraphicsPresetProfile {
   particlesEnabled: boolean;
   drawDistance: DrawDistanceTier;
   dynamicAutoFps: boolean;
+  tvSafetyMode: TvSafetyMode;
 }
 
 export const GRAPHICS_PRESET_PROFILES: Record<GraphicsPreset, GraphicsPresetProfile> = {
@@ -29,6 +33,7 @@ export const GRAPHICS_PRESET_PROFILES: Record<GraphicsPreset, GraphicsPresetProf
     particlesEnabled: true,
     drawDistance: 'far',
     dynamicAutoFps: true,
+    tvSafetyMode: 'auto',
   },
   balanced: {
     graphicsQuality: 'balanced',
@@ -38,6 +43,7 @@ export const GRAPHICS_PRESET_PROFILES: Record<GraphicsPreset, GraphicsPresetProf
     particlesEnabled: true,
     drawDistance: 'medium',
     dynamicAutoFps: true,
+    tvSafetyMode: 'auto',
   },
   performance: {
     graphicsQuality: 'balanced',
@@ -47,6 +53,7 @@ export const GRAPHICS_PRESET_PROFILES: Record<GraphicsPreset, GraphicsPresetProf
     particlesEnabled: false,
     drawDistance: 'near',
     dynamicAutoFps: true,
+    tvSafetyMode: 'safe_mini',
   },
 };
 
@@ -80,6 +87,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   particlesEnabled: true,
   drawDistance: 'medium',
   dynamicAutoFps: true,
+  tvSafetyMode: 'auto',
   touchControlsMode: 'auto',
   cameraSensitivity: 1.0,
   invertCameraY: false,
@@ -118,6 +126,13 @@ export function loadSettings(): GameSettings {
       if (parsed.drawDistance === undefined) merged.drawDistance = prof.drawDistance;
     }
     if (merged.dynamicAutoFps === undefined) merged.dynamicAutoFps = true;
+    if (
+      merged.tvSafetyMode !== 'auto' &&
+      merged.tvSafetyMode !== 'safe_mini' &&
+      merged.tvSafetyMode !== 'full_3d'
+    ) {
+      merged.tvSafetyMode = 'auto';
+    }
     return merged;
   } catch {
     return base;
@@ -130,6 +145,58 @@ export function saveSettings(settings: GameSettings): void {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   } catch {
     // Ignore storage quota errors gracefully
+  }
+}
+
+export function markSessionPlaying(slotId: string, mode?: GameMode): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(
+      ACTIVE_SESSION_KEY,
+      JSON.stringify({
+        slotId,
+        mode: mode || 'survival',
+        updatedAt: Date.now(),
+      }),
+    );
+  } catch {
+    // Ignore restricted sessionStorage environments
+  }
+}
+
+export function clearSessionPlaying(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.removeItem(ACTIVE_SESSION_KEY);
+  } catch {
+    // Ignore
+  }
+}
+
+export function getActiveSessionRecovery(): {
+  slotId: string;
+  mode?: GameMode;
+} | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(ACTIVE_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as {
+      slotId?: string;
+      mode?: GameMode;
+      updatedAt?: number;
+    };
+    if (
+      typeof parsed?.slotId === 'string' &&
+      parsed.slotId.trim() &&
+      typeof parsed.updatedAt === 'number' &&
+      Date.now() - parsed.updatedAt < 1000 * 60 * 60 * 12
+    ) {
+      return { slotId: parsed.slotId, mode: parsed.mode };
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 

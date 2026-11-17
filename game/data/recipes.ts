@@ -178,6 +178,20 @@ export const CRAFTING_RECIPES: CraftingRecipe[] = [
     description: 'Heavy basalt warhammer that shatters stone-heavy armor (3.1x) and staggers charging bosses.',
   },
   {
+    id: 'craft_drying_rack',
+    resultItemId: 'drying_rack',
+    resultQuantity: 1,
+    category: 'camp',
+    requiresTable: false,
+    craftTimeSeconds: 1.8,
+    ingredients: [
+      { itemId: 'wood', quantity: 4 },
+      { itemId: 'branch', quantity: 6 },
+      { itemId: 'rope', quantity: 2 },
+    ],
+    description: 'Build a wooden meat drying rack to cure raw meat into long-lasting jerky.',
+  },
+  {
     id: 'craft_flint_campfire',
     resultItemId: 'campfire',
     resultQuantity: 1,

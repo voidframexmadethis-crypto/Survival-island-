@@ -11,6 +11,7 @@ import React, {
 } from 'react';
 import { Pause, Play, SlidersHorizontal, Tv, X } from 'lucide-react';
 import type { TvScreenProjection } from '@/game/engine/GameEngine';
+import type { TvSafetyMode } from '@/game/types';
 
 export interface PersistentYouTubeOverlayHandle {
   updateProjection: (proj: TvScreenProjection | null) => void;
@@ -27,6 +28,7 @@ interface PersistentYouTubeOverlayProps {
   startSec?: number;
   remoteOpen: boolean;
   remoteViewMode: 'inline' | 'world3d';
+  tvSafetyMode?: TvSafetyMode;
   inlineSlotElement: HTMLElement | null;
   pipDismissed: boolean;
   onDismissPip: () => void;
@@ -56,6 +58,7 @@ export const PersistentYouTubeOverlay = forwardRef<
     startSec = 0,
     remoteOpen,
     remoteViewMode,
+    tvSafetyMode = 'auto',
     inlineSlotElement,
     pipDismissed,
     onDismissPip,
@@ -74,6 +77,7 @@ export const PersistentYouTubeOverlay = forwardRef<
   const lastSentMutedRef = useRef<boolean | null>(null);
   const lastSentPausedRef = useRef<boolean | null>(null);
   const lastVolPushAtRef = useRef<number>(0);
+  const lastLayoutKeyRef = useRef<string>('');
 
   const [projVisible, setProjVisible] = useState(false);
   const [nocookieVideoId, setNocookieVideoId] = useState<string | null>(null);
@@ -86,6 +90,7 @@ export const PersistentYouTubeOverlay = forwardRef<
     lastSentVolRef.current = -1;
     lastSentMutedRef.current = null;
     lastSentPausedRef.current = null;
+    lastLayoutKeyRef.current = '';
   }, [streamInstanceKey, active]);
 
   const isInlineTarget = active && remoteOpen && remoteViewMode === 'inline';
@@ -93,10 +98,18 @@ export const PersistentYouTubeOverlay = forwardRef<
   const mode: PresentationMode = useMemo(() => {
     if (!active || !videoId) return 'hidden';
     if (isInlineTarget) return 'inline';
-    if (projVisible) return 'world3d';
+    if (projVisible && tvSafetyMode !== 'safe_mini') return 'world3d';
     if (!remoteOpen && !pipDismissed) return 'pip';
     return 'hidden';
-  }, [active, videoId, isInlineTarget, projVisible, remoteOpen, pipDismissed]);
+  }, [
+    active,
+    videoId,
+    isInlineTarget,
+    projVisible,
+    tvSafetyMode,
+    remoteOpen,
+    pipDismissed,
+  ]);
 
   const sendCommand = useCallback((func: string, args: unknown[] = []) => {
     const win = iframeRef.current?.contentWindow;
@@ -148,42 +161,48 @@ export const PersistentYouTubeOverlay = forwardRef<
     [active, isMuted, mode, spatialVolume, volume, sendCommand],
   );
 
-  // Apply DOM geometry for the current mode directly without triggering React re-renders per frame
+  // Apply DOM geometry for the current mode directly without triggering React re-renders or redundant style mutations per frame
   const applyContainerLayout = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
 
+    const commitStyle = (
+      layoutKey: string,
+      apply: () => void,
+    ) => {
+      if (lastLayoutKeyRef.current === layoutKey) return;
+      lastLayoutKeyRef.current = layoutKey;
+      apply();
+    };
+
     if (!active || !videoId) {
-      el.style.opacity = '0';
-      el.style.pointerEvents = 'none';
-      el.style.transform = 'translate3d(-9999px, -9999px, 0)';
-      el.style.clipPath = 'none';
+      commitStyle('inactive', () => {
+        el.style.opacity = '0';
+        el.style.pointerEvents = 'none';
+        el.style.transform = 'translate3d(-9999px, -9999px, 0)';
+        el.style.clipPath = 'none';
+      });
       return;
     }
 
     if (mode === 'inline') {
       if (!inlineSlotElement) {
-        el.style.opacity = '0';
-        el.style.pointerEvents = 'none';
+        commitStyle('inline_noslot', () => {
+          el.style.opacity = '0';
+          el.style.pointerEvents = 'none';
+        });
         return;
       }
       const rect = inlineSlotElement.getBoundingClientRect();
       if (rect.width < 10 || rect.height < 10) {
-        el.style.opacity = '0';
-        el.style.pointerEvents = 'none';
+        commitStyle('inline_tiny', () => {
+          el.style.opacity = '0';
+          el.style.pointerEvents = 'none';
+        });
         return;
       }
-      el.style.left = '0px';
-      el.style.top = '0px';
-      el.style.right = 'auto';
-      el.style.width = `${rect.width.toFixed(2)}px`;
-      el.style.height = `${rect.height.toFixed(2)}px`;
-      el.style.transformOrigin = '0 0';
-      el.style.transform = `translate3d(${rect.left.toFixed(2)}px, ${rect.top.toFixed(2)}px, 0)`;
-      el.style.zIndex = '60';
-      el.style.pointerEvents = 'auto';
-      el.style.opacity = '1';
 
+      let clipPathVal = 'none';
       const scrollParent = inlineSlotElement.closest('.survival-scroll');
       if (scrollParent) {
         const sRect = scrollParent.getBoundingClientRect();
@@ -192,29 +211,57 @@ export const PersistentYouTubeOverlay = forwardRef<
         const leftClip = Math.max(0, sRect.left - rect.left);
         const rightClip = Math.max(0, rect.right - sRect.right);
         if (topClip > 0 || bottomClip > 0 || leftClip > 0 || rightClip > 0) {
-          el.style.clipPath = `inset(${topClip.toFixed(1)}px ${rightClip.toFixed(1)}px ${bottomClip.toFixed(1)}px ${leftClip.toFixed(1)}px round 12px)`;
-        } else {
-          el.style.clipPath = 'none';
+          clipPathVal = `inset(${topClip.toFixed(1)}px ${rightClip.toFixed(1)}px ${bottomClip.toFixed(1)}px ${leftClip.toFixed(1)}px round 12px)`;
         }
-      } else {
-        el.style.clipPath = 'none';
       }
+
+      const wStr = `${rect.width.toFixed(2)}px`;
+      const hStr = `${rect.height.toFixed(2)}px`;
+      const xform = `translate3d(${rect.left.toFixed(2)}px, ${rect.top.toFixed(2)}px, 0)`;
+      commitStyle(`inline:${wStr}:${hStr}:${xform}:${clipPathVal}`, () => {
+        el.style.left = '0px';
+        el.style.top = '0px';
+        el.style.right = 'auto';
+        el.style.width = wStr;
+        el.style.height = hStr;
+        el.style.transformOrigin = '0 0';
+        el.style.transform = xform;
+        el.style.zIndex = '60';
+        el.style.pointerEvents = 'auto';
+        el.style.opacity = '1';
+        el.style.clipPath = clipPathVal;
+      });
       return;
     }
 
     if (mode === 'world3d' && projectionRef.current?.visible) {
       const proj = projectionRef.current;
-      el.style.left = '0px';
-      el.style.top = '0px';
-      el.style.right = 'auto';
-      el.style.width = `${WORLD_REF_WIDTH}px`;
-      el.style.height = `${WORLD_REF_HEIGHT}px`;
-      el.style.transformOrigin = '0 0';
-      el.style.transform = proj.cssMatrix3d;
-      el.style.zIndex = '2';
-      el.style.pointerEvents = 'none';
-      el.style.opacity = '1';
-      el.style.clipPath = 'none';
+      const mat = proj.cssMatrix3d;
+      if (
+        !mat ||
+        mat.includes('NaN') ||
+        mat.includes('Infinity')
+      ) {
+        commitStyle('world3d_invalid', () => {
+          el.style.opacity = '0';
+          el.style.pointerEvents = 'none';
+          el.style.transform = 'translate3d(-9999px, -9999px, 0)';
+        });
+        return;
+      }
+      commitStyle(`world3d:${mat}`, () => {
+        el.style.left = '0px';
+        el.style.top = '0px';
+        el.style.right = 'auto';
+        el.style.width = `${WORLD_REF_WIDTH}px`;
+        el.style.height = `${WORLD_REF_HEIGHT}px`;
+        el.style.transformOrigin = '0 0';
+        el.style.transform = mat;
+        el.style.zIndex = '2';
+        el.style.pointerEvents = 'none';
+        el.style.opacity = '1';
+        el.style.clipPath = 'none';
+      });
       return;
     }
 
@@ -225,32 +272,46 @@ export const PersistentYouTubeOverlay = forwardRef<
       const pipHeight = Math.round((pipWidth * 9) / 16) + headerHeight;
       const left = Math.max(12, vw - pipWidth - 16);
       const top = 72;
-      el.style.left = '0px';
-      el.style.top = '0px';
-      el.style.right = 'auto';
-      el.style.width = `${pipWidth}px`;
-      el.style.height = `${pipHeight}px`;
-      el.style.transformOrigin = '0 0';
-      el.style.transform = `translate3d(${left}px, ${top}px, 0)`;
-      el.style.zIndex = '25';
-      el.style.pointerEvents = 'auto';
-      el.style.opacity = '1';
-      el.style.clipPath = 'none';
+      commitStyle(`pip:${pipWidth}x${pipHeight}:${left},${top}`, () => {
+        el.style.left = '0px';
+        el.style.top = '0px';
+        el.style.right = 'auto';
+        el.style.width = `${pipWidth}px`;
+        el.style.height = `${pipHeight}px`;
+        el.style.transformOrigin = '0 0';
+        el.style.transform = `translate3d(${left}px, ${top}px, 0)`;
+        el.style.zIndex = '25';
+        el.style.pointerEvents = 'auto';
+        el.style.opacity = '1';
+        el.style.clipPath = 'none';
+      });
       return;
     }
 
-    el.style.opacity = '0';
-    el.style.pointerEvents = 'none';
-    el.style.transform = 'translate3d(-9999px, -9999px, 0)';
-    el.style.clipPath = 'none';
+    commitStyle('hidden', () => {
+      el.style.opacity = '0';
+      el.style.pointerEvents = 'none';
+      el.style.transform = 'translate3d(-9999px, -9999px, 0)';
+      el.style.clipPath = 'none';
+    });
   }, [active, videoId, mode, inlineSlotElement]);
 
   useImperativeHandle(
     ref,
     () => ({
       updateProjection(proj: TvScreenProjection | null) {
+        if (
+          proj?.visible &&
+          (!proj.cssMatrix3d ||
+            proj.cssMatrix3d.includes('NaN') ||
+            proj.cssMatrix3d.includes('Infinity'))
+        ) {
+          projectionRef.current = null;
+          setProjVisible((prev) => (prev ? false : prev));
+          return;
+        }
         projectionRef.current = proj;
-        const nextVisible = Boolean(proj?.visible);
+        const nextVisible = Boolean(proj?.visible) && tvSafetyMode !== 'safe_mini';
         setProjVisible((prev) => (prev === nextVisible ? prev : nextVisible));
         if (mode === 'world3d') {
           applyContainerLayout();
@@ -258,7 +319,7 @@ export const PersistentYouTubeOverlay = forwardRef<
         }
       },
     }),
-    [mode, applyContainerLayout, syncAudioState],
+    [mode, tvSafetyMode, applyContainerLayout, syncAudioState],
   );
 
   // Sync layout immediately whenever mode changes, and continuously track inline slot / window resize

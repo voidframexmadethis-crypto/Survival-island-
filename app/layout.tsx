@@ -1,24 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { Cinzel, Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
-
-const cinzel = Cinzel({
-  subsets: ['latin'],
-  weight: ['600', '700'],
-  variable: '--font-display',
-});
-
-const jakarta = Plus_Jakarta_Sans({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  variable: '--font-sans',
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
-  variable: '--font-mono',
-});
 
 export const metadata: Metadata = {
   title: 'SURVIVAL ISLAND: LOST WORLD | AdventureForgeGames',
@@ -57,10 +38,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html
-      lang="en"
-      className={`${cinzel.variable} ${jakarta.variable} ${jetbrainsMono.variable}`}
-    >
+    <html lang="en">
       <body
         className="bg-stone-950 text-stone-100 antialiased selection:bg-amber-500/30 overflow-x-hidden overflow-y-scroll"
         suppressHydrationWarning

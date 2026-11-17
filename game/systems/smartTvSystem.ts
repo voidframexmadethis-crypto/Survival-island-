@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { TvSafetyMode } from '../types';
 
 export interface SmartTvTelemetry {
   dayCount: number;
@@ -108,7 +109,7 @@ export function setupVirtualTV(
 
 export class SmartTvSystem {
   public canvas: HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D;
+  private ctx: CanvasRenderingContext2D | null;
   public canvasTexture: THREE.CanvasTexture;
   public localVideoElement: HTMLVideoElement | null = null;
   private localVideoObjectUrl: string | null = null;
@@ -133,6 +134,14 @@ export class SmartTvSystem {
   private isPoweringTransition = false;
   private segmentTimer = 0;
   private onAutoAdvanceCallback?: (ch: TvChannelMeta) => void;
+  private onLocalVideoErrorCallback?: (message: string) => void;
+
+  // WebGL & Performance Safety State
+  private safetyMode: TvSafetyMode = 'auto';
+  private drawIntervalMs = 66; // 15 FPS default for balanced GPU load
+  private lastDrawPerfMs = -Infinity;
+  private staticFrameDirty = true;
+  private activeAudioNodes = 0;
 
   // Web Audio Synthesizer
   private audioCtx: AudioContext | null = null;
@@ -145,6 +154,7 @@ export class SmartTvSystem {
   private screenMesh: THREE.Mesh | null = null;
   private screenMat: THREE.MeshStandardMaterial | null = null;
   private standbyLedMat: THREE.MeshStandardMaterial | null = null;
+  private placedTvMats = new Set<THREE.MeshStandardMaterial>();
   public tvGlowLight: THREE.PointLight | null = null;
   public tvWorldPos = new THREE.Vector3(1.4, 1.24, 0.41);
 
@@ -154,22 +164,58 @@ export class SmartTvSystem {
 
   constructor() {
     this.canvas = document.createElement('canvas');
-    this.canvas.width = 1280;
-    this.canvas.height = 720;
-    const ctx = this.canvas.getContext('2d', { alpha: false });
-    if (!ctx) {
-      throw new Error('Failed to create 2D context for Smart TV');
-    }
-    this.ctx = ctx;
+    this.canvas.width = 640;
+    this.canvas.height = 360;
+    this.ctx = this.canvas.getContext('2d', { alpha: false });
 
-    this.canvasTexture = new THREE.CanvasTexture(this.canvas);
-    this.canvasTexture.colorSpace = THREE.SRGBColorSpace;
-    this.canvasTexture.minFilter = THREE.LinearFilter;
-    this.canvasTexture.magFilter = THREE.LinearFilter;
-    this.canvasTexture.generateMipmaps = false;
-
+    this.canvasTexture = this.createCanvasTexture(this.canvas);
     this.tvGlowLight = new THREE.PointLight(0xa855f7, 1.5, 8.0);
     this.tvGlowLight.castShadow = false;
+  }
+
+  private createCanvasTexture(canvas: HTMLCanvasElement): THREE.CanvasTexture {
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+    return tex;
+  }
+
+  public setLocalVideoErrorCallback(cb?: (message: string) => void): void {
+    this.onLocalVideoErrorCallback = cb;
+  }
+
+  public setSafetyMode(mode: TvSafetyMode): void {
+    if (this.safetyMode === mode && this.canvasTexture) return;
+    this.safetyMode = mode;
+    const targetW = mode === 'full_3d' ? 960 : 640;
+    const targetH = mode === 'full_3d' ? 540 : 360;
+    this.drawIntervalMs = mode === 'full_3d' ? 42 : mode === 'safe_mini' ? 84 : 66;
+
+    if (this.canvas.width !== targetW || this.canvas.height !== targetH) {
+      const oldTex = this.canvasTexture;
+      this.canvas.width = targetW;
+      this.canvas.height = targetH;
+      this.ctx = this.canvas.getContext('2d', { alpha: false });
+      this.canvasTexture = this.createCanvasTexture(this.canvas);
+      this.applyMaterialTexture();
+      this.placedTvMats.forEach((mat) => {
+        mat.map = this.canvasTexture;
+        mat.emissiveMap = this.canvasTexture;
+        mat.needsUpdate = true;
+      });
+      oldTex.dispose();
+    }
+    this.staticFrameDirty = true;
+    this.lastDrawPerfMs = -Infinity;
+  }
+
+  public handleWebGLContextRestored(): void {
+    this.staticFrameDirty = true;
+    this.lastDrawPerfMs = -Infinity;
+    this.canvasTexture.needsUpdate = true;
+    this.applyMaterialTexture();
   }
 
   public setAutoAdvanceCallback(cb?: (ch: TvChannelMeta) => void): void {
@@ -187,8 +233,12 @@ export class SmartTvSystem {
   public syncPlacedTvVisual(group: THREE.Group): void {
     const mat = group.userData.tvScreenMat as THREE.MeshStandardMaterial | undefined;
     if (mat) {
-      mat.map = this.canvasTexture;
-      mat.emissiveMap = this.canvasTexture;
+      this.placedTvMats.add(mat);
+      if (mat.map !== this.canvasTexture || mat.emissiveMap !== this.canvasTexture) {
+        mat.map = this.canvasTexture;
+        mat.emissiveMap = this.canvasTexture;
+        mat.needsUpdate = true;
+      }
       if (this.power) {
         mat.color.setHex(0xffffff);
         mat.emissive.setHex(0xffffff);
@@ -299,6 +349,7 @@ export class SmartTvSystem {
     this.initAudioContext();
     this.power = !this.power;
     this.isPoweringTransition = true;
+    this.staticFrameDirty = true;
     if (this.power) {
       this.isPaused = false;
       this.isStopped = false;
@@ -310,14 +361,7 @@ export class SmartTvSystem {
     } else {
       this.turnOffProgress = 0.0;
       // Turning off the TV explicitly stops active video/YouTube playback
-      if (this.localVideoElement) {
-        this.localVideoElement.pause();
-        try {
-          this.localVideoElement.currentTime = 0;
-        } catch {
-          // Ignore if metadata not loaded
-        }
-      }
+      this.cleanupLocalVideoElement();
       this.isUsingLocalVideo = false;
       this.localVideoName = '';
       this.isUsingYouTube = false;
@@ -335,14 +379,7 @@ export class SmartTvSystem {
 
   public stopPlayback(): void {
     this.initAudioContext();
-    if (this.localVideoElement) {
-      this.localVideoElement.pause();
-      try {
-        this.localVideoElement.currentTime = 0;
-      } catch {
-        // Ignore if metadata not loaded
-      }
-    }
+    this.cleanupLocalVideoElement();
     this.isUsingLocalVideo = false;
     this.localVideoName = '';
     this.isUsingYouTube = false;
@@ -352,12 +389,14 @@ export class SmartTvSystem {
     this.currentTimestamp = 0;
     this.isPaused = true;
     this.isStopped = true;
+    this.staticFrameDirty = true;
     this.updateSpatialAudioGain(0);
     this.applyMaterialTexture();
   }
 
   public setPaused(paused: boolean): void {
     this.initAudioContext();
+    this.staticFrameDirty = true;
     if (paused) {
       if (!this.power) return;
       this.isPaused = true;
@@ -398,12 +437,13 @@ export class SmartTvSystem {
     this.isPaused = false;
     this.isStopped = false;
     this.segmentTimer = 0;
+    this.staticFrameDirty = true;
     if (wasOff) {
       this.isPoweringTransition = true;
       this.turnOnProgress = 0.25;
     }
-    if (this.isUsingLocalVideo && this.localVideoElement) {
-      this.localVideoElement.pause();
+    if (this.isUsingLocalVideo || this.localVideoElement) {
+      this.cleanupLocalVideoElement();
       this.isUsingLocalVideo = false;
       this.localVideoName = '';
     }
@@ -419,9 +459,7 @@ export class SmartTvSystem {
     channel = 'YouTube',
   ): void {
     this.initAudioContext();
-    if (this.localVideoElement) {
-      this.localVideoElement.pause();
-    }
+    this.cleanupLocalVideoElement();
     this.isUsingLocalVideo = false;
     this.localVideoName = '';
     const isSameVideo = this.isUsingYouTube && this.youtubeVideoId === videoId;
@@ -429,6 +467,7 @@ export class SmartTvSystem {
     this.youtubeVideoId = videoId;
     this.youtubeTitle = title;
     this.youtubeChannel = channel;
+    this.staticFrameDirty = true;
     if (!isSameVideo) {
       this.currentTimestamp = 0;
     }
@@ -477,16 +516,36 @@ export class SmartTvSystem {
     return this.isMuted;
   }
 
-  public loadLocalVideoFile(file: File): void {
-    this.initAudioContext();
+  private cleanupLocalVideoElement(): void {
     if (this.localVideoElement) {
-      this.localVideoElement.pause();
-      this.localVideoElement.remove();
+      try {
+        this.localVideoElement.pause();
+        this.localVideoElement.removeAttribute('src');
+        this.localVideoElement.load();
+        this.localVideoElement.remove();
+      } catch {
+        // Ignore cleanup errors
+      }
       this.localVideoElement = null;
     }
     if (this.localVideoObjectUrl) {
-      URL.revokeObjectURL(this.localVideoObjectUrl);
+      try {
+        URL.revokeObjectURL(this.localVideoObjectUrl);
+      } catch {
+        // Ignore
+      }
       this.localVideoObjectUrl = null;
+    }
+  }
+
+  public loadLocalVideoFile(file: File): void {
+    this.initAudioContext();
+    this.cleanupLocalVideoElement();
+
+    if (file.size > 512 * 1024 * 1024) {
+      this.onLocalVideoErrorCallback?.(
+        'Video file is very large (>512 MB); if playback stutters, try a shorter MP4/WebM clip.',
+      );
     }
 
     const objectUrl = URL.createObjectURL(file);
@@ -494,11 +553,11 @@ export class SmartTvSystem {
 
     const video = document.createElement('video');
     video.src = objectUrl;
-    video.crossOrigin = 'anonymous';
     video.loop = true;
     video.muted = this.isMuted;
     video.volume = Math.max(0, Math.min(1, this.volume * this.lastSpatialMult));
     video.playsInline = true;
+    video.preload = 'metadata';
     video.setAttribute('playsinline', 'true');
     video.setAttribute('webkit-playsinline', 'true');
     video.autoplay = true;
@@ -510,10 +569,30 @@ export class SmartTvSystem {
     this.power = true;
     this.isPaused = false;
     this.isStopped = false;
+    this.staticFrameDirty = true;
     this.applyMaterialTexture();
 
+    video.addEventListener('error', () => {
+      if (this.localVideoElement !== video) return;
+      const errCode = video.error?.code;
+      const msg =
+        errCode === 4
+          ? 'Unsupported video format. Please pick an H.264 MP4 or WebM file.'
+          : 'Could not decode video file on this device.';
+      this.cleanupLocalVideoElement();
+      this.isUsingLocalVideo = false;
+      this.localVideoName = '';
+      this.isStopped = true;
+      this.isPaused = true;
+      this.staticFrameDirty = true;
+      this.applyMaterialTexture();
+      this.onLocalVideoErrorCallback?.(msg);
+    });
+
     video.addEventListener('canplay', () => {
-      video.play().catch(() => {});
+      if (this.localVideoElement === video && !this.isPaused && this.power) {
+        video.play().catch(() => {});
+      }
     });
     video.load();
     video.play().catch(() => {});
@@ -523,19 +602,23 @@ export class SmartTvSystem {
 
   private initAudioContext(): void {
     if (typeof window === 'undefined') return;
-    if (!this.audioCtx) {
-      const AudioCtxClass =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext })
-          .webkitAudioContext;
-      if (AudioCtxClass) {
-        this.audioCtx = new AudioCtxClass();
-        this.masterGain = this.audioCtx.createGain();
-        this.masterGain.connect(this.audioCtx.destination);
+    try {
+      if (!this.audioCtx || this.audioCtx.state === 'closed') {
+        const AudioCtxClass =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext })
+            .webkitAudioContext;
+        if (AudioCtxClass) {
+          this.audioCtx = new AudioCtxClass();
+          this.masterGain = this.audioCtx.createGain();
+          this.masterGain.connect(this.audioCtx.destination);
+        }
       }
-    }
-    if (this.audioCtx && this.audioCtx.state === 'suspended') {
-      this.audioCtx.resume().catch(() => {});
+      if (this.audioCtx && this.audioCtx.state === 'suspended') {
+        this.audioCtx.resume().catch(() => {});
+      }
+    } catch {
+      // AudioContext blocked or unavailable; TV remains visual-safe
     }
   }
 
@@ -551,7 +634,8 @@ export class SmartTvSystem {
       this.audioCtx.state !== 'running' ||
       !this.power ||
       this.isMuted ||
-      this.isPaused
+      this.isPaused ||
+      this.activeAudioNodes >= 8
     ) {
       return;
     }
@@ -568,6 +652,16 @@ export class SmartTvSystem {
 
       osc.connect(gain);
       gain.connect(this.masterGain);
+      this.activeAudioNodes += 1;
+      osc.onended = () => {
+        this.activeAudioNodes = Math.max(0, this.activeAudioNodes - 1);
+        try {
+          osc.disconnect();
+          gain.disconnect();
+        } catch {
+          // Ignore already disconnected nodes
+        }
+      };
       osc.start(now);
       osc.stop(now + dur + 0.01);
     } catch {
@@ -582,7 +676,8 @@ export class SmartTvSystem {
       this.audioCtx.state !== 'running' ||
       !this.power ||
       this.isMuted ||
-      this.isPaused
+      this.isPaused ||
+      this.activeAudioNodes >= 8
     ) {
       return;
     }
@@ -607,6 +702,17 @@ export class SmartTvSystem {
       src.connect(filter);
       filter.connect(gain);
       gain.connect(this.masterGain);
+      this.activeAudioNodes += 1;
+      src.onended = () => {
+        this.activeAudioNodes = Math.max(0, this.activeAudioNodes - 1);
+        try {
+          src.disconnect();
+          filter.disconnect();
+          gain.disconnect();
+        } catch {
+          // Ignore already disconnected nodes
+        }
+      };
       src.start();
     } catch {
       // Ignore audio edge cases
@@ -646,26 +752,42 @@ export class SmartTvSystem {
         !this.power || this.isMuted || this.isPaused ? 0 : this.volume * spatialMult;
       this.localVideoElement.volume = Math.max(0, Math.min(1, effectiveVol));
     }
-    if (!this.masterGain || !this.audioCtx) return;
-    const finalGain =
-      !this.power || this.isMuted || this.isPaused ? 0 : this.volume * spatialMult * 0.24;
-    this.masterGain.gain.setTargetAtTime(finalGain, this.audioCtx.currentTime, 0.05);
+    if (!this.masterGain || !this.audioCtx || this.audioCtx.state === 'closed') return;
+    try {
+      const finalGain =
+        !this.power || this.isMuted || this.isPaused ? 0 : this.volume * spatialMult * 0.24;
+      this.masterGain.gain.setTargetAtTime(finalGain, this.audioCtx.currentTime, 0.05);
+    } catch {
+      // Ignore AudioContext timing errors
+    }
   }
 
   public drawPreviewToCanvas(targetCanvas: HTMLCanvasElement): void {
-    const tCtx = targetCanvas.getContext('2d');
-    if (!tCtx) return;
-    tCtx.drawImage(this.canvas, 0, 0, targetCanvas.width, targetCanvas.height);
+    try {
+      const tCtx = targetCanvas.getContext('2d');
+      if (!tCtx) return;
+      tCtx.drawImage(this.canvas, 0, 0, targetCanvas.width, targetCanvas.height);
+    } catch {
+      // Ignore transient canvas blit issues
+    }
   }
 
-  public update(dt: number, telemetry: SmartTvTelemetry): void {
+  public update(
+    dt: number,
+    telemetry: SmartTvTelemetry,
+    options?: {
+      skipTextureUpload?: boolean;
+      youtubeCoversScreen?: boolean;
+      playerDist?: number;
+    },
+  ): void {
     if (!this.power || !this.isPaused) {
       this.animClock += dt;
     }
     if (this.power && !this.isPaused) {
       this.currentTimestamp += dt;
       this.newsTickerOffset += dt * 88;
-      if (this.autoCycleChannels && !this.isUsingLocalVideo) {
+      if (this.autoCycleChannels && !this.isUsingLocalVideo && !this.isUsingYouTube) {
         this.segmentTimer += dt;
         if (this.segmentTimer >= 45) {
           this.segmentTimer = 0;
@@ -675,21 +797,35 @@ export class SmartTvSystem {
       }
     }
 
+    if (!this.ctx) return;
+
+    const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const skipUpload = Boolean(options?.skipTextureUpload);
+    const farAway =
+      typeof options?.playerDist === 'number' && options.playerDist > 34;
+
     if (!this.power) {
       if (this.isPoweringTransition) {
         this.turnOffProgress += dt * 3.5;
         if (this.turnOffProgress >= 1.0) {
           this.isPoweringTransition = false;
-          this.drawOffScreen();
+          this.renderLogicalFrame(() => this.drawOffScreen());
           this.canvasTexture.needsUpdate = true;
+          this.staticFrameDirty = false;
           if (this.tvGlowLight) this.tvGlowLight.intensity = 0;
           return;
         }
-        this.drawPowerOffAnimation(this.turnOffProgress);
-        this.canvasTexture.needsUpdate = true;
+        if (nowMs - this.lastDrawPerfMs >= this.drawIntervalMs) {
+          this.lastDrawPerfMs = nowMs;
+          this.renderLogicalFrame(() => this.drawPowerOffAnimation(this.turnOffProgress));
+          this.canvasTexture.needsUpdate = true;
+        }
       } else {
-        this.drawOffScreen();
-        this.canvasTexture.needsUpdate = true;
+        if (this.staticFrameDirty && !skipUpload) {
+          this.staticFrameDirty = false;
+          this.renderLogicalFrame(() => this.drawOffScreen());
+          this.canvasTexture.needsUpdate = true;
+        }
         if (this.standbyLedMat) {
           this.standbyLedMat.emissiveIntensity =
             0.85 + Math.sin(this.animClock * 2.2) * 0.4;
@@ -707,105 +843,136 @@ export class SmartTvSystem {
       }
     }
 
-    if (this.isUsingLocalVideo && this.localVideoElement) {
-      const w = this.canvas.width;
-      const h = this.canvas.height;
-      const ctx = this.ctx;
-      const vid = this.localVideoElement;
-      if (vid.readyState >= vid.HAVE_CURRENT_DATA) {
-        ctx.drawImage(vid, 0, 0, w, h);
+    if (this.isUsingYouTube) {
+      if (this.tvGlowLight) {
+        this.tvGlowLight.intensity = 1.35;
+        this.tvGlowLight.color.setHex(0xef4444);
+      }
+      // When the live YouTube iframe covers the screen (Inline, PiP, or 3D Wall) or player is far away,
+      // draw the fallback card once and skip continuous 3D texture uploads to protect GPU memory.
+      if (options?.youtubeCoversScreen || farAway || skipUpload) {
+        if (this.staticFrameDirty && !skipUpload) {
+          this.staticFrameDirty = false;
+          this.renderLogicalFrame((ctx, w, h) => {
+            this.drawYouTubeBroadcast(ctx, w, h);
+            this.drawSmartTvOsOverlay(ctx, w, h, telemetry);
+          });
+          this.canvasTexture.needsUpdate = true;
+        }
+        return;
+      }
+      if (!this.staticFrameDirty && nowMs - this.lastDrawPerfMs < this.drawIntervalMs) {
+        return;
+      }
+      this.lastDrawPerfMs = nowMs;
+      this.staticFrameDirty = false;
+      this.renderLogicalFrame((ctx, w, h) => {
+        this.drawYouTubeBroadcast(ctx, w, h);
         this.drawSmartTvOsOverlay(ctx, w, h, telemetry);
         if (this.turnOnProgress < 1.0) {
           this.drawPowerOnAnimation(this.turnOnProgress);
         }
-        this.canvasTexture.needsUpdate = true;
-      } else {
-        ctx.fillStyle = '#020617';
-        ctx.fillRect(0, 0, w, h);
-        ctx.fillStyle = '#e2e8f0';
-        ctx.font = 'bold 28px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(`LOADING VIDEO: ${this.localVideoName.toUpperCase()}...`, w / 2, h / 2);
-        ctx.textAlign = 'left';
-        this.drawSmartTvOsOverlay(ctx, w, h, telemetry);
-        this.canvasTexture.needsUpdate = true;
-      }
-      if (this.tvGlowLight) {
-        this.tvGlowLight.intensity = 1.45;
-        this.tvGlowLight.color.setHex(0x38bdf8);
-      }
-      return;
-    }
-
-    if (this.isUsingYouTube) {
-      const w = this.canvas.width;
-      const h = this.canvas.height;
-      const ctx = this.ctx;
-      this.drawYouTubeBroadcast(ctx, w, h);
-      this.drawSmartTvOsOverlay(ctx, w, h, telemetry);
-      if (this.turnOnProgress < 1.0) {
-        this.drawPowerOnAnimation(this.turnOnProgress);
-      }
+      });
       this.canvasTexture.needsUpdate = true;
-      if (this.tvGlowLight) {
-        this.tvGlowLight.intensity = 1.5;
-        this.tvGlowLight.color.setHex(0xef4444);
-      }
       return;
     }
 
     if (this.isStopped) {
-      const w = this.canvas.width;
-      const h = this.canvas.height;
-      const ctx = this.ctx;
-      this.drawStoppedScreen(ctx, w, h);
-      this.drawSmartTvOsOverlay(ctx, w, h, telemetry);
-      this.canvasTexture.needsUpdate = true;
       if (this.tvGlowLight) {
         this.tvGlowLight.intensity = 0.55;
         this.tvGlowLight.color.setHex(0x64748b);
       }
+      if (this.staticFrameDirty && !skipUpload) {
+        this.staticFrameDirty = false;
+        this.renderLogicalFrame((ctx, w, h) => {
+          this.drawStoppedScreen(ctx, w, h);
+          this.drawSmartTvOsOverlay(ctx, w, h, telemetry);
+        });
+        this.canvasTexture.needsUpdate = true;
+      }
       return;
     }
 
-    const w = this.canvas.width;
-    const h = this.canvas.height;
-    const ctx = this.ctx;
+    if (this.isUsingLocalVideo && this.localVideoElement) {
+      if (this.tvGlowLight) {
+        this.tvGlowLight.intensity = 1.45;
+        this.tvGlowLight.color.setHex(0x38bdf8);
+      }
+      if (skipUpload || farAway) return;
+      if (this.isPaused && !this.staticFrameDirty) return;
+      if (!this.staticFrameDirty && nowMs - this.lastDrawPerfMs < this.drawIntervalMs) {
+        return;
+      }
+      this.lastDrawPerfMs = nowMs;
+      this.staticFrameDirty = false;
 
-    ctx.fillStyle = '#050508';
-    ctx.fillRect(0, 0, w, h);
+      const vid = this.localVideoElement;
+      if (vid.readyState >= vid.HAVE_CURRENT_DATA && vid.videoWidth > 0 && vid.videoHeight > 0) {
+        try {
+          this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+          this.ctx.drawImage(vid, 0, 0, this.canvas.width, this.canvas.height);
+          this.renderLogicalFrame((ctx, w, h) => {
+            this.drawSmartTvOsOverlay(ctx, w, h, telemetry);
+            if (this.turnOnProgress < 1.0) {
+              this.drawPowerOnAnimation(this.turnOnProgress);
+            }
+          });
+          this.canvasTexture.needsUpdate = true;
+        } catch {
+          // Guard corrupted/hardware-evicted video frame draws so game loop never crashes
+          this.cleanupLocalVideoElement();
+          this.isUsingLocalVideo = false;
+          this.localVideoName = '';
+          this.isStopped = true;
+          this.isPaused = true;
+          this.staticFrameDirty = true;
+          this.onLocalVideoErrorCallback?.(
+            'Local video playback was interrupted; returned TV to standby safely.',
+          );
+        }
+      } else {
+        this.renderLogicalFrame((ctx, w, h) => {
+          ctx.fillStyle = '#020617';
+          ctx.fillRect(0, 0, w, h);
+          ctx.fillStyle = '#e2e8f0';
+          ctx.font = 'bold 28px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(`LOADING VIDEO: ${this.localVideoName.toUpperCase()}...`, w / 2, h / 2);
+          ctx.textAlign = 'left';
+          this.drawSmartTvOsOverlay(ctx, w, h, telemetry);
+        });
+        this.canvasTexture.needsUpdate = true;
+      }
+      return;
+    }
 
+    // Native animated procedural channels (1–5)
     switch (this.currentChannel) {
       case 1:
-        this.drawLoFiChillRadio(ctx, w, h);
         if (this.tvGlowLight) {
           this.tvGlowLight.intensity = 1.5;
           this.tvGlowLight.color.setHex(0xa855f7);
         }
         break;
       case 2:
-        this.drawSurvivalNewsChannel(ctx, w, h, telemetry);
         if (this.tvGlowLight) {
           this.tvGlowLight.intensity = 1.45;
           this.tvGlowLight.color.setHex(0xef4444);
         }
         break;
       case 3:
-        this.drawNatureWildlifeCam(ctx, w, h, telemetry);
         if (this.tvGlowLight) {
           this.tvGlowLight.intensity = 1.45;
           this.tvGlowLight.color.setHex(0x10b981);
         }
         break;
       case 4:
-        this.drawRetroArcadeGaming(ctx, w, h);
         if (this.tvGlowLight) {
           this.tvGlowLight.intensity = 1.55;
           this.tvGlowLight.color.setHex(0x06b6d4);
         }
         break;
       case 5:
-        this.drawStaticStandbyChannel(ctx, w, h);
         if (this.tvGlowLight) {
           this.tvGlowLight.intensity = 0.85;
           this.tvGlowLight.color.setHex(0x94a3b8);
@@ -813,20 +980,69 @@ export class SmartTvSystem {
         break;
     }
 
-    this.drawSmartTvOsOverlay(ctx, w, h, telemetry);
+    this.updateProceduralAudio();
 
-    if (this.turnOnProgress < 1.0) {
-      this.drawPowerOnAnimation(this.turnOnProgress);
+    if (skipUpload || farAway) return;
+    if (this.isPaused && !this.staticFrameDirty && !this.isPoweringTransition) return;
+    if (!this.staticFrameDirty && nowMs - this.lastDrawPerfMs < this.drawIntervalMs) {
+      return;
     }
+    this.lastDrawPerfMs = nowMs;
+    this.staticFrameDirty = false;
+
+    this.renderLogicalFrame((ctx, w, h) => {
+      ctx.fillStyle = '#050508';
+      ctx.fillRect(0, 0, w, h);
+
+      switch (this.currentChannel) {
+        case 1:
+          this.drawLoFiChillRadio(ctx, w, h);
+          break;
+        case 2:
+          this.drawSurvivalNewsChannel(ctx, w, h, telemetry);
+          break;
+        case 3:
+          this.drawNatureWildlifeCam(ctx, w, h, telemetry);
+          break;
+        case 4:
+          this.drawRetroArcadeGaming(ctx, w, h);
+          break;
+        case 5:
+          this.drawStaticStandbyChannel(ctx, w, h);
+          break;
+      }
+
+      this.drawSmartTvOsOverlay(ctx, w, h, telemetry);
+
+      if (this.turnOnProgress < 1.0) {
+        this.drawPowerOnAnimation(this.turnOnProgress);
+      }
+    });
 
     this.canvasTexture.needsUpdate = true;
-    this.updateProceduralAudio();
+  }
+
+  private renderLogicalFrame(
+    drawFn: (ctx: CanvasRenderingContext2D, logicalW: number, logicalH: number) => void,
+  ): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const scaleX = this.canvas.width / 1280;
+    const scaleY = this.canvas.height / 720;
+    ctx.save();
+    ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0);
+    try {
+      drawFn(ctx, 1280, 720);
+    } finally {
+      ctx.restore();
+    }
   }
 
   private drawPowerOnAnimation(p: number): void {
     const ctx = this.ctx;
-    const w = this.canvas.width;
-    const h = this.canvas.height;
+    if (!ctx) return;
+    const w = 1280;
+    const h = 720;
     ctx.save();
     if (p < 0.4) {
       const lineH = Math.max(4, h * 0.04);
@@ -847,8 +1063,9 @@ export class SmartTvSystem {
 
   private drawPowerOffAnimation(p: number): void {
     const ctx = this.ctx;
-    const w = this.canvas.width;
-    const h = this.canvas.height;
+    if (!ctx) return;
+    const w = 1280;
+    const h = 720;
     ctx.save();
     const maskH = (h / 2) * Math.min(1, p * 1.5);
     ctx.fillStyle = '#000000';
@@ -864,8 +1081,9 @@ export class SmartTvSystem {
 
   private drawOffScreen(): void {
     const ctx = this.ctx;
-    const w = this.canvas.width;
-    const h = this.canvas.height;
+    if (!ctx) return;
+    const w = 1280;
+    const h = 720;
 
     const baseGrad = ctx.createLinearGradient(0, 0, w, h);
     baseGrad.addColorStop(0, '#070a10');
@@ -1846,15 +2064,8 @@ export class SmartTvSystem {
       this.audioCtx.close().catch(() => {});
       this.audioCtx = null;
     }
-    if (this.localVideoElement) {
-      this.localVideoElement.pause();
-      this.localVideoElement.remove();
-      this.localVideoElement = null;
-    }
-    if (this.localVideoObjectUrl) {
-      URL.revokeObjectURL(this.localVideoObjectUrl);
-      this.localVideoObjectUrl = null;
-    }
+    this.cleanupLocalVideoElement();
+    this.placedTvMats.clear();
     this.canvasTexture.dispose();
     if (this.tvGlowLight && this.tvGlowLight.parent) {
       this.tvGlowLight.parent.remove(this.tvGlowLight);

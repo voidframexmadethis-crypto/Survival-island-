@@ -2548,6 +2548,43 @@ export function createCampStructureModel(
     return { group, fireLight, flameGroup };
   }
 
+  if (type === 'drying_rack') {
+    const postMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.92, map: woodTex || null });
+    const ropeMat = new THREE.MeshStandardMaterial({ color: 0xd4d4d8, roughness: 0.85 });
+    const meatMat = new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.75 });
+
+    const leftPost = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 1.8, 6), postMat);
+    leftPost.position.set(-0.9, 0.9, 0);
+    leftPost.castShadow = true;
+    const rightPost = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 1.8, 6), postMat);
+    rightPost.position.set(0.9, 0.9, 0);
+    rightPost.castShadow = true;
+    group.add(leftPost, rightPost);
+
+    const crossbar = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.9, 6), postMat);
+    crossbar.rotation.z = Math.PI / 2;
+    crossbar.position.set(0, 1.7, 0);
+    crossbar.castShadow = true;
+    group.add(crossbar);
+
+    [-0.5, 0.5].forEach((zOff) => {
+      const baseBar = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.9, 6), postMat);
+      baseBar.rotation.z = Math.PI / 2;
+      baseBar.position.set(0, 0.08, zOff);
+      group.add(baseBar);
+    });
+
+    [-0.45, -0.15, 0.15, 0.45].forEach((xOff) => {
+      const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.4, 4), ropeMat);
+      cord.position.set(xOff, 1.45, 0);
+      const meatChunk = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.32, 0.08), meatMat);
+      meatChunk.position.set(xOff, 1.18, 0);
+      group.add(cord, meatChunk);
+    });
+
+    return { group };
+  }
+
   if (type === 'basic_shelter') {
     // Timber deck + stone/timber foundation plinth embedded into hill slopes
     const shelterPlinth = new THREE.Mesh(

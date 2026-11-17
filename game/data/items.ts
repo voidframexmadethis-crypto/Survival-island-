@@ -358,6 +358,19 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
   },
 
   // Cooked Foods
+  dried_meat: {
+    id: 'dried_meat',
+    name: 'Dried Meat Jerky',
+    category: 'food',
+    description: 'Savorily dried meat cured on a drying rack. Highly nutritious, excellent shelf life.',
+    stackable: true,
+    maxStack: 30,
+    iconKey: 'dried_meat',
+    color: '#991b1b',
+    hungerRestore: 38,
+    healthRestore: 12,
+    staminaRestore: 22,
+  },
   roasted_meat: {
     id: 'roasted_meat',
     name: 'Roasted Meat',
@@ -1191,6 +1204,17 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
   },
 
   // Placeable Camp Structures
+  drying_rack: {
+    id: 'drying_rack',
+    name: 'Meat Drying Rack',
+    category: 'structure',
+    description: 'Wooden rack for hanging raw meat and dino meat to dry into delicious jerky in the sun and wind.',
+    stackable: true,
+    maxStack: 5,
+    iconKey: 'rack',
+    color: '#d97706',
+    structureType: 'drying_rack',
+  },
   campfire: {
     id: 'campfire',
     name: 'Campfire',

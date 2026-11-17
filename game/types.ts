@@ -156,6 +156,8 @@ export type ItemId =
   | 'excavator_shovel'
   | 'powder_keg'
   | 'water_torrent'
+  | 'drying_rack'
+  | 'dried_meat'
   // Placeable Camp Structures
   | 'campfire'
   | 'sleeping_area'
@@ -533,7 +535,8 @@ export type CampStructureType =
   | 'spike_barricade'
   | 'timeshift_sundial'
   | 'auto_turret'
-  | 'smart_tv';
+  | 'smart_tv'
+  | 'drying_rack';
 
 export interface PlacedStructure {
   id: string;
@@ -543,6 +546,7 @@ export interface PlacedStructure {
   z: number;
   rotationY: number;
   chestItems?: InventorySlot[];
+  dryingSlots?: { itemId: ItemId; quantity: number; progress: number }[];
   lit?: boolean;
   dimension?: DimensionId;
 }
@@ -864,6 +868,7 @@ export type ActiveModal =
   | 'fridge'
   | 'farmer'
   | 'tv'
+  | 'drying_rack'
   | 'place'
   | 'vehicles'
   | 'vehicle_cargo'
@@ -897,6 +902,7 @@ export interface NearbyInteraction {
     | 'timeshift_sundial'
     | 'auto_turret'
     | 'smart_tv'
+    | 'drying_rack'
     | 'creature'
     | 'mount'
     | 'tame'

@@ -293,6 +293,7 @@ export interface EngineCallbacks {
       | 'fridge'
       | 'farmer'
       | 'tv'
+      | 'drying_rack'
       | 'vehicles'
       | 'vehicle_cargo'
     >,
@@ -3553,6 +3554,12 @@ export class GameEngine {
       z: pz,
       rotationY: this.camYaw,
       chestItems: def.structureType === 'storage_chest' ? [] : undefined,
+      dryingSlots: def.structureType === 'drying_rack' ? [
+        { itemId: 'raw_meat' as ItemId, quantity: 0, progress: 0 },
+        { itemId: 'raw_meat' as ItemId, quantity: 0, progress: 0 },
+        { itemId: 'raw_meat' as ItemId, quantity: 0, progress: 0 },
+        { itemId: 'raw_meat' as ItemId, quantity: 0, progress: 0 },
+      ] : undefined,
       lit:
         def.structureType === 'campfire' ||
         def.structureType === 'cooking_station',
@@ -3784,6 +3791,49 @@ export class GameEngine {
     chest.chestItems[idx].quantity -= take;
     if (chest.chestItems[idx].quantity <= 0) chest.chestItems.splice(idx, 1);
     this.addItem(itemId, take, false);
+    this.emitHud();
+  }
+
+  public hangMeatOnDryingRack(structureId: string, itemId: ItemId): void {
+    const st = this.structures.find((s) => s.id === structureId && s.type === 'drying_rack');
+    if (!st || !st.dryingSlots) return;
+
+    if (this.getItemCount(itemId) <= 0) {
+      this.toast(`No ${ITEMS[itemId].name} in inventory`, 'warning');
+      return;
+    }
+
+    const emptySlot = st.dryingSlots.find((slot) => !slot.itemId || slot.quantity === 0 || slot.progress >= 1.0);
+    if (!emptySlot) {
+      this.toast('All drying rack hooks are currently occupied', 'warning');
+      return;
+    }
+
+    if (!this.removeItem(itemId, 1)) return;
+    emptySlot.itemId = itemId;
+    emptySlot.quantity = 1;
+    emptySlot.progress = 0.0;
+    this.sound.playCraftSuccess();
+    this.toast(`Hung ${ITEMS[itemId].name} to cure in the sun`, 'discovery');
+    this.emitHud();
+  }
+
+  public collectDriedMeatFromRack(structureId: string, slotIdx: number): void {
+    const st = this.structures.find((s) => s.id === structureId && s.type === 'drying_rack');
+    if (!st || !st.dryingSlots || !st.dryingSlots[slotIdx]) return;
+
+    const slot = st.dryingSlots[slotIdx];
+    if (!slot.itemId || slot.quantity <= 0 || slot.progress < 1.0) {
+      this.toast('Meat is still curing on the rack', 'warning');
+      return;
+    }
+
+    this.addItem('dried_meat', 1);
+    slot.itemId = 'raw_meat';
+    slot.quantity = 0;
+    slot.progress = 0;
+    this.sound.playCraftSuccess();
+    this.toast('Collected Delicious Dried Jerky (+1 Dried Meat)', 'discovery');
     this.emitHud();
   }
 
@@ -4569,6 +4619,10 @@ export class GameEngine {
       }
       if (near.kind === 'smart_tv') {
         this.callbacks.onOpenStation('tv', near.structureId);
+        return;
+      }
+      if (near.kind === 'drying_rack') {
+        this.callbacks.onOpenStation('drying_rack', near.structureId);
         return;
       }
       if (near.kind === 'auto_turret') {
@@ -6227,6 +6281,17 @@ export class GameEngine {
         v.flameGroup.scale.set(1, 1, 1);
       }
     });
+
+    for (const st of this.structures) {
+      if (st.type === 'drying_rack' && st.dryingSlots) {
+        for (const slot of st.dryingSlots) {
+          if (slot.quantity > 0 && slot.itemId && slot.progress < 1.0) {
+            slot.progress += dt / 45;
+            if (slot.progress > 1.0) slot.progress = 1.0;
+          }
+        }
+      }
+    }
 
     // Waterfall shimmer & ocean normal drift
     if (
@@ -7994,6 +8059,7 @@ export class GameEngine {
           timeshift_sundial: 'Scrub Time of Day',
           auto_turret: 'Auto-Turret Defense',
           smart_tv: 'Watch Smart TV',
+          drying_rack: 'Meat Drying Rack',
         };
         const catMap: Record<
           CampStructureType,
@@ -8010,6 +8076,7 @@ export class GameEngine {
           timeshift_sundial: 'use',
           auto_turret: 'use',
           smart_tv: 'use',
+          drying_rack: 'use',
         };
         best = {
           id: st.id,

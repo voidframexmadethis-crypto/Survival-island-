@@ -15,6 +15,7 @@ import {
   Sun,
   Trash2,
   Trophy,
+  Tv,
   Waves,
   X,
   Zap,
@@ -27,6 +28,7 @@ import {
   GraphicsPreset,
   HUDStateSnapshot,
   SaveSlotSummary,
+  TvSafetyMode,
 } from '@/game/types';
 
 export function MissionsModal({
@@ -161,6 +163,7 @@ export function SettingsModal({
   const particlesOn = settings.particlesEnabled !== false;
   const autoFpsOn = settings.dynamicAutoFps !== false;
   const drawDist: DrawDistanceTier = settings.drawDistance ?? 'medium';
+  const tvSafetyMode: TvSafetyMode = settings.tvSafetyMode ?? 'auto';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
@@ -325,6 +328,47 @@ export function SettingsModal({
                     {label}
                   </button>
                 ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center gap-1.5 text-xs text-stone-300 mb-1.5">
+                <Tv className="w-3.5 h-3.5 text-sky-400" />
+                <span>Smart TV Stability Mode</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {(
+                  [
+                    ['auto', 'Auto-Protected', '3D TV + Auto Fallback'],
+                    ['safe_mini', 'Safe Mini-TV', 'Lowest GPU & RAM'],
+                    ['full_3d', 'Full 3D Wall', 'Always 3D Wall TV'],
+                  ] as const
+                ).map(([mode, title, subtitle]) => {
+                  const selected = tvSafetyMode === mode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => onChange({ ...settings, tvSafetyMode: mode })}
+                      className={`min-h-[50px] px-2 py-1.5 rounded-xl border text-center transition-colors ${
+                        selected
+                          ? 'bg-sky-500 text-stone-950 border-sky-300'
+                          : 'bg-stone-900 text-stone-300 border-stone-800 hover:bg-stone-800'
+                      }`}
+                    >
+                      <div className="text-[11px] font-bold leading-tight">
+                        {title}
+                      </div>
+                      <div
+                        className={`text-[9px] mt-0.5 leading-tight ${
+                          selected ? 'text-stone-900 font-semibold' : 'text-stone-400'
+                        }`}
+                      >
+                        {subtitle}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
