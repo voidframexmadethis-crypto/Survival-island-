@@ -21,6 +21,8 @@ const STRUCTURE_ITEM_IDS: ItemId[] = [
   'storage_chest',
   'sleeping_area',
   'basic_shelter',
+  'auto_turret',
+  'smart_tv',
   'stone_block',
   'stone_pillar',
   'stone_arch',

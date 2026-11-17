@@ -48,16 +48,19 @@ import {
   Scissors,
   Settings2,
   Shield,
+  ShieldAlert,
   Soup,
   Sparkles,
   Sprout,
   Sword,
   Target,
   Trees,
+  Tv,
   Utensils,
   Waves,
   Wheat,
   Wrench,
+  Zap,
 } from 'lucide-react';
 import { ITEMS } from '@/game/data/items';
 import { ItemId } from '@/game/types';
@@ -246,6 +249,16 @@ export function ItemIcon({
       return <Factory {...props} />;
     case 'vehicle_chassis_kit':
       return <Car {...props} />;
+    case 'auto_turret':
+      return <Crosshair {...props} />;
+    case 'smart_tv':
+      return <Tv {...props} />;
+    case 'gravity_monolith':
+      return <Zap {...props} />;
+    case 'spike_barricade':
+      return <ShieldAlert {...props} />;
+    case 'timeshift_sundial':
+      return <Compass {...props} />;
     default:
       return <Box {...props} />;
   }

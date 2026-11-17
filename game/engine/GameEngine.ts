@@ -2889,6 +2889,19 @@ export class GameEngine {
         this.callbacks.onOpenStation('chest', near.structureId);
         return;
       }
+      if (near.kind === 'smart_tv') {
+        this.callbacks.onOpenStation('tv', near.structureId);
+        return;
+      }
+      if (near.kind === 'auto_turret') {
+        this.sound.playWeldSnap();
+        this.toast(
+          'Defense Auto-Turret active: Perimeter scanned for hostile raptors & predators',
+          'discovery',
+        );
+        this.actionCooldown = 0.5;
+        return;
+      }
       if (near.kind === 'sleeping_area' || near.kind === 'basic_shelter') {
         this.restAtSleepingArea();
         this.actionCooldown = 0.8;
@@ -5904,6 +5917,8 @@ export class GameEngine {
           gravity_monolith: 'Vortex Gravity Pulse',
           spike_barricade: 'Kinetic Spike Barricade',
           timeshift_sundial: 'Scrub Time of Day',
+          auto_turret: 'Auto-Turret Defense',
+          smart_tv: 'Watch Smart TV',
         };
         const catMap: Record<
           CampStructureType,
@@ -5918,6 +5933,8 @@ export class GameEngine {
           gravity_monolith: 'use',
           spike_barricade: 'use',
           timeshift_sundial: 'use',
+          auto_turret: 'use',
+          smart_tv: 'use',
         };
         best = {
           id: st.id,

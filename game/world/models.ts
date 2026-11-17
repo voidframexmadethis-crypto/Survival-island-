@@ -2517,36 +2517,38 @@ export function createCampStructureModel(
     return { group, fireLight, flameGroup };
   }
 
-  // Simple Shelter with built-in woven bedroll inside!
-  [
-    [-1.4, -1.2],
-    [1.4, -1.2],
-    [-1.4, 1.2],
-    [1.4, 1.2],
-  ].forEach(([px, pz]) => {
-    const h = pz < 0 ? 1.75 : 2.35;
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, h, 7), woodMat);
-    post.position.set(px, h / 2, pz);
-    post.castShadow = true;
-    group.add(post);
-  });
-  const roof = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.18, 2.9), thatchMat);
-  roof.position.set(0, 2.08, 0);
-  roof.rotation.x = 0.24;
-  roof.castShadow = true;
-  roof.receiveShadow = true;
-  group.add(roof);
-  const backWall = new THREE.Mesh(new THREE.BoxGeometry(2.9, 1.5, 0.12), woodMat);
-  backWall.position.set(0, 0.85, -1.2);
-  group.add(backWall);
+  if (type === 'basic_shelter') {
+    [
+      [-1.4, -1.2],
+      [1.4, -1.2],
+      [-1.4, 1.2],
+      [1.4, 1.2],
+    ].forEach(([px, pz]) => {
+      const h = pz < 0 ? 1.75 : 2.35;
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, h, 7), woodMat);
+      post.position.set(px, h / 2, pz);
+      post.castShadow = true;
+      group.add(post);
+    });
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.18, 2.9), thatchMat);
+    roof.position.set(0, 2.08, 0);
+    roof.rotation.x = 0.24;
+    roof.castShadow = true;
+    roof.receiveShadow = true;
+    group.add(roof);
+    const backWall = new THREE.Mesh(new THREE.BoxGeometry(2.9, 1.5, 0.12), woodMat);
+    backWall.position.set(0, 0.85, -1.2);
+    group.add(backWall);
 
-  // Built-in woven sleeping mat inside shelter
-  const mat = new THREE.Mesh(
-    new THREE.BoxGeometry(1.1, 0.1, 1.85),
-    new THREE.MeshStandardMaterial({ color: 0x9ca653, roughness: 0.95 }),
-  );
-  mat.position.set(0, 0.08, 0.1);
-  group.add(mat);
+    // Built-in woven sleeping mat inside shelter
+    const mat = new THREE.Mesh(
+      new THREE.BoxGeometry(1.1, 0.1, 1.85),
+      new THREE.MeshStandardMaterial({ color: 0x9ca653, roughness: 0.95 }),
+    );
+    mat.position.set(0, 0.08, 0.1);
+    group.add(mat);
+    return { group };
+  }
 
   if (type === 'gravity_monolith') {
     const obsidianMat = new THREE.MeshStandardMaterial({
@@ -2637,6 +2639,81 @@ export function createCampStructureModel(
     group.add(sundialLight);
 
     return { group, fireLight: sundialLight };
+  }
+
+  if (type === 'auto_turret') {
+    const tripodMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.4, metalness: 0.8 });
+    const gunMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.3, metalness: 0.9 });
+    const sensorMat = new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0xb91c1c, emissiveIntensity: 1.5 });
+
+    const baseHub = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.4, 0.3, 8), tripodMat);
+    baseHub.position.y = 0.5;
+    baseHub.castShadow = true;
+    group.add(baseHub);
+
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2;
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.8, 6), tripodMat);
+      leg.position.set(Math.cos(a) * 0.35, 0.25, Math.sin(a) * 0.35);
+      leg.lookAt(Math.cos(a) * 0.7, 0, Math.sin(a) * 0.7);
+      leg.rotateX(Math.PI / 3);
+      group.add(leg);
+    }
+
+    const swivel = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.4, 0.6), gunMat);
+    swivel.position.y = 0.85;
+    swivel.castShadow = true;
+    group.add(swivel);
+
+    [-0.12, 0.12].forEach((bx) => {
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.04, 0.9, 8), gunMat);
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.set(bx, 0.88, 0.55);
+      group.add(barrel);
+    });
+
+    const sensorEye = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8), sensorMat);
+    sensorEye.position.set(0, 1.1, 0.25);
+    group.add(sensorEye);
+
+    const laserLight = new THREE.PointLight(0xef4444, 1.5, 6, 2);
+    laserLight.position.set(0, 1.1, 0.3);
+    group.add(laserLight);
+
+    return { group, fireLight: laserLight };
+  }
+
+  if (type === 'smart_tv') {
+    const plasticMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.3, metalness: 0.6 });
+    const screenMat = new THREE.MeshStandardMaterial({
+      color: 0x0284c7,
+      emissive: 0x0369a1,
+      emissiveIntensity: 0.9,
+      roughness: 0.1,
+    });
+
+    const standBase = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.04, 0.4), plasticMat);
+    standBase.position.y = 0.02;
+    group.add(standBase);
+
+    const standPole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.5, 8), plasticMat);
+    standPole.position.y = 0.27;
+    group.add(standPole);
+
+    const bezel = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1.05, 0.08), plasticMat);
+    bezel.position.y = 0.95;
+    bezel.castShadow = true;
+    group.add(bezel);
+
+    const screen = new THREE.Mesh(new THREE.PlaneGeometry(1.68, 0.93), screenMat);
+    screen.position.set(0, 0.95, 0.045);
+    group.add(screen);
+
+    const tvGlow = new THREE.PointLight(0x38bdf8, 1.8, 8, 1.5);
+    tvGlow.position.set(0, 0.95, 0.4);
+    group.add(tvGlow);
+
+    return { group, fireLight: tvGlow };
   }
 
   return { group };
