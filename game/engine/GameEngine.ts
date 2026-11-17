@@ -1,5 +1,9 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import {
+  CSS3DObject,
+  CSS3DRenderer,
+} from 'three/addons/renderers/CSS3DRenderer.js';
 import { SoundEngine } from '../audio/soundEngine';
 import {
   SmartTvSystem,
@@ -53,6 +57,10 @@ import {
 import { VolumetricTerrainEngine } from '../systems/terrainPhysics';
 import { ModSystemManager } from '../systems/modManager';
 import {
+  DIMENSION_DEFINITIONS,
+  getDimensionArrivalPoint,
+} from '../systems/multiverse';
+import {
   P2PMultiplayerManager,
   P2PPacket,
   RemoteAnimState,
@@ -70,12 +78,15 @@ import {
   CustomModAsset,
   CustomModScript,
   DEFAULT_HUD_BAR_SLOTS,
+  DimensionId,
+  PortalLinkState,
   FirearmReloadMode,
   GameMode,
   GameSaveData,
   GameSettings,
   GameStats,
   HUDStateSnapshot,
+  HydraulicMode,
   InventorySlot,
   ItemDefinition,
   ItemId,
@@ -261,9 +272,23 @@ export class GameEngine {
 
   private isSoftwareGl = false;
   private renderer!: THREE.WebGLRenderer;
+  private cssRenderer!: CSS3DRenderer;
+  private cssScene!: THREE.Scene;
   private scene!: THREE.Scene;
   private camera!: THREE.PerspectiveCamera;
   private smartTv!: SmartTvSystem;
+  private tvCssObject: CSS3DObject | null = null;
+  private tvCssWrapper: HTMLDivElement | null = null;
+  private tvYoutubeIframe: HTMLIFrameElement | null = null;
+  private activeYoutubeIframeId = '';
+  private ytIframeReady = false;
+  private lastSentYtPaused: boolean | null = null;
+  private lastSentYtMuted: boolean | null = null;
+  private lastSentYtVolume = -1;
+  private lastTvCssOpacity = '0';
+  private lastTvCssPointer = 'none';
+  private tvOccluderMeshes: THREE.Object3D[] = [];
+  private tvRaycaster = new THREE.Raycaster();
   private tvIsZoomed = false;
   private tvModalOpen = false;
   private _tvWorldPos = new THREE.Vector3();
@@ -272,6 +297,9 @@ export class GameEngine {
   private _tvRight = new THREE.Vector3();
   private _tvLookTarget = new THREE.Vector3();
   private _tvTmpVec = new THREE.Vector3();
+  private _tvToCam = new THREE.Vector3();
+  private _tvToTarget = new THREE.Vector3();
+  private _camForward = new THREE.Vector3();
   private sunLight!: THREE.DirectionalLight;
   private moonLight!: THREE.DirectionalLight;
   private nightVisionLight!: THREE.PointLight;
@@ -426,6 +454,12 @@ export class GameEngine {
   private stats: GameStats = this.createEmptyStats();
   private gameOver = false;
   private gameOverReason = '';
+  private currentDimension: DimensionId = 'overworld';
+  private selectedPortalDimension: DimensionId = 'space';
+  private visitedDimensions: Set<DimensionId> = new Set(['overworld']);
+  private unlockedGildedPaint = false;
+  private crystalArmorHp = 0;
+  private activePortals: PortalLinkState[] = [];
   private currentSlotId = 'slot_1';
   private gameMode: GameMode = 'survival';
   private hitMarkerActive = false;
@@ -529,6 +563,10 @@ export class GameEngine {
   private vehicleAscendHold = false;
   private vehicleDescendHold = false;
   private vehicleEngineSoundAccum = 0;
+  private hydraulicMode: HydraulicMode = 'level';
+  private hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
+  private hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
+  private trunkBassPulse = 0;
 
   // Creature Taming & Mounting & Sandbox
   private mountedCreatureId: string | null = null;
@@ -648,6 +686,23 @@ export class GameEngine {
     this.container.innerHTML = '';
     this.container.appendChild(this.renderer.domElement);
 
+    // Persistent CSS3D Layer for rendering live YouTube video directly onto the 3D TV screen
+    this.cssScene = new THREE.Scene();
+    this.cssRenderer = new CSS3DRenderer();
+    this.cssRenderer.setSize(
+      this.container.clientWidth || window.innerWidth,
+      this.container.clientHeight || window.innerHeight,
+    );
+    const cssDom = this.cssRenderer.domElement;
+    cssDom.style.position = 'absolute';
+    cssDom.style.top = '0';
+    cssDom.style.left = '0';
+    cssDom.style.width = '100%';
+    cssDom.style.height = '100%';
+    cssDom.style.pointerEvents = 'none';
+    cssDom.style.zIndex = '2';
+    this.container.appendChild(cssDom);
+
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x7cc4e0);
     this.scene.fog = new THREE.FogExp2(0x7cc4e0, 0.0042);
@@ -766,11 +821,19 @@ export class GameEngine {
       ],
     };
 
-    // Initialize Persistent Native 3D CanvasTexture Smart TV OS
+    // Initialize Persistent Native 3D CanvasTexture Smart TV OS & CSS3D YouTube Player
     this.smartTv = new SmartTvSystem();
     if (this.world.tvScreenMesh && this.world.tvScreenMat) {
       this.smartTv.attachToMesh(this.world.tvScreenMesh, this.world.tvScreenMat);
+      if (this.world.tvScreenMesh.parent) {
+        this.world.tvScreenMesh.parent.traverse((obj) => {
+          if (obj.userData?.isHouseWall) {
+            this.tvOccluderMeshes.push(obj);
+          }
+        });
+      }
     }
+    this.initPersistentTvCssPlayer();
     if (this.smartTv.tvGlowLight) {
       this.scene.add(this.smartTv.tvGlowLight);
     }
@@ -817,7 +880,7 @@ export class GameEngine {
     window.addEventListener('resize', this.onResize);
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
-    window.addEventListener('wheel', this.onWheel, { passive: false });
+    window.addEventListener('wheel', this.onWheel, { passive: true });
     window.addEventListener('blur', this.onWindowBlur);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
   }
@@ -846,6 +909,7 @@ export class GameEngine {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
+    this.cssRenderer?.setSize(w, h);
   };
 
   private onKeyDown = (e: KeyboardEvent): void => {
@@ -871,14 +935,41 @@ export class GameEngine {
       e.preventDefault();
     }
 
+    const activeVehicle = this.activeVehicleId
+      ? this.vehicles.find((v) => v.id === this.activeVehicleId)
+      : undefined;
+    const activeHasHyd = Boolean(
+      activeVehicle && (activeVehicle.hydraulicHop || activeVehicle.preset === 'lowrider'),
+    );
+    const activeHasBass = Boolean(
+      activeVehicle &&
+        (activeVehicle.preset === 'slab' || activeVehicle.trunkBassEnabled !== undefined),
+    );
+
     if (e.code === 'Space') {
       if (this.activeVehicleId) {
-        this.vehicleAscendHold = true;
+        if (activeHasHyd) {
+          this.triggerHydraulicAction('front_hop');
+        } else {
+          this.vehicleAscendHold = true;
+        }
       } else if (this.seatedState) {
         this.standUp();
       } else {
         this.triggerJump();
       }
+    } else if (activeHasHyd && (e.code === 'Digit1' || e.code === 'Numpad1')) {
+      this.triggerHydraulicAction('front_hop');
+    } else if (activeHasHyd && (e.code === 'KeyZ' || e.code === 'Digit2' || e.code === 'Numpad2')) {
+      this.triggerHydraulicAction('rear_hop');
+    } else if (activeHasHyd && (e.code === 'KeyQ' || e.code === 'Digit3' || e.code === 'Numpad3')) {
+      this.triggerHydraulicAction('left_tilt');
+    } else if (activeHasHyd && (e.code === 'KeyR' || e.code === 'Digit4' || e.code === 'Numpad4')) {
+      this.triggerHydraulicAction('right_tilt');
+    } else if (activeHasHyd && (e.code === 'KeyX' || e.code === 'Digit5' || e.code === 'Numpad5')) {
+      this.triggerHydraulicAction('lock_up');
+    } else if (activeHasBass && (e.code === 'KeyT' || e.code === 'KeyG')) {
+      this.toggleTrunkBass();
     } else if (e.code === 'KeyV') {
       if (!this.activeVehicleId) {
         this.triggerDebrisKick();
@@ -933,10 +1024,16 @@ export class GameEngine {
     if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) {
       return;
     }
-    const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+    const targetEl = e.target as HTMLElement | null;
+    const overHotbar = Boolean(targetEl?.closest?.('[data-hud-hotbar]'));
+    // Allow normal vertical mouse wheel to scroll the whole game freely;
+    // only cycle hotbar slots when Shift+Wheel is used or horizontally over the hotbar.
+    if (!e.shiftKey && !(overHotbar && Math.abs(e.deltaX) > Math.abs(e.deltaY))) {
+      return;
+    }
+    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
     if (delta === 0) return;
 
-    e.preventDefault();
     const now = performance.now();
     if (now - this.lastWheelSwitchTime < 55) return;
 
@@ -971,6 +1068,7 @@ export class GameEngine {
     this.mode = mode;
     if (mode !== 'playing') {
       this.clearMovementInputs();
+      this.sound.stopTrunkBass();
     } else {
       this.sound.unlock();
       this.smartTv?.unlockAudio();
@@ -1031,16 +1129,7 @@ export class GameEngine {
     if (this.activeVehicleId) {
       const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
       if (av && (av.hydraulicHop || av.preset === 'lowrider')) {
-        const floorY = Math.max(
-          getTerrainHeight(av.x, av.z),
-          this.getStructuralSurfaceY(av.x, av.z, av.y + 0.8),
-        );
-        if (av.y <= floorY + 0.35) {
-          av.vy = 5.8;
-          this.hydraulicBounceTimer = 0.32;
-          this.sound.playSteamHiss();
-          this.spawnParticles(av.x, av.y + 0.3, av.z, 0xfbbf24, 8);
-        }
+        this.triggerHydraulicAction('front_hop');
       }
       return;
     }
@@ -1371,6 +1460,12 @@ export class GameEngine {
     return isPlaying;
   }
 
+  public stopTvPlayback(): void {
+    this.smartTv.stopPlayback();
+    this.toast('3D TV Playback Stopped', 'info');
+    this.emitHud();
+  }
+
   public setTvVolume(vol: number): void {
     this.smartTv.setVolume(vol);
     this.emitHud();
@@ -1426,6 +1521,218 @@ export class GameEngine {
     }
   }
 
+  private initPersistentTvCssPlayer(): void {
+    const wrapper = document.createElement('div');
+    wrapper.style.width = '800px';
+    wrapper.style.height = '430px';
+    wrapper.style.backgroundColor = '#000000';
+    wrapper.style.overflow = 'hidden';
+    wrapper.style.position = 'relative';
+    wrapper.style.backfaceVisibility = 'hidden';
+    wrapper.style.opacity = '0';
+    wrapper.style.pointerEvents = 'none';
+
+    const iframe = document.createElement('iframe');
+    iframe.style.width = '100%';
+    iframe.style.height = '100%';
+    iframe.style.border = '0';
+    iframe.style.display = 'block';
+    iframe.style.pointerEvents = 'none';
+    iframe.allow =
+      'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+    iframe.allowFullscreen = true;
+    iframe.src = 'about:blank';
+
+    iframe.addEventListener('load', () => {
+      if (!this.activeYoutubeIframeId || this.disposed) return;
+      this.ytIframeReady = true;
+      try {
+        iframe.contentWindow?.postMessage(
+          JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }),
+          '*',
+        );
+      } catch {
+        // Ignore cross-origin timing
+      }
+      const syncInitialState = () => {
+        if (!this.activeYoutubeIframeId || this.disposed) return;
+        const spatialVol = Math.max(
+          0,
+          Math.min(
+            100,
+            Math.round(this.smartTv.volume * this.smartTv.getSpatialMultiplier() * 100),
+          ),
+        );
+        this.lastSentYtPaused = this.smartTv.isPaused;
+        this.sendYouTubeIframeCommand(
+          this.smartTv.isPaused ? 'pauseVideo' : 'playVideo',
+        );
+        this.lastSentYtMuted = this.smartTv.isMuted;
+        if (this.smartTv.isMuted) {
+          this.sendYouTubeIframeCommand('mute');
+        } else {
+          this.sendYouTubeIframeCommand('unMute');
+          this.sendYouTubeIframeCommand('setVolume', [spatialVol]);
+          this.lastSentYtVolume = spatialVol;
+        }
+      };
+      syncInitialState();
+      window.setTimeout(syncInitialState, 400);
+    });
+
+    wrapper.appendChild(iframe);
+    const cssObj = new CSS3DObject(wrapper);
+    // Keep CSS3DObject.visible=true permanently so CSS3DRenderer never sets display:none on the iframe
+    cssObj.visible = true;
+    this.cssScene.add(cssObj);
+
+    this.tvCssWrapper = wrapper;
+    this.tvYoutubeIframe = iframe;
+    this.tvCssObject = cssObj;
+  }
+
+  private sendYouTubeIframeCommand(func: string, args: unknown[] = []): void {
+    const win = this.tvYoutubeIframe?.contentWindow;
+    if (!win) return;
+    try {
+      win.postMessage(
+        JSON.stringify({
+          event: 'command',
+          func,
+          args,
+        }),
+        '*',
+      );
+    } catch {
+      // Ignore cross-origin timing before iframe finishes loading
+    }
+  }
+
+  private syncTvCssOverlay(): void {
+    if (!this.tvCssObject || !this.tvCssWrapper || !this.tvYoutubeIframe) return;
+
+    const shouldPlayYouTube =
+      this.smartTv.power &&
+      this.smartTv.isUsingYouTube &&
+      Boolean(this.smartTv.youtubeVideoId);
+
+    if (!shouldPlayYouTube) {
+      if (this.activeYoutubeIframeId !== '') {
+        this.activeYoutubeIframeId = '';
+        this.ytIframeReady = false;
+        this.tvYoutubeIframe.src = 'about:blank';
+        this.lastSentYtPaused = null;
+        this.lastSentYtMuted = null;
+        this.lastSentYtVolume = -1;
+      }
+      if (this.lastTvCssOpacity !== '0') {
+        this.tvCssWrapper.style.opacity = '0';
+        this.lastTvCssOpacity = '0';
+      }
+      if (this.lastTvCssPointer !== 'none') {
+        this.tvCssWrapper.style.pointerEvents = 'none';
+        this.tvYoutubeIframe.style.pointerEvents = 'none';
+        this.lastTvCssPointer = 'none';
+      }
+      return;
+    }
+
+    const targetVideoId = this.smartTv.youtubeVideoId;
+    if (this.activeYoutubeIframeId !== targetVideoId) {
+      this.activeYoutubeIframeId = targetVideoId;
+      this.ytIframeReady = false;
+      this.lastSentYtPaused = null;
+      this.lastSentYtMuted = null;
+      this.lastSentYtVolume = -1;
+      const originParam =
+        typeof window !== 'undefined' && window.location?.origin
+          ? `&origin=${encodeURIComponent(window.location.origin)}`
+          : '';
+      this.tvYoutubeIframe.src = `https://www.youtube.com/embed/${targetVideoId}?autoplay=1&rel=0&playsinline=1&enablejsapi=1${originParam}`;
+      this.tvYoutubeIframe.title = this.smartTv.youtubeTitle || 'YouTube TV';
+    }
+
+    if (this.ytIframeReady) {
+      if (this.lastSentYtPaused !== this.smartTv.isPaused) {
+        this.lastSentYtPaused = this.smartTv.isPaused;
+        this.sendYouTubeIframeCommand(
+          this.smartTv.isPaused ? 'pauseVideo' : 'playVideo',
+        );
+      }
+
+      const spatialVol = Math.max(
+        0,
+        Math.min(
+          100,
+          Math.round(this.smartTv.volume * this.smartTv.getSpatialMultiplier() * 100),
+        ),
+      );
+      if (this.lastSentYtMuted !== this.smartTv.isMuted) {
+        this.lastSentYtMuted = this.smartTv.isMuted;
+        if (this.smartTv.isMuted) {
+          this.sendYouTubeIframeCommand('mute');
+        } else {
+          this.sendYouTubeIframeCommand('unMute');
+          this.sendYouTubeIframeCommand('setVolume', [spatialVol]);
+          this.lastSentYtVolume = spatialVol;
+        }
+      } else if (
+        !this.smartTv.isMuted &&
+        (this.lastSentYtVolume < 0 ||
+          Math.abs(spatialVol - this.lastSentYtVolume) >= 2 ||
+          (spatialVol === 0 && this.lastSentYtVolume !== 0))
+      ) {
+        this.lastSentYtVolume = spatialVol;
+        this.sendYouTubeIframeCommand('setVolume', [spatialVol]);
+      }
+    }
+
+    const tvTarget = this.resolveNearestTvTarget(false);
+    let isVisiblyFacing = false;
+
+    if (tvTarget && this.mode !== 'menu' && !this.cinematicActive) {
+      this.tvCssObject.position.copy(tvTarget.worldPos);
+      this.tvCssObject.quaternion.copy(tvTarget.worldQuat);
+      this.tvCssObject.scale.set(tvTarget.scaleX, tvTarget.scaleY, 1);
+
+      this._tvToCam.subVectors(this.camera.position, tvTarget.worldPos);
+      const facingDot = this._tvToCam.dot(tvTarget.forward);
+
+      this.camera.getWorldDirection(this._camForward);
+      this._tvToTarget.subVectors(tvTarget.worldPos, this.camera.position);
+      const camDist = this._tvToTarget.length();
+      const inFrontOfCam =
+        camDist > 0.05 &&
+        this._tvToTarget.divideScalar(camDist).dot(this._camForward) > 0.15;
+
+      if (facingDot > 0.04 && inFrontOfCam && camDist <= 24) {
+        isVisiblyFacing = true;
+        if (tvTarget.isHouseTv && this.tvOccluderMeshes.length > 0 && camDist > 0.4) {
+          this.tvRaycaster.set(this.camera.position, this._tvToTarget);
+          this.tvRaycaster.near = 0.05;
+          this.tvRaycaster.far = camDist - 0.2;
+          const hits = this.tvRaycaster.intersectObjects(this.tvOccluderMeshes, false);
+          if (hits.length > 0) {
+            isVisiblyFacing = false;
+          }
+        }
+      }
+    }
+
+    const nextOpacity = isVisiblyFacing ? '1' : '0';
+    if (this.lastTvCssOpacity !== nextOpacity) {
+      this.tvCssWrapper.style.opacity = nextOpacity;
+      this.lastTvCssOpacity = nextOpacity;
+    }
+
+    const nextPointer = isVisiblyFacing && this.tvModalOpen ? 'auto' : 'none';
+    if (this.lastTvCssPointer !== nextPointer) {
+      this.tvCssWrapper.style.pointerEvents = nextPointer;
+      this.tvYoutubeIframe.style.pointerEvents = nextPointer;
+      this.lastTvCssPointer = nextPointer;
+    }
+  }
+
   private resolveNearestTvTarget(usePlayerAnchor = false): {
     dist: number;
     worldPos: THREE.Vector3;
@@ -1434,6 +1741,7 @@ export class GameEngine {
     right: THREE.Vector3;
     scaleX: number;
     scaleY: number;
+    isHouseTv: boolean;
   } | null {
     const refX = usePlayerAnchor ? this.playerX : this.camera.position.x;
     const refY = usePlayerAnchor ? this.playerY + 1.4 : this.camera.position.y;
@@ -1443,6 +1751,7 @@ export class GameEngine {
     let hasTarget = false;
     let scaleX = 1.6 / 800;
     let scaleY = 0.86 / 430;
+    let isHouseTv = true;
 
     for (const st of this.structures) {
       if (st.type !== 'smart_tv') continue;
@@ -1452,9 +1761,10 @@ export class GameEngine {
         this._tvWorldQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), st.rotationY);
         this._tvForward.set(0, 0, 1).applyQuaternion(this._tvWorldQuat);
         this._tvRight.set(1, 0, 0).applyQuaternion(this._tvWorldQuat);
-        this._tvWorldPos.set(st.x, st.y + 0.95, st.z).addScaledVector(this._tvForward, 0.05);
+        this._tvWorldPos.set(st.x, st.y + 0.95, st.z).addScaledVector(this._tvForward, 0.06);
         scaleX = 1.68 / 800;
         scaleY = 0.93 / 430;
+        isHouseTv = false;
         hasTarget = true;
       }
     }
@@ -1475,6 +1785,7 @@ export class GameEngine {
         this._tvWorldPos.addScaledVector(this._tvForward, 0.015);
         scaleX = 1.6 / 800;
         scaleY = 0.86 / 430;
+        isHouseTv = true;
         hasTarget = true;
       }
     }
@@ -1488,6 +1799,7 @@ export class GameEngine {
       right: this._tvRight,
       scaleX,
       scaleY,
+      isHouseTv,
     };
   }
 
@@ -1864,6 +2176,34 @@ export class GameEngine {
           modules: v.modules.map((m) => ({ ...m })),
           cargoItems: (v.cargoItems || []).map((c) => ({ ...c })),
         });
+      }
+      if (!this.vehicles.some((v) => v.preset === 'donk')) {
+        const bay2X = VEHICLE_GARAGE_POS.x;
+        const bay2Z = VEHICLE_GARAGE_POS.z + 0.6;
+        this.spawnVehicleInstance(
+          createVehicleFromPreset(
+            'veh_starter_donk',
+            'donk',
+            bay2X,
+            getTerrainHeight(bay2X, bay2Z) + 0.14,
+            bay2Z,
+            0,
+          ),
+        );
+      }
+      if (!this.vehicles.some((v) => v.preset === 'slab')) {
+        const bay3X = VEHICLE_GARAGE_POS.x + 6.0;
+        const bay3Z = VEHICLE_GARAGE_POS.z + 0.6;
+        this.spawnVehicleInstance(
+          createVehicleFromPreset(
+            'veh_starter_slab',
+            'slab',
+            bay3X,
+            getTerrainHeight(bay3X, bay3Z) + 0.14,
+            bay3Z,
+            0,
+          ),
+        );
       }
     } else {
       this.setupStarterEngineeringShowcase(true, false);
@@ -3365,7 +3705,7 @@ export class GameEngine {
 
   private handleGarageBenchInteraction(): void {
     const garageVehicles = this.vehicles.filter(
-      (v) => Math.hypot(v.x - VEHICLE_GARAGE_POS.x, v.z - VEHICLE_GARAGE_POS.z) <= 14.5,
+      (v) => Math.hypot(v.x - VEHICLE_GARAGE_POS.x, v.z - VEHICLE_GARAGE_POS.z) <= 18.5,
     );
     let serviced = 0;
     for (const v of garageVehicles) {
@@ -7868,7 +8208,12 @@ export class GameEngine {
           this._tvLookTarget.copy(tvTarget.worldPos);
           this._tvLookTarget.y -= 0.44;
         }
-        this.camera.position.lerp(_vec3A, 0.24);
+        const camDistToTarget = this.camera.position.distanceTo(_vec3A);
+        if (camDistToTarget > 8) {
+          this.camera.position.copy(_vec3A);
+        } else {
+          this.camera.position.lerp(_vec3A, 0.28);
+        }
         this.camera.lookAt(this._tvLookTarget);
         return;
       }
@@ -8087,6 +8432,7 @@ export class GameEngine {
         activeVehicle = {
           id: av.id,
           name: av.name,
+          preset: av.preset,
           craftClass: specs.craftClass,
           speedKmh: Math.round(spd * 3.6),
           altitudeM: Math.max(0, Math.round((av.y - Math.max(surfY, waterY)) * 10) / 10),
@@ -8098,6 +8444,13 @@ export class GameEngine {
           airborne,
           canFloat: specs.canFloat,
           canFly: specs.canFly,
+          hasHydraulics: Boolean(av.hydraulicHop || av.preset === 'lowrider'),
+          hydraulicMode: this.hydraulicMode,
+          hasTrunkBass: av.preset === 'slab' || av.trunkBassEnabled !== undefined,
+          trunkBassOn: Boolean(av.trunkBassEnabled),
+          highClearance:
+            av.preset === 'donk' ||
+            ((av.suspensionOffset ?? 0) >= 0.32 && (av.wheelScale ?? 1) >= 1.3),
           cargoUsed: av.cargoItems.reduce((s, c) => s + c.quantity, 0),
           cargoCapacity: specs.cargoCapacity,
         };
@@ -8148,6 +8501,12 @@ export class GameEngine {
       cinematicSubtitle: this.cinematicSubtitle,
       gameOver: this.gameOver,
       gameOverReason: this.gameOverReason,
+      currentDimension: this.currentDimension,
+      selectedPortalDimension: this.selectedPortalDimension,
+      visitedDimensions: Array.from(this.visitedDimensions),
+      unlockedGildedPaint: this.unlockedGildedPaint,
+      crystalArmorHp: this.crystalArmorHp,
+      activePortals: this.activePortals.map((p) => ({ ...p })),
       coins: this.coins,
       seatedLabel: this.seatedState?.label ?? null,
       plantedCrops: this.plantedCrops.map((c) => ({ ...c })),
@@ -8201,6 +8560,7 @@ export class GameEngine {
           isZoomedToTv: this.tvIsZoomed,
           autoCycle: this.smartTv.autoCycleChannels,
           isPaused: this.smartTv.isPaused,
+          isStopped: this.smartTv.isStopped,
           currentTime: Math.floor(this.smartTv.currentTimestamp),
           isLocalVideo: isLocal,
           localVideoName: localName,
@@ -8246,7 +8606,7 @@ export class GameEngine {
       },
       garageSummary: (() => {
         const parked = this.vehicles.filter(
-          (v) => Math.hypot(v.x - VEHICLE_GARAGE_POS.x, v.z - VEHICLE_GARAGE_POS.z) <= 13.5,
+          (v) => Math.hypot(v.x - VEHICLE_GARAGE_POS.x, v.z - VEHICLE_GARAGE_POS.z) <= 18.5,
         );
         return {
           parkedCount: parked.length,
@@ -8432,7 +8792,9 @@ export class GameEngine {
     }
 
     this.updateCamera();
+    this.syncTvCssOverlay();
     this.renderer.render(this.scene, this.camera);
+    this.cssRenderer.render(this.cssScene, this.camera);
 
     if (this.isSoftwareGl) {
       this.afterDraw(this.tick);
@@ -9280,6 +9642,11 @@ export class GameEngine {
     this.vehicleAltitudeVel = 0;
     this.vehicleAscendHold = false;
     this.vehicleDescendHold = false;
+    this.hydraulicMode = 'level';
+    this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
+    this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
+    this.trunkBassPulse = 0;
+    this.sound.stopTrunkBass();
   }
 
   private setupStarterEngineeringShowcase(
@@ -9347,32 +9714,57 @@ export class GameEngine {
     }
 
     if (seedVehicles) {
-      // Park the starter Expedition Rover in Vehicle Garage Bay A and West Coast Lowrider in Bay B
-      const bayAX = VEHICLE_GARAGE_POS.x - 3.1;
-      const bayAZ = VEHICLE_GARAGE_POS.z + 0.4;
-      const roverY = getTerrainHeight(bayAX, bayAZ) + 0.14;
-      const rover = createVehicleFromPreset(
-        'veh_starter_rover',
-        'expedition_rover',
-        bayAX,
-        roverY,
-        bayAZ,
-        0,
-      );
-      this.spawnVehicleInstance(rover);
-
-      const bayBX = VEHICLE_GARAGE_POS.x + 3.1;
-      const bayBZ = VEHICLE_GARAGE_POS.z + 0.4;
-      const lowriderY = getTerrainHeight(bayBX, bayBZ) + 0.14;
+      // Bay 1: 1964 Impala Candy Lowrider (with 4-Corner Hydraulics)
+      const bay1X = VEHICLE_GARAGE_POS.x - 6.0;
+      const bay1Z = VEHICLE_GARAGE_POS.z + 0.6;
       const lowrider = createVehicleFromPreset(
         'veh_starter_lowrider',
         'lowrider',
-        bayBX,
-        lowriderY,
-        bayBZ,
+        bay1X,
+        getTerrainHeight(bay1X, bay1Z) + 0.14,
+        bay1Z,
         0,
       );
       this.spawnVehicleInstance(lowrider);
+
+      // Bay 2: Lifted 1974 Box Chevy DONK on 30-inch Chrome Rims
+      const bay2X = VEHICLE_GARAGE_POS.x;
+      const bay2Z = VEHICLE_GARAGE_POS.z + 0.6;
+      const donk = createVehicleFromPreset(
+        'veh_starter_donk',
+        'donk',
+        bay2X,
+        getTerrainHeight(bay2X, bay2Z) + 0.14,
+        bay2Z,
+        0,
+      );
+      this.spawnVehicleInstance(donk);
+
+      // Bay 3: Houston Candy SLAB on Swangers + 5th-Wheel Continental + Trunk Bass
+      const bay3X = VEHICLE_GARAGE_POS.x + 6.0;
+      const bay3Z = VEHICLE_GARAGE_POS.z + 0.6;
+      const slab = createVehicleFromPreset(
+        'veh_starter_slab',
+        'slab',
+        bay3X,
+        getTerrainHeight(bay3X, bay3Z) + 0.14,
+        bay3Z,
+        0,
+      );
+      this.spawnVehicleInstance(slab);
+
+      // Expedition 4x4 Rover parked on the East Service Apron beside Bay 3
+      const apronX = VEHICLE_GARAGE_POS.x + 13.0;
+      const apronZ = VEHICLE_GARAGE_POS.z + 5.2;
+      const rover = createVehicleFromPreset(
+        'veh_starter_rover',
+        'expedition_rover',
+        apronX,
+        getTerrainHeight(apronX, apronZ) + 0.14,
+        apronZ,
+        0,
+      );
+      this.spawnVehicleInstance(rover);
 
       const boat = createVehicleFromPreset(
         'veh_starter_boat',
@@ -10015,14 +10407,26 @@ export class GameEngine {
     this.vehicleAltitudeVel = 0;
     this.vehicleAscendHold = false;
     this.vehicleDescendHold = false;
+    this.hydraulicMode = 'level';
+    this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
+    this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
+    this.trunkBassPulse = 0;
     this.isCrouching = false;
     this.touchCrouch = false;
     this.camYaw = v.yaw - Math.PI;
     this.camPitch = -0.18;
     const specs = computeVehicleSpecs(v.modules);
     this.sound.playSteamHiss();
+    const extraHint =
+      v.hydraulicHop || v.preset === 'lowrider'
+        ? ' · [Space/Z/Q/R/X] 4-Corner Hydraulics'
+        : v.preset === 'slab' || v.trunkBassEnabled !== undefined
+          ? ' · [T] Trunk Bass System'
+          : v.preset === 'donk'
+            ? ' · 30" High-Clearance Suspension'
+            : '';
     this.toast(
-      `Piloting ${v.name} (${specs.craftClass}) · WASD Drive · [E] Exit · [F] Cargo`,
+      `Piloting ${v.name} (${specs.craftClass}) · WASD Drive${extraHint} · [E] Exit · [F] Cargo`,
       'discovery',
     );
     this.emitHud();
@@ -10037,6 +10441,11 @@ export class GameEngine {
     this.vehicleAltitudeVel = 0;
     this.vehicleAscendHold = false;
     this.vehicleDescendHold = false;
+    this.hydraulicMode = 'level';
+    this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
+    this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
+    this.trunkBassPulse = 0;
+    this.sound.stopTrunkBass();
     if (v) {
       const sideX = Math.cos(v.yaw);
       const sideZ = -Math.sin(v.yaw);
@@ -10050,6 +10459,84 @@ export class GameEngine {
       this.grounded = true;
       this.toast(`Exited ${v.name}`, 'info');
     }
+    this.emitHud();
+  }
+
+  public triggerHydraulicAction(
+    action: 'front_hop' | 'rear_hop' | 'left_tilt' | 'right_tilt' | 'lock_up' | 'drop',
+  ): void {
+    if (!this.activeVehicleId || this.mode !== 'playing' || this.gameOver) return;
+    const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
+    if (!av || !(av.hydraulicHop || av.preset === 'lowrider')) return;
+
+    this.sound.unlock();
+    const floorY = Math.max(
+      getTerrainHeight(av.x, av.z),
+      this.getStructuralSurfaceY(av.x, av.z, av.y + 0.8),
+    );
+    const groundedOnSurface = av.y <= floorY + 0.45;
+
+    if (action === 'front_hop') {
+      this.hydraulicMode = 'front_hop';
+      this.hydVel.fl = 7.4;
+      this.hydVel.fr = 7.4;
+      this.hydVel.rl -= 1.2;
+      this.hydVel.rr -= 1.2;
+      if (groundedOnSurface) av.vy = Math.max(av.vy, 3.6);
+      this.hydraulicBounceTimer = 0.35;
+      this.sound.playHydraulicHop('hop');
+      this.spawnParticles(av.x, av.y + 0.35, av.z, 0xfbbf24, 6);
+    } else if (action === 'rear_hop') {
+      this.hydraulicMode = 'rear_hop';
+      this.hydVel.rl = 7.4;
+      this.hydVel.rr = 7.4;
+      this.hydVel.fl -= 1.2;
+      this.hydVel.fr -= 1.2;
+      if (groundedOnSurface) av.vy = Math.max(av.vy, 3.3);
+      this.hydraulicBounceTimer = 0.35;
+      this.sound.playHydraulicHop('hop');
+      this.spawnParticles(av.x, av.y + 0.35, av.z, 0xfbbf24, 6);
+    } else if (action === 'left_tilt') {
+      this.hydraulicMode = this.hydraulicMode === 'left_tilt' ? 'level' : 'left_tilt';
+      this.sound.playHydraulicHop('tilt');
+    } else if (action === 'right_tilt') {
+      this.hydraulicMode = this.hydraulicMode === 'right_tilt' ? 'level' : 'right_tilt';
+      this.sound.playHydraulicHop('tilt');
+    } else if (action === 'lock_up') {
+      this.hydraulicMode = this.hydraulicMode === 'lock_up' ? 'level' : 'lock_up';
+      if (this.hydraulicMode === 'lock_up') {
+        this.hydVel.fl += 3.2;
+        this.hydVel.fr += 3.2;
+        this.hydVel.rl += 3.2;
+        this.hydVel.rr += 3.2;
+      }
+      this.sound.playHydraulicHop('lock');
+    } else {
+      this.hydraulicMode = 'level';
+      this.sound.playHydraulicHop('tilt');
+    }
+    this.emitHud();
+  }
+
+  public toggleTrunkBass(): void {
+    if (!this.activeVehicleId) return;
+    const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
+    if (!av) return;
+    if (av.preset !== 'slab' && av.trunkBassEnabled === undefined) return;
+    this.sound.unlock();
+    av.trunkBassEnabled = !av.trunkBassEnabled;
+    if (!av.trunkBassEnabled) {
+      this.sound.stopTrunkBass();
+      this.trunkBassPulse = 0;
+    } else {
+      this.sound.playPickup();
+    }
+    this.toast(
+      av.trunkBassEnabled
+        ? 'Trunk Bass ON — Swang & Bang Subwoofers Active!'
+        : 'Trunk Bass OFF',
+      av.trunkBassEnabled ? 'discovery' : 'info',
+    );
     this.emitHud();
   }
 
@@ -10176,7 +10663,11 @@ export class GameEngine {
       this.getStructuralSurfaceY(v.x, v.z, v.y + 0.8),
     );
     const waterY = getWaterLevelAt(v.x, v.z);
-    const isInWater = surfY < waterY - 0.28 && v.y <= waterY + 0.5;
+    const isHighClearance =
+      v.preset === 'donk' ||
+      ((v.suspensionOffset ?? 0) >= 0.32 && (v.wheelScale ?? 1) >= 1.3);
+    const hasHyd = Boolean(v.hydraulicHop || v.preset === 'lowrider');
+    const isInWater = surfY < waterY - (isHighClearance ? 1.5 : 0.28) && v.y <= waterY + 0.5;
     const airborne = specs.canFly && (this.vehicleAscendHold || v.y > Math.max(surfY, waterY) + 0.55);
 
     const vSpeedMult = (v.turboBoost ?? 1) * (this.modSystem?.tweaks.vehicleSpeedMultiplier ?? 1);
@@ -10188,7 +10679,7 @@ export class GameEngine {
           : specs.topLandSpeed * boostMult * fuelMult) * vSpeedMult;
 
     // Braking / Throttle
-    if (!specs.canFly && this.vehicleAscendHold) {
+    if (!specs.canFly && !hasHyd && this.vehicleAscendHold) {
       this.vehicleForwardSpeed = THREE.MathUtils.damp(this.vehicleForwardSpeed, 0, 9, dt);
     } else if (Math.abs(moveForward) > 0.08) {
       const targetSpd =
@@ -10259,7 +10750,8 @@ export class GameEngine {
         this.getStructuralSurfaceY(nextX, nextZ, v.y + 0.8),
       );
       const nextWater = getWaterLevelAt(nextX, nextZ);
-      if (nextSurf < nextWater - 1.2) {
+      const maxFordDepth = isHighClearance ? 2.2 : 1.2;
+      if (nextSurf < nextWater - maxFordDepth) {
         this.vehicleForwardSpeed *= 0.6;
       }
     }
@@ -10345,14 +10837,28 @@ export class GameEngine {
     );
     const desiredPitch = airborne
       ? THREE.MathUtils.clamp(-this.vehicleAltitudeVel * 0.03 + moveForward * 0.06, -0.25, 0.25)
-      : THREE.MathUtils.clamp(Math.atan2(sampleBackY - sampleFwdY, 2.8), -0.4, 0.4);
+      : THREE.MathUtils.clamp(
+          Math.atan2(sampleBackY - sampleFwdY, 2.8) * (isHighClearance ? 0.65 : 1.0),
+          -0.4,
+          0.4,
+        );
     const desiredRoll = THREE.MathUtils.clamp(
       moveRight * (airborne ? 0.24 : 0.09) * Math.min(1, spd / 8),
       -0.3,
       0.3,
     );
-    this.vehicleVisualPitch = THREE.MathUtils.damp(this.vehicleVisualPitch, desiredPitch, 9, dt);
-    this.vehicleVisualRoll = THREE.MathUtils.damp(this.vehicleVisualRoll, desiredRoll, 9, dt);
+    this.vehicleVisualPitch = THREE.MathUtils.damp(
+      this.vehicleVisualPitch,
+      desiredPitch,
+      isHighClearance ? 6.5 : 9,
+      dt,
+    );
+    this.vehicleVisualRoll = THREE.MathUtils.damp(
+      this.vehicleVisualRoll,
+      desiredRoll,
+      isHighClearance ? 6.5 : 9,
+      dt,
+    );
 
     this.vehicleEngineSoundAccum += dt;
     if ((spd > 2 || airborne) && this.vehicleEngineSoundAccum >= 0.45) {
@@ -10363,6 +10869,42 @@ export class GameEngine {
   }
 
   private updateVehicles(dt: number): void {
+    const activeV = this.activeVehicleId
+      ? this.vehicles.find((x) => x.id === this.activeVehicleId)
+      : null;
+    const bassActive = Boolean(
+      activeV &&
+        activeV.trunkBassEnabled &&
+        this.mode === 'playing' &&
+        !this.gameOver,
+    );
+    this.trunkBassPulse = this.sound.updateTrunkBass(bassActive, dt);
+
+    // Solve 4-corner hydraulic spring-damper physics for active vehicle
+    const activeHasHyd = Boolean(
+      activeV && (activeV.hydraulicHop || activeV.preset === 'lowrider'),
+    );
+    const targets =
+      !activeHasHyd || this.hydraulicMode === 'level' || this.hydraulicMode === 'front_hop' || this.hydraulicMode === 'rear_hop'
+        ? { fl: 0, fr: 0, rl: 0, rr: 0 }
+        : this.hydraulicMode === 'lock_up'
+          ? { fl: 0.52, fr: 0.52, rl: 0.52, rr: 0.52 }
+          : this.hydraulicMode === 'left_tilt'
+            ? { fl: -0.06, fr: 0.56, rl: -0.06, rr: 0.56 }
+            : { fl: 0.56, fr: -0.06, rl: 0.56, rr: -0.06 };
+
+    const stiffness = 92;
+    const damping = 8.4;
+    (['fl', 'fr', 'rl', 'rr'] as const).forEach((c) => {
+      const accel = (targets[c] - this.hydCorners[c]) * stiffness - this.hydVel[c] * damping;
+      this.hydVel[c] += accel * dt;
+      this.hydCorners[c] = THREE.MathUtils.clamp(
+        this.hydCorners[c] + this.hydVel[c] * dt,
+        -0.16,
+        0.92,
+      );
+    });
+
     for (const v of this.vehicles) {
       const specs = computeVehicleSpecs(v.modules);
       const handles = this.vehicleMeshes.get(v.id);
@@ -10393,8 +10935,62 @@ export class GameEngine {
         handles.root.rotation.set(0, v.yaw, 0);
       }
 
+      // Base chassis ride height + 4-corner hydraulic heave/pitch/roll + SLAB sub-bass rattle
+      const isCustomShowCar =
+        v.preset === 'lowrider' || v.preset === 'donk' || v.preset === 'slab';
+      const baseBodyY = isCustomShowCar
+        ? Math.max(0.28, 0.38 + (v.suspensionOffset ?? 0))
+        : (v.suspensionOffset ?? 0);
+      const showBassPulse =
+        isActive && v.trunkBassEnabled
+          ? this.trunkBassPulse
+          : !isActive && v.trunkBassEnabled
+            ? 0.25 + 0.2 * Math.max(0, Math.sin(this.elapsed * 6.5))
+            : 0;
+
+      if (isActive && activeHasHyd) {
+        const { fl, fr, rl, rr } = this.hydCorners;
+        const avgHeave = (fl + fr + rl + rr) * 0.25;
+        const hydPitch = ((rl + rr) - (fl + fr)) * 0.14;
+        const hydRoll = ((fl + rl) - (fr + rr)) * 0.19;
+        handles.chassisGroup.position.y = baseBodyY + avgHeave + showBassPulse * 0.025;
+        handles.chassisGroup.rotation.x = hydPitch;
+        handles.chassisGroup.rotation.z = hydRoll;
+        for (const wc of handles.wheelCorners) {
+          const cornerH = this.hydCorners[wc.corner];
+          // Wheels stay planted on ground under low suspension displacement and droop slightly during high hops/three-wheeling
+          const droop = cornerH > 0.34 ? (cornerH - 0.34) * 0.45 : Math.max(0, cornerH * 0.08);
+          wc.obj.position.y = wc.baseY + droop;
+        }
+      } else {
+        handles.chassisGroup.position.y = baseBodyY + showBassPulse * 0.032;
+        handles.chassisGroup.rotation.x = 0;
+        handles.chassisGroup.rotation.z = 0;
+        for (const wc of handles.wheelCorners) {
+          wc.obj.position.y = wc.baseY;
+        }
+      }
+
+      // SLAB Trunk lid vibration & neon underglow pulse
+      if (handles.trunkLid) {
+        handles.trunkLid.rotation.x =
+          showBassPulse > 0.01 ? -0.055 * showBassPulse : 0;
+      }
+      if (handles.underglowLight) {
+        handles.underglowLight.intensity = 1.85 + showBassPulse * 3.1;
+      }
+      if (handles.underglowMeshes) {
+        for (const gm of handles.underglowMeshes) {
+          const mat = gm.material as THREE.MeshStandardMaterial;
+          if (mat && 'emissiveIntensity' in mat) {
+            mat.emissiveIntensity = 1.9 + showBassPulse * 2.4;
+          }
+        }
+      }
+
+      const wheelRadius = 0.42 * (v.wheelScale ?? 1.0);
       const spd = isActive ? this.vehicleForwardSpeed : 0;
-      const wheelRoll = (spd / 0.42) * dt;
+      const wheelRoll = (spd / wheelRadius) * dt;
       for (const w of handles.wheels) {
         w.rotation.x += wheelRoll;
       }
@@ -10482,8 +11078,8 @@ export class GameEngine {
   public parkVehicleInGarage(vehicleId: string, bay: 'A' | 'B' | 'C' = 'A'): boolean {
     const v = this.vehicles.find((x) => x.id === vehicleId);
     if (!v) return false;
-    const offsetX = bay === 'A' ? -3.1 : bay === 'B' ? 3.1 : 0;
-    const offsetZ = bay === 'C' ? -5.8 : 0.4;
+    const offsetX = bay === 'A' ? -6.0 : bay === 'B' ? 0.0 : 6.0;
+    const offsetZ = 0.6;
     v.x = VEHICLE_GARAGE_POS.x + offsetX;
     v.z = VEHICLE_GARAGE_POS.z + offsetZ;
     v.y = getTerrainHeight(v.x, v.z) + 0.14;
@@ -11411,6 +12007,93 @@ export class GameEngine {
     this.emitHud();
   }
 
+  public selectPortalDimension(dim: DimensionId): void {
+    this.selectedPortalDimension = dim;
+    this.toast(`Portal Destination Set: ${DIMENSION_DEFINITIONS[dim]?.name || dim}`, 'info');
+    this.emitHud();
+  }
+
+  public switchDimension(dim: DimensionId): void {
+    if (!DIMENSION_DEFINITIONS[dim]) return;
+    this.currentDimension = dim;
+    this.visitedDimensions.add(dim);
+    if (dim === 'gold') {
+      this.unlockedGildedPaint = true;
+    }
+    const arrival = getDimensionArrivalPoint(dim);
+    this.playerX = arrival.x;
+    this.playerY = arrival.y;
+    this.playerZ = arrival.z;
+    this.playerYaw = arrival.yaw;
+    this.playerVelY = 0;
+
+    const def = DIMENSION_DEFINITIONS[dim];
+    if (def) {
+      this.scene.background = new THREE.Color(def.skyHex);
+      if (this.scene.fog) {
+        this.scene.fog.color.setHex(def.fogHex);
+        if ('density' in this.scene.fog) {
+          (this.scene.fog as THREE.FogExp2).density = def.fogDensity;
+        }
+      }
+      this.sunLight.color.setHex(def.sunColorHex);
+      this.sunLight.intensity = def.sunIntensity;
+      this.hemiLight.color.setHex(def.hemiSkyHex);
+      this.hemiLight.groundColor.setHex(def.hemiGroundHex);
+      this.hemiLight.intensity = def.hemiIntensity;
+    }
+
+    this.sound.playPortalWarp();
+    this.toast(`Warped into ${def.name}!`, 'discovery');
+    this.emitHud();
+  }
+
+  public firePortalGun(): void {
+    const equipped = this.getEquippedItemId();
+    if (equipped !== 'portal_gun') {
+      this.toast('Equip Dimensional Portal Gun in hotbar to fire portals!', 'warning');
+      return;
+    }
+
+    const targetDim = this.selectedPortalDimension;
+    const dest = getDimensionArrivalPoint(targetDim);
+    const portalId = `portal_${Date.now()}`;
+    const pairId = `pair_${Date.now()}`;
+
+    const dist = 3.8;
+    const px = this.playerX - Math.sin(this.playerYaw) * dist;
+    const pz = this.playerZ - Math.cos(this.playerYaw) * dist;
+    const py = this.playerY + 0.1;
+
+    const newPortal: PortalLinkState = {
+      id: portalId,
+      pairId,
+      sourceDim: this.currentDimension,
+      targetDim,
+      x: px,
+      y: py,
+      z: pz,
+      yaw: this.playerYaw,
+      destX: dest.x,
+      destY: dest.y,
+      destZ: dest.z,
+      destYaw: dest.yaw,
+      isReturn: false,
+      createdAt: this.elapsed,
+    };
+
+    this.activePortals.push(newPortal);
+    this.sound.playPortalWarp();
+    this.toast(`Portal opened to ${DIMENSION_DEFINITIONS[targetDim]?.name || targetDim}! Walk or drive through.`, 'gain');
+    this.emitHud();
+  }
+
+  public closeAllPortals(): void {
+    this.activePortals = [];
+    this.toast('All dimensional portals closed.', 'info');
+    this.emitHud();
+  }
+
   public dispose(): void {
     this.disposed = true;
     cancelAnimationFrame(this.frameId);
@@ -11444,6 +12127,17 @@ export class GameEngine {
         }
       }
     });
+    if (this.tvYoutubeIframe) {
+      this.tvYoutubeIframe.src = 'about:blank';
+      this.tvYoutubeIframe = null;
+    }
+    if (this.tvCssWrapper) {
+      this.tvCssWrapper.remove();
+      this.tvCssWrapper = null;
+    }
+    if (this.cssRenderer?.domElement) {
+      this.cssRenderer.domElement.remove();
+    }
     if (this.smartTv) {
       this.smartTv.dispose();
     }

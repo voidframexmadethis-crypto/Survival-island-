@@ -1862,6 +1862,97 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
     attackRange: 100,
     weaponClass: 'ballistic',
   },
+  portal_gun: {
+    id: 'portal_gun',
+    name: 'Dimensional Portal Gun',
+    category: 'equipment',
+    description:
+      'Interdimensional quantum launcher. Aim at any surface and fire [Click / E] to open a swirling travel portal for foot or vehicle traversal. Press [G] to pick Dimension.',
+    stackable: false,
+    maxStack: 1,
+    iconKey: 'portal_gun',
+    color: '#38bdf8',
+  },
+  alien_plasma_gun: {
+    id: 'alien_plasma_gun',
+    name: 'Alien Plasma Gun',
+    category: 'weapon',
+    description:
+      'Extraterrestrial bioluminescent plasma repeater firing superheated violet-teal energy bolts.',
+    stackable: false,
+    maxStack: 1,
+    iconKey: 'alien_plasma_gun',
+    color: '#2dd4bf',
+    attackDamage: 148,
+    attackRange: 120,
+    weaponClass: 'ballistic',
+  },
+  inferno_blade: {
+    id: 'inferno_blade',
+    name: 'Netherite Inferno Blade',
+    category: 'weapon',
+    description:
+      'Hellfire-forged Netherite greatsword radiating molten ember damage with massive armor-piercing cleave.',
+    stackable: false,
+    maxStack: 1,
+    iconKey: 'inferno_blade',
+    color: '#f97316',
+    attackDamage: 96,
+    attackRange: 3.4,
+    weaponClass: 'blade',
+  },
+  diamond_ammo: {
+    id: 'diamond_ammo',
+    name: 'Diamond-Tipped Ammo',
+    category: 'resource',
+    description:
+      'Faceted crystalline armor-piercing rounds. Automatically supercharges equipped firearms with +55% bonus damage.',
+    stackable: true,
+    maxStack: 200,
+    iconKey: 'diamond_ammo',
+    color: '#67e8f9',
+  },
+  crystal_armor: {
+    id: 'crystal_armor',
+    name: 'Diamond Crystal Armor',
+    category: 'equipment',
+    description:
+      'Refracting blue diamond chestplate shield. Use [Click / E] to activate +150 Crystal Shield absorbing 55% incoming damage.',
+    stackable: true,
+    maxStack: 5,
+    iconKey: 'crystal_armor',
+    color: '#38bdf8',
+  },
+  nether_ember: {
+    id: 'nether_ember',
+    name: 'Hellfire Nether Ember',
+    category: 'resource',
+    description: 'Incandescent Netherite core ember harvested from Hellfire Dimension spires and guardians.',
+    stackable: true,
+    maxStack: 50,
+    iconKey: 'nether_ember',
+    color: '#f97316',
+  },
+  alien_core: {
+    id: 'alien_core',
+    name: 'Xenotech Alien Core',
+    category: 'resource',
+    description: 'Humming purple power cell salvaged from crashed flying saucers and Extraterrestrials.',
+    stackable: true,
+    maxStack: 50,
+    iconKey: 'alien_core',
+    color: '#a855f7',
+  },
+  diamond_crystal: {
+    id: 'diamond_crystal',
+    name: 'Pure Diamond Crystal',
+    category: 'resource',
+    description: 'Radiant crystalline shard mined from the Diamond Dimension pillars.',
+    stackable: true,
+    maxStack: 50,
+    iconKey: 'diamond_crystal',
+    color: '#38bdf8',
+  },
 };
 
 export const ALL_ITEM_IDS = Object.keys(ITEMS) as ItemId[];
@@ -2152,6 +2243,21 @@ export const FIREARM_SPECS: Partial<Record<ItemId, FirearmSpec>> = {
     caliberLabel: '5.56 Belt',
     soundProfile: 'lmg',
   },
+  alien_plasma_gun: {
+    magSize: 40,
+    reloadTime: 1.35,
+    reloadMode: 'magazine',
+    fireRate: 0.135,
+    pelletCount: 1,
+    spread: 0.004,
+    recoil: 0.018,
+    damage: 148,
+    muzzleSpeed: 165,
+    range: 125,
+    autoFire: true,
+    caliberLabel: 'Plasma Cell',
+    soundProfile: 'plasma',
+  },
 };
 
 export function isFirearmItem(itemId: ItemId | null | undefined): boolean {
@@ -2166,12 +2272,13 @@ export function isActiveWeaponItem(itemId: ItemId | null | undefined): boolean {
     itemId === 'wooden_club' ||
     itemId === 'wooden_spear' ||
     itemId === 'stone_warhammer' ||
-    itemId === 'rope_whip'
+    itemId === 'rope_whip' ||
+    itemId === 'inferno_blade'
   );
 }
 
 export function isAmmoItem(itemId: ItemId | null | undefined): boolean {
-  return itemId === 'ammo' || itemId === 'arrows';
+  return itemId === 'ammo' || itemId === 'arrows' || itemId === 'diamond_ammo';
 }
 
 export function isSeedItem(itemId: ItemId | null | undefined): boolean {
@@ -2289,5 +2396,10 @@ export const ITEM_SELL_PRICES: Partial<Record<ItemId, number>> = {
   coconut: 7,
   maple_syrup: 14,
   hide: 10,
+  gold_bar: 45,
+  space_gem: 55,
+  diamond_crystal: 60,
+  nether_ember: 48,
+  alien_core: 65,
 };
 

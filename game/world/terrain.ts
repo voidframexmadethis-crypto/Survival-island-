@@ -44,7 +44,12 @@ export function resetTerrainDeformation(): void {
 
 export function isTerrainProtectedAt(x: number, z: number): boolean {
   if (Math.hypot(x - HILL_HOUSE_POS.x, z - HILL_HOUSE_POS.z) < 10.8) return true;
-  if (Math.hypot(x - VEHICLE_GARAGE_POS.x, z - VEHICLE_GARAGE_POS.z) < 9.5) return true;
+  if (
+    Math.abs(x - VEHICLE_GARAGE_POS.x) < 13.5 &&
+    Math.abs(z - VEHICLE_GARAGE_POS.z) < 9.5
+  ) {
+    return true;
+  }
   if (Math.hypot(x - FARMER_POS.x, z - FARMER_POS.z) < 4.5) return true;
   return false;
 }
@@ -412,11 +417,58 @@ export function getBaseTerrainHeight(x: number, z: number): number {
     h = h * (1 - sideBlend) + rampH * sideBlend;
   }
 
-  // Structured Vehicle Garage clearing beside the base (outside the hilltop house footprint)
-  const dGarage = Math.hypot(x - VEHICLE_GARAGE_POS.x, z - VEHICLE_GARAGE_POS.z);
-  if (dGarage < 13.8) {
-    const garageBlend = 1 - smoothstep(9.2, 13.8, dGarage);
+  // Expanded 3-Bay Custom Vehicle Garage clearing & wide driveways to island trails & beaches
+  const gdx = Math.max(0, Math.abs(x - VEHICLE_GARAGE_POS.x) - 11.2);
+  const gdz = Math.max(0, Math.abs(z - VEHICLE_GARAGE_POS.z) - 6.8);
+  const dGarageBox = Math.hypot(gdx, gdz);
+  if (dGarageBox < 5.5) {
+    const garageBlend = 1 - smoothstep(1.2, 5.5, dGarageBox);
     h = h * (1 - garageBlend) + VEHICLE_GARAGE_Y * garageBlend;
+  }
+
+  // Wide South-East main driveway apron -> Southern Beach & Spawn Trail
+  const mainDrive = distToSegment(
+    x,
+    z,
+    VEHICLE_GARAGE_POS.x + 2,
+    VEHICLE_GARAGE_POS.z + 6.5,
+    -2,
+    105,
+  );
+  if (mainDrive.dist < 6.4) {
+    const dBlend = 1 - smoothstep(3.0, 6.4, mainDrive.dist);
+    const targetDriveH = VEHICLE_GARAGE_Y * (1 - mainDrive.t) + 1.85 * mainDrive.t;
+    h = h * (1 - dBlend * 0.85) + targetDriveH * (dBlend * 0.85);
+  }
+
+  // Wide South-West driveway ramp -> Western Beach Shore
+  const westDrive = distToSegment(
+    x,
+    z,
+    VEHICLE_GARAGE_POS.x - 6,
+    VEHICLE_GARAGE_POS.z + 6.5,
+    -44,
+    112,
+  );
+  if (westDrive.dist < 5.8) {
+    const wBlend = 1 - smoothstep(2.6, 5.8, westDrive.dist);
+    const targetWestH = VEHICLE_GARAGE_Y * (1 - westDrive.t) + 1.55 * westDrive.t;
+    h = h * (1 - wBlend * 0.82) + targetWestH * (wBlend * 0.82);
+  }
+
+  // Wide East connector -> Central Island Trail
+  const eastDrive = distToSegment(
+    x,
+    z,
+    VEHICLE_GARAGE_POS.x + 10.5,
+    VEHICLE_GARAGE_POS.z + 1.5,
+    -2,
+    84,
+  );
+  if (eastDrive.dist < 5.4) {
+    const eBlend = 1 - smoothstep(2.4, 5.4, eastDrive.dist);
+    const targetEastH = VEHICLE_GARAGE_Y * (1 - eastDrive.t) + 2.85 * eastDrive.t;
+    h = h * (1 - eBlend * 0.8) + targetEastH * (eBlend * 0.8);
   }
 
   return h;

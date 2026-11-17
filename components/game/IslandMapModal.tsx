@@ -69,8 +69,8 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
             Math.abs(wx - HILL_HOUSE_POS.x) < 5.6 &&
             Math.abs(wz - HILL_HOUSE_POS.z) < 4.6;
           const inGarage =
-            Math.abs(wx - VEHICLE_GARAGE_POS.x) < 7.2 &&
-            Math.abs(wz - VEHICLE_GARAGE_POS.z) < 5.2;
+            Math.abs(wx - VEHICLE_GARAGE_POS.x) < 11.2 &&
+            Math.abs(wz - VEHICLE_GARAGE_POS.z) < 6.8;
 
           if (inHouse) {
             r = 165;

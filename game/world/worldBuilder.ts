@@ -108,6 +108,7 @@ export interface WorldHandles {
   wheatfieldPos: THREE.Vector3;
   caveCeilings: CaveCeilingCluster[];
   shipwreckChests: ShipwreckChestHandle[];
+  overworldGroup: THREE.Group;
 }
 
 function seededRand(seed: number): () => number {
@@ -123,6 +124,8 @@ export function buildIslandWorld(
   scene: THREE.Scene,
   renderer: THREE.WebGLRenderer,
 ): WorldHandles {
+  const overworldGroup = new THREE.Group();
+  scene.add(overworldGroup);
   const rand = seededRand(42071);
 
   const groundTex = createGroundDetailTexture(renderer);
@@ -169,12 +172,20 @@ export function buildIslandWorld(
       x >= HILL_HOUSE_POS.x + 5 &&
       x <= HILL_HOUSE_POS.x + 22 &&
       Math.abs(z - HILL_HOUSE_POS.z) < 2.3;
+    const onGaragePadArea =
+      Math.abs(x - VEHICLE_GARAGE_POS.x) < 12.6 &&
+      Math.abs(z - VEHICLE_GARAGE_POS.z) < 8.4;
+    const segDist = (ax: number, az: number, bx: number, bz: number) => {
+      const dx = bx - ax;
+      const dz = bz - az;
+      const lenSq = dx * dx + dz * dz;
+      const t = lenSq === 0 ? 0 : Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / lenSq));
+      return Math.hypot(x - (ax + t * dx), z - (az + t * dz));
+    };
     const onGarageDriveway =
-      x >= VEHICLE_GARAGE_POS.x - 4 &&
-      x <= VEHICLE_GARAGE_POS.x + 18 &&
-      z >= VEHICLE_GARAGE_POS.z - 12 &&
-      z <= VEHICLE_GARAGE_POS.z + 10 &&
-      Math.abs((z - VEHICLE_GARAGE_POS.z) - 0.35 * (x - VEHICLE_GARAGE_POS.x)) < 3.2;
+      segDist(VEHICLE_GARAGE_POS.x + 2, VEHICLE_GARAGE_POS.z + 6.5, -2, 105) < 3.8 ||
+      segDist(VEHICLE_GARAGE_POS.x - 6, VEHICLE_GARAGE_POS.z + 6.5, -44, 112) < 3.4 ||
+      segDist(VEHICLE_GARAGE_POS.x + 10.5, VEHICLE_GARAGE_POS.z + 1.5, -2, 84) < 3.2;
 
     if (y < -0.3) {
       c.setHex(0x1e6b7b);
@@ -186,10 +197,10 @@ export function buildIslandWorld(
       c.setHex(0x8c5228); // warm fallen autumn leaf bed
     } else if (dWheat < 7.8) {
       c.setHex(0x7c5832); // rich cultivated wheatfield loam
-    } else if (dGarage < 9.5) {
-      c.setHex(0x78736c); // leveled compacted stone garage clearing
+    } else if (onGaragePadArea) {
+      c.setHex(0x6b6761); // leveled compacted concrete & gravel garage apron
     } else if (onHouseRamp || onGarageDriveway) {
-      c.setHex(0xa89274); // gravel-earth path & vehicle driveway
+      c.setHex(0xa89274); // wide crushed-gravel driveways & trail connectors
     } else if (biome === 'beach' || y < 2.2) {
       c.setHex(0xe5c88b);
     } else if (biome === 'river' || biome === 'lake') {
@@ -224,7 +235,7 @@ export function buildIslandWorld(
   });
   const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
   terrainMesh.receiveShadow = true;
-  scene.add(terrainMesh);
+  overworldGroup.add(terrainMesh);
 
   // 2. Ocean Water Plane
   const oceanGeo = new THREE.PlaneGeometry(780, 780, 24, 24);
@@ -241,7 +252,7 @@ export function buildIslandWorld(
   const oceanMesh = new THREE.Mesh(oceanGeo, oceanMat);
   oceanMesh.position.y = OCEAN_LEVEL;
   oceanMesh.receiveShadow = true;
-  scene.add(oceanMesh);
+  overworldGroup.add(oceanMesh);
 
   // 3. Azure Lake & Crystal River Freshwater Planes
   const lakeGeo = new THREE.CircleGeometry(LAKE_CENTER.radius + 2.5, 32);
@@ -257,7 +268,7 @@ export function buildIslandWorld(
   });
   const lakeMesh = new THREE.Mesh(lakeGeo, freshwaterMat);
   lakeMesh.position.set(LAKE_CENTER.x, LAKE_CENTER.waterY, LAKE_CENTER.z);
-  scene.add(lakeMesh);
+  overworldGroup.add(lakeMesh);
 
   const riverSegs: [number, number, number][] = [
     [6, -46, 2.58],
@@ -278,7 +289,7 @@ export function buildIslandWorld(
     rib.position.set((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2);
     rib.rotation.y = Math.atan2(bx - ax, bz - az);
     rib.rotation.x = Math.atan2(by - ay, len);
-    scene.add(rib);
+    overworldGroup.add(rib);
   }
 
   // 4. Waterfall at Northern Mountain Shelf
@@ -295,7 +306,7 @@ export function buildIslandWorld(
     const stream = new THREE.Mesh(new THREE.BoxGeometry(2.6, 11.5, 0.65), wfMat);
     stream.position.set(WATERFALL_POS.x + (i - 1) * 1.4, 8.0, WATERFALL_POS.z + 1.8);
     stream.rotation.x = 0.28;
-    scene.add(stream);
+    overworldGroup.add(stream);
     waterfallStreams.push(stream);
   }
   const waterfallFoam = new THREE.Mesh(
@@ -309,7 +320,7 @@ export function buildIslandWorld(
   );
   waterfallFoam.rotation.x = -Math.PI / 2;
   waterfallFoam.position.set(WATERFALL_POS.x, 2.66, WATERFALL_POS.z + 4.4);
-  scene.add(waterfallFoam);
+  overworldGroup.add(waterfallFoam);
 
   // 5. Drifting 3D Tropical Clouds
   const cloudsGroup = new THREE.Group();
@@ -332,7 +343,7 @@ export function buildIslandWorld(
     }
     cloudsGroup.add(cluster);
   }
-  scene.add(cloudsGroup);
+  overworldGroup.add(cloudsGroup);
 
   // 6. Hyper-Realistic Shipwreck & Beaching Event with Tiered Interior Zones & Boarding Routes
   // ALL COLLISION BARRIERS & INVISIBLE WALLS STRIPPED: Player can walk/swim freely through any part!
@@ -426,7 +437,7 @@ export function buildIslandWorld(
     mainMast,
     tatteredSail,
   );
-  scene.add(wreckGroup);
+  overworldGroup.add(wreckGroup);
   // NOTE: Zero colliders pushed for the ship — completely removing all invisible walls & barriers!
 
   // 4 Interactive 3D Loot Chests placed with 100% open, unrestricted access
@@ -507,7 +518,7 @@ export function buildIslandWorld(
     glowMesh.position.y = 1.6;
     chestGroup.add(glowMesh);
 
-    scene.add(chestGroup);
+    overworldGroup.add(chestGroup);
 
     return {
       id,
@@ -598,13 +609,13 @@ export function buildIslandWorld(
     const plank = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 2.8), wreckMat);
     plank.position.set(dx, Math.max(OCEAN_LEVEL + 0.05, dy + 0.06), dz);
     plank.rotation.y = rot;
-    scene.add(plank);
+    overworldGroup.add(plank);
 
     const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.85, 9), wreckMat);
     barrel.position.set(dx + 0.9, Math.max(OCEAN_LEVEL + 0.15, dy + 0.35), dz + 0.6);
     barrel.rotation.z = Math.PI / 2.4;
     barrel.castShadow = true;
-    scene.add(barrel);
+    overworldGroup.add(barrel);
   });
 
   // 7. Obsidian Mountain Cavern
@@ -646,7 +657,7 @@ export function buildIslandWorld(
   const caveLight = new THREE.PointLight(0x38bdf8, 2.2, 16, 1.5);
   caveLight.position.set(0, 2.6, -1.8);
   caveGroup.add(caveLight);
-  scene.add(caveGroup);
+  overworldGroup.add(caveGroup);
   colliders.push({ x: CAVE_POS.x - 4.2, z: CAVE_POS.z, radius: 2.2 });
   colliders.push({ x: CAVE_POS.x + 4.2, z: CAVE_POS.z, radius: 2.2 });
   colliders.push({ x: CAVE_POS.x, z: CAVE_POS.z - 4.8, radius: 3.0 });
@@ -665,7 +676,7 @@ export function buildIslandWorld(
     const groundY = getTerrainHeight(cx, cz);
     const mesh = createCaveCeilingClusterMesh();
     mesh.position.set(cx, cy, cz);
-    scene.add(mesh);
+    overworldGroup.add(mesh);
     caveCeilings.push({
       id: `cave_ceiling_${idx}`,
       x: cx,
@@ -733,7 +744,7 @@ export function buildIslandWorld(
   expGroup.add(desk, journal);
   colliders.push({ x: EXPEDITION_POS.x + 1.6, z: EXPEDITION_POS.z + 1.6, radius: 1.0 });
 
-  scene.add(expGroup);
+  overworldGroup.add(expGroup);
   const expeditionJournalPos = new THREE.Vector3(
     EXPEDITION_POS.x + 1.6,
     expY + 0.85,
@@ -859,7 +870,7 @@ export function buildIslandWorld(
   const barnWarmFill = new THREE.PointLight(0xfbbf24, 1.35, 9.5, 1.6);
   barnWarmFill.position.set(0.3, 2.35, 0);
   barnGroup.add(barnWarmFill);
-  scene.add(barnGroup);
+  overworldGroup.add(barnGroup);
 
   // Barn back/side colliders (keeping east doorway open so player can walk inside!)
   colliders.push({ x: barnX - 2.6, z: barnZ, radius: 1.5 });
@@ -872,14 +883,14 @@ export function buildIslandWorld(
   paddockPatch.rotation.x = -Math.PI / 2;
   paddockPatch.position.set(-31.5, homesteadY + 0.025, 66.5);
   paddockPatch.receiveShadow = true;
-  scene.add(paddockPatch);
+  overworldGroup.add(paddockPatch);
 
   // Farmyard dirt patch for Rooster scratching & muddy pig pen corner
   const yardDirt = new THREE.Mesh(new THREE.CircleGeometry(4.6, 18), dustyDirtMat);
   yardDirt.rotation.x = -Math.PI / 2;
   yardDirt.position.set(-19.5, homesteadY + 0.024, 60.5);
   yardDirt.receiveShadow = true;
-  scene.add(yardDirt);
+  overworldGroup.add(yardDirt);
 
   const addFenceSpan = (ax: number, az: number, bx: number, bz: number) => {
     const len = Math.hypot(bx - ax, bz - az);
@@ -893,7 +904,7 @@ export function buildIslandWorld(
       const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.28, 0.16), darkBeamMat);
       post.position.set(px, py + 0.64, pz);
       post.castShadow = true;
-      scene.add(post);
+      overworldGroup.add(post);
       colliders.push({ x: px, z: pz, radius: 0.25 });
     }
     const mx = (ax + bx) / 2;
@@ -904,7 +915,7 @@ export function buildIslandWorld(
       rail.position.set(mx, my + ry, mz);
       rail.rotation.y = angle;
       rail.castShadow = true;
-      scene.add(rail);
+      overworldGroup.add(rail);
     });
   };
   // Rustic split-rail fence segments around dusty paddock (open entrance on east side)
@@ -922,7 +933,7 @@ export function buildIslandWorld(
   goatCrate.position.set(crateX, crateBaseY + 0.34, crateZ);
   goatCrate.castShadow = true;
   goatCrate.receiveShadow = true;
-  scene.add(goatCrate);
+  overworldGroup.add(goatCrate);
   colliders.push({ x: crateX, z: crateZ, radius: 0.68 });
 
   // Muddy Farm Pond beside the barnyard for Pekin Ducks
@@ -939,7 +950,7 @@ export function buildIslandWorld(
   );
   pondWater.rotation.x = -Math.PI / 2;
   pondWater.position.set(FARM_POND_POS.x, FARM_POND_POS.waterY, FARM_POND_POS.z);
-  scene.add(muddyRing, pondWater);
+  overworldGroup.add(muddyRing, pondWater);
 
   // 8c. Wild Animal Habitats (Misty Lake, Snowy Woodland, Rocky Pine Bank, Autumn Grove, Murky Swamp, Savanna Tall Grass, Dead Oak Perch)
   // 1) Misty Azure Lake surface wisps (Bald Eagle soaring backdrop)
@@ -961,7 +972,7 @@ export function buildIslandWorld(
       LAKE_CENTER.waterY + 0.34 + m * 0.14,
       LAKE_CENTER.z + (m - 1.5) * 1.1,
     );
-    scene.add(mistRing);
+    overworldGroup.add(mistRing);
   }
 
   // 2) Snowy Woodland Plateau (Timber Wolves)
@@ -997,7 +1008,7 @@ export function buildIslandWorld(
       snowTop.position.y = tierY + 0.48 * sc;
       tree.add(bough, snowTop);
     }
-    scene.add(tree);
+    overworldGroup.add(tree);
     colliders.push({ x: tx, z: tz, radius: 0.34 * sc });
   });
   [
@@ -1015,7 +1026,7 @@ export function buildIslandWorld(
     const snowDrift = new THREE.Mesh(new THREE.DodecahedronGeometry(0.86, 1), snowCapMat);
     snowDrift.scale.set(1.18, 0.35, 0.96);
     snowDrift.position.set(rx, ry + 0.85, rz);
-    scene.add(rock, snowDrift);
+    overworldGroup.add(rock, snowDrift);
     colliders.push({ x: rx, z: rz, radius: 1.05 });
   });
 
@@ -1045,7 +1056,7 @@ export function buildIslandWorld(
       bough.castShadow = true;
       pine.add(bough);
     }
-    scene.add(pine);
+    overworldGroup.add(pine);
     colliders.push({ x: px, z: pz, radius: 0.34 * sc });
   });
   [
@@ -1059,7 +1070,7 @@ export function buildIslandWorld(
     cobble.scale.set(1.3, 0.65, 1.1);
     cobble.position.set(rx, ry + 0.3 * sc, rz);
     cobble.castShadow = true;
-    scene.add(cobble);
+    overworldGroup.add(cobble);
     colliders.push({ x: rx, z: rz, radius: 0.8 * sc });
   });
 
@@ -1095,7 +1106,7 @@ export function buildIslandWorld(
       crown.castShadow = true;
       tree.add(crown);
     }
-    scene.add(tree);
+    overworldGroup.add(tree);
     colliders.push({ x: ax, z: az, radius: 0.32 * sc });
   });
   // Undergrowth ferns & fallen autumn leaves on ground
@@ -1113,7 +1124,7 @@ export function buildIslandWorld(
     leafPatch.rotation.x = -Math.PI / 2;
     leafPatch.rotation.z = rand() * Math.PI * 2;
     leafPatch.position.set(lx, ly + 0.03, lz);
-    scene.add(leafPatch);
+    overworldGroup.add(leafPatch);
   }
   for (let u = 0; u < 10; u++) {
     const ua = (u / 10) * Math.PI * 2 + 0.3;
@@ -1130,7 +1141,7 @@ export function buildIslandWorld(
       frond.rotation.y = (f / 4) * Math.PI * 2;
       bush.add(frond);
     }
-    scene.add(bush);
+    overworldGroup.add(bush);
   }
 
   // 5) Murky Jungle Swamp Lagoon (Saltwater Crocodile territory)
@@ -1157,7 +1168,7 @@ export function buildIslandWorld(
   );
   swampWater.rotation.x = -Math.PI / 2;
   swampWater.position.set(SWAMP_POS.x, SWAMP_POS.waterY, SWAMP_POS.z);
-  scene.add(swampBankRing, swampWater);
+  overworldGroup.add(swampBankRing, swampWater);
 
   // Mossy swamp logs & dense jungle reeds along lagoon edge
   const swampReedMat = new THREE.MeshStandardMaterial({ color: 0x365314, roughness: 0.86 });
@@ -1174,12 +1185,12 @@ export function buildIslandWorld(
       reed.rotation.z = (s - 2) * 0.1;
       clump.add(reed);
     }
-    scene.add(clump);
+    overworldGroup.add(clump);
   }
   const sunkenLog = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.34, 4.4, 8), snowBarkMat);
   sunkenLog.position.set(SWAMP_POS.x - 4.2, SWAMP_POS.waterY + 0.02, SWAMP_POS.z + 3.8);
   sunkenLog.rotation.set(0.06, 0.72, Math.PI / 2);
-  scene.add(sunkenLog);
+  overworldGroup.add(sunkenLog);
 
   // 6) Tall Golden Savanna Grass Patch (African Lion prowling & Bison windswept prairie)
   const goldenSavannaBladeGeo = new THREE.ConeGeometry(0.08, 1.32, 4);
@@ -1209,7 +1220,7 @@ export function buildIslandWorld(
   savannaGrassMesh.instanceMatrix.needsUpdate = true;
   if (savannaGrassMesh.instanceColor) savannaGrassMesh.instanceColor.needsUpdate = true;
   savannaGrassMesh.computeBoundingSphere();
-  scene.add(savannaGrassMesh);
+  overworldGroup.add(savannaGrassMesh);
 
   // 7) Gnarled Dead Oak Tree & Exposed Perch Branch (Great Horned Owl at DEAD_OAK_POS = (18, 78))
   const deadOakBaseY = getTerrainHeight(DEAD_OAK_POS.x, DEAD_OAK_POS.z);
@@ -1244,7 +1255,7 @@ export function buildIslandWorld(
   upperLimbR.rotation.z = -0.52;
   upperLimbR.rotation.x = -0.38;
   deadOakGroup.add(owlBranch, upperLimbL, upperLimbR);
-  scene.add(deadOakGroup);
+  overworldGroup.add(deadOakGroup);
   colliders.push({ x: DEAD_OAK_POS.x, z: DEAD_OAK_POS.z, radius: 0.7 });
 
   // 9. Interactive Realistic Trees, Breakable Rocks & Resource Nodes
@@ -1698,7 +1709,7 @@ export function buildIslandWorld(
     const handle = buildNodeMesh(kind, scale);
     handle.root.position.set(x, y, z);
     handle.root.rotation.y = rand() * Math.PI * 2;
-    scene.add(handle.root);
+    overworldGroup.add(handle.root);
     resourceMeshes.set(id, handle.root);
     resourceHandles.set(id, handle);
 
@@ -1805,7 +1816,7 @@ export function buildIslandWorld(
       }
     }
   }
-  scene.add(wheatFenceGroup);
+  overworldGroup.add(wheatFenceGroup);
 
   // 20 Dense Harvestable Wheat Patches inside the Wheatfield (4 rows x 5 cols)
   for (let row = 0; row < 4; row++) {
@@ -1845,7 +1856,7 @@ export function buildIslandWorld(
   const farmerGroundY = getTerrainHeight(FARMER_POS.x, FARMER_POS.z);
   const { group: farmerNpcGroup, head: farmerHead, armR: farmerArmR } = createFarmerNpcModel();
   farmerNpcGroup.position.set(FARMER_POS.x, farmerGroundY, FARMER_POS.z);
-  scene.add(farmerNpcGroup);
+  overworldGroup.add(farmerNpcGroup);
   colliders.push({ x: FARMER_POS.x, z: FARMER_POS.z, radius: 0.45 });
 
   // Rustic Wooden Farm Market Stall right behind Farmer NPC
@@ -1889,7 +1900,7 @@ export function buildIslandWorld(
     produce.position.set(cx, 1.12, 0.1);
     stallGroup.add(tray, produce);
   });
-  scene.add(stallGroup);
+  overworldGroup.add(stallGroup);
   colliders.push({ x: FARMER_POS.x - 0.9, z: FARMER_POS.z - 1.9, radius: 0.7 });
   colliders.push({ x: FARMER_POS.x + 0.9, z: FARMER_POS.z - 1.9, radius: 0.7 });
 
@@ -1909,7 +1920,7 @@ export function buildIslandWorld(
       dirt.position.y = 0.07;
       dirt.receiveShadow = true;
       bed.add(rim, dirt);
-      scene.add(bed);
+      overworldGroup.add(bed);
       soilPlots.push({ x: gx, y: gy + 0.15, z: gz });
     }
   }
@@ -1922,141 +1933,285 @@ export function buildIslandWorld(
     HILL_HOUSE_POS.z,
     woodTex,
   );
-  scene.add(hillHouse.group);
+  overworldGroup.add(hillHouse.group);
   hillHouse.colliders.forEach((hc) => colliders.push(hc));
 
-  // E. Structured Vehicle Garage Clearing Right Beside the Shelter (VEHICLE_GARAGE_POS)
+  // E. Expanded Covered 3-Bay Custom Vehicle Garage Zone Beside the Shelter (VEHICLE_GARAGE_POS)
   const garageGroundY = getTerrainHeight(VEHICLE_GARAGE_POS.x, VEHICLE_GARAGE_POS.z);
   const garageGroup = new THREE.Group();
   garageGroup.position.set(VEHICLE_GARAGE_POS.x, garageGroundY, VEHICLE_GARAGE_POS.z);
 
-  const padMat = new THREE.MeshStandardMaterial({ color: 0x4b4844, map: rockTex, roughness: 0.9 });
-  const timberPostMat = new THREE.MeshStandardMaterial({ color: 0x6b4226, map: woodTex, roughness: 0.85 });
-  const garageRoofMat = new THREE.MeshStandardMaterial({ color: 0x3f4c54, roughness: 0.68, metalness: 0.35 });
-  const bayLineMat = new THREE.MeshStandardMaterial({
-    color: 0xf59e0b,
-    emissive: 0xd97706,
-    emissiveIntensity: 0.55,
-    roughness: 0.3,
+  const concreteBaseMat = new THREE.MeshStandardMaterial({
+    color: 0x57534e,
+    map: rockTex,
+    roughness: 0.88,
   });
-  const bayCyanMat = new THREE.MeshStandardMaterial({
-    color: 0x38bdf8,
-    emissive: 0x0284c7,
-    emissiveIntensity: 0.45,
-    roughness: 0.3,
+  const concreteBayPadMat = new THREE.MeshStandardMaterial({
+    color: 0x3f3f46,
+    roughness: 0.72,
+    metalness: 0.1,
   });
-  const tireMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.85 });
-  const toolMetalMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8, roughness: 0.28 });
+  const apronMat = new THREE.MeshStandardMaterial({
+    color: 0x6b6760,
+    map: rockTex,
+    roughness: 0.92,
+  });
+  const steelFrameMat = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    roughness: 0.36,
+    metalness: 0.78,
+  });
+  const timberPostMat = new THREE.MeshStandardMaterial({
+    color: 0x6b4226,
+    map: woodTex,
+    roughness: 0.85,
+  });
+  const garageRoofMat = new THREE.MeshStandardMaterial({
+    color: 0x334155,
+    roughness: 0.55,
+    metalness: 0.48,
+  });
+  const bayTrimMats = [
+    new THREE.MeshStandardMaterial({
+      color: 0xf59e0b,
+      emissive: 0xd97706,
+      emissiveIntensity: 0.65,
+      roughness: 0.25,
+    }),
+    new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      emissive: 0x0284c7,
+      emissiveIntensity: 0.65,
+      roughness: 0.25,
+    }),
+    new THREE.MeshStandardMaterial({
+      color: 0xe879f9,
+      emissive: 0xc026d3,
+      emissiveIntensity: 0.7,
+      roughness: 0.25,
+    }),
+  ];
+  const tireMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.88 });
+  const toolMetalMat = new THREE.MeshStandardMaterial({
+    color: 0xe2e8f0,
+    metalness: 0.88,
+    roughness: 0.2,
+  });
+  const toolChestRedMat = new THREE.MeshStandardMaterial({
+    color: 0xb91c1c,
+    roughness: 0.32,
+    metalness: 0.55,
+  });
 
-  // Leveled concrete/stone pad (14.5m x 10.6m)
-  const garagePad = new THREE.Mesh(new THREE.BoxGeometry(14.5, 0.16, 10.6), padMat);
+  // Main leveled concrete foundation pad (22.0m x 13.0m)
+  const garagePad = new THREE.Mesh(new THREE.BoxGeometry(22.0, 0.18, 13.0), concreteBaseMat);
   garagePad.position.set(0, 0.04, 0);
   garagePad.receiveShadow = true;
   garageGroup.add(garagePad);
 
-  // Dual illuminated parking bay guides (Bay A: x = -3.1, Bay B: x = +3.1)
-  [-3.1, 3.1].forEach((bx, bayIdx) => {
-    const lineMat = bayIdx === 0 ? bayLineMat : bayCyanMat;
-    [-2.2, 2.2].forEach((sideOffset) => {
-      const sideLine = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.03, 6.2), lineMat);
-      sideLine.position.set(bx + sideOffset, 0.135, 0.4);
+  // Wide beveled concrete driveway apron leading south (+Z) onto the island trails & beach
+  const driveApron = new THREE.Mesh(new THREE.BoxGeometry(22.6, 0.12, 3.8), apronMat);
+  driveApron.position.set(0, 0.01, 7.8);
+  driveApron.rotation.x = 0.045;
+  driveApron.receiveShadow = true;
+  garageGroup.add(driveApron);
+
+  // 3 Distinct Covered Custom Bays: Bay 1 (x = -6.0 Lowrider), Bay 2 (x = 0.0 DONK), Bay 3 (x = +6.0 SLAB)
+  const bayCenters = [-6.0, 0.0, 6.0];
+  bayCenters.forEach((bx, bayIdx) => {
+    const trimMat = bayTrimMats[bayIdx];
+    const bayPad = new THREE.Mesh(new THREE.BoxGeometry(5.0, 0.04, 8.2), concreteBayPadMat);
+    bayPad.position.set(bx, 0.145, 0.6);
+    bayPad.receiveShadow = true;
+    garageGroup.add(bayPad);
+
+    [-2.42, 2.42].forEach((sideOffset) => {
+      const sideLine = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.025, 8.0), trimMat);
+      sideLine.position.set(bx + sideOffset, 0.17, 0.6);
       garageGroup.add(sideLine);
     });
-    const backStop = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.14, 0.26), lineMat);
-    backStop.position.set(bx, 0.18, -2.7);
+    const frontApronLine = new THREE.Mesh(new THREE.BoxGeometry(4.95, 0.025, 0.14), trimMat);
+    frontApronLine.position.set(bx, 0.17, 4.55);
+    garageGroup.add(frontApronLine);
+
+    const backStop = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.16, 0.28), trimMat);
+    backStop.position.set(bx, 0.22, -3.35);
     garageGroup.add(backStop);
   });
 
-  // Heavy Timber Canopy Pillars & Open Drive-In Archway
-  const postPositions: [number, number][] = [
-    [-6.6, -4.6],
-    [0, -4.6],
-    [6.6, -4.6],
-    [-6.6, 4.6],
-    [6.6, 4.6],
-  ];
-  postPositions.forEach(([px, pz]) => {
-    const post = new THREE.Mesh(new THREE.BoxGeometry(0.32, 4.2, 0.32), timberPostMat);
-    post.position.set(px, 2.15, pz);
-    post.castShadow = true;
-    garageGroup.add(post);
-    colliders.push({
-      x: VEHICLE_GARAGE_POS.x + px,
-      z: VEHICLE_GARAGE_POS.z + pz,
-      radius: 0.34,
+  // Steel-and-Timber Canopy Columns (wide 6m open clear-span per bay, zero pillars blocking drive-in)
+  const colXList = [-10.2, -3.0, 3.0, 10.2];
+  const colZList = [-5.8, 5.4];
+  colXList.forEach((px) => {
+    colZList.forEach((pz) => {
+      // Skip inner center-front? Actually x = -3.0 & +3.0 sit neatly BETWEEN bays (-6, 0, +6), giving 5.6m clear bay openings!
+      const plinth = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.32, 0.56), concreteBaseMat);
+      plinth.position.set(px, 0.26, pz);
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.32, 4.7, 0.32), steelFrameMat);
+      post.position.set(px, 2.55, pz);
+      post.castShadow = true;
+      garageGroup.add(plinth, post);
+      colliders.push({
+        x: VEHICLE_GARAGE_POS.x + px,
+        z: VEHICLE_GARAGE_POS.z + pz,
+        radius: 0.38,
+      });
     });
   });
 
-  // Top beams + angled canopy roof (open front driveway facing South +Z)
-  const frontBeam = new THREE.Mesh(new THREE.BoxGeometry(13.8, 0.35, 0.35), timberPostMat);
-  frontBeam.position.set(0, 4.15, 4.6);
-  const backBeam = new THREE.Mesh(new THREE.BoxGeometry(13.8, 0.35, 0.35), timberPostMat);
-  backBeam.position.set(0, 4.15, -4.6);
-  const sideBeamL = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, 9.6), timberPostMat);
-  sideBeamL.position.set(-6.6, 4.15, 0);
-  const sideBeamR = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, 9.6), timberPostMat);
-  sideBeamR.position.set(6.6, 4.15, 0);
-  const canopyRoof = new THREE.Mesh(new THREE.BoxGeometry(14.8, 0.18, 10.6), garageRoofMat);
-  canopyRoof.position.set(0, 4.55, 0);
-  canopyRoof.rotation.x = -0.08;
+  // Back workshop low retaining wall + timber wainscot + steel roof trusses
+  const backWall = new THREE.Mesh(new THREE.BoxGeometry(20.6, 2.4, 0.28), concreteBaseMat);
+  backWall.position.set(0, 1.3, -5.85);
+  backWall.castShadow = true;
+  backWall.receiveShadow = true;
+  garageGroup.add(backWall);
+
+  const frontHeaderBeam = new THREE.Mesh(new THREE.BoxGeometry(21.2, 0.42, 0.38), steelFrameMat);
+  frontHeaderBeam.position.set(0, 4.85, 5.4);
+  const backHeaderBeam = new THREE.Mesh(new THREE.BoxGeometry(21.2, 0.42, 0.38), steelFrameMat);
+  backHeaderBeam.position.set(0, 4.85, -5.8);
+  garageGroup.add(frontHeaderBeam, backHeaderBeam);
+
+  colXList.forEach((px) => {
+    const trussBeam = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.34, 11.6), steelFrameMat);
+    trussBeam.position.set(px, 4.85, -0.2);
+    garageGroup.add(trussBeam);
+  });
+
+  // Sloped corrugated steel canopy roof (22.6m x 13.4m)
+  const canopyRoof = new THREE.Mesh(new THREE.BoxGeometry(22.6, 0.2, 13.4), garageRoofMat);
+  canopyRoof.position.set(0, 5.22, -0.2);
+  canopyRoof.rotation.x = -0.07;
   canopyRoof.castShadow = true;
   canopyRoof.receiveShadow = true;
-  garageGroup.add(frontBeam, backBeam, sideBeamL, sideBeamR, canopyRoof);
+  garageGroup.add(canopyRoof);
 
-  // Warm overhead garage work light
-  const garageLight = new THREE.PointLight(0xffedd5, 1.5, 22, 1.35);
-  garageLight.position.set(0, 3.85, 0.4);
-  garageGroup.add(garageLight);
+  // Overhead Illuminated Bay Signboard Beam & 3 Industrial Floodlight Fixtures
+  const signBacking = new THREE.Mesh(
+    new THREE.BoxGeometry(9.6, 0.62, 0.16),
+    new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.4, metalness: 0.6 }),
+  );
+  signBacking.position.set(0, 5.15, 5.65);
+  const signNeonBar = new THREE.Mesh(
+    new THREE.BoxGeometry(9.0, 0.12, 0.08),
+    new THREE.MeshStandardMaterial({
+      color: 0xfef08a,
+      emissive: 0xf59e0b,
+      emissiveIntensity: 1.15,
+    }),
+  );
+  signNeonBar.position.set(0, 5.15, 5.74);
+  garageGroup.add(signBacking, signNeonBar);
 
-  // Interactive Mechanic Repair & Crafting Workbench at center-north (-33, 85.9)
+  const floodBulbMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    emissive: 0xfffbeb,
+    emissiveIntensity: 1.5,
+  });
+  bayCenters.forEach((bx, bayIdx) => {
+    // Ceiling bay light housing + warm/cool industrial floodlight
+    const hood = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.14, 0.45), steelFrameMat);
+    hood.position.set(bx, 4.72, 0.5);
+    const bulb = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.08, 0.32), floodBulbMat);
+    bulb.position.set(bx, 4.64, 0.5);
+    garageGroup.add(hood, bulb);
+
+    // Exterior front overhang floodlight above each bay entrance
+    const extArm = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.75), steelFrameMat);
+    extArm.position.set(bx, 4.82, 5.9);
+    const extLamp = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.16, 0.28), floodBulbMat);
+    extLamp.position.set(bx, 4.76, 6.22);
+    extLamp.rotation.x = 0.45;
+    garageGroup.add(extArm, extLamp);
+
+    const bayLight = new THREE.PointLight(
+      bayIdx === 0 ? 0xffedd5 : bayIdx === 1 ? 0xe0f2fe : 0xfaf5ff,
+      1.65,
+      20,
+      1.3,
+    );
+    bayLight.position.set(bx, 4.35, 1.2);
+    garageGroup.add(bayLight);
+  });
+
+  // Rolling Red/Chrome Mechanic Tool Chests & Floor Jack along back wall
+  [-9.1, 9.1].forEach((tx) => {
+    const chestGroup = new THREE.Group();
+    chestGroup.position.set(tx, 0.13, -4.95);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.45, 1.15, 0.68), toolChestRedMat);
+    body.position.y = 0.62;
+    body.castShadow = true;
+    const topBox = new THREE.Mesh(new THREE.BoxGeometry(1.38, 0.55, 0.58), toolChestRedMat);
+    topBox.position.y = 1.47;
+    topBox.castShadow = true;
+    for (let d = 0; d < 4; d++) {
+      const pull = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.05, 0.06), toolMetalMat);
+      pull.position.set(0, 0.32 + d * 0.24, 0.36);
+      chestGroup.add(pull);
+    }
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.54), toolMetalMat);
+    handle.position.set(tx < 0 ? 0.78 : -0.78, 1.05, 0);
+    chestGroup.add(body, topBox, handle);
+    garageGroup.add(chestGroup);
+  });
+
+  // Hydraulic Floor Jack beside Bay 1
+  const jackBody = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.14, 0.85), toolChestRedMat);
+  jackBody.position.set(-2.2, 0.2, -3.9);
+  const jackHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1.05, 6), toolMetalMat);
+  jackHandle.position.set(-2.2, 0.62, -4.32);
+  jackHandle.rotation.x = 0.45;
+  garageGroup.add(jackBody, jackHandle);
+
+  // Interactive Mechanic Repair & Assembly Workbench at center-north
   const benchGroup = new THREE.Group();
-  benchGroup.position.set(0, 0.12, -4.0);
-  const benchTable = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.92, 1.0), timberPostMat);
-  benchTable.position.y = 0.46;
+  benchGroup.position.set(0, 0.13, -5.0);
+  const benchTable = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.94, 1.05), timberPostMat);
+  benchTable.position.y = 0.47;
   benchTable.castShadow = true;
   const benchVise = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.28, 0.35), toolMetalMat);
-  benchVise.position.set(-0.75, 1.05, 0.15);
+  benchVise.position.set(-0.95, 1.08, 0.15);
   const benchLamp = new THREE.Mesh(
-    new THREE.SphereGeometry(0.14, 8, 8),
-    new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0xf59e0b, emissiveIntensity: 1.0 }),
+    new THREE.SphereGeometry(0.15, 8, 8),
+    new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0xf59e0b, emissiveIntensity: 1.1 }),
   );
-  benchLamp.position.set(0.85, 1.18, -0.2);
+  benchLamp.position.set(1.05, 1.2, -0.2);
   benchGroup.add(benchTable, benchVise, benchLamp);
   garageGroup.add(benchGroup);
   colliders.push({
     x: VEHICLE_GARAGE_POS.x,
-    z: VEHICLE_GARAGE_POS.z - 4.0,
-    radius: 0.85,
+    z: VEHICLE_GARAGE_POS.z - 5.0,
+    radius: 0.95,
   });
 
-  // Spare Tires & Fuel Cans neatly stacked in West corner
-  for (let t = 0; t < 3; t++) {
-    const tire = new THREE.Mesh(new THREE.TorusGeometry(0.36, 0.13, 8, 14), tireMat);
+  // Spare Tires, Chrome Rims & Fuel Drums in West/East Service Corners
+  for (let t = 0; t < 4; t++) {
+    const tire = new THREE.Mesh(new THREE.TorusGeometry(0.38, 0.14, 8, 16), tireMat);
     tire.rotation.x = Math.PI / 2;
-    tire.position.set(-5.6, 0.24 + t * 0.24, -3.7);
+    tire.position.set(-7.6, 0.26 + t * 0.25, -4.85);
     tire.castShadow = true;
     garageGroup.add(tire);
   }
-  const fuelCanMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.45, metalness: 0.25 });
-  [-4.6, -4.15].forEach((fx) => {
+  const fuelCanMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.42, metalness: 0.3 });
+  [-4.4, -3.9, 4.2, 4.7].forEach((fx) => {
     const can = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.56, 0.24), fuelCanMat);
-    can.position.set(fx, 0.4, -4.0);
+    can.position.set(fx, 0.42, -5.1);
     can.castShadow = true;
     garageGroup.add(can);
   });
 
-  scene.add(garageGroup);
+  overworldGroup.add(garageGroup);
 
   const garagePos = new THREE.Vector3(VEHICLE_GARAGE_POS.x, garageGroundY, VEHICLE_GARAGE_POS.z);
   const garageBenchPos = new THREE.Vector3(
     VEHICLE_GARAGE_POS.x,
-    garageGroundY + 0.12,
-    VEHICLE_GARAGE_POS.z - 4.0,
+    garageGroundY + 0.13,
+    VEHICLE_GARAGE_POS.z - 5.0,
   );
 
-  // Base Armory Supply Chest tucked neatly beside the Vehicle Garage
-  const armoryX = VEHICLE_GARAGE_POS.x + 5.6;
-  const armoryZ = VEHICLE_GARAGE_POS.z - 3.2;
+  // Base Armory Supply Chest tucked neatly beside the East flank of the Expanded Vehicle Garage
+  const armoryX = VEHICLE_GARAGE_POS.x + 12.6;
+  const armoryZ = VEHICLE_GARAGE_POS.z - 2.2;
   const armoryY = getTerrainHeight(armoryX, armoryZ);
   const armoryChest = createShipwreckLootChest(
     'base_armory',
@@ -2086,7 +2241,15 @@ export function buildIslandWorld(
     if (Math.hypot(x - WHEATFIELD_POS.x, z - WHEATFIELD_POS.z) < 11.5) continue;
     if (Math.hypot(x - FARMER_POS.x, z - FARMER_POS.z) < 10.5) continue;
     if (Math.hypot(x - HILL_HOUSE_POS.x, z - HILL_HOUSE_POS.z) < 16.5) continue;
-    if (Math.hypot(x - VEHICLE_GARAGE_POS.x, z - VEHICLE_GARAGE_POS.z) < 15.5) continue;
+    if (Math.hypot(x - VEHICLE_GARAGE_POS.x, z - VEHICLE_GARAGE_POS.z) < 20.0) continue;
+    if (
+      x >= VEHICLE_GARAGE_POS.x - 18 &&
+      x <= VEHICLE_GARAGE_POS.x + 28 &&
+      z >= VEHICLE_GARAGE_POS.z - 6 &&
+      z <= VEHICLE_GARAGE_POS.z + 24
+    ) {
+      continue; // Keep garage wide driveways to beaches & trails completely clear of trees/boulders
+    }
     if (
       x >= HILL_HOUSE_POS.x + 3 &&
       x <= HILL_HOUSE_POS.x + 23 &&
@@ -2218,7 +2381,15 @@ export function buildIslandWorld(
     ) {
       continue;
     }
-    if (Math.hypot(px - VEHICLE_GARAGE_POS.x, pz - VEHICLE_GARAGE_POS.z) < 14.0) continue;
+    if (Math.hypot(px - VEHICLE_GARAGE_POS.x, pz - VEHICLE_GARAGE_POS.z) < 19.5) continue;
+    if (
+      px >= VEHICLE_GARAGE_POS.x - 18 &&
+      px <= VEHICLE_GARAGE_POS.x + 28 &&
+      pz >= VEHICLE_GARAGE_POS.z - 6 &&
+      pz <= VEHICLE_GARAGE_POS.z + 24
+    ) {
+      continue;
+    }
 
     if (gPlaced < grassCount && (biome === 'forest' || biome === 'grassland')) {
       dummy.position.set(px, py, pz);
@@ -2244,12 +2415,12 @@ export function buildIslandWorld(
   grassInstanced.instanceMatrix.needsUpdate = true;
   if (grassInstanced.instanceColor) grassInstanced.instanceColor.needsUpdate = true;
   grassInstanced.computeBoundingSphere();
-  scene.add(grassInstanced);
+  overworldGroup.add(grassInstanced);
 
   pebbleInstanced.count = pPlaced;
   pebbleInstanced.instanceMatrix.needsUpdate = true;
   pebbleInstanced.computeBoundingSphere();
-  scene.add(pebbleInstanced);
+  overworldGroup.add(pebbleInstanced);
 
   return {
     terrainMesh,
@@ -2281,5 +2452,6 @@ export function buildIslandWorld(
     wheatfieldPos: new THREE.Vector3(WHEATFIELD_POS.x, wheatY, WHEATFIELD_POS.z),
     caveCeilings,
     shipwreckChests,
+    overworldGroup,
   };
 }

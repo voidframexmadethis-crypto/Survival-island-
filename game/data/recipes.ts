@@ -565,6 +565,75 @@ export const CRAFTING_RECIPES: CraftingRecipe[] = [
     ],
     description: 'Fabricate 2 Modular Vehicle Kits for building custom Land, Boat, and Gyro Airships.',
   },
+  {
+    id: 'craft_portal_gun',
+    resultItemId: 'portal_gun',
+    resultQuantity: 1,
+    category: 'tools',
+    requiresTable: false,
+    craftTimeSeconds: 2.2,
+    ingredients: [
+      { itemId: 'stone', quantity: 3 },
+      { itemId: 'flint', quantity: 2 },
+      { itemId: 'wood', quantity: 2 },
+    ],
+    description:
+      'Assemble a Dimensional Portal Gun capable of opening swirling warp portals to Space, Nether, Gold, Diamond, Alien, and distant Islands.',
+  },
+  {
+    id: 'craft_inferno_blade',
+    resultItemId: 'inferno_blade',
+    resultQuantity: 1,
+    category: 'weapons',
+    requiresTable: false,
+    craftTimeSeconds: 2.4,
+    ingredients: [
+      { itemId: 'nether_ember', quantity: 2 },
+      { itemId: 'metal_ore', quantity: 2 },
+      { itemId: 'flint', quantity: 2 },
+    ],
+    description: 'Forge a blazing Netherite Inferno Blade from Hellfire Embers.',
+  },
+  {
+    id: 'craft_diamond_ammo',
+    resultItemId: 'diamond_ammo',
+    resultQuantity: 16,
+    category: 'weapons',
+    requiresTable: false,
+    craftTimeSeconds: 1.5,
+    ingredients: [
+      { itemId: 'diamond_crystal', quantity: 1 },
+      { itemId: 'ammo', quantity: 8 },
+    ],
+    description: 'Craft 16 Diamond-Tipped armor-piercing cartridges (+55% weapon damage).',
+  },
+  {
+    id: 'craft_crystal_armor',
+    resultItemId: 'crystal_armor',
+    resultQuantity: 1,
+    category: 'survival',
+    requiresTable: false,
+    craftTimeSeconds: 2.4,
+    ingredients: [
+      { itemId: 'diamond_crystal', quantity: 3 },
+      { itemId: 'hide', quantity: 2 },
+    ],
+    description: 'Craft Diamond Crystal Armor (+150 Shield absorbing 55% incoming damage).',
+  },
+  {
+    id: 'craft_alien_plasma_gun',
+    resultItemId: 'alien_plasma_gun',
+    resultQuantity: 1,
+    category: 'weapons',
+    requiresTable: false,
+    craftTimeSeconds: 2.6,
+    ingredients: [
+      { itemId: 'alien_core', quantity: 2 },
+      { itemId: 'space_gem', quantity: 2 },
+      { itemId: 'metal_ore', quantity: 3 },
+    ],
+    description: 'Engineer a rapid-fire Alien Plasma Gun from salvaged Xenotech Cores.',
+  },
 ];
 
 export const COOKING_RECIPES: CookingRecipe[] = [

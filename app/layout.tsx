@@ -62,7 +62,7 @@ export default function RootLayout({
       className={`${cinzel.variable} ${jakarta.variable} ${jetbrainsMono.variable}`}
     >
       <body
-        className="bg-stone-950 text-stone-100 antialiased selection:bg-amber-500/30 overflow-hidden"
+        className="bg-stone-950 text-stone-100 antialiased selection:bg-amber-500/30 overflow-x-hidden overflow-y-scroll"
         suppressHydrationWarning
       >
         {children}

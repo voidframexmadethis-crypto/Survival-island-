@@ -28,6 +28,12 @@ import {
   createExpandedCreatureModel,
   isExpandedCreatureSpecies,
 } from './expandedCreatureModels';
+import {
+  PortalGunMeshHandle,
+  createAlienPlasmaGunFirstPersonMesh,
+  createInfernoBladeMesh,
+  createPortalGunFirstPersonMesh,
+} from './multiverseModels';
 
 let cachedAnimalTextures: {
   holstein: THREE.CanvasTexture;
@@ -82,6 +88,9 @@ export interface FirstPersonHandsRig {
   sickleBlade: THREE.Mesh;
   warhammerHead: THREE.Group;
   gunMesh: THREE.Group;
+  portalGunHandle: PortalGunMeshHandle;
+  alienPlasmaGunMesh: THREE.Group;
+  infernoBladeMesh: THREE.Group;
   consumableGroup: THREE.Group;
   foodMesh: THREE.Mesh;
   foodMat: THREE.MeshStandardMaterial;
@@ -333,6 +342,18 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
   gunMesh.visible = false;
   toolGroup.add(gunMesh);
 
+  const portalGunHandle = createPortalGunFirstPersonMesh();
+  portalGunHandle.group.visible = false;
+  toolGroup.add(portalGunHandle.group);
+
+  const alienPlasmaGunMesh = createAlienPlasmaGunFirstPersonMesh();
+  alienPlasmaGunMesh.visible = false;
+  toolGroup.add(alienPlasmaGunMesh);
+
+  const infernoBladeMesh = createInfernoBladeMesh();
+  infernoBladeMesh.visible = false;
+  toolGroup.add(infernoBladeMesh);
+
   // Hand-held Consumables (3D Food Morsel & Water Bottle) for eating, drinking & bottle washing
   const consumableGroup = new THREE.Group();
   consumableGroup.position.set(-0.01, 0.04, -0.16);
@@ -406,6 +427,9 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
     sickleBlade,
     warhammerHead,
     gunMesh,
+    portalGunHandle,
+    alienPlasmaGunMesh,
+    infernoBladeMesh,
     consumableGroup,
     foodMesh,
     foodMat,
@@ -3548,11 +3572,13 @@ export function createHilltopHouse(
     w.position.set(lx, wallH / 2 + 0.06, lz);
     w.castShadow = true;
     w.receiveShadow = true;
+    w.userData.isHouseWall = true;
     const inner = new THREE.Mesh(
       new THREE.BoxGeometry(Math.max(0.06, sx - 0.03), wallH - 0.05, Math.max(0.06, sz - 0.03)),
       wallInnerMat,
     );
     inner.position.copy(w.position);
+    inner.userData.isHouseWall = true;
     group.add(w, inner);
 
     if (withColliders) {
@@ -3579,6 +3605,7 @@ export function createHilltopHouse(
   // Door header lintel above open doorway
   const doorHeader = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.75, 2.65), trimMat);
   doorHeader.position.set(4.2, 2.78, 0);
+  doorHeader.userData.isHouseWall = true;
   group.add(doorHeader);
 
   // Decorative Glazed Windows on South & West & Front walls
@@ -3616,10 +3643,12 @@ export function createHilltopHouse(
   roofPitchL.position.set(0.3, 4.05, -2.2);
   roofPitchL.rotation.x = 0.38;
   roofPitchL.castShadow = true;
+  roofPitchL.userData.isHouseWall = true;
   const roofPitchR = new THREE.Mesh(new THREE.BoxGeometry(12.2, 0.22, 5.4), roofMat);
   roofPitchR.position.set(0.3, 4.05, 2.2);
   roofPitchR.rotation.x = -0.38;
   roofPitchR.castShadow = true;
+  roofPitchR.userData.isHouseWall = true;
   const ridgeBeam = new THREE.Mesh(new THREE.BoxGeometry(12.3, 0.25, 0.35), trimMat);
   ridgeBeam.position.set(0.3, 4.95, 0);
   group.add(roofPitchL, roofPitchR, ridgeBeam);

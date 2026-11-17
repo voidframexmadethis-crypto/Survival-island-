@@ -9,6 +9,34 @@ export type BiomeId =
   | 'cave'
   | 'expedition';
 
+export type DimensionId =
+  | 'overworld'
+  | 'space'
+  | 'nether'
+  | 'gold'
+  | 'diamond'
+  | 'alien'
+  | 'island_arctic'
+  | 'island_volcanic'
+  | 'island_jungle';
+
+export interface PortalLinkState {
+  id: string;
+  pairId: string;
+  sourceDim: DimensionId;
+  targetDim: DimensionId;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  destX: number;
+  destY: number;
+  destZ: number;
+  destYaw: number;
+  isReturn: boolean;
+  createdAt: number;
+}
+
 export type WeatherType = 'clear' | 'overcast' | 'rain' | 'storm';
 
 export type ItemCategory =
@@ -186,7 +214,16 @@ export type ItemId =
   | 'fn_fal'
   | 'barrett_50'
   | 'remington_700'
-  | 'm249_saw';
+  | 'm249_saw'
+  // Dimensional Portal Gun & Multiverse Gear / Loot
+  | 'portal_gun'
+  | 'alien_plasma_gun'
+  | 'inferno_blade'
+  | 'diamond_ammo'
+  | 'crystal_armor'
+  | 'nether_ember'
+  | 'alien_core'
+  | 'diamond_crystal';
 
 export type StructuralBlockKind =
   | 'stone_block'
@@ -267,6 +304,8 @@ export interface ModularVehicleData {
   wheelScale?: number;
   hydraulicHop?: boolean;
   turboBoost?: number;
+  trunkBassEnabled?: boolean;
+  underglowColor?: string;
   x: number;
   y: number;
   z: number;
@@ -279,6 +318,7 @@ export interface ModularVehicleData {
   fuel: number; // Steam coal/wood fuel 0..100
   modules: VehicleModulePlacement[];
   cargoItems: InventorySlot[];
+  dimension?: DimensionId;
 }
 
 export interface KineticHudSummary {
@@ -302,9 +342,18 @@ export interface KineticHudSummary {
   } | null;
 }
 
+export type HydraulicMode =
+  | 'level'
+  | 'front_hop'
+  | 'rear_hop'
+  | 'left_tilt'
+  | 'right_tilt'
+  | 'lock_up';
+
 export interface ActiveVehicleHudState {
   id: string;
   name: string;
+  preset?: string;
   craftClass: 'Land Rover' | 'Steam Boat' | 'Amphibious Craft' | 'Gyro Airship' | 'Armored Rig';
   speedKmh: number;
   altitudeM: number;
@@ -316,6 +365,11 @@ export interface ActiveVehicleHudState {
   airborne: boolean;
   canFloat: boolean;
   canFly: boolean;
+  hasHydraulics: boolean;
+  hydraulicMode: HydraulicMode;
+  hasTrunkBass: boolean;
+  trunkBassOn: boolean;
+  highClearance: boolean;
   cargoUsed: number;
   cargoCapacity: number;
 }
@@ -334,6 +388,7 @@ export interface StructuralBlock {
   anchored: boolean;
   supportHops: number;
   bucklingTimer: number; // > 0 when actively buckling before detaching
+  dimension?: DimensionId;
 }
 
 export interface ItemDefinition {
@@ -368,7 +423,8 @@ export type FirearmSoundProfile =
   | 'rifle'
   | 'sniper'
   | 'lmg'
-  | 'musket';
+  | 'musket'
+  | 'plasma';
 
 export interface FirearmSpec {
   magSize: number;
@@ -486,6 +542,7 @@ export interface PlacedStructure {
   rotationY: number;
   chestItems?: InventorySlot[];
   lit?: boolean;
+  dimension?: DimensionId;
 }
 
 export interface PlantedCrop {
@@ -547,6 +604,7 @@ export interface WorldPickupSave {
   y: number;
   z: number;
   life: number;
+  dimension?: DimensionId;
 }
 
 export interface SavedResourceNodeState {
@@ -764,6 +822,12 @@ export interface GameSaveData {
   tamedCreatures?: { species: CreatureSpecies; name: string }[];
   weaponMagazines?: Partial<Record<ItemId, number>>;
   baseArmoryOpened?: boolean;
+  currentDimension?: DimensionId;
+  selectedPortalDimension?: DimensionId;
+  activePortals?: PortalLinkState[];
+  unlockedGildedPaint?: boolean;
+  crystalArmorHp?: number;
+  visitedDimensions?: DimensionId[];
 }
 
 export interface CarcassSaveData {
@@ -798,7 +862,9 @@ export type ActiveModal =
   | 'settings'
   | 'console'
   | 'multiplayer'
-  | 'mods';
+  | 'mods'
+  | 'multiverse'
+  | 'menu_drawer';
 
 export interface NearbyInteraction {
   id: string;
@@ -845,7 +911,8 @@ export interface NearbyInteraction {
     | 'modular_vehicle'
     | 'shipwreck'
     | 'garage_bench'
-    | 'armory_chest';
+    | 'armory_chest'
+    | 'portal';
   actionCategory?:
     | 'chop'
     | 'mine'
@@ -990,6 +1057,7 @@ export interface HUDStateSnapshot {
     isZoomedToTv: boolean;
     autoCycle: boolean;
     isPaused: boolean;
+    isStopped?: boolean;
     currentTime: number;
     isLocalVideo?: boolean;
     localVideoName?: string;
@@ -1018,6 +1086,15 @@ export interface HUDStateSnapshot {
   } | null;
   multiplayerState?: MultiplayerStatusSnapshot;
   modState?: ModSystemSnapshot;
+  currentDimension?: DimensionId;
+  currentDimensionName?: string;
+  selectedPortalDimension?: DimensionId;
+  activePortals?: PortalLinkState[];
+  visitedDimensions?: DimensionId[];
+  unlockedGildedPaint?: boolean;
+  crystalArmorHp?: number;
+  crystalArmorMaxHp?: number;
+  portalNearHint?: string | null;
 }
 
 export interface ModGameplayTweaks {

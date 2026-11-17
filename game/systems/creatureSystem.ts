@@ -1053,6 +1053,7 @@ export class CreatureManager {
   private fpSeq = 0;
   private replenishTimer = 2.5;
   private dynamicSeq = 0;
+  private overworldActive = true;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -1706,6 +1707,17 @@ export class CreatureManager {
     });
   }
 
+  public setOverworldActive(active: boolean): void {
+    if (this.overworldActive === active) return;
+    this.overworldActive = active;
+    for (const c of this.creatures) {
+      c.rig.root.visible = active && c.alive && c.cycleActive;
+    }
+    for (const fp of this.footprints) {
+      fp.mesh.visible = active;
+    }
+  }
+
   public update(
     dt: number,
     elapsed: number,
@@ -1725,6 +1737,9 @@ export class CreatureManager {
       displayName: string,
     ) => void,
   ): { nocturnalActiveCount: number } {
+    if (!this.overworldActive) {
+      return { nocturnalActiveCount: 0 };
+    }
     for (let i = this.footprints.length - 1; i >= 0; i--) {
       const fp = this.footprints[i];
       fp.life -= dt;
@@ -2587,7 +2602,7 @@ export class CreatureManager {
 
           // Keep safe homestead/garage clearings free of random wild spawns
           if (Math.hypot(sx - HILL_HOUSE_POS.x, sz - HILL_HOUSE_POS.z) < 16) continue;
-          if (Math.hypot(sx - VEHICLE_GARAGE_POS.x, sz - VEHICLE_GARAGE_POS.z) < 14) continue;
+          if (Math.hypot(sx - VEHICLE_GARAGE_POS.x, sz - VEHICLE_GARAGE_POS.z) < 19.5) continue;
           if (Math.hypot(sx - WHEATFIELD_POS.x, sz - WHEATFIELD_POS.z) < 11) continue;
           if (Math.hypot(sx - FARMER_POS.x, sz - FARMER_POS.z) < 9) continue;
 

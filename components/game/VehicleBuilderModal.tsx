@@ -57,6 +57,8 @@ const PAINT_SWATCHES = [
   '#dc2626',
   '#d97706',
   '#eab308',
+  '#facc15',
+  '#38bdf8',
   '#84cc16',
   '#0284c7',
   '#7e22ce',
@@ -137,24 +139,24 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
     const spawnX = playerX - Math.sin(playerYaw) * 4.5;
     const spawnZ = playerZ - Math.cos(playerYaw) * 4.5;
     const spawnY = playerY + 0.4;
+    const basePreset = createVehicleFromPreset(
+      `vehicle_${Date.now()}`,
+      selectedPreset,
+      spawnX,
+      spawnY,
+      spawnZ,
+      playerYaw,
+    );
 
     const newVehicle: ModularVehicleData = {
-      id: `vehicle_${Date.now()}`,
+      ...basePreset,
       name: presetName || specs.craftClass,
       paintColor,
-      preset: selectedPreset,
       rimColor,
       suspensionOffset,
       wheelScale,
       hydraulicHop,
       turboBoost,
-      x: spawnX,
-      y: spawnY,
-      z: spawnZ,
-      yaw: playerYaw,
-      vx: 0,
-      vy: 0,
-      vz: 0,
       hp: specs.maxHp,
       maxHp: specs.maxHp,
       fuel: 100,
@@ -180,7 +182,7 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                 Vehicle Garage &amp; Modular Assembly Bay
               </h2>
               <p className="text-xs text-stone-400">
-                Build &amp; customize Sports Cars, Dune Buggies, Hydraulic Lowriders, Rovers, Boats &amp; Airships
+                Build &amp; customize Lowriders, 30&quot; Lifted DONKs, Houston SLABs, Sports Cars, Buggies, Rovers &amp; Boats
               </p>
             </div>
           </div>
@@ -242,6 +244,27 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   {[
                     {
+                      key: 'lowrider' as VehiclePresetKey,
+                      title: '1964 Candy Lowrider',
+                      desc: 'Classic Impala cruiser with whitewall wire rims & 4-corner hydraulic hops/tilts.',
+                      icon: Sparkles,
+                      color: 'border-purple-500/50 bg-purple-500/10 text-purple-400',
+                    },
+                    {
+                      key: 'donk' as VehiclePresetKey,
+                      title: '30" Lifted DONK',
+                      desc: '1970s Box Chevy lifted high on 30-inch chrome rims to clear sandbars & rough trails.',
+                      icon: Car,
+                      color: 'border-sky-500/50 bg-sky-500/10 text-sky-400',
+                    },
+                    {
+                      key: 'slab' as VehiclePresetKey,
+                      title: 'Houston Candy SLAB',
+                      desc: 'Luxury sedan on extended Swanger wire elbows, fifth-wheel spare, neon glow & trunk bass.',
+                      icon: Zap,
+                      color: 'border-pink-500/50 bg-pink-500/10 text-pink-400',
+                    },
+                    {
                       key: 'sports_car' as VehiclePresetKey,
                       title: 'Island GT Car',
                       desc: 'Twin-turbo low-slung sports coupe with rear aero wing & fast cornering.',
@@ -254,13 +277,6 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                       desc: 'Tubular roll-cage chassis & tall off-road tires built for beaches & dunes.',
                       icon: Gauge,
                       color: 'border-lime-500/50 bg-lime-500/10 text-lime-400',
-                    },
-                    {
-                      key: 'lowrider' as VehiclePresetKey,
-                      title: 'Chrome Lowrider',
-                      desc: 'Slammed West Coast cruiser with gold rims & Spacebar hydraulic hops.',
-                      icon: Sparkles,
-                      color: 'border-purple-500/50 bg-purple-500/10 text-purple-400',
                     },
                     {
                       key: 'expedition_rover' as VehiclePresetKey,
@@ -485,7 +501,7 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                             <input
                               type="range"
                               min={-0.3}
-                              max={0.32}
+                              max={0.55}
                               step={0.02}
                               value={activeGarageVehicle.suspensionOffset ?? 0}
                               onChange={(e) =>
@@ -507,7 +523,7 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                             <input
                               type="range"
                               min={0.65}
-                              max={1.45}
+                              max={1.65}
                               step={0.05}
                               value={activeGarageVehicle.wheelScale ?? 1}
                               onChange={(e) =>

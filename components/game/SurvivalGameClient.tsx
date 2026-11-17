@@ -3,7 +3,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowDownToLine,
+  ArrowUp,
   Axe,
   Backpack,
   Box,
@@ -28,6 +30,7 @@ import {
   Hand,
   Heart,
   Layers,
+  LogOut,
   Map as MapIcon,
   Moon,
   PackageOpen,
@@ -43,6 +46,7 @@ import {
   ShieldAlert,
   ShieldOff,
   Skull,
+  Sparkles,
   Sun,
   Swords,
   Terminal,
@@ -51,7 +55,10 @@ import {
   Tv,
   Users,
   Utensils,
+  Volume2,
+  VolumeX,
   Waves,
+  X,
   Zap,
 } from 'lucide-react';
 import { ITEMS, isActiveWeaponItem, isAmmoItem, isFirearmItem } from '@/game/data/items';
@@ -92,9 +99,10 @@ import { ModManagerModal } from './ModManagerModal';
 import { MultiplayerModal } from './MultiplayerModal';
 import { PlaceModal } from './PlaceModal';
 import { TouchControls } from './TouchControls';
-import { TvPlayerModal } from './TvPlayerModal';
+import { TvPlayerModal, YouTubeStreamSelection } from './TvPlayerModal';
 import { VehicleBuilderModal } from './VehicleBuilderModal';
 import { CommandConsoleModal } from './CommandConsoleModal';
+import { DimensionWheelModal } from './DimensionWheelModal';
 
 function formatTimePhase(t: number): string {
   if (t < 0.2 || t >= 0.84) return 'Night';
@@ -134,6 +142,9 @@ export function SurvivalGameClient() {
   const [draggingHudSlot, setDraggingHudSlot] = useState<number | null>(null);
   const [hudDropHover, setHudDropHover] = useState(false);
   const [inviteRoomCode, setInviteRoomCode] = useState('');
+  const [tvSearchQuery, setTvSearchQuery] = useState('');
+  const [tvSearchResults, setTvSearchResults] = useState<YouTubeStreamSelection[]>([]);
+  const [tvSearchStatus, setTvSearchStatus] = useState('');
 
   const refreshSaves = useCallback(() => {
     setSaveSlots(listSaveSlots());
@@ -254,6 +265,9 @@ export function SurvivalGameClient() {
         } else if (e.code === 'KeyJ') {
           setActiveModal('missions');
           engineRef.current?.setMode('paused');
+        } else if (e.code === 'KeyU' || e.code === 'KeyG') {
+          setActiveModal('multiverse');
+          engineRef.current?.setMode('paused');
         }
       }
     };
@@ -367,6 +381,7 @@ export function SurvivalGameClient() {
     !activeModal &&
     !hud?.gameOver &&
     !hud?.cinematicActive &&
+    !hud?.seatedLabel &&
     (settings.touchControlsMode === 'always' ||
       (settings.touchControlsMode === 'auto' && isTouchDevice));
 
@@ -411,11 +426,11 @@ export function SurvivalGameClient() {
       .reduce((acc, s) => acc + s.quantity, 0) || 0;
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-stone-950 select-none">
-      {/* Isolated WebGL Canvas Mount — Unified Finger Touch & Mouse Camera Look */}
+    <div className="relative w-full min-h-[100dvh] overflow-x-hidden bg-stone-950 select-none">
+      {/* Isolated WebGL Canvas Mount — Fixed Full-Bleed Behind Scrollable HUD */}
       <div
         ref={canvasMountRef}
-        className="absolute inset-0 w-full h-full touch-surface touch-none"
+        className="fixed inset-0 w-full h-full z-0 touch-surface touch-none"
         onPointerDown={(e) => {
           engineRef.current?.unlockAudio();
           if (screen === 'playing' && !activeModal && !hud?.cinematicActive) {
@@ -482,7 +497,7 @@ export function SurvivalGameClient() {
 
       {/* MAIN MENU / TITLE SCREEN OVERLAY */}
       {screen === 'menu' && (
-        <div className="relative z-10 w-full h-full flex flex-col justify-between p-5 sm:p-10 bg-gradient-to-t from-stone-950/90 via-stone-950/40 to-stone-950/70 overflow-y-auto survival-scroll">
+        <div className="relative z-10 w-full min-h-[100dvh] flex flex-col justify-between p-5 sm:p-10 bg-gradient-to-t from-stone-950/90 via-stone-950/40 to-stone-950/70">
           <div className="flex flex-wrap items-center justify-between gap-2 safe-top">
             <div className="text-xs font-semibold tracking-wider text-amber-300 uppercase">
               AdventureForgeGames · Stage 1 Final Polish
@@ -680,7 +695,7 @@ export function SurvivalGameClient() {
 
       {/* IN-GAME FIRST-PERSON HUD */}
       {screen === 'playing' && hud && !hud.cinematicActive && (
-        <div className="pointer-events-none fixed inset-0 z-10 flex flex-col justify-between p-3 sm:p-4 safe-top safe-bottom">
+        <div className="pointer-events-none relative z-10 min-h-[100dvh] w-full flex flex-col justify-between gap-2 p-2.5 sm:p-4 safe-top safe-bottom pb-5 sm:pb-5">
           {/* Subtle First-Person Aim Reticle + Dynamic Hitbox & Armor Inspector */}
           {!activeModal && !hud.gameOver && (
             <div className="fixed inset-0 pointer-events-none flex items-center justify-center">
@@ -788,7 +803,7 @@ export function SurvivalGameClient() {
           )}
 
           {/* Top Row: Vitals (Left), Active Objective (Center), Menu Buttons (Right) */}
-          <div className="flex items-start justify-between gap-2">
+          <div className="flex flex-wrap lg:flex-nowrap items-start justify-between gap-2">
             {/* Survival Status Panel */}
             <div className="pointer-events-auto rounded-xl bg-stone-950/85 border border-stone-700/70 p-2.5 sm:p-3 w-48 sm:w-60 space-y-1.5">
               <div className="flex items-center justify-between text-[11px] text-stone-300 pb-1 border-b border-stone-800">
@@ -911,53 +926,31 @@ export function SurvivalGameClient() {
               )}
             </div>
 
-            {/* Top-Right HUD Action Triggers */}
-            <div className="pointer-events-auto flex flex-wrap justify-end gap-1.5 sm:gap-2">
-              <HudIconButton
-                icon={<Backpack className="w-5 h-5" />}
-                label="Pack"
-                onClick={() => openModal('inventory')}
-              />
-              <HudIconButton
-                icon={<Hammer className="w-5 h-5" />}
-                label="Craft"
-                onClick={() => openModal('crafting')}
-              />
-              <HudIconButton
-                icon={<MapIcon className="w-5 h-5" />}
-                label="Map"
-                onClick={() => openModal('map')}
-              />
-              <HudIconButton
-                icon={<Car className="w-5 h-5" />}
-                label="Garage"
-                onClick={() => openModal('vehicles')}
-              />
-              <HudIconButton
-                icon={<Users className="w-5 h-5" />}
-                label={hud.multiplayerState?.connected ? `${1 + (hud.multiplayerState.peers?.length ?? 0)} Online` : 'P2P'}
-                onClick={() => openModal('multiplayer')}
-              />
-              <HudIconButton
-                icon={<Box className="w-5 h-5" />}
-                label="Mods"
-                onClick={() => openModal('mods')}
-              />
-              <HudIconButton
-                icon={<Terminal className="w-5 h-5" />}
-                label="Console"
-                onClick={() => openModal('console')}
-              />
-              <HudIconButton
-                icon={<Trophy className="w-5 h-5" />}
-                label="Goals"
-                onClick={() => openModal('missions')}
-              />
-              <HudIconButton
-                icon={<Pause className="w-5 h-5" />}
-                label="Pause"
-                onClick={() => openModal('pause')}
-              />
+            {/* Top-Right HUD Action Triggers / Menu / Exit Car */}
+            <div className="pointer-events-auto flex items-center gap-2">
+              {hud?.seatedLabel ? (
+                <button
+                  type="button"
+                  onClick={() => engineRef.current?.exitVehicle()}
+                  className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-display font-extrabold text-sm shadow-2xl border-2 border-white/50 flex items-center gap-2 transition-all animate-bounce"
+                  style={{ position: 'fixed', top: '16px', right: '16px', zIndex: 9999 }}
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>EXIT CAR</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveModal('menu_drawer');
+                    engineRef.current?.setMode('paused');
+                  }}
+                  className="px-4 py-2 rounded-xl bg-amber-600/90 hover:bg-amber-500 text-stone-950 font-display font-bold text-sm flex items-center gap-2 shadow-lg border border-amber-400/60 transition"
+                >
+                  <Settings className="w-4 h-4" />
+                  <span>MENU</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -1137,8 +1130,211 @@ export function SurvivalGameClient() {
                 )}
             </div>
 
-            {/* Current Equipped Item Indicator + Strictly Scoped Quick Actions */}
-            {(() => {
+            {/* Active Vehicle Driving HUD (Lowrider Hydraulics, DONK 30" Clearance, SLAB Trunk Bass, Aircraft Flight) */}
+            {hud.activeVehicle && !activeModal && (
+              <div
+                onPointerDown={(e) => e.stopPropagation()}
+                className="pointer-events-auto w-[min(95vw,600px)] rounded-2xl bg-stone-950/92 border border-amber-500/50 px-3.5 py-2.5 shadow-2xl space-y-2"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300 shrink-0">
+                      <Car className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs sm:text-sm font-bold text-stone-100 truncate flex items-center gap-1.5">
+                        <span>{hud.activeVehicle.name}</span>
+                        {hud.activeVehicle.highClearance && (
+                          <span className="px-1.5 py-0.5 rounded bg-sky-950 border border-sky-500/60 text-[9px] font-bold text-sky-300 uppercase shrink-0">
+                            30&quot; Lifted
+                          </span>
+                        )}
+                        {hud.activeVehicle.inWater && (
+                          <span className="px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-500/60 text-[9px] font-bold text-cyan-300 uppercase shrink-0">
+                            Fording Water
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] font-mono-tabular text-stone-400 flex items-center gap-2.5">
+                        <span className="text-amber-300 font-bold">
+                          {hud.activeVehicle.speedKmh} km/h
+                        </span>
+                        <span>Fuel {hud.activeVehicle.fuel}%</span>
+                        <span>
+                          HP {hud.activeVehicle.hp}/{hud.activeVehicle.maxHp}
+                        </span>
+                        {hud.activeVehicle.canFly && (
+                          <span className="text-yellow-300">
+                            Alt {hud.activeVehicle.altitudeM}m
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        engineRef.current?.openVehicleCargo(hud.activeVehicle!.id)
+                      }
+                      className="min-h-[36px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-600 text-stone-100 text-xs font-semibold flex items-center gap-1 transition"
+                      title="Vehicle Cargo (F)"
+                    >
+                      <Box className="w-3.5 h-3.5 text-amber-300" />
+                      <span>Cargo [F]</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => engineRef.current?.exitVehicle()}
+                      className="min-h-[36px] px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-stone-950 text-xs font-bold flex items-center gap-1 transition"
+                      title="Exit Vehicle (E)"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>Exit [E]</span>
+                    </button>
+                  </div>
+                </div>
+
+                {hud.activeVehicle.hasHydraulics && (
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-stone-800">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-purple-300 flex items-center gap-1 mr-1">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Hydraulics</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        engineRef.current?.triggerHydraulicAction('front_hop')
+                      }
+                      className="min-h-[34px] px-2.5 py-1 rounded-lg bg-purple-950/90 hover:bg-purple-700 border border-purple-500/60 text-purple-100 text-[11px] font-bold flex items-center gap-1 transition"
+                    >
+                      <ArrowUp className="w-3.5 h-3.5" />
+                      <span>Front Hop [Space]</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        engineRef.current?.triggerHydraulicAction('rear_hop')
+                      }
+                      className="min-h-[34px] px-2.5 py-1 rounded-lg bg-purple-950/90 hover:bg-purple-700 border border-purple-500/60 text-purple-100 text-[11px] font-bold flex items-center gap-1 transition"
+                    >
+                      <ArrowDown className="w-3.5 h-3.5" />
+                      <span>Rear Hop [Z]</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        engineRef.current?.triggerHydraulicAction('left_tilt')
+                      }
+                      className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
+                        hud.activeVehicle.hydraulicMode === 'left_tilt'
+                          ? 'bg-amber-500 border-amber-300 text-stone-950'
+                          : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                      }`}
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                      <span>Tilt L [Q]</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        engineRef.current?.triggerHydraulicAction('right_tilt')
+                      }
+                      className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
+                        hud.activeVehicle.hydraulicMode === 'right_tilt'
+                          ? 'bg-amber-500 border-amber-300 text-stone-950'
+                          : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                      }`}
+                    >
+                      <span>Tilt R [R]</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        engineRef.current?.triggerHydraulicAction('lock_up')
+                      }
+                      className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
+                        hud.activeVehicle.hydraulicMode === 'lock_up'
+                          ? 'bg-purple-500 border-purple-200 text-stone-950'
+                          : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                      }`}
+                    >
+                      Lock-Up [X]
+                    </button>
+                  </div>
+                )}
+
+                {hud.activeVehicle.hasTrunkBass && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-stone-800">
+                    <span className="text-[11px] text-stone-300">
+                      Swanger Elbows &amp; Candy Trunk Sub-Bass Audio
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => engineRef.current?.toggleTrunkBass()}
+                      className={`min-h-[34px] px-3 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1.5 transition ${
+                        hud.activeVehicle.trunkBassOn
+                          ? 'bg-pink-600 border-pink-300 text-white shadow-lg'
+                          : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                      }`}
+                    >
+                      {hud.activeVehicle.trunkBassOn ? (
+                        <Volume2 className="w-3.5 h-3.5" />
+                      ) : (
+                        <VolumeX className="w-3.5 h-3.5" />
+                      )}
+                      <span>
+                        {hud.activeVehicle.trunkBassOn
+                          ? 'Trunk Bass: SLAMMING [T]'
+                          : 'Trunk Bass OFF [T]'}
+                      </span>
+                    </button>
+                  </div>
+                )}
+
+                {hud.activeVehicle.canFly && (
+                  <div className="flex items-center gap-2 pt-1.5 border-t border-stone-800">
+                    <button
+                      type="button"
+                      onPointerDown={() =>
+                        engineRef.current?.setVehicleVerticalHold('up')
+                      }
+                      onPointerUp={() =>
+                        engineRef.current?.setVehicleVerticalHold(null)
+                      }
+                      onPointerLeave={() =>
+                        engineRef.current?.setVehicleVerticalHold(null)
+                      }
+                      className="min-h-[34px] px-3 py-1 rounded-lg bg-sky-900 hover:bg-sky-800 border border-sky-500/60 text-sky-100 text-[11px] font-bold flex items-center gap-1"
+                    >
+                      <ArrowUp className="w-3.5 h-3.5" />
+                      <span>Ascend [Space]</span>
+                    </button>
+                    <button
+                      type="button"
+                      onPointerDown={() =>
+                        engineRef.current?.setVehicleVerticalHold('down')
+                      }
+                      onPointerUp={() =>
+                        engineRef.current?.setVehicleVerticalHold(null)
+                      }
+                      onPointerLeave={() =>
+                        engineRef.current?.setVehicleVerticalHold(null)
+                      }
+                      className="min-h-[34px] px-3 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-600 text-stone-200 text-[11px] font-bold flex items-center gap-1"
+                    >
+                      <ArrowDown className="w-3.5 h-3.5" />
+                      <span>Descend [C]</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Current Equipped Item Indicator + Strictly Scoped Quick Actions (Hidden while driving) */}
+            {!hud.activeVehicle && (() => {
               const eqId =
                 hud.equippedSlot >= 0
                   ? hud.hotbarItemIds[hud.equippedSlot]
@@ -1447,9 +1643,11 @@ export function SurvivalGameClient() {
               </div>
             )}
 
-            {/* Bare Hands Toggle + Windowed HUD Bar (up to 5,000 Slots) + Empty Compartment Drop Target */}
+            {/* Bare Hands Toggle + Windowed HUD Bar (Hidden while driving) */}
+            {!hud.activeVehicle && (
             <div
-              className="pointer-events-auto flex items-center gap-1 p-1.5 rounded-xl bg-stone-950/88 border border-stone-700/80 shadow-xl max-w-[96vw]"
+              data-hud-hotbar="true"
+              className="pointer-events-auto flex items-center gap-1 p-1.5 rounded-xl bg-stone-950/92 border border-stone-700/80 shadow-xl max-w-[calc(100vw-20px)] overflow-x-auto survival-scroll"
               title="Drag any HUD slot to the Compartment drop icon (or right-click) to move it to your 1B+ Backpack Compartments"
             >
               <button
@@ -1493,7 +1691,7 @@ export function SurvivalGameClient() {
               <div
                 ref={hotbarScrollRef}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="flex items-center gap-1.5 overflow-x-auto survival-scroll pb-1 max-w-[min(46vw,290px)] sm:max-w-[336px] snap-x snap-mandatory"
+                className="flex items-center gap-1.5 overflow-x-auto survival-scroll pb-1 min-w-0 max-w-[min(44vw,260px)] sm:max-w-[360px] md:max-w-[474px] snap-x snap-mandatory"
               >
                 {(() => {
                   const clampedStart = Math.min(
@@ -1618,7 +1816,7 @@ export function SurvivalGameClient() {
                   onClick={() => setHudManagerOpen((v) => !v)}
                   className={`h-11 sm:h-12 px-2 shrink-0 rounded-lg border flex flex-col items-center justify-center transition-colors ${
                     hudDropHover || draggingHudSlot !== null
-                      ? 'bg-emerald-900 border-emerald-400 text-emerald-100 animate-pulse'
+                      ? 'bg-emerald-900 border-emerald-400 text-emerald-100'
                       : hudManagerOpen
                         ? 'bg-amber-950/80 border-amber-400 text-amber-200'
                         : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-emerald-300'
@@ -1655,6 +1853,7 @@ export function SurvivalGameClient() {
                 <span>Place</span>
               </button>
             </div>
+            )}
           </div>
         </div>
       )}
@@ -1804,10 +2003,15 @@ export function SurvivalGameClient() {
         />
       )}
 
-      {screen === 'playing' && (
+      {screen === 'playing' && activeModal === 'tv' && (
         <TvPlayerModal
-          isOpen={activeModal === 'tv'}
           tvState={hud?.tvState}
+          searchQuery={tvSearchQuery}
+          onSearchQueryChange={setTvSearchQuery}
+          searchResults={tvSearchResults}
+          onSearchResultsChange={setTvSearchResults}
+          searchStatus={tvSearchStatus}
+          onSearchStatusChange={setTvSearchStatus}
           onSelectChannel={(ch) => engineRef.current?.setTvChannel(ch)}
           onSelectYouTube={(stream) =>
             engineRef.current?.setTvYouTubeStream(
@@ -1818,6 +2022,7 @@ export function SurvivalGameClient() {
           }
           onTogglePower={() => engineRef.current?.toggleTvPower()}
           onTogglePlayPause={() => engineRef.current?.toggleTvPlayPause()}
+          onStop={() => engineRef.current?.stopTvPlayback()}
           onSetVolume={(vol) => engineRef.current?.setTvVolume(vol)}
           onToggleMute={() => engineRef.current?.toggleTvMute()}
           onNextChannel={() => engineRef.current?.nextTvChannel()}
@@ -1928,11 +2133,129 @@ export function SurvivalGameClient() {
         />
       )}
 
+      {activeModal === 'menu_drawer' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fadeIn">
+          <div className="relative w-full max-w-md bg-stone-900 border border-amber-500/50 rounded-2xl shadow-2xl p-6 space-y-5">
+            <div className="flex items-center justify-between border-b border-stone-800 pb-3">
+              <h3 className="font-display text-lg font-bold text-amber-300">
+                Survival Island Menu &amp; Tools
+              </h3>
+              <button
+                onClick={closeModal}
+                className="p-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setActiveModal('inventory')}
+                className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <Backpack className="w-5 h-5 text-amber-400" />
+                <span>Pack / Inventory</span>
+              </button>
+              <button
+                onClick={() => { setActiveStationStructureId(undefined); setActiveModal('crafting'); }}
+                className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <Hammer className="w-5 h-5 text-amber-400" />
+                <span>Crafting Bay</span>
+              </button>
+              <button
+                onClick={() => setActiveModal('map')}
+                className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <MapIcon className="w-5 h-5 text-amber-400" />
+                <span>Island Map</span>
+              </button>
+              <button
+                onClick={() => setActiveModal('vehicles')}
+                className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <Car className="w-5 h-5 text-amber-400" />
+                <span>Vehicle Garage</span>
+              </button>
+              <button
+                onClick={() => setActiveModal('multiverse')}
+                className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <Sparkles className="w-5 h-5 text-amber-400" />
+                <span>Realms Portal</span>
+              </button>
+              <button
+                onClick={() => setActiveModal('multiplayer')}
+                className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <Users className="w-5 h-5 text-amber-400" />
+                <span>Multiplayer P2P</span>
+              </button>
+              <button
+                onClick={() => setActiveModal('mods')}
+                className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <Box className="w-5 h-5 text-amber-400" />
+                <span>Mod Manager</span>
+              </button>
+              <button
+                onClick={() => setActiveModal('console')}
+                className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <Terminal className="w-5 h-5 text-amber-400" />
+                <span>Console &amp; Relics</span>
+              </button>
+              <button
+                onClick={() => setActiveModal('missions')}
+                className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <Trophy className="w-5 h-5 text-amber-400" />
+                <span>Missions &amp; Goals</span>
+              </button>
+              <button
+                onClick={() => setActiveModal('settings')}
+                className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <Settings className="w-5 h-5 text-amber-400" />
+                <span>Settings</span>
+              </button>
+            </div>
+            <button
+              onClick={() => setActiveModal('pause')}
+              className="w-full py-3 rounded-xl bg-stone-800 hover:bg-stone-700 font-bold text-stone-200 text-sm transition text-center"
+            >
+              Pause Menu &amp; Save / Quit
+            </button>
+          </div>
+        </div>
+      )}
+
       {activeModal === 'console' && (
         <CommandConsoleModal
           onClose={closeModal}
           onExecuteCommand={(cmd) => engineRef.current?.executeConsoleCommand(cmd)}
           onSpawnCreatorRelic={(relicKey) => engineRef.current?.spawnCreatorRelic(relicKey)}
+        />
+      )}
+
+      {activeModal === 'multiverse' && (
+        <DimensionWheelModal
+          currentDimension={hud?.currentDimension ?? 'overworld'}
+          selectedPortalDimension={hud?.selectedPortalDimension ?? 'space'}
+          visitedDimensions={hud?.visitedDimensions ?? ['overworld']}
+          unlockedGildedPaint={Boolean(hud?.unlockedGildedPaint)}
+          crystalArmorHp={hud?.crystalArmorHp ?? 0}
+          activePortals={hud?.activePortals ?? []}
+          onSelectPortalDimension={(dim) => engineRef.current?.selectPortalDimension(dim)}
+          onFirePortalGun={() => {
+            closeModal();
+            engineRef.current?.firePortalGun();
+          }}
+          onDirectWarp={(dim) => {
+            closeModal();
+            engineRef.current?.switchDimension(dim);
+          }}
+          onCloseAllPortals={() => engineRef.current?.closeAllPortals()}
+          onClose={closeModal}
         />
       )}
 

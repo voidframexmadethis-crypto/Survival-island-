@@ -35,6 +35,15 @@ export const CommandConsoleModal: React.FC<CommandConsoleModalProps> = ({
 
   const quickCommands = [
     '/god',
+    '/warp space',
+    '/warp nether',
+    '/warp gold',
+    '/warp diamond',
+    '/warp alien',
+    '/warp overworld',
+    '/spawn portal_gun',
+    '/spawn plasma_gun',
+    '/spawn crystal_armor',
     '/weather clear',
     '/weather monsoon',
     '/weather fog',
@@ -46,13 +55,6 @@ export const CommandConsoleModal: React.FC<CommandConsoleModalProps> = ({
     '/spawn raptor',
     '/spawn trex',
     '/spawn spinosaurus',
-    '/spawn pteranodon',
-    '/spawn elephant',
-    '/spawn reindeer',
-    '/spawn tiger',
-    '/spawn giraffe',
-    '/spawn shark',
-    '/spawn wildlife',
     '/spawn airship',
     '/spawn gun',
     '/gravity 9.8',
@@ -64,12 +66,14 @@ export const CommandConsoleModal: React.FC<CommandConsoleModalProps> = ({
   ];
 
   const creatorRelics = [
+    { key: 'portal_gun', name: 'Dimensional Portal Gun', desc: 'Sci-fi spatial portal gun with multi-dimension vortexes' },
+    { key: 'plasma_gun', name: 'Alien Plasma Rifle', desc: 'High-energy beam weapon with blue plasma ignition' },
+    { key: 'crystal_armor', name: 'Crystal Energy Armor', desc: 'Prismatic defense shield with 150 energy buffer' },
     { key: 'gravity_monolith', name: 'Vortex Gravity Monolith', desc: 'Anti-gravity launch zone & enemy puller' },
     { key: 'terraformer_orb', name: 'Terraformer Orb', desc: 'Raises terrain or carves water craters' },
     { key: 'kinetic_trap', name: 'Kinetic Tripwire Trap', desc: 'Connected energy tether to spike wall' },
     { key: 'timeshift_sundial', name: 'Time-Shift Sundial Altar', desc: 'Scrubs sun/moon across sky' },
     { key: 'tamed_raptor', name: 'Saddled Mount Raptor', desc: 'Rideable mount with sprint & jump' },
-    { key: 'tamed_trex', name: 'Armored Mount T-Rex', desc: 'Rideable apex predator with colossal bite' },
   ];
 
   const handleSend = (e?: React.FormEvent) => {

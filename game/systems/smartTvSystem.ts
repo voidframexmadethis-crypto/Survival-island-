@@ -121,6 +121,7 @@ export class SmartTvSystem {
 
   public power = true;
   public isPaused = false;
+  public isStopped = false;
   public currentChannel: TvChannelId = 1;
   public volume = 0.75;
   public isMuted = false;
@@ -288,6 +289,7 @@ export class SmartTvSystem {
     this.isPoweringTransition = true;
     if (this.power) {
       this.isPaused = false;
+      this.isStopped = false;
       this.turnOnProgress = 0.0;
       this.turnOffProgress = 0.0;
       if (this.localVideoElement && this.isUsingLocalVideo) {
@@ -295,13 +297,51 @@ export class SmartTvSystem {
       }
     } else {
       this.turnOffProgress = 0.0;
+      // Turning off the TV explicitly stops active video/YouTube playback
       if (this.localVideoElement) {
         this.localVideoElement.pause();
+        try {
+          this.localVideoElement.currentTime = 0;
+        } catch {
+          // Ignore if metadata not loaded
+        }
       }
+      this.isUsingLocalVideo = false;
+      this.localVideoName = '';
+      this.isUsingYouTube = false;
+      this.youtubeVideoId = '';
+      this.youtubeTitle = 'YouTube';
+      this.youtubeChannel = 'YouTube';
+      this.currentTimestamp = 0;
+      this.isPaused = false;
+      this.isStopped = false;
     }
     this.updateSpatialAudioGain(this.lastSpatialMult);
     this.applyMaterialTexture();
     return this.power;
+  }
+
+  public stopPlayback(): void {
+    this.initAudioContext();
+    if (this.localVideoElement) {
+      this.localVideoElement.pause();
+      try {
+        this.localVideoElement.currentTime = 0;
+      } catch {
+        // Ignore if metadata not loaded
+      }
+    }
+    this.isUsingLocalVideo = false;
+    this.localVideoName = '';
+    this.isUsingYouTube = false;
+    this.youtubeVideoId = '';
+    this.youtubeTitle = 'YouTube';
+    this.youtubeChannel = 'YouTube';
+    this.currentTimestamp = 0;
+    this.isPaused = true;
+    this.isStopped = true;
+    this.updateSpatialAudioGain(0);
+    this.applyMaterialTexture();
   }
 
   public setPaused(paused: boolean): void {
@@ -320,6 +360,7 @@ export class SmartTvSystem {
         this.turnOnProgress = 0.25;
       }
       this.isPaused = false;
+      this.isStopped = false;
       if (this.localVideoElement && this.isUsingLocalVideo) {
         this.localVideoElement.play().catch(() => {});
       }
@@ -343,6 +384,7 @@ export class SmartTvSystem {
     this.currentChannel = normalizeChannelId(ch);
     this.power = true;
     this.isPaused = false;
+    this.isStopped = false;
     this.segmentTimer = 0;
     if (wasOff) {
       this.isPoweringTransition = true;
@@ -354,6 +396,7 @@ export class SmartTvSystem {
       this.localVideoName = '';
     }
     this.isUsingYouTube = false;
+    this.youtubeVideoId = '';
     this.updateSpatialAudioGain(this.lastSpatialMult);
     this.applyMaterialTexture();
   }
@@ -369,14 +412,19 @@ export class SmartTvSystem {
     }
     this.isUsingLocalVideo = false;
     this.localVideoName = '';
+    const isSameVideo = this.isUsingYouTube && this.youtubeVideoId === videoId;
     this.isUsingYouTube = true;
     this.youtubeVideoId = videoId;
     this.youtubeTitle = title;
     this.youtubeChannel = channel;
+    if (!isSameVideo) {
+      this.currentTimestamp = 0;
+    }
 
     const wasOff = !this.power;
     this.power = true;
     this.isPaused = false;
+    this.isStopped = false;
     if (wasOff) {
       this.isPoweringTransition = true;
       this.turnOnProgress = 0.25;
@@ -445,9 +493,11 @@ export class SmartTvSystem {
 
     this.localVideoName = file.name.replace(/\.[^/.]+$/, '') || 'Custom Video';
     this.isUsingYouTube = false;
+    this.youtubeVideoId = '';
     this.isUsingLocalVideo = true;
     this.power = true;
     this.isPaused = false;
+    this.isStopped = false;
     this.applyMaterialTexture();
 
     video.addEventListener('canplay', () => {
@@ -688,6 +738,20 @@ export class SmartTvSystem {
       if (this.tvGlowLight) {
         this.tvGlowLight.intensity = 1.5;
         this.tvGlowLight.color.setHex(0xef4444);
+      }
+      return;
+    }
+
+    if (this.isStopped) {
+      const w = this.canvas.width;
+      const h = this.canvas.height;
+      const ctx = this.ctx;
+      this.drawStoppedScreen(ctx, w, h);
+      this.drawSmartTvOsOverlay(ctx, w, h, telemetry);
+      this.canvasTexture.needsUpdate = true;
+      if (this.tvGlowLight) {
+        this.tvGlowLight.intensity = 0.55;
+        this.tvGlowLight.color.setHex(0x64748b);
       }
       return;
     }
@@ -1622,30 +1686,34 @@ export class SmartTvSystem {
     );
 
     const curMeta = this.getCurrentChannelMeta();
-    const activeBadgeText = this.isUsingYouTube
-      ? `YOUTUBE · ${this.youtubeTitle.slice(0, 26).toUpperCase()}`
-      : this.isUsingLocalVideo
-        ? `USB VIDEO · ${this.localVideoName.toUpperCase()}`
-        : `${curMeta.badge} · ${curMeta.name.toUpperCase()}`;
-    ctx.fillStyle = this.isPaused
-      ? '#d97706'
+    const activeBadgeText = this.isStopped
+      ? 'PLAYBACK STOPPED · READY'
       : this.isUsingYouTube
-        ? '#dc2626'
+        ? `YOUTUBE · ${this.youtubeTitle.slice(0, 26).toUpperCase()}`
         : this.isUsingLocalVideo
-          ? '#0284c7'
-          : curMeta.color;
+          ? `USB VIDEO · ${this.localVideoName.toUpperCase()}`
+          : `${curMeta.badge} · ${curMeta.name.toUpperCase()}`;
+    ctx.fillStyle = this.isStopped
+      ? '#475569'
+      : this.isPaused
+        ? '#d97706'
+        : this.isUsingYouTube
+          ? '#dc2626'
+          : this.isUsingLocalVideo
+            ? '#0284c7'
+            : curMeta.color;
     ctx.beginPath();
     ctx.roundRect(w / 2 - 225, 8, 450, 30, 15);
     ctx.fill();
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 12px sans-serif';
     ctx.textAlign = 'center';
-    const prefix = this.isPaused ? 'PAUSED · ' : '';
+    const prefix = this.isStopped ? '' : this.isPaused ? 'PAUSED · ' : '';
     ctx.fillText(`${prefix}${activeBadgeText}`, w / 2, 28);
     ctx.textAlign = 'left';
 
     // Crisp translucent Pause Badge if paused
-    if (this.isPaused) {
+    if (this.isPaused && !this.isStopped) {
       ctx.fillStyle = 'rgba(2, 6, 23, 0.76)';
       ctx.strokeStyle = '#f59e0b';
       ctx.lineWidth = 3;
@@ -1659,6 +1727,35 @@ export class SmartTvSystem {
       ctx.fillText('|| PAUSED', w - 109, h - 43);
       ctx.textAlign = 'left';
     }
+  }
+
+  private drawStoppedScreen(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+  ): void {
+    const bg = ctx.createLinearGradient(0, 0, w, h);
+    bg.addColorStop(0, '#090d16');
+    bg.addColorStop(0.5, '#0f172a');
+    bg.addColorStop(1, '#020617');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.22)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.roundRect(w / 2 - 250, h / 2 - 82, 500, 164, 24);
+    ctx.stroke();
+
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = 'bold 30px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('PLAYBACK STOPPED', w / 2, h / 2 - 12);
+
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '16px monospace';
+    ctx.fillText('OPEN REMOTE TO SELECT YOUTUBE OR TV CHANNEL', w / 2, h / 2 + 28);
+    ctx.textAlign = 'left';
   }
 
   // PROCEDURAL WEB AUDIO SYNTH PER CHANNEL

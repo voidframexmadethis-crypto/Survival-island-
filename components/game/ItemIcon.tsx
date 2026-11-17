@@ -42,6 +42,7 @@ import {
   Milk,
   Mountain,
   Nut,
+  Orbit,
   Package,
   Pickaxe,
   Salad,
@@ -259,6 +260,22 @@ export function ItemIcon({
       return <ShieldAlert {...props} />;
     case 'timeshift_sundial':
       return <Compass {...props} />;
+    case 'portal_gun':
+      return <Orbit {...props} />;
+    case 'alien_plasma_gun':
+      return <Zap {...props} />;
+    case 'inferno_blade':
+      return <Flame {...props} />;
+    case 'diamond_ammo':
+      return <Sparkles {...props} />;
+    case 'crystal_armor':
+      return <Shield {...props} />;
+    case 'nether_ember':
+      return <Flame {...props} />;
+    case 'alien_core':
+      return <Orbit {...props} />;
+    case 'diamond_crystal':
+      return <Gem {...props} />;
     default:
       return <Box {...props} />;
   }
