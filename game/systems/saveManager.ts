@@ -1,11 +1,14 @@
 import {
   DrawDistanceTier,
+  FlatSurfaceStyle,
   GameMode,
   GameSaveData,
   GameSettings,
   GraphicsPreset,
   SaveSlotSummary,
   TvSafetyMode,
+  WorldType,
+  resolveAllowedGameMode,
 } from '../types';
 
 const SAVE_INDEX_KEY = 'survival_island_lost_world_saves_v1';
@@ -29,7 +32,8 @@ export function normalizeGraphicsPreset(
   rawQuality?: string,
 ): GraphicsPreset {
   if (rawPreset === 'low' || rawPreset === 'performance') return 'low';
-  if (rawPreset === 'high' || rawPreset === 'ultra') return 'high';
+  if (rawPreset === 'ultra' || rawQuality === 'ultra') return 'ultra';
+  if (rawPreset === 'high' || rawQuality === 'high') return 'high';
   if (rawPreset === 'medium' || rawPreset === 'balanced') return 'medium';
   if (rawQuality === 'high') return 'high';
   if (rawQuality === 'low') return 'low';
@@ -66,6 +70,16 @@ export const GRAPHICS_PRESET_PROFILES: Record<GraphicsPreset, GraphicsPresetProf
     drawDistance: 'far',
     dynamicAutoFps: true,
     tvSafetyMode: 'auto',
+  },
+  ultra: {
+    graphicsQuality: 'ultra',
+    graphicsPreset: 'ultra',
+    shadowsEnabled: true,
+    waterReflectionsEnabled: true,
+    particlesEnabled: true,
+    drawDistance: 'far',
+    dynamicAutoFps: false,
+    tvSafetyMode: 'full_3d',
   },
 };
 
@@ -220,6 +234,32 @@ export function getActiveSessionRecovery(): {
   }
 }
 
+export function createNewSaveSlotId(worldType: WorldType): string {
+  const safeType: WorldType = worldType === 'flat' ? 'flat' : 'island';
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `world_${safeType}_${Date.now()}_${rand}`;
+}
+
+function normalizeSlotSummary(raw: SaveSlotSummary): SaveSlotSummary {
+  const worldType: WorldType = raw.worldType === 'flat' ? 'flat' : 'island';
+  const gameMode = resolveAllowedGameMode(worldType, raw.gameMode);
+  const flatSurfaceStyle: FlatSurfaceStyle =
+    raw.flatSurfaceStyle === 'concrete_plaza' ? 'concrete_plaza' : 'turf_grid';
+  const defaultName =
+    worldType === 'flat' ? 'Flat Park World' : 'Survival Island';
+  return {
+    ...raw,
+    worldType,
+    worldName:
+      typeof raw.worldName === 'string' && raw.worldName.trim()
+        ? raw.worldName.trim()
+        : defaultName,
+    flatSurfaceStyle: worldType === 'flat' ? flatSurfaceStyle : undefined,
+    gameMode,
+    coastersCount: typeof raw.coastersCount === 'number' ? raw.coastersCount : 0,
+  };
+}
+
 export function listSaveSlots(): SaveSlotSummary[] {
   if (typeof window === 'undefined') return [];
   try {
@@ -227,7 +267,7 @@ export function listSaveSlots(): SaveSlotSummary[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as SaveSlotSummary[];
     return Array.isArray(parsed)
-      ? parsed.sort((a, b) => b.savedAt - a.savedAt)
+      ? parsed.map(normalizeSlotSummary).sort((a, b) => b.savedAt - a.savedAt)
       : [];
   } catch {
     return [];
@@ -242,23 +282,50 @@ export function getLatestSaveSlot(): SaveSlotSummary | null {
 export function saveGameToSlot(data: GameSaveData): boolean {
   if (typeof window === 'undefined') return false;
   try {
-    const payload = JSON.stringify(data);
+    const worldType: WorldType = data.worldType === 'flat' ? 'flat' : 'island';
+    const gameMode = resolveAllowedGameMode(worldType, data.gameMode);
+    const flatSurfaceStyle: FlatSurfaceStyle | undefined =
+      worldType === 'flat'
+        ? data.flatSurfaceStyle === 'concrete_plaza'
+          ? 'concrete_plaza'
+          : 'turf_grid'
+        : undefined;
+    const worldName =
+      typeof data.worldName === 'string' && data.worldName.trim()
+        ? data.worldName.trim()
+        : worldType === 'flat'
+          ? 'Flat Park World'
+          : 'Survival Island';
+    const normalizedData: GameSaveData = {
+      ...data,
+      worldType,
+      worldName,
+      flatSurfaceStyle,
+      gameMode,
+      coasters: Array.isArray(data.coasters) ? data.coasters : [],
+    };
+    const payload = JSON.stringify(normalizedData);
     window.localStorage.setItem(`${SAVE_SLOT_PREFIX}${data.slotId}`, payload);
 
     const existing = listSaveSlots().filter((s) => s.slotId !== data.slotId);
     const summary: SaveSlotSummary = {
       slotId: data.slotId,
       savedAt: data.savedAt,
+      worldType,
+      worldName,
+      flatSurfaceStyle,
+      gameMode,
       dayCount: data.dayCount,
       timeOfDay: data.timeOfDay,
       biome: data.visitedBiomes[data.visitedBiomes.length - 1] || 'beach',
       health: Math.round(data.player.vitals.health),
       structuresCount: data.structures.length,
+      coastersCount: normalizedData.coasters?.length ?? 0,
       missionsCompleted: data.completedMissionIds.length,
     };
     window.localStorage.setItem(
       SAVE_INDEX_KEY,
-      JSON.stringify([summary, ...existing].slice(0, 6)),
+      JSON.stringify([summary, ...existing].slice(0, 12)),
     );
     return true;
   } catch {
@@ -273,26 +340,47 @@ export function loadGameFromSlot(slotId: string): GameSaveData | null {
     if (!raw) return null;
     const data = JSON.parse(raw) as GameSaveData;
     if (data && data.player && Array.isArray(data.inventory)) {
-      // Guarantee player always starts with gun, knife, ammo, and starter materials
-      const hasGun = data.inventory.some((s) => s.itemId === 'gun');
-      if (!hasGun) {
-        data.inventory.unshift({ itemId: 'gun', quantity: 1 });
+      const worldType: WorldType = data.worldType === 'flat' ? 'flat' : 'island';
+      data.worldType = worldType;
+      data.gameMode = resolveAllowedGameMode(worldType, data.gameMode);
+      data.worldName =
+        typeof data.worldName === 'string' && data.worldName.trim()
+          ? data.worldName.trim()
+          : worldType === 'flat'
+            ? 'Flat Park World'
+            : 'Survival Island';
+      if (worldType === 'flat') {
+        data.flatSurfaceStyle =
+          data.flatSurfaceStyle === 'concrete_plaza'
+            ? 'concrete_plaza'
+            : 'turf_grid';
       }
-      const hasKnife = data.inventory.some((s) => s.itemId === 'hunting_knife');
-      if (!hasKnife) {
-        data.inventory.splice(1, 0, { itemId: 'hunting_knife', quantity: 1 });
+      if (!Array.isArray(data.coasters)) {
+        data.coasters = [];
       }
-      const hasSickle = data.inventory.some((s) => s.itemId === 'sickle');
-      if (!hasSickle) {
-        data.inventory.push({ itemId: 'sickle', quantity: 1 });
-      }
-      const hasAmmo = data.inventory.some((s) => s.itemId === 'ammo');
-      if (!hasAmmo) {
-        data.inventory.push({ itemId: 'ammo', quantity: 60 });
-      } else {
-        const ammoSlot = data.inventory.find((s) => s.itemId === 'ammo');
-        if (ammoSlot && ammoSlot.quantity < 30) {
-          ammoSlot.quantity = 60;
+
+      if (worldType === 'island') {
+        // Guarantee island survivors retain starter essentials without resetting progress
+        const hasGun = data.inventory.some((s) => s.itemId === 'gun');
+        if (!hasGun) {
+          data.inventory.unshift({ itemId: 'gun', quantity: 1 });
+        }
+        const hasKnife = data.inventory.some((s) => s.itemId === 'hunting_knife');
+        if (!hasKnife) {
+          data.inventory.splice(1, 0, { itemId: 'hunting_knife', quantity: 1 });
+        }
+        const hasSickle = data.inventory.some((s) => s.itemId === 'sickle');
+        if (!hasSickle) {
+          data.inventory.push({ itemId: 'sickle', quantity: 1 });
+        }
+        const hasAmmo = data.inventory.some((s) => s.itemId === 'ammo');
+        if (!hasAmmo) {
+          data.inventory.push({ itemId: 'ammo', quantity: 60 });
+        } else {
+          const ammoSlot = data.inventory.find((s) => s.itemId === 'ammo');
+          if (ammoSlot && ammoSlot.quantity < 30) {
+            ammoSlot.quantity = 60;
+          }
         }
       }
 
@@ -314,53 +402,70 @@ export function loadGameFromSlot(slotId: string): GameSaveData | null {
         ];
       }
 
-      const baselineMaterials: { itemId: GameSaveData['inventory'][number]['itemId']; minQty: number }[] = [
-        { itemId: 'wood', minQty: 4 },
-        { itemId: 'branch', minQty: 4 },
-        { itemId: 'stone', minQty: 4 },
-        { itemId: 'flint', minQty: 3 },
-        { itemId: 'fiber', minQty: 4 },
-        { itemId: 'leaves', minQty: 3 },
-        { itemId: 'grass', minQty: 3 },
-        { itemId: 'clay', minQty: 2 },
-        { itemId: 'metal_ore', minQty: 1 },
-        { itemId: 'hide', minQty: 1 },
-        { itemId: 'rope', minQty: 1 },
-        { itemId: 'soap', minQty: 2 },
-      ];
-      for (const mat of baselineMaterials) {
-        const current = data.inventory
-          .filter((s) => s.itemId === mat.itemId)
-          .reduce((sum, s) => sum + s.quantity, 0);
-        if (current <= 0) {
-          data.inventory.push({ itemId: mat.itemId, quantity: mat.minQty });
+      if (worldType === 'island') {
+        const baselineMaterials: { itemId: GameSaveData['inventory'][number]['itemId']; minQty: number }[] = [
+          { itemId: 'wood', minQty: 4 },
+          { itemId: 'branch', minQty: 4 },
+          { itemId: 'stone', minQty: 4 },
+          { itemId: 'flint', minQty: 3 },
+          { itemId: 'fiber', minQty: 4 },
+          { itemId: 'leaves', minQty: 3 },
+          { itemId: 'grass', minQty: 3 },
+          { itemId: 'clay', minQty: 2 },
+          { itemId: 'metal_ore', minQty: 1 },
+          { itemId: 'hide', minQty: 1 },
+          { itemId: 'rope', minQty: 1 },
+          { itemId: 'soap', minQty: 2 },
+        ];
+        for (const mat of baselineMaterials) {
+          const current = data.inventory
+            .filter((s) => s.itemId === mat.itemId)
+            .reduce((sum, s) => sum + s.quantity, 0);
+          if (current <= 0) {
+            data.inventory.push({ itemId: mat.itemId, quantity: mat.minQty });
+          }
+        }
+
+        const hasBottle = data.inventory.some(
+          (s) =>
+            s.itemId === 'dirty_water_bottle' ||
+            s.itemId === 'filtered_water_bottle',
+        );
+        if (!hasBottle) {
+          data.inventory.push({ itemId: 'dirty_water_bottle', quantity: 1 });
         }
       }
 
-      const hasBottle = data.inventory.some(
-        (s) =>
-          s.itemId === 'dirty_water_bottle' ||
-          s.itemId === 'filtered_water_bottle',
-      );
-      if (!hasBottle) {
-        data.inventory.push({ itemId: 'dirty_water_bottle', quantity: 1 });
-      }
-
       if (!Array.isArray(data.player.hotbarItemIds) || data.player.hotbarItemIds.length === 0) {
-        data.player.hotbarItemIds = [
-          'gun',
-          'hunting_knife',
-          'ammo',
-          null,
-          'dirty_water_bottle',
-          'sickle',
-          null,
-          null,
-          null,
-        ];
-        const gunIdx = data.player.hotbarItemIds.indexOf('gun');
-        if (gunIdx !== -1) {
-          data.player.equippedSlot = gunIdx;
+        if (worldType === 'flat') {
+          data.player.hotbarItemIds = [
+            'coaster_station',
+            'stone_block',
+            'stone_arch',
+            'stone_pillar',
+            'timber_beam',
+            'smart_tv',
+            'vehicle_chassis_kit',
+            'belt_pulley',
+            null,
+          ];
+          data.player.equippedSlot = 0;
+        } else {
+          data.player.hotbarItemIds = [
+            'gun',
+            'hunting_knife',
+            'ammo',
+            null,
+            'dirty_water_bottle',
+            'sickle',
+            null,
+            null,
+            null,
+          ];
+          const gunIdx = data.player.hotbarItemIds.indexOf('gun');
+          if (gunIdx !== -1) {
+            data.player.equippedSlot = gunIdx;
+          }
         }
       }
       while (data.player.hotbarItemIds.length < 9) {

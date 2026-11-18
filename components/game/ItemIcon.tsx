@@ -45,6 +45,7 @@ import {
   Orbit,
   Package,
   Pickaxe,
+  RollerCoaster,
   Salad,
   Scissors,
   Settings2,
@@ -292,6 +293,8 @@ export function ItemIcon({
       return <Orbit {...props} />;
     case 'diamond_crystal':
       return <Gem {...props} />;
+    case 'coaster_station':
+      return <RollerCoaster {...props} />;
     default:
       return <Box {...props} />;
   }

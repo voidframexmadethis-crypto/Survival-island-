@@ -34,12 +34,14 @@ import {
   LogOut,
   Map as MapIcon,
   Moon,
+  Music,
   PackageOpen,
   PackagePlus,
   Pause,
   Pickaxe,
   Play,
   Plus,
+  RollerCoaster,
   RotateCcw,
   RotateCw,
   Settings,
@@ -67,6 +69,7 @@ import { STAGE_1_MISSIONS } from '@/game/data/missions';
 import { GameEngine } from '@/game/engine/GameEngine';
 import {
   DEFAULT_SETTINGS,
+  createNewSaveSlotId,
   deleteSaveSlot,
   getLatestSaveSlot,
   listSaveSlots,
@@ -77,12 +80,15 @@ import {
 } from '@/game/systems/saveManager';
 import {
   ActiveModal,
+  FlatSurfaceStyle,
   GameMode,
   GameSettings,
   HUDStateSnapshot,
   ItemId,
   ResourceToast,
   SaveSlotSummary,
+  WorldType,
+  resolveAllowedGameMode,
 } from '@/game/types';
 import { CookingModal } from './CookingModal';
 import { DryingRackModal } from './DryingRackModal';
@@ -110,6 +116,8 @@ import { VehicleBuilderModal } from './VehicleBuilderModal';
 import { CommandConsoleModal } from './CommandConsoleModal';
 import { DimensionWheelModal } from './DimensionWheelModal';
 import { MusicStudioModal } from './MusicStudioModal';
+import { WorldSelectionMenu } from './WorldSelectionMenu';
+import { CoasterStudioModal } from './CoasterStudioModal';
 
 function formatTimePhase(t: number): string {
   if (t < 0.2 || t >= 0.84) return 'Night';
@@ -132,6 +140,7 @@ export function SurvivalGameClient() {
   const slotButtonRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const [screen, setScreen] = useState<'menu' | 'playing'>('menu');
+  const [currentSlotId, setCurrentSlotId] = useState<string>('slot_1');
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
   const [activeStationStructureId, setActiveStationStructureId] = useState<
     string | undefined
@@ -469,11 +478,15 @@ export function SurvivalGameClient() {
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('autostart') === '1') {
-      engine.setGameMode('survival');
-      engine.startNewWorldState('slot_1', true);
+      engine.startNewWorldState('slot_1', true, {
+        worldType: 'island',
+        worldName: 'Survival Island',
+        gameMode: 'survival',
+      });
       engine.ensurePlayerHasGun(true);
       engine.setMode('playing');
       window.requestAnimationFrame(() => {
+        setCurrentSlotId('slot_1');
         setActiveModal(null);
         setScreen('playing');
       });
@@ -550,7 +563,8 @@ export function SurvivalGameClient() {
     if (screen !== 'playing') return;
     const id = window.setInterval(() => {
       if (engineRef.current) {
-        saveGameToSlot(engineRef.current.exportSaveData('slot_1'));
+        const slotId = engineRef.current.getCurrentSlotId() || 'slot_1';
+        saveGameToSlot(engineRef.current.exportSaveData(slotId));
         refreshSaves();
       }
     }, 35000);
@@ -575,13 +589,30 @@ export function SurvivalGameClient() {
     }
   }, [equippedSlot, hudWindowStart]);
 
-  const handleStartNewGame = (mode: GameMode = 'survival') => {
+  const handleStartNewGame = (opts: {
+    worldType: WorldType;
+    worldName: string;
+    gameMode: GameMode;
+    flatSurfaceStyle?: FlatSurfaceStyle;
+  }) => {
     if (!engineRef.current) return;
     engineRef.current.unlockAudio();
-    engineRef.current.setGameMode(mode);
-    engineRef.current.startNewWorldState('slot_1', true);
-    engineRef.current.ensurePlayerHasGun(true);
+    const safeMode = resolveAllowedGameMode(opts.worldType, opts.gameMode);
+    const slotId = createNewSaveSlotId(opts.worldType);
+    const playCinematic = opts.worldType === 'island';
+    engineRef.current.startNewWorldState(slotId, playCinematic, {
+      worldType: opts.worldType,
+      worldName: opts.worldName,
+      flatSurfaceStyle: opts.flatSurfaceStyle,
+      gameMode: safeMode,
+    });
+    if (opts.worldType === 'island') {
+      engineRef.current.ensurePlayerHasGun(true);
+    }
+    saveGameToSlot(engineRef.current.exportSaveData(slotId));
+    refreshSaves();
     engineRef.current.setMode('playing');
+    setCurrentSlotId(slotId);
     setActiveModal(null);
     setScreen('playing');
   };
@@ -594,7 +625,10 @@ export function SurvivalGameClient() {
     if (!data) return;
     engineRef.current.unlockAudio();
     engineRef.current.loadFromSave(data);
-    engineRef.current.ensurePlayerHasGun(false);
+    setCurrentSlotId(targetId);
+    if (data.worldType !== 'flat') {
+      engineRef.current.ensurePlayerHasGun(false);
+    }
     if (data.hudPreferences) {
       const merged: GameSettings = {
         ...settings,
@@ -610,18 +644,22 @@ export function SurvivalGameClient() {
     setScreen('playing');
     pushToast({
       id: `loaded_${Date.now()}`,
-      text: `Loaded Day ${data.dayCount} Expedition · Gun, Knife & Supplies Ready`,
+      text:
+        data.worldType === 'flat'
+          ? `Loaded ${data.worldName || 'Flat Park World'} · Creative Park Ready`
+          : `Loaded ${data.worldName || `Day ${data.dayCount} Expedition`}`,
       tone: 'info',
     });
   };
 
-  const handleSaveNow = (slotId = 'slot_1') => {
+  const handleSaveNow = (slotId?: string) => {
     if (!engineRef.current) return;
-    const ok = saveGameToSlot(engineRef.current.exportSaveData(slotId));
+    const targetSlot = slotId || engineRef.current.getCurrentSlotId() || 'slot_1';
+    const ok = saveGameToSlot(engineRef.current.exportSaveData(targetSlot));
     refreshSaves();
     pushToast({
       id: `saved_${Date.now()}`,
-      text: ok ? 'Expedition progress saved' : 'Could not save to storage',
+      text: ok ? 'World progress saved' : 'Could not save to storage',
       tone: ok ? 'craft' : 'warning',
     });
   };
@@ -769,179 +807,25 @@ export function SurvivalGameClient() {
         }}
       />
 
-      {/* MAIN MENU / TITLE SCREEN OVERLAY */}
+      {/* MAIN MENU / WORLD SELECTION OVERLAY */}
       {screen === 'menu' && (
-        <div className="relative z-10 w-full min-h-[100dvh] flex flex-col justify-between p-5 sm:p-10 bg-gradient-to-t from-stone-950/90 via-stone-950/40 to-stone-950/70">
-          <div className="flex flex-wrap items-center justify-between gap-2 safe-top">
-            <div className="text-xs font-semibold tracking-wider text-amber-300 uppercase">
-              AdventureForgeGames · Stage 1 Final Polish
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setActiveModal('multiplayer')}
-                className="min-h-[44px] px-3.5 rounded-xl bg-sky-950/90 hover:bg-sky-900 border border-sky-500/50 text-sky-200 text-xs font-semibold flex items-center gap-2 whitespace-nowrap shrink-0"
-              >
-                <Users className="w-4 h-4" />
-                <span>Multiplayer{hud?.multiplayerState?.roomCode ? ` (${hud.multiplayerState.roomCode})` : ''}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveModal('mods')}
-                className="min-h-[44px] px-3.5 rounded-xl bg-emerald-950/90 hover:bg-emerald-900 border border-emerald-500/50 text-emerald-200 text-xs font-semibold flex items-center gap-2 whitespace-nowrap shrink-0"
-              >
-                <Box className="w-4 h-4" />
-                <span>Mods</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveModal('settings')}
-                className="min-h-[44px] px-4 rounded-xl bg-stone-900/90 hover:bg-stone-800 border border-stone-700 text-stone-100 text-xs font-semibold flex items-center gap-2 whitespace-nowrap shrink-0"
-              >
-                <Settings className="w-4 h-4" />
-                <span>Settings</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="max-w-3xl space-y-6 my-auto py-6">
-            <div className="space-y-3">
-              <h1 className="font-display text-4xl sm:text-6xl font-bold tracking-tight text-stone-50 leading-[1.05] text-balance drop-shadow-lg">
-                SURVIVAL ISLAND: LOST WORLD
-              </h1>
-              <p className="text-sm sm:text-base text-stone-200 max-w-xl leading-relaxed">
-                Realistic 3D prehistoric survival simulator — gather timber and ore, craft tools, hunt wildlife, roast meals, and outlast 7-Day Blood Moon Sieges.
-              </p>
-            </div>
-
-            {latestSave && (
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => handleContinueGame(latestSave.slotId)}
-                  className="min-h-[52px] px-6 py-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-sm flex items-center gap-2.5 shadow-xl whitespace-nowrap"
-                >
-                  <Play className="w-5 h-5" />
-                  <span>
-                    Continue Expedition (Day {latestSave.dayCount} · HP {latestSave.health})
-                  </span>
-                </button>
-              </div>
-            )}
-
-            {/* 3 Playable Game Modes */}
-            <div className="space-y-2.5 pt-2">
-              <div className="text-xs font-bold uppercase tracking-wider text-amber-400">
-                Select Game Mode
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <button
-                  data-start="true"
-                  onClick={() => handleStartNewGame('survival')}
-                  className="p-4 rounded-2xl bg-stone-900/90 hover:bg-stone-800 border border-amber-500/50 hover:border-amber-400 text-left transition shadow-xl flex flex-col justify-between group"
-                >
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10px] px-2 py-0.5 rounded bg-amber-600 font-extrabold text-stone-950 uppercase">
-                        Hardcore
-                      </span>
-                      <Compass className="w-4 h-4 text-amber-400 group-hover:scale-110 transition" />
-                    </div>
-                    <h3 className="text-sm font-bold text-stone-100 font-display">
-                      Survival Mode
-                    </h3>
-                    <p className="text-[11px] text-stone-300 mt-1 leading-relaxed">
-                      Full biological survival, Fluid Erosion, and 7-Day Blood Moon Sieges with nocturnal predator attacks.
-                    </p>
-                  </div>
-                  <div className="mt-4 text-xs font-bold text-amber-400 flex items-center gap-1">
-                    <span>Play Survival</span>
-                    <Play className="w-3.5 h-3.5" />
-                  </div>
-                </button>
-
-                <button
-                  onClick={() => handleStartNewGame('boss_hunt')}
-                  className="p-4 rounded-2xl bg-stone-900/90 hover:bg-stone-800 border border-red-500/50 hover:border-red-400 text-left transition shadow-xl flex flex-col justify-between group"
-                >
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10px] px-2 py-0.5 rounded bg-red-600 font-extrabold text-white uppercase">
-                        Action
-                      </span>
-                      <Skull className="w-4 h-4 text-red-400 group-hover:scale-110 transition" />
-                    </div>
-                    <h3 className="text-sm font-bold text-stone-100 font-display">
-                      Guardian Boss Hunt
-                    </h3>
-                    <p className="text-[11px] text-stone-300 mt-1 leading-relaxed">
-                      Track and defeat 4 colossal Lost World Guardian Bosses across distinct biomes to claim Core Shards.
-                    </p>
-                  </div>
-                  <div className="mt-4 text-xs font-bold text-red-400 flex items-center gap-1">
-                    <span>Hunt Bosses</span>
-                    <Play className="w-3.5 h-3.5" />
-                  </div>
-                </button>
-
-                <button
-                  onClick={() => handleStartNewGame('sandbox')}
-                  className="p-4 rounded-2xl bg-stone-900/90 hover:bg-stone-800 border border-sky-500/50 hover:border-sky-400 text-left transition shadow-xl flex flex-col justify-between group"
-                >
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10px] px-2 py-0.5 rounded bg-sky-600 font-extrabold text-stone-950 uppercase">
-                        Creative
-                      </span>
-                      <Zap className="w-4 h-4 text-sky-400 group-hover:scale-110 transition" />
-                    </div>
-                    <h3 className="text-sm font-bold text-stone-100 font-display">
-                      Sandbox / God Mode
-                    </h3>
-                    <p className="text-[11px] text-stone-300 mt-1 leading-relaxed">
-                      Unlimited resources, flight, instant Creator Relic spawner, and full Smart TV access.
-                    </p>
-                  </div>
-                  <div className="mt-4 text-xs font-bold text-sky-400 flex items-center gap-1">
-                    <span>Enter Sandbox</span>
-                    <Play className="w-3.5 h-3.5" />
-                  </div>
-                </button>
-              </div>
-            </div>
-
-            {saveSlots.length > 0 && (
-              <div className="rounded-xl bg-stone-950/85 border border-stone-800 p-4 max-w-md space-y-2">
-                <div className="text-xs font-semibold text-stone-400">
-                  Saved Expeditions
-                </div>
-                {saveSlots.slice(0, 3).map((slot) => (
-                  <div
-                    key={slot.slotId}
-                    className="flex items-center justify-between gap-2 text-xs py-1.5 border-t border-stone-800/80 first:border-t-0"
-                  >
-                    <div className="text-stone-200 font-mono-tabular">
-                      Day {slot.dayCount} · {slot.structuresCount} camp structures
-                    </div>
-                    <button
-                      onClick={() => handleContinueGame(slot.slotId)}
-                      className="min-h-[36px] px-3 rounded-lg bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-semibold text-stone-100"
-                    >
-                      Load
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-stone-300 safe-bottom">
-            <span>
-              Desktop: WASD Move · Drag Look · C Crouch · E Act · V Kick Debris · B Craft · Space Jump/Vault/Wall-Kick
-            </span>
-            <span aria-hidden="true">·</span>
-            <span>Mobile: Virtual Thumbstick &amp; Touch Camera</span>
-          </div>
-        </div>
+        <WorldSelectionMenu
+          latestSave={latestSave}
+          saveSlots={saveSlots}
+          multiplayerRoomCode={hud?.multiplayerState?.roomCode}
+          onContinueLatest={() => {
+            if (latestSave) handleContinueGame(latestSave.slotId);
+          }}
+          onLoadSlot={(slotId) => handleContinueGame(slotId)}
+          onDeleteSlot={(slotId) => {
+            deleteSaveSlot(slotId);
+            refreshSaves();
+          }}
+          onCreateWorld={handleStartNewGame}
+          onOpenMultiplayer={() => setActiveModal('multiplayer')}
+          onOpenMods={() => setActiveModal('mods')}
+          onOpenSettings={() => setActiveModal('settings')}
+        />
       )}
 
       {/* SHIPWRECK INTRO CINEMATIC OVERLAY */}
@@ -1073,14 +957,18 @@ export function SurvivalGameClient() {
 
           {/* Top Bar: Compact Survival Vitals (Left), Slim Compass (Center), Menu/Exit (Right) */}
           <div className="flex flex-nowrap items-start justify-between gap-1.5 sm:gap-2">
-            {/* Compact Survival Vitals Panel */}
-            <div className="pointer-events-auto rounded-lg bg-stone-950/85 border border-stone-700/80 p-1.5 sm:p-2.5 w-[148px] sm:w-[208px] space-y-1 shadow-lg">
+            {/* Top-Left Vitals / Flat World Park Tools Panel */}
+            <div className="pointer-events-auto rounded-lg bg-stone-950/90 border border-stone-700/80 p-1.5 sm:p-2.5 w-[166px] sm:w-[228px] space-y-1.5 shadow-lg">
               <div className="flex items-center justify-between gap-1 text-[10px] sm:text-[11px] text-stone-300 pb-0.5 border-b border-stone-800">
                 <span className="font-semibold text-amber-300 truncate">
-                  {hud.biomeName}
+                  {hud.worldType === 'flat'
+                    ? hud.worldName || 'Flat Park Grounds'
+                    : hud.biomeName}
                 </span>
                 <span className="font-mono-tabular shrink-0 flex items-center gap-1">
-                  {hud.weather === 'storm' ? (
+                  {hud.worldType === 'flat' ? (
+                    <Sun className="w-3 h-3 text-sky-400" />
+                  ) : hud.weather === 'storm' ? (
                     <CloudLightning className="w-3 h-3 text-amber-300" />
                   ) : hud.weather === 'rain' ? (
                     <CloudRain className="w-3 h-3 text-sky-300" />
@@ -1095,68 +983,122 @@ export function SurvivalGameClient() {
                 </span>
               </div>
 
-              <VitalBar
-                icon={<Heart className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-red-400" />}
-                label="Health"
-                value={hud.vitals.health}
-                barColor="bg-red-500"
-              />
-              <VitalBar
-                icon={<Utensils className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-400" />}
-                label="Hunger"
-                value={hud.vitals.hunger}
-                barColor="bg-amber-500"
-              />
-              <VitalBar
-                icon={<Droplets className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-sky-400" />}
-                label="Thirst"
-                value={hud.vitals.thirst}
-                barColor="bg-sky-500"
-              />
-              <VitalBar
-                icon={<Zap className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-lime-400" />}
-                label="Stamina"
-                value={hud.vitals.stamina}
-                barColor="bg-lime-500"
-              />
-
-              {/* Optional Collapsible Extra Telemetry */}
-              <div className="pt-0.5 border-t border-stone-800/80">
-                <button
-                  type="button"
-                  onClick={() => setTelemetryExpanded(!telemetryExpanded)}
-                  className="w-full flex items-center justify-between text-[10px] text-stone-400 hover:text-stone-200"
-                >
-                  <span className="truncate">{formatTimePhase(hud.timeOfDay)}</span>
-                  {telemetryExpanded ? (
-                    <ChevronUp className="w-3 h-3 shrink-0" />
-                  ) : (
-                    <ChevronDown className="w-3 h-3 shrink-0" />
-                  )}
-                </button>
-                {telemetryExpanded && (
-                  <div className="space-y-1 text-[10px] font-mono-tabular text-stone-300 pt-1 mt-0.5 border-t border-stone-800/60">
-                    <div className="flex items-center justify-between">
-                      <span className="flex items-center gap-0.5">
-                        <Thermometer className="w-3 h-3" />
-                        {hud.vitals.temperatureC.toFixed(1)}°C
-                      </span>
-                      <span className="flex items-center gap-0.5">
-                        <Eye className="w-3 h-3" />
-                        {hud.visibilityPercent}%
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-stone-400">
-                      <span>W:{countOf('wood')}</span>
-                      <span>S:{countOf('stone')}</span>
-                      <span className="text-amber-300 flex items-center gap-0.5">
-                        <Coins className="w-3 h-3" />
-                        {hud.coins}
-                      </span>
-                    </div>
+              {hud.worldType === 'flat' ? (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="px-1.5 py-0.5 rounded bg-sky-950 border border-sky-500/50 text-sky-300 font-bold uppercase">
+                      Flat · Creative
+                    </span>
+                    <span className="font-mono-tabular text-stone-300">
+                      {hud.coasters?.length ?? 0} Coasters
+                    </span>
                   </div>
-                )}
-              </div>
+                  <div className="grid grid-cols-2 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => openModal('coaster')}
+                      className="min-h-[28px] px-2 rounded bg-sky-500 hover:bg-sky-400 text-stone-950 font-bold text-[10px] flex items-center justify-center gap-1 whitespace-nowrap shrink-0"
+                    >
+                      <RollerCoaster className="w-3 h-3" />
+                      <span>Coasters</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openModal('music_studio')}
+                      className="min-h-[28px] px-2 rounded bg-stone-800 hover:bg-stone-700 border border-stone-600 text-amber-300 font-bold text-[10px] flex items-center justify-center gap-1 whitespace-nowrap shrink-0"
+                    >
+                      <Music className="w-3 h-3" />
+                      <span>Music Pro</span>
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      engineRef.current?.setFlatSurfaceStyle(
+                        hud.flatSurfaceStyle === 'concrete_plaza'
+                          ? 'turf_grid'
+                          : 'concrete_plaza',
+                      )
+                    }
+                    className="w-full min-h-[26px] px-2 rounded bg-stone-900 hover:bg-stone-800 border border-stone-700 text-stone-200 text-[10px] font-semibold flex items-center justify-between gap-1"
+                  >
+                    <span className="flex items-center gap-1">
+                      <Layers className="w-3 h-3 text-emerald-400" />
+                      <span>Ground</span>
+                    </span>
+                    <span className="text-sky-300">
+                      {hud.flatSurfaceStyle === 'concrete_plaza'
+                        ? 'Concrete'
+                        : 'Turf Grid'}
+                    </span>
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <VitalBar
+                    icon={<Heart className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-red-400" />}
+                    label="Health"
+                    value={hud.vitals.health}
+                    barColor="bg-red-500"
+                  />
+                  <VitalBar
+                    icon={<Utensils className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-400" />}
+                    label="Hunger"
+                    value={hud.vitals.hunger}
+                    barColor="bg-amber-500"
+                  />
+                  <VitalBar
+                    icon={<Droplets className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-sky-400" />}
+                    label="Thirst"
+                    value={hud.vitals.thirst}
+                    barColor="bg-sky-500"
+                  />
+                  <VitalBar
+                    icon={<Zap className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-lime-400" />}
+                    label="Stamina"
+                    value={hud.vitals.stamina}
+                    barColor="bg-lime-500"
+                  />
+
+                  {/* Optional Collapsible Extra Telemetry */}
+                  <div className="pt-0.5 border-t border-stone-800/80">
+                    <button
+                      type="button"
+                      onClick={() => setTelemetryExpanded(!telemetryExpanded)}
+                      className="w-full flex items-center justify-between text-[10px] text-stone-400 hover:text-stone-200"
+                    >
+                      <span className="truncate">{formatTimePhase(hud.timeOfDay)}</span>
+                      {telemetryExpanded ? (
+                        <ChevronUp className="w-3 h-3 shrink-0" />
+                      ) : (
+                        <ChevronDown className="w-3 h-3 shrink-0" />
+                      )}
+                    </button>
+                    {telemetryExpanded && (
+                      <div className="space-y-1 text-[10px] font-mono-tabular text-stone-300 pt-1 mt-0.5 border-t border-stone-800/60">
+                        <div className="flex items-center justify-between">
+                          <span className="flex items-center gap-0.5">
+                            <Thermometer className="w-3 h-3" />
+                            {hud.vitals.temperatureC.toFixed(1)}°C
+                          </span>
+                          <span className="flex items-center gap-0.5">
+                            <Eye className="w-3 h-3" />
+                            {hud.visibilityPercent}%
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-stone-400">
+                          <span>W:{countOf('wood')}</span>
+                          <span>S:{countOf('stone')}</span>
+                          <span className="text-amber-300 flex items-center gap-0.5">
+                            <Coins className="w-3 h-3" />
+                            {hud.coins}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Top-Center Slim Compass (No permanent objective box blocking center view) */}
@@ -1166,7 +1108,7 @@ export function SurvivalGameClient() {
               )}
             </div>
 
-            {/* Top-Right Compact Actions: Menu / Exit Vehicle / Stand Up / Multiplayer Mic */}
+            {/* Top-Right Compact Actions: Coasters / Menu / Exit Vehicle / Stand Up / Exit Ride */}
             <div className="pointer-events-auto flex flex-col items-end gap-1 shrink-0">
               <div className="flex items-center gap-1.5">
                 {hud.multiplayerState?.connected && (
@@ -1200,7 +1142,27 @@ export function SurvivalGameClient() {
                   </button>
                 )}
 
-                {hud?.activeVehicle ? (
+                {hud?.activeCoasterRide ? (
+                  <button
+                    type="button"
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      engineRef.current?.exitCoasterRide();
+                    }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      engineRef.current?.exitCoasterRide();
+                    }}
+                    className="pointer-events-auto px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-lg bg-sky-500 hover:bg-sky-400 text-stone-950 font-display font-extrabold text-xs shadow-lg border border-sky-200 flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
+                    style={{ position: 'relative', zIndex: 60 }}
+                    title="Exit Roller Coaster (E)"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>EXIT RIDE</span>
+                  </button>
+                ) : hud?.activeVehicle ? (
                   <button
                     type="button"
                     onPointerDown={(e) => {
@@ -1240,17 +1202,28 @@ export function SurvivalGameClient() {
                     <span>STAND</span>
                   </button>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveModal('menu_drawer');
-                      engineRef.current?.setMode('paused');
-                    }}
-                    className="px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-lg bg-stone-950/85 hover:bg-stone-900 text-amber-300 font-display font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-lg border border-stone-700/85 transition"
-                  >
-                    <Settings className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                    <span>MENU</span>
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => openModal('coaster')}
+                      className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg bg-stone-950/90 hover:bg-stone-900 text-sky-300 font-display font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-lg border border-sky-500/40 transition whitespace-nowrap shrink-0"
+                      title="Roller Coaster Creator"
+                    >
+                      <RollerCoaster className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                      <span className="hidden sm:inline">COASTER</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveModal('menu_drawer');
+                        engineRef.current?.setMode('paused');
+                      }}
+                      className="px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-lg bg-stone-950/90 hover:bg-stone-900 text-amber-300 font-display font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-lg border border-stone-700/85 transition whitespace-nowrap shrink-0"
+                    >
+                      <Settings className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                      <span>MENU</span>
+                    </button>
+                  </>
                 )}
               </div>
 
@@ -1467,6 +1440,46 @@ export function SurvivalGameClient() {
                   </button>
                 )}
             </div>
+
+            {/* Active Coaster First-Person Ride HUD */}
+            {hud.activeCoasterRide && !activeModal && (
+              <div
+                onPointerDown={(e) => e.stopPropagation()}
+                className="pointer-events-auto relative z-30 w-[min(95vw,520px)] rounded-xl bg-stone-950/92 border border-sky-400/60 px-3.5 py-2.5 shadow-2xl flex items-center justify-between gap-3"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-sky-500/20 border border-sky-400/50 flex items-center justify-center text-sky-300 shrink-0">
+                    <RollerCoaster className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xs sm:text-sm font-bold text-stone-100 truncate">
+                      {hud.activeCoasterRide.coasterName}
+                    </div>
+                    <div className="text-[11px] font-mono-tabular text-stone-300 flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
+                      <span className="text-sky-300 font-bold">
+                        {Math.round(hud.activeCoasterRide.speedKmh)} km/h
+                      </span>
+                      <span>Elev {hud.activeCoasterRide.heightM.toFixed(1)}m</span>
+                      <span>{(hud.activeCoasterRide.verticalG ?? 1).toFixed(1)}G</span>
+                      {hud.activeCoasterRide.segmentLabel && (
+                        <span className="font-sans text-stone-400">
+                          {hud.activeCoasterRide.segmentLabel}
+                        </span>
+                      )}
+                      <span>{Math.round(hud.activeCoasterRide.progressPercent)}%</span>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => engineRef.current?.exitCoasterRide()}
+                  className="min-h-[34px] px-3 py-1 rounded-lg bg-sky-500 hover:bg-sky-400 text-stone-950 text-xs font-bold flex items-center gap-1 whitespace-nowrap shrink-0"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Disembark [E]</span>
+                </button>
+              </div>
+            )}
 
             {/* Active Vehicle Driving HUD */}
             {hud.activeVehicle && !activeModal && (
@@ -2485,13 +2498,65 @@ export function SurvivalGameClient() {
         />
       )}
 
+      {activeModal === 'coaster' && hud && (
+        <CoasterStudioModal
+          hud={hud}
+          onCreateCoaster={(name, withStation) =>
+            engineRef.current?.createCoaster(name, withStation) || null
+          }
+          onDeleteCoaster={(id) => engineRef.current?.deleteCoaster(id)}
+          onRenameCoaster={(id, nextName) =>
+            engineRef.current?.renameCoaster(id, nextName)
+          }
+          onSetColor={(id, color) => engineRef.current?.setCoasterColor(id, color)}
+          onSetCoasterType={(id, type) => engineRef.current?.setCoasterType(id, type)}
+          onSetCarCount={(id, count) =>
+            engineRef.current?.setCoasterTrainCars(id, count)
+          }
+          onAppendPiece={(id, pieceKey) =>
+            engineRef.current?.appendCoasterPiece(id, pieceKey)
+          }
+          onAppendInversion={(id, settingsObj) =>
+            engineRef.current?.appendCoasterInversion(id, settingsObj)
+          }
+          onCompleteCircuit={(id) =>
+            engineRef.current?.completeCoasterCircuit(id)
+          }
+          onDepumpCoaster={(id) => engineRef.current?.depumpCoaster(id)}
+          onExportCSV={(id) => engineRef.current?.exportCoasterCSV(id) || ''}
+          onImportCSV={(id, csv) => engineRef.current?.importCoasterCSV(id, csv)}
+          onCreateDemoCoaster={(name, type) =>
+            engineRef.current?.createDemoCoaster(name, type) || null
+          }
+          onAddNodeAhead={(id) => engineRef.current?.addCoasterNodeAhead(id)}
+          onUpdateNode={(id, idx, patch) =>
+            engineRef.current?.updateCoasterNode(id, idx, patch)
+          }
+          onRemoveNode={(id, idx) => engineRef.current?.removeCoasterNode(id, idx)}
+          onToggleDispatch={(id, running) =>
+            engineRef.current?.toggleCoasterDispatch(id, running)
+          }
+          onResetTrain={(id) => engineRef.current?.resetCoasterTrain(id)}
+          onBoardRide={(id) => engineRef.current?.boardCoasterRide(id)}
+          onOpenMusicStudio={() => openModal('music_studio')}
+          onClose={closeModal}
+        />
+      )}
+
       {activeModal === 'menu_drawer' && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fadeIn">
-          <div className="relative w-full max-w-md bg-stone-900 border border-amber-500/50 rounded-2xl shadow-2xl p-6 space-y-5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+          <div className="relative w-full max-w-md bg-stone-900 border border-amber-500/50 rounded-2xl shadow-2xl p-6 space-y-5 max-h-[90vh] overflow-y-auto survival-scroll">
             <div className="flex items-center justify-between border-b border-stone-800 pb-3">
-              <h3 className="font-display text-lg font-bold text-amber-300">
-                Survival Island Menu &amp; Tools
-              </h3>
+              <div>
+                <h3 className="font-display text-lg font-bold text-amber-300">
+                  {hud?.worldType === 'flat'
+                    ? 'Flat Park Menu & Tools'
+                    : 'Survival Island Menu & Tools'}
+                </h3>
+                <div className="text-[11px] text-stone-400">
+                  {hud?.worldName || 'Active World'}
+                </div>
+              </div>
               <button
                 onClick={closeModal}
                 className="p-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 transition"
@@ -2501,80 +2566,105 @@ export function SurvivalGameClient() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <button
+                onClick={() => setActiveModal('coaster')}
+                className="p-3.5 rounded-xl bg-sky-950/80 hover:bg-sky-500 hover:text-stone-950 border border-sky-500/40 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <RollerCoaster className="w-5 h-5 text-sky-300 shrink-0" />
+                <span>Coaster Studio</span>
+              </button>
+              <button
+                onClick={() => setActiveModal('music_studio')}
+                className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <Music className="w-5 h-5 text-amber-400 shrink-0" />
+                <span>Music Pro</span>
+              </button>
+              <button
+                onClick={() => setActiveModal('place')}
+                className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <PackageOpen className="w-5 h-5 text-amber-400 shrink-0" />
+                <span>Place &amp; Build</span>
+              </button>
+              <button
                 onClick={() => setActiveModal('inventory')}
                 className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
               >
-                <Backpack className="w-5 h-5 text-amber-400" />
+                <Backpack className="w-5 h-5 text-amber-400 shrink-0" />
                 <span>Pack / Inventory</span>
               </button>
               <button
                 onClick={() => { setActiveStationStructureId(undefined); setActiveModal('crafting'); }}
                 className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
               >
-                <Hammer className="w-5 h-5 text-amber-400" />
+                <Hammer className="w-5 h-5 text-amber-400 shrink-0" />
                 <span>Crafting Bay</span>
               </button>
               <button
                 onClick={() => setActiveModal('map')}
                 className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
               >
-                <MapIcon className="w-5 h-5 text-amber-400" />
-                <span>Island Map</span>
+                <MapIcon className="w-5 h-5 text-amber-400 shrink-0" />
+                <span>{hud?.worldType === 'flat' ? 'Park Map' : 'Island Map'}</span>
               </button>
               <button
                 onClick={() => setActiveModal('vehicles')}
                 className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
               >
-                <Car className="w-5 h-5 text-amber-400" />
+                <Car className="w-5 h-5 text-amber-400 shrink-0" />
                 <span>Vehicle Garage</span>
               </button>
-              <button
-                onClick={() => setActiveModal('multiverse')}
-                className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
-              >
-                <Sparkles className="w-5 h-5 text-amber-400" />
-                <span>Realms Portal</span>
-              </button>
+              {hud?.worldType !== 'flat' && (
+                <button
+                  onClick={() => setActiveModal('multiverse')}
+                  className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+                >
+                  <Sparkles className="w-5 h-5 text-amber-400 shrink-0" />
+                  <span>Realms Portal</span>
+                </button>
+              )}
               <button
                 onClick={() => setActiveModal('multiplayer')}
                 className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
               >
-                <Users className="w-5 h-5 text-amber-400" />
+                <Users className="w-5 h-5 text-amber-400 shrink-0" />
                 <span>Multiplayer P2P</span>
               </button>
               <button
                 onClick={() => setActiveModal('mods')}
                 className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
               >
-                <Box className="w-5 h-5 text-amber-400" />
+                <Box className="w-5 h-5 text-amber-400 shrink-0" />
                 <span>Mod Manager</span>
               </button>
               <button
                 onClick={() => setActiveModal('console')}
                 className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
               >
-                <Terminal className="w-5 h-5 text-amber-400" />
+                <Terminal className="w-5 h-5 text-amber-400 shrink-0" />
                 <span>Console &amp; Relics</span>
               </button>
-              <button
-                onClick={() => setActiveModal('missions')}
-                className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
-              >
-                <Trophy className="w-5 h-5 text-amber-400" />
-                <span>Missions &amp; Goals</span>
-              </button>
+              {hud?.worldType !== 'flat' && (
+                <button
+                  onClick={() => setActiveModal('missions')}
+                  className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+                >
+                  <Trophy className="w-5 h-5 text-amber-400 shrink-0" />
+                  <span>Missions &amp; Goals</span>
+                </button>
+              )}
               <button
                 onClick={() => openModal('tv')}
                 className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
               >
-                <Tv className="w-5 h-5 text-amber-400" />
+                <Tv className="w-5 h-5 text-amber-400 shrink-0" />
                 <span>Smart TV</span>
               </button>
               <button
                 onClick={() => setActiveModal('settings')}
                 className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
               >
-                <Settings className="w-5 h-5 text-amber-400" />
+                <Settings className="w-5 h-5 text-amber-400 shrink-0" />
                 <span>Settings</span>
               </button>
             </div>
@@ -2621,6 +2711,10 @@ export function SurvivalGameClient() {
       {activeModal === 'pause' && (
         <PauseModal
           saveSlots={saveSlots}
+          currentSlotId={currentSlotId}
+          worldType={hud?.worldType || 'island'}
+          worldName={hud?.worldName}
+          gameMode={hud?.gameMode || 'survival'}
           onResume={closeModal}
           onSaveNow={(slotId) => handleSaveNow(slotId)}
           onLoadSlot={(slotId) => handleContinueGame(slotId)}
@@ -2630,7 +2724,7 @@ export function SurvivalGameClient() {
           }}
           onOpenSettings={() => setActiveModal('settings')}
           onQuitToMenu={() => {
-            handleSaveNow('slot_1');
+            handleSaveNow(engineRef.current?.getCurrentSlotId() || 'slot_1');
             setActiveModal(null);
             setScreen('menu');
             engineRef.current?.setMode('menu');
@@ -2680,7 +2774,17 @@ export function SurvivalGameClient() {
                 </button>
               )}
               <button
-                onClick={() => handleStartNewGame()}
+                onClick={() =>
+                  handleStartNewGame({
+                    worldType: hud.worldType || 'island',
+                    worldName: hud.worldName || 'Lost World Island',
+                    gameMode: resolveAllowedGameMode(
+                      hud.worldType || 'island',
+                      hud.gameMode,
+                    ),
+                    flatSurfaceStyle: hud.flatSurfaceStyle,
+                  })
+                }
                 className="w-full min-h-[48px] rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-100 font-semibold text-sm flex items-center justify-center gap-2"
               >
                 <RotateCcw className="w-4 h-4" />

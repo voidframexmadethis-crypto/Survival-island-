@@ -1663,6 +1663,19 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
     maxStack: 5,
     iconKey: 'smart_tv',
     color: '#38bdf8',
+    structureType: 'smart_tv',
+  },
+  coaster_station: {
+    id: 'coaster_station',
+    name: 'Roller Coaster Station',
+    category: 'structure',
+    description:
+      'Placeable amusement park boarding platform and track dispatch console. Open the Coaster Studio to build loops, hills, custom inversions, and ride in 3D.',
+    stackable: true,
+    maxStack: 10,
+    iconKey: 'coaster_station',
+    color: '#fb7185',
+    structureType: 'coaster_station',
   },
   gold_bar: {
     id: 'gold_bar',

@@ -235,7 +235,8 @@ export type ItemId =
   | 'crystal_armor'
   | 'nether_ember'
   | 'alien_core'
-  | 'diamond_crystal';
+  | 'diamond_crystal'
+  | 'coaster_station';
 
 export type StructuralBlockKind =
   | 'stone_block'
@@ -534,6 +535,108 @@ export interface CookingRecipe {
 
 export type GameMode = 'survival' | 'boss_hunt' | 'sandbox';
 
+export type WorldType = 'island' | 'flat';
+
+export type FlatSurfaceStyle = 'turf_grid' | 'concrete_plaza';
+
+export function resolveAllowedGameMode(
+  worldType: WorldType,
+  requestedMode?: GameMode,
+): GameMode {
+  if (worldType === 'flat') {
+    return 'sandbox';
+  }
+  if (
+    requestedMode === 'survival' ||
+    requestedMode === 'boss_hunt' ||
+    requestedMode === 'sandbox'
+  ) {
+    return requestedMode;
+  }
+  return 'survival';
+}
+
+export type CoasterSegmentKind =
+  | 'station'
+  | 'chain_lift'
+  | 'lsm_launch'
+  | 'coast'
+  | 'trim_brake'
+  | 'block_brake'
+  | 'splashdown'
+  | 'inversion';
+
+export interface SavedCoasterNode {
+  position: { x: number; y: number; z: number };
+  bank: number;
+  segmentType?: CoasterSegmentKind;
+  targetSpeed?: number;
+}
+
+export type CoasterModelType =
+  | 'sit_down'
+  | 'tilt'
+  | 'single_rail'
+  | 'hybrid_classic'
+  | 'hybrid_modern'
+  | 'wood_3row'
+  | 'classic_hyper'
+  | 'twister_hyper'
+  | 'twister_hyper_staggered'
+  | 'twister_dive'
+  | 'twister_invert'
+  | 'twister_wing'
+  | 'lay_down'
+  | 'classic_corkscrew'
+  | 'blitz_lapbar'
+  | 'blitz_wide'
+  | 'air_launch_classic'
+  | 'air_launch_modern'
+  | 'air_launch_wide'
+  | 'rocket_lapbar'
+  | 'rocket_otsr'
+  | 'sky_launch'
+  | 'wooden'
+  | 'steel'
+  | 'inverted'
+  | 'flying'
+  | 'standup'
+  | 'log_flume';
+
+export interface SavedCoasterData {
+  id: string;
+  name: string;
+  trackColor: string;
+  trainCarCount: number;
+  stationPos: { x: number; y: number; z: number };
+  nodes: SavedCoasterNode[];
+  pieceTags?: string[];
+  closedCircuit?: boolean;
+  coasterType?: CoasterModelType;
+}
+
+export interface CoasterHudSummaryItem {
+  id: string;
+  name: string;
+  trackColor: string;
+  nodeCount: number;
+  trackLengthM: number;
+  trainCarCount: number;
+  running: boolean;
+  valid: boolean;
+  validationErrors: string[];
+  speedKmh: number;
+  maxHeightM?: number;
+  estPeakSpeedKmh?: number;
+  inversionsCount?: number;
+  isCompleteCircuit?: boolean;
+  verticalG?: number;
+  lateralG?: number;
+  segmentLabel?: string;
+  coasterType?: CoasterModelType;
+  nodes: SavedCoasterNode[];
+}
+
 export type CampStructureType =
   | 'campfire'
   | 'sleeping_area'
@@ -546,7 +649,8 @@ export type CampStructureType =
   | 'timeshift_sundial'
   | 'auto_turret'
   | 'smart_tv'
-  | 'drying_rack';
+  | 'drying_rack'
+  | 'coaster_station';
 
 export interface PlacedStructure {
   id: string;
@@ -757,7 +861,7 @@ export interface GameStats {
   daysSurvived: number;
 }
 
-export type GraphicsPreset = 'low' | 'medium' | 'high';
+export type GraphicsPreset = 'low' | 'medium' | 'high' | 'ultra';
 export type DrawDistanceTier = 'near' | 'medium' | 'far';
 export type TvSafetyMode = 'auto' | 'safe_mini' | 'full_3d';
 
@@ -783,11 +887,16 @@ export interface GameSettings {
 export interface SaveSlotSummary {
   slotId: string;
   savedAt: number;
+  worldType?: WorldType;
+  worldName?: string;
+  flatSurfaceStyle?: FlatSurfaceStyle;
+  gameMode?: GameMode;
   dayCount: number;
   timeOfDay: number;
   biome: BiomeId;
   health: number;
   structuresCount: number;
+  coastersCount?: number;
   missionsCompleted: number;
 }
 
@@ -838,7 +947,11 @@ export interface GameSaveData {
   stats: GameStats;
   completedMissionIds: string[];
   discoveredLocations: string[];
+  worldType?: WorldType;
+  worldName?: string;
+  flatSurfaceStyle?: FlatSurfaceStyle;
   gameMode?: GameMode;
+  coasters?: SavedCoasterData[];
   tvChannel?: number;
   tvPower?: boolean;
   tvEmbedSrc?: string;
@@ -897,7 +1010,8 @@ export type ActiveModal =
   | 'mods'
   | 'multiverse'
   | 'menu_drawer'
-  | 'music_studio';
+  | 'music_studio'
+  | 'coaster';
 
 export interface NearbyInteraction {
   id: string;
@@ -951,7 +1065,8 @@ export interface NearbyInteraction {
     | 'shipwreck'
     | 'garage_bench'
     | 'armory_chest'
-    | 'portal';
+    | 'portal'
+    | 'coaster_station';
   actionCategory?:
     | 'chop'
     | 'mine'
@@ -1082,7 +1197,22 @@ export interface HUDStateSnapshot {
   vehicles?: ModularVehicleData[];
   activeVehicle?: ActiveVehicleHudState | null;
   selectedCargoVehicleId?: string | null;
+  worldType?: WorldType;
+  worldName?: string;
+  flatSurfaceStyle?: FlatSurfaceStyle;
   gameMode?: GameMode;
+  coasters?: CoasterHudSummaryItem[];
+  activeCoasterRide?: {
+    coasterId: string;
+    coasterName: string;
+    speedKmh: number;
+    heightM: number;
+    progressPercent: number;
+    firstPerson: boolean;
+    verticalG?: number;
+    lateralG?: number;
+    segmentLabel?: string;
+  } | null;
   bloodMoonActive?: boolean;
   daysUntilBloodMoon?: number;
   bossesDefeatedCount?: number;

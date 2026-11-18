@@ -2926,6 +2926,108 @@ export function createCampStructureModel(
     return { group, fireLight: tvGlow };
   }
 
+  if (type === 'coaster_station') {
+    const steelMat = new THREE.MeshStandardMaterial({
+      color: 0x334155,
+      roughness: 0.34,
+      metalness: 0.82,
+    });
+    const deckMat = new THREE.MeshStandardMaterial({
+      color: 0x475569,
+      roughness: 0.72,
+      metalness: 0.25,
+    });
+    const accentMat = new THREE.MeshStandardMaterial({
+      color: 0xe11d48,
+      emissive: 0x881337,
+      emissiveIntensity: 0.3,
+      roughness: 0.32,
+      metalness: 0.45,
+    });
+    const canopyMat = new THREE.MeshStandardMaterial({
+      color: 0x0f172a,
+      roughness: 0.4,
+      metalness: 0.6,
+    });
+    const hazardMat = new THREE.MeshStandardMaterial({
+      color: 0xfacc15,
+      roughness: 0.42,
+      metalness: 0.2,
+    });
+    const lampMat = new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      emissive: 0x38bdf8,
+      emissiveIntensity: 1.4,
+      roughness: 0.2,
+    });
+
+    // Raised station boarding platform alongside track heartline
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.24, 5.2), deckMat);
+    deck.position.set(1.9, 0.92, 0);
+    deck.receiveShadow = true;
+    deck.castShadow = true;
+    group.add(deck);
+
+    // Steel pier supports under deck
+    for (const px of [0.5, 3.3]) {
+      for (const pz of [-2.1, 2.1]) {
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 0.92, 8), steelMat);
+        leg.position.set(px, 0.46, pz);
+        leg.castShadow = true;
+        group.add(leg);
+      }
+    }
+
+    // Yellow safety edging stripe on track-side edge
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.04, 5.05), hazardMat);
+    stripe.position.set(0.32, 1.05, 0);
+    group.add(stripe);
+
+    // Automatic boarding air-gates along the track loading edge
+    for (const gz of [-1.5, -0.5, 0.5, 1.5]) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.95, 0.1), steelMat);
+      post.position.set(0.45, 1.5, gz);
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.09, 0.72), hazardMat);
+      bar.position.set(0.45, 1.72, gz + 0.36);
+      group.add(post, bar);
+    }
+
+    // Four structural roof canopy columns & gable rafters
+    for (const px of [0.45, 3.35]) {
+      for (const pz of [-2.2, 2.2]) {
+        const col = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.1, 2.5, 8), steelMat);
+        col.position.set(px, 2.25, pz);
+        col.castShadow = true;
+        group.add(col);
+      }
+    }
+    const roofPlate = new THREE.Mesh(new THREE.BoxGeometry(3.55, 0.14, 5.5), canopyMat);
+    roofPlate.position.set(1.9, 3.55, 0);
+    roofPlate.castShadow = true;
+    group.add(roofPlate);
+
+    const fascia = new THREE.Mesh(new THREE.BoxGeometry(3.62, 0.24, 5.56), accentMat);
+    fascia.position.set(1.9, 3.45, 0);
+    group.add(fascia);
+
+    // Operator dispatch console booth
+    const consoleBox = new THREE.Mesh(new THREE.BoxGeometry(0.75, 1.05, 0.6), steelMat);
+    consoleBox.position.set(2.8, 1.56, -1.6);
+    consoleBox.castShadow = true;
+    group.add(consoleBox);
+
+    const consolePanel = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.1, 0.45), lampMat);
+    consolePanel.position.set(2.8, 2.1, -1.6);
+    consolePanel.rotation.x = 0.25;
+    group.add(consolePanel);
+
+    const stationLight = new THREE.PointLight(0x38bdf8, 1.6, 12, 1.6);
+    stationLight.position.set(1.9, 3.1, 0);
+    group.add(stationLight);
+
+    return { group, fireLight: stationLight };
+  }
+
   return { group };
 }
 

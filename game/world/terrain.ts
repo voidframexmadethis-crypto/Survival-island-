@@ -1,6 +1,9 @@
-import { BiomeId } from '../types';
+import { BiomeId, WorldType } from '../types';
 
 export const OCEAN_LEVEL = 0.0;
+export const FLAT_GROUND_Y = 1.0;
+export const FLAT_PLAYABLE_MAX_RADIUS = 310;
+export const FLAT_PLAYER_SPAWN = { x: 0, z: 24 };
 export const LAKE_CENTER = { x: -14, z: 8, radius: 18, waterY: 2.6 };
 export const WATERFALL_POS = { x: 6, z: -50 };
 export const CAVE_POS = { x: -36, z: -56 };
@@ -21,6 +24,22 @@ export const PLAYER_SPAWN = { x: 0, z: 112 };
 
 export const WORLD_RADIUS = 175;
 export const PLAYABLE_MAX_RADIUS = 152;
+
+let activeTerrainWorldType: WorldType = 'island';
+
+export function setActiveTerrainWorldType(worldType: WorldType): void {
+  activeTerrainWorldType = worldType === 'flat' ? 'flat' : 'island';
+}
+
+export function getActiveTerrainWorldType(): WorldType {
+  return activeTerrainWorldType;
+}
+
+export function getPlayableMaxRadius(): number {
+  return activeTerrainWorldType === 'flat'
+    ? FLAT_PLAYABLE_MAX_RADIUS
+    : PLAYABLE_MAX_RADIUS;
+}
 
 export const TERRAIN_SIZE = 360;
 export const TERRAIN_SEGS = 150;
@@ -71,6 +90,7 @@ export function getHilltopBaseFloorY(
   z: number,
   footY: number,
 ): number {
+  if (activeTerrainWorldType === 'flat') return -9999;
   const dx = x - HILL_HOUSE_POS.x;
   const dz = z - HILL_HOUSE_POS.z;
   let bestY = -9999;
@@ -292,6 +312,7 @@ export function getRiverSample(
 }
 
 export function getWaterLevelAt(x: number, z: number): number {
+  if (activeTerrainWorldType === 'flat') return -999;
   const dLake = Math.hypot(x - LAKE_CENTER.x, z - LAKE_CENTER.z);
   if (dLake < LAKE_CENTER.radius + 3) {
     return LAKE_CENTER.waterY;
@@ -308,6 +329,7 @@ export function getWaterLevelAt(x: number, z: number): number {
 }
 
 export function isFreshwaterAt(x: number, z: number): boolean {
+  if (activeTerrainWorldType === 'flat') return false;
   const h = getTerrainHeight(x, z);
   const dLake = Math.hypot(x - LAKE_CENTER.x, z - LAKE_CENTER.z);
   if (dLake < LAKE_CENTER.radius && h < LAKE_CENTER.waterY + 0.35) return true;
@@ -319,10 +341,12 @@ export function isFreshwaterAt(x: number, z: number): boolean {
 }
 
 export function getTerrainHeight(x: number, z: number): number {
+  if (activeTerrainWorldType === 'flat') return FLAT_GROUND_Y;
   return getBaseTerrainHeight(x, z) + sampleGridBilinear(terrainDeltaGrid, x, z);
 }
 
 export function getBaseTerrainHeight(x: number, z: number): number {
+  if (activeTerrainWorldType === 'flat') return FLAT_GROUND_Y;
   const r = Math.hypot(x, z);
   const angle = Math.atan2(z, x);
 
@@ -532,6 +556,7 @@ export function getBaseTerrainHeight(x: number, z: number): number {
 }
 
 export function getBiomeAt(x: number, z: number): BiomeId {
+  if (activeTerrainWorldType === 'flat') return 'grassland';
   const dExp = Math.hypot(x - EXPEDITION_POS.x, z - EXPEDITION_POS.z);
   if (dExp < 14) return 'expedition';
 
@@ -558,6 +583,7 @@ export function getBiomeAt(x: number, z: number): BiomeId {
 }
 
 export function getTerrainSlope(x: number, z: number): number {
+  if (activeTerrainWorldType === 'flat') return 0;
   const e = 0.75;
   const hx1 = getTerrainHeight(x + e, z);
   const hx0 = getTerrainHeight(x - e, z);

@@ -24,11 +24,14 @@ import { STAGE_1_MISSIONS } from '@/game/data/missions';
 import { getPresetSettings, normalizeGraphicsPreset } from '@/game/systems/saveManager';
 import {
   DrawDistanceTier,
+  GameMode,
   GameSettings,
   GraphicsPreset,
   HUDStateSnapshot,
   SaveSlotSummary,
   TvSafetyMode,
+  WorldType,
+  resolveAllowedGameMode,
 } from '@/game/types';
 
 export function MissionsModal({
@@ -143,7 +146,8 @@ const PRESET_CARDS: {
 }[] = [
   { id: 'low', title: 'Low', subtitle: 'Max Battery & FPS' },
   { id: 'medium', title: 'Medium', subtitle: 'iPhone Default' },
-  { id: 'high', title: 'High', subtitle: 'Full Shadows & Shaders' },
+  { id: 'high', title: 'High', subtitle: 'Full Shadows' },
+  { id: 'ultra', title: 'Ultra', subtitle: 'Cinematic PBR' },
 ];
 
 export function SettingsModal({
@@ -202,7 +206,7 @@ export function SettingsModal({
 
             <div>
               <div className="text-xs text-stone-300 mb-2">Quality Preset</div>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-4 gap-1.5">
                 {PRESET_CARDS.map((card) => {
                   const selected = activePreset === card.id;
                   return (
@@ -511,6 +515,10 @@ export function SettingsModal({
 
 export function PauseModal({
   saveSlots,
+  currentSlotId = 'slot_1',
+  worldType = 'island',
+  worldName,
+  gameMode = 'survival',
   onResume,
   onSaveNow,
   onLoadSlot,
@@ -519,6 +527,10 @@ export function PauseModal({
   onQuitToMenu,
 }: {
   saveSlots: SaveSlotSummary[];
+  currentSlotId?: string;
+  worldType?: WorldType;
+  worldName?: string;
+  gameMode?: GameMode;
   onResume: () => void;
   onSaveNow: (slotId: string) => void;
   onLoadSlot: (slotId: string) => void;
@@ -526,33 +538,46 @@ export function PauseModal({
   onOpenSettings: () => void;
   onQuitToMenu: () => void;
 }) {
+  const effectiveMode = resolveAllowedGameMode(worldType, gameMode);
+  const resumeLabel =
+    worldType === 'flat'
+      ? 'Resume Park'
+      : effectiveMode === 'sandbox'
+        ? 'Resume Sandbox'
+        : 'Resume Survival';
+
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/80 p-4">
-      <div className="w-full max-w-md rounded-2xl bg-stone-900 border border-stone-700/80 shadow-2xl overflow-hidden">
-        <div className="px-5 py-4 border-b border-stone-800 flex items-center justify-between">
-          <h2 className="font-display text-lg font-bold text-stone-100">
-            Expedition Paused
-          </h2>
+      <div className="w-full max-w-md rounded-2xl bg-stone-900 border border-stone-700/80 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="px-5 py-4 border-b border-stone-800 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <h2 className="font-display text-lg font-bold text-stone-100 truncate">
+              {worldName || (worldType === 'flat' ? 'Flat Park World' : 'Expedition Paused')}
+            </h2>
+            <div className="text-[11px] text-stone-400">
+              {worldType === 'flat' ? 'Flat World · Creative Only' : `Island World · ${effectiveMode === 'sandbox' ? 'Creative' : effectiveMode === 'boss_hunt' ? 'Boss Hunt' : 'Survival'}`}
+            </div>
+          </div>
           <button
             onClick={onResume}
-            className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200"
+            className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 shrink-0"
             aria-label="Resume"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="p-5 space-y-3">
+        <div className="p-5 space-y-3 overflow-y-auto survival-scroll">
           <button
             onClick={onResume}
             className="w-full min-h-[48px] rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-semibold text-sm flex items-center justify-center gap-2"
           >
             <Play className="w-4 h-4" />
-            <span>Resume Survival</span>
+            <span>{resumeLabel}</span>
           </button>
 
           <button
-            onClick={() => onSaveNow('slot_1')}
+            onClick={() => onSaveNow(currentSlotId)}
             className="w-full min-h-[46px] rounded-xl bg-emerald-700 hover:bg-emerald-600 text-stone-50 font-semibold text-sm flex items-center justify-center gap-2"
           >
             <Save className="w-4 h-4" />
@@ -570,38 +595,52 @@ export function PauseModal({
           {saveSlots.length > 0 && (
             <div className="pt-2 border-t border-stone-800 space-y-2">
               <div className="text-xs font-semibold text-stone-400">
-                Saved Expeditions
+                Saved Worlds
               </div>
-              {saveSlots.map((slot) => (
-                <div
-                  key={slot.slotId}
-                  className="flex items-center justify-between gap-2 rounded-xl bg-stone-950/70 border border-stone-800 px-3 py-2"
-                >
-                  <div className="min-w-0">
-                    <div className="text-xs font-semibold text-stone-200">
-                      Day {slot.dayCount} · HP {slot.health}
+              {saveSlots.map((slot) => {
+                const slotType: WorldType = slot.worldType === 'flat' ? 'flat' : 'island';
+                const slotMode = resolveAllowedGameMode(slotType, slot.gameMode);
+                return (
+                  <div
+                    key={slot.slotId}
+                    className="flex items-center justify-between gap-2 rounded-xl bg-stone-950/70 border border-stone-800 px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-stone-100 truncate">
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase shrink-0 ${
+                            slotType === 'flat'
+                              ? 'bg-sky-950 text-sky-300 border border-sky-500/40'
+                              : 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
+                          }`}
+                        >
+                          {slotType === 'flat' ? 'Flat' : 'Island'}
+                        </span>
+                        <span className="truncate">{slot.worldName || 'Saved World'}</span>
+                      </div>
+                      <div className="text-[11px] text-stone-400 truncate mt-0.5">
+                        {slotMode === 'sandbox' ? 'Creative' : slotMode === 'boss_hunt' ? 'Boss Hunt' : 'Survival'} · Day {slot.dayCount}
+                        {(slot.coastersCount ?? 0) > 0 ? ` · ${slot.coastersCount} coaster${slot.coastersCount === 1 ? '' : 's'}` : ''}
+                      </div>
                     </div>
-                    <div className="text-[11px] text-stone-400 truncate">
-                      {new Date(slot.savedAt).toLocaleString()}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        onClick={() => onLoadSlot(slot.slotId)}
+                        className="min-h-[38px] px-3 rounded-lg bg-stone-800 hover:bg-amber-600 hover:text-stone-950 text-xs font-semibold text-stone-100"
+                      >
+                        Load
+                      </button>
+                      <button
+                        onClick={() => onDeleteSlot(slot.slotId)}
+                        className="min-w-[38px] min-h-[38px] rounded-lg bg-stone-800 hover:bg-red-700 text-stone-300 flex items-center justify-center"
+                        aria-label="Delete Save"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      onClick={() => onLoadSlot(slot.slotId)}
-                      className="min-h-[38px] px-3 rounded-lg bg-stone-800 hover:bg-amber-600 hover:text-stone-950 text-xs font-semibold text-stone-100"
-                    >
-                      Load
-                    </button>
-                    <button
-                      onClick={() => onDeleteSlot(slot.slotId)}
-                      className="min-w-[38px] min-h-[38px] rounded-lg bg-stone-800 hover:bg-red-700 text-stone-300 flex items-center justify-center"
-                      aria-label="Delete Save"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 

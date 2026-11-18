@@ -15,6 +15,7 @@ interface PlaceModalProps {
 }
 
 const STRUCTURE_ITEM_IDS: ItemId[] = [
+  'coaster_station',
   'campfire',
   'crafting_table',
   'cooking_station',
@@ -38,6 +39,8 @@ export function PlaceModal({
   onClose,
 }: PlaceModalProps) {
   const [keepOpen, setKeepOpen] = useState(false);
+  const isCreativeOrFlat =
+    hud.gameMode === 'sandbox' || hud.worldType === 'flat';
 
   const countOf = (itemId: ItemId) =>
     hud.inventory
@@ -47,7 +50,8 @@ export function PlaceModal({
   const equippedId =
     hud.equippedSlot >= 0 ? hud.hotbarItemIds[hud.equippedSlot] : null;
   const equippedQty = equippedId ? countOf(equippedId) : 0;
-  const equippedDef = equippedId && equippedQty > 0 ? ITEMS[equippedId] : null;
+  const equippedDef =
+    equippedId && (equippedQty > 0 || isCreativeOrFlat) ? ITEMS[equippedId] : null;
 
   const ownedStructures = hud.inventory.filter(
     (s) =>
@@ -62,6 +66,12 @@ export function PlaceModal({
   );
   const unownedStructureIds = STRUCTURE_ITEM_IDS.filter(
     (id) => countOf(id) <= 0,
+  );
+  const creativeStructureIds = Array.from(
+    new Set<ItemId>([
+      ...STRUCTURE_ITEM_IDS,
+      ...ownedStructures.map((s) => s.itemId),
+    ]),
   );
 
   const handlePlace = (itemId: ItemId) => {
@@ -83,7 +93,9 @@ export function PlaceModal({
                 Place in World
               </h2>
               <p className="text-xs text-stone-400">
-                Build camp structures or set supplies, food, and gear down in front of you.
+                {isCreativeOrFlat
+                  ? 'Creative Free Build active — place Coaster Stations, Structures, and Masonry directly.'
+                  : 'Build camp structures or set supplies, food, and gear down in front of you.'}
               </p>
             </div>
           </div>
@@ -172,7 +184,8 @@ export function PlaceModal({
                     Currently Equipped
                   </div>
                   <div className="text-sm font-bold text-stone-100 truncate">
-                    {equippedDef.name} (×{equippedQty})
+                    {equippedDef.name}{' '}
+                    {equippedQty > 0 ? `(×${equippedQty})` : '(Free Build)'}
                   </div>
                 </div>
               </div>
@@ -195,7 +208,7 @@ export function PlaceModal({
           <div className="space-y-2.5">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold uppercase tracking-wider text-stone-300">
-                Camp Structures &amp; Engineered Masonry
+                Park &amp; Camp Structures &amp; Masonry
               </h3>
               <button
                 type="button"
@@ -207,31 +220,32 @@ export function PlaceModal({
               </button>
             </div>
 
-            {ownedStructures.length > 0 ? (
+            {isCreativeOrFlat ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {ownedStructures.map((slot, idx) => {
-                  const def = ITEMS[slot.itemId];
+                {creativeStructureIds.map((itemId) => {
+                  const def = ITEMS[itemId];
+                  const qty = countOf(itemId);
                   return (
                     <div
-                      key={`${slot.itemId}_${idx}`}
+                      key={itemId}
                       className="rounded-xl bg-stone-950/75 border border-stone-800 p-3 flex items-center justify-between gap-3"
                     >
                       <div className="flex items-center gap-3 min-w-0">
                         <div className="w-10 h-10 rounded-lg bg-stone-800 flex items-center justify-center shrink-0">
-                          <ItemIcon itemId={slot.itemId} className="w-5 h-5" />
+                          <ItemIcon itemId={itemId} className="w-5 h-5" />
                         </div>
                         <div className="min-w-0">
                           <div className="text-xs font-semibold text-stone-100 truncate">
                             {def.name}
                           </div>
-                          <div className="text-[11px] text-amber-400 font-mono-tabular">
-                            Ready: ×{slot.quantity}
+                          <div className="text-[11px] text-sky-400 font-mono-tabular">
+                            {qty > 0 ? `Ready: ×${qty}` : 'Free Build'}
                           </div>
                         </div>
                       </div>
                       <button
                         type="button"
-                        onClick={() => handlePlace(slot.itemId)}
+                        onClick={() => handlePlace(itemId)}
                         className="min-h-[40px] px-3.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-xs whitespace-nowrap shrink-0"
                       >
                         Place
@@ -241,35 +255,72 @@ export function PlaceModal({
                 })}
               </div>
             ) : (
-              <div className="rounded-xl bg-stone-950/50 border border-stone-800/80 p-3.5 text-xs text-stone-400 flex items-center justify-between gap-3">
-                <span>
-                  No crafted camp structures in your bag yet. Craft a Campfire, Workbench, Box, or Shelter to build it here.
-                </span>
-                <button
-                  type="button"
-                  onClick={onOpenCraft}
-                  className="min-h-[38px] px-3 rounded-lg bg-stone-800 hover:bg-stone-700 text-amber-300 font-semibold text-xs whitespace-nowrap shrink-0"
-                >
-                  Open Craft
-                </button>
-              </div>
-            )}
+              <>
+                {ownedStructures.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {ownedStructures.map((slot, idx) => {
+                      const def = ITEMS[slot.itemId];
+                      return (
+                        <div
+                          key={`${slot.itemId}_${idx}`}
+                          className="rounded-xl bg-stone-950/75 border border-stone-800 p-3 flex items-center justify-between gap-3"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-10 h-10 rounded-lg bg-stone-800 flex items-center justify-center shrink-0">
+                              <ItemIcon itemId={slot.itemId} className="w-5 h-5" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold text-stone-100 truncate">
+                                {def.name}
+                              </div>
+                              <div className="text-[11px] text-amber-400 font-mono-tabular">
+                                Ready: ×{slot.quantity}
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handlePlace(slot.itemId)}
+                            className="min-h-[40px] px-3.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-xs whitespace-nowrap shrink-0"
+                          >
+                            Place
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="rounded-xl bg-stone-950/50 border border-stone-800/80 p-3.5 text-xs text-stone-400 flex items-center justify-between gap-3">
+                    <span>
+                      No crafted camp structures in your bag yet. Craft a Campfire, Workbench, Box, or Coaster Station to build it here.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={onOpenCraft}
+                      className="min-h-[38px] px-3 rounded-lg bg-stone-800 hover:bg-stone-700 text-amber-300 font-semibold text-xs whitespace-nowrap shrink-0"
+                    >
+                      Open Craft
+                    </button>
+                  </div>
+                )}
 
-            {unownedStructureIds.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {unownedStructureIds.map((id) => (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={onOpenCraft}
-                    className="px-2.5 py-1 rounded-lg bg-stone-950/60 border border-stone-800 text-[11px] text-stone-500 hover:text-stone-300 hover:border-stone-600 flex items-center gap-1.5"
-                    title="Craft this structure first"
-                  >
-                    <ItemIcon itemId={id} className="w-3.5 h-3.5 opacity-60" />
-                    <span>{ITEMS[id].name} (0)</span>
-                  </button>
-                ))}
-              </div>
+                {unownedStructureIds.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {unownedStructureIds.map((id) => (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={onOpenCraft}
+                        className="px-2.5 py-1 rounded-lg bg-stone-950/60 border border-stone-800 text-[11px] text-stone-500 hover:text-stone-300 hover:border-stone-600 flex items-center gap-1.5"
+                        title="Craft this structure first"
+                      >
+                        <ItemIcon itemId={id} className="w-3.5 h-3.5 opacity-60" />
+                        <span>{ITEMS[id].name} (0)</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
 

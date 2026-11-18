@@ -79,11 +79,15 @@ import {
   BodyZone,
   CampStructureType,
   CarcassSaveData,
+  CoasterHudSummaryItem,
+  CoasterModelType,
+  CoasterSegmentKind,
   CreatureSpecies,
   CustomModAsset,
   CustomModScript,
   DEFAULT_HUD_BAR_SLOTS,
   DimensionId,
+  FlatSurfaceStyle,
   PortalLinkState,
   FirearmReloadMode,
   GameMode,
@@ -120,6 +124,8 @@ import {
   WeaponMaterialClass,
   WeatherType,
   WorldPickupSave,
+  WorldType,
+  resolveAllowedGameMode,
 } from '../types';
 import {
   BeltSpanMeshHandles,
@@ -152,6 +158,8 @@ import {
   CAVE_POS,
   EXPEDITION_POS,
   FARMER_POS,
+  FLAT_GROUND_Y,
+  FLAT_PLAYER_SPAWN,
   HILL_HOUSE_POS,
   HILL_HOUSE_Y,
   HOMESTEAD_POS,
@@ -166,12 +174,14 @@ import {
   exportSparseTerrainDeltas,
   getBiomeAt,
   getHilltopBaseFloorY,
+  getPlayableMaxRadius,
   getTerrainHeight,
   getTerrainSlope,
   getWaterLevelAt,
   importSparseTerrainDeltas,
   isFreshwaterAt,
   resetTerrainDeformation,
+  setActiveTerrainWorldType,
 } from '../world/terrain';
 import {
   buildIslandWorld,
@@ -179,6 +189,12 @@ import {
   ShipwreckChestHandle,
   WorldHandles,
 } from '../world/worldBuilder';
+import { buildFlatWorld, FlatWorldHandles } from '../world/flatWorldBuilder';
+import {
+  CoasterPiecePresetKey,
+  RollerCoasterRuntime,
+} from '../systems/rollerCoasterRuntime';
+import { CustomInversion } from '../systems/rollerCoasterSystem';
 import { RealisticOcean } from '../world/RealisticOcean';
 import {
   applyRealisticMeshLightingPass,
@@ -318,6 +334,7 @@ export interface EngineCallbacks {
       | 'vehicles'
       | 'vehicle_cargo'
       | 'music_studio'
+      | 'coaster'
     >,
     structureId?: string,
   ) => void;
@@ -562,6 +579,12 @@ export class GameEngine {
   private crystalArmorHp = 0;
   private activePortals: PortalLinkState[] = [];
   private currentSlotId = 'slot_1';
+  private worldType: WorldType = 'island';
+  private worldName = 'Survival Island';
+  private flatSurfaceStyle: FlatSurfaceStyle = 'turf_grid';
+  private flatWorld!: FlatWorldHandles;
+  private coasterRuntime!: RollerCoasterRuntime;
+  private ridingCoasterId: string | null = null;
   private gameMode: GameMode = 'survival';
   private hitMarkerActive = false;
   private nearbyInteraction: NearbyInteraction | null = null;
@@ -919,6 +942,9 @@ export class GameEngine {
     this.world.cloudsGroup.traverse((o) => {
       o.userData.ignoreLightingPass = true;
     });
+    this.flatWorld = buildFlatWorld(this.scene, this.renderer);
+    this.flatWorld.setVisible(false);
+    this.coasterRuntime = new RollerCoasterRuntime(this.scene);
     this.realisticOcean = new RealisticOcean(this.scene);
     this.world.oceanMesh.visible = false;
     this.world.resourceNodes.forEach((n) => this.nodeById.set(n.id, n));
@@ -1182,6 +1208,11 @@ export class GameEngine {
     const keyLower = e.key ? e.key.toLowerCase() : '';
     if (keyLower) this.keys[`key_${keyLower}`] = true;
     this.sound.unlock();
+    if (this.ridingCoasterId && !this.gameOver && (e.code === 'KeyE' || keyLower === 'e' || e.code === 'Space')) {
+      e.preventDefault();
+      this.exitCoasterRide();
+      return;
+    }
     if (this.activeVehicleId && !this.gameOver && (e.code === 'KeyE' || keyLower === 'e')) {
       e.preventDefault();
       this.exitVehicle();
@@ -1379,30 +1410,39 @@ export class GameEngine {
     }
 
     const shadowMapSize =
-      preset === 'high'
+      preset === 'ultra'
         ? this.isTouchDevice
-          ? 1024
-          : 2048
-        : preset === 'medium'
-          ? 1024
-          : 512;
+          ? 2048
+          : 4096
+        : preset === 'high'
+          ? this.isTouchDevice
+            ? 1024
+            : 2048
+          : preset === 'medium'
+            ? 1024
+            : 512;
     const shadowHalfExtent =
-      preset === 'high'
-        ? this.isTouchDevice
-          ? 72
-          : 100
-        : preset === 'medium'
-          ? 64
-          : 44;
+      preset === 'ultra'
+        ? 120
+        : preset === 'high'
+          ? this.isTouchDevice
+            ? 72
+            : 100
+          : preset === 'medium'
+            ? 64
+            : 44;
     const shadowFar =
-      preset === 'high'
-        ? this.isTouchDevice
-          ? 240
-          : 300
-        : preset === 'medium'
-          ? 220
-          : 170;
-    const shadowRadius = preset === 'high' ? 4 : preset === 'medium' ? 3 : 2;
+      preset === 'ultra'
+        ? 350
+        : preset === 'high'
+          ? this.isTouchDevice
+            ? 240
+            : 300
+          : preset === 'medium'
+            ? 220
+            : 170;
+    const shadowRadius =
+      preset === 'ultra' ? 5 : preset === 'high' ? 4 : preset === 'medium' ? 3 : 2;
     let dpr = 1;
     if (!this.isSoftwareGl) {
       const nativeDpr = window.devicePixelRatio || 1;
@@ -1410,6 +1450,8 @@ export class GameEngine {
         dpr = 1;
       } else if (this.isTouchDevice || preset === 'medium') {
         dpr = Math.min(nativeDpr, 1.5);
+      } else if (preset === 'ultra') {
+        dpr = Math.min(nativeDpr, 2.5);
       } else {
         dpr = Math.min(nativeDpr, 2);
       }
@@ -1426,14 +1468,18 @@ export class GameEngine {
         ? 0.5
         : preset === 'medium'
           ? 0.8
-          : 1.0;
+          : preset === 'ultra'
+            ? 1.25
+            : 1.0;
 
     this.shaderQualityTier =
       this.isSoftwareGl || this.autoFpsTier >= 2 || preset === 'low'
         ? 0
-        : preset === 'high'
-          ? 2
-          : 1;
+        : preset === 'ultra'
+          ? 2.5
+          : preset === 'high'
+            ? 2
+            : 1;
 
     let distTier =
       this.settings.drawDistance ??
@@ -2197,8 +2243,8 @@ export class GameEngine {
 
     const vw = this.container.clientWidth || window.innerWidth || 1280;
     const vh = this.container.clientHeight || window.innerHeight || 720;
-    const halfW = tvTarget.isHouseTv ? 0.8 : 0.84;
-    const halfH = tvTarget.isHouseTv ? 0.43 : 0.465;
+    const halfW = tvTarget.halfW ?? (tvTarget.isHouseTv ? 0.8 : 0.84);
+    const halfH = tvTarget.halfH ?? (tvTarget.isHouseTv ? 0.43 : 0.465);
     this._tvUp.set(0, 1, 0).applyQuaternion(tvTarget.worldQuat);
 
     const corners: [number, number][] = [];
@@ -2311,6 +2357,8 @@ export class GameEngine {
     right: THREE.Vector3;
     scaleX: number;
     scaleY: number;
+    halfW: number;
+    halfH: number;
     isHouseTv: boolean;
   } | null {
     const refX = usePlayerAnchor ? this.playerX : this.camera.position.x;
@@ -2321,6 +2369,8 @@ export class GameEngine {
     let hasTarget = false;
     let scaleX = 1.6 / 800;
     let scaleY = 0.86 / 430;
+    let halfW = 0.8;
+    let halfH = 0.43;
     let isHouseTv = true;
 
     for (const st of this.structures) {
@@ -2334,13 +2384,17 @@ export class GameEngine {
         this._tvWorldPos.set(st.x, st.y + 0.95, st.z).addScaledVector(this._tvForward, 0.06);
         scaleX = 1.68 / 800;
         scaleY = 0.93 / 430;
+        halfW = 0.84;
+        halfH = 0.465;
         isHouseTv = false;
         hasTarget = true;
       }
     }
 
-    if (this.world.tvScreenMesh) {
-      this.world.tvScreenMesh.getWorldPosition(this._tvTmpVec);
+    const baseTvMesh =
+      this.worldType === 'flat' ? this.flatWorld?.tvScreenMesh : this.world?.tvScreenMesh;
+    if (baseTvMesh) {
+      baseTvMesh.getWorldPosition(this._tvTmpVec);
       const houseDist = Math.hypot(
         this._tvTmpVec.x - refX,
         this._tvTmpVec.y - refY,
@@ -2349,13 +2403,22 @@ export class GameEngine {
       if (houseDist < bestDist) {
         bestDist = houseDist;
         this._tvWorldPos.copy(this._tvTmpVec);
-        this.world.tvScreenMesh.getWorldQuaternion(this._tvWorldQuat);
+        baseTvMesh.getWorldQuaternion(this._tvWorldQuat);
         this._tvForward.set(0, 0, 1).applyQuaternion(this._tvWorldQuat);
         this._tvRight.set(1, 0, 0).applyQuaternion(this._tvWorldQuat);
         this._tvWorldPos.addScaledVector(this._tvForward, 0.015);
-        scaleX = 1.6 / 800;
-        scaleY = 0.86 / 430;
-        isHouseTv = true;
+        if (this.worldType === 'flat') {
+          scaleX = 3.52 / 800;
+          scaleY = 1.92 / 430;
+          halfW = 1.76;
+          halfH = 0.96;
+        } else {
+          scaleX = 1.6 / 800;
+          scaleY = 0.86 / 430;
+          halfW = 0.8;
+          halfH = 0.43;
+        }
+        isHouseTv = this.worldType === 'island';
         hasTarget = true;
       }
     }
@@ -2369,34 +2432,118 @@ export class GameEngine {
       right: this._tvRight,
       scaleX,
       scaleY,
+      halfW,
+      halfH,
       isHouseTv,
     };
   }
 
+  public getCurrentSlotId(): string {
+    return this.currentSlotId;
+  }
+
+  public getWorldType(): WorldType {
+    return this.worldType;
+  }
+
+  public getWorldName(): string {
+    return this.worldName;
+  }
+
+  private getActiveStations(): HouseStationTarget[] {
+    return this.worldType === 'flat'
+      ? this.flatWorld?.flatStations || []
+      : this.world?.houseStations || [];
+  }
+
+  private applyWorldEnvironment(
+    worldType: WorldType,
+    flatSurfaceStyle: FlatSurfaceStyle = this.flatSurfaceStyle,
+  ): void {
+    this.worldType = worldType;
+    this.flatSurfaceStyle = flatSurfaceStyle;
+    setActiveTerrainWorldType(worldType);
+
+    if (this.flatWorld) {
+      this.flatWorld.setSurfaceStyle(flatSurfaceStyle);
+    }
+
+    this.setOverworldActiveState(this.currentDimension === 'overworld');
+
+    if (this.smartTv) {
+      if (worldType === 'flat' && this.flatWorld?.tvScreenMesh && this.flatWorld?.tvScreenMat) {
+        this.flatWorld.flatGroup.updateMatrixWorld(true);
+        this.smartTv.attachToMesh(
+          this.flatWorld.tvScreenMesh,
+          this.flatWorld.tvScreenMat,
+          this.flatWorld.tvWorldPos,
+        );
+      } else if (this.world?.tvScreenMesh && this.world?.tvScreenMat) {
+        this.world.overworldGroup.updateMatrixWorld(true);
+        this.smartTv.attachToMesh(
+          this.world.tvScreenMesh,
+          this.world.tvScreenMat,
+          this.world.tvWorldPos,
+        );
+      }
+    }
+  }
+
+  public setFlatSurfaceStyle(style: FlatSurfaceStyle): void {
+    this.flatSurfaceStyle = style;
+    this.flatWorld?.setSurfaceStyle(style);
+    if (this.worldType === 'flat') {
+      this.toast(
+        style === 'concrete_plaza'
+          ? 'Park Ground switched to Smooth Concrete Plaza'
+          : 'Park Ground switched to Sunlit Turf Grid',
+        'info',
+      );
+    }
+    this.emitHud();
+  }
+
   public setGameMode(mode: GameMode): void {
-    this.gameMode = mode;
-    if (mode === 'boss_hunt') {
+    const resolvedMode = resolveAllowedGameMode(this.worldType, mode);
+    if (this.worldType === 'flat' && mode !== 'sandbox') {
+      this.toast('Flat World supports Creative Mode only (Survival disabled).', 'warning');
+    }
+    this.gameMode = resolvedMode;
+    if (resolvedMode === 'boss_hunt' && this.worldType === 'island') {
       this.creatures.spawnGuardianBosses();
       this.toast('Guardian Boss Hunt active: 4 colossal Lost World Titans spawned across biomes!', 'discovery');
-    } else if (mode === 'sandbox') {
+    } else if (resolvedMode === 'sandbox') {
       this.vitals.health = 9999;
       this.vitals.maxHealth = 9999;
       this.vitals.hunger = 100;
       this.vitals.thirst = 100;
-      this.toast('Sandbox / God Mode active: Unlimited vitals, flight & Smart TV access', 'discovery');
+      this.vitals.stamina = 100;
+      this.vitals.temperatureC = 37.0;
+      this.toast(
+        this.worldType === 'flat'
+          ? 'Flat Park Creative Mode active: Unlimited building, Coaster Studio & Music Pro ready'
+          : 'Sandbox / God Mode active: Unlimited vitals, flight & Smart TV access',
+        'discovery',
+      );
     } else {
+      this.vitals.maxHealth = 100;
+      this.vitals.health = Math.min(100, this.vitals.health);
       this.toast('Survival Mode active: Biological survival, Fluid Erosion & Blood Moon Sieges', 'discovery');
     }
     this.emitHud();
   }
 
   private isBloodMoonNight(): boolean {
+    if (this.worldType === 'flat') return false;
     const sunElev = Math.sin((this.timeOfDay - 0.25) * Math.PI * 2);
     const isNight = sunElev < -0.05;
     return isNight && (this.dayCount % 7 === 0);
   }
 
   private computeObjectiveText(): string {
+    if (this.worldType === 'flat') {
+      return `Flat Park Creative: Build amusement parks, custom roller coasters & Music Pro tracks`;
+    }
     if (this.isBloodMoonNight()) {
       return `BLOOD MOON SIEGE: Defend your base from nocturnal predators!`;
     }
@@ -2413,8 +2560,150 @@ export class GameEngine {
     return `Day ${this.dayCount}: Expand homestead, craft gear & survive`;
   }
 
-  public startNewWorldState(slotId = 'slot_1', playCinematic = true): void {
+  public startNewWorldState(
+    slotId = 'slot_1',
+    playCinematic = true,
+    options?: {
+      worldType?: WorldType;
+      worldName?: string;
+      flatSurfaceStyle?: FlatSurfaceStyle;
+      gameMode?: GameMode;
+    },
+  ): void {
     this.currentSlotId = slotId;
+    const nextWorldType: WorldType = options?.worldType === 'flat' ? 'flat' : 'island';
+    const nextSurfaceStyle: FlatSurfaceStyle =
+      options?.flatSurfaceStyle === 'concrete_plaza' ? 'concrete_plaza' : 'turf_grid';
+    const defaultMode: GameMode = nextWorldType === 'flat' ? 'sandbox' : 'survival';
+    const nextMode = resolveAllowedGameMode(nextWorldType, options?.gameMode ?? defaultMode);
+
+    this.worldName =
+      (options?.worldName || (nextWorldType === 'flat' ? 'Flat Park Grounds' : 'Survival Island')).trim() ||
+      (nextWorldType === 'flat' ? 'Flat Park Grounds' : 'Survival Island');
+    this.gameMode = nextMode;
+    this.ridingCoasterId = null;
+    this.currentDimension = 'overworld';
+    if (this.activeDimensionWorld) {
+      disposeDimensionWorld(this.activeDimensionWorld);
+      this.activeDimensionWorld = null;
+    }
+
+    this.applyWorldEnvironment(nextWorldType, nextSurfaceStyle);
+    this.coasterRuntime?.clearAll();
+
+    if (nextWorldType === 'flat') {
+      this.playerX = FLAT_PLAYER_SPAWN.x;
+      this.playerZ = FLAT_PLAYER_SPAWN.z;
+      this.playerY = FLAT_GROUND_Y;
+      this.playerVelY = 0;
+      this.camYaw = 0;
+      this.camPitch = -0.05;
+      this.playerYaw = this.camYaw + Math.PI;
+      this.isCrouching = false;
+      this.touchCrouch = false;
+      this.currentEyeHeight = 1.62;
+
+      this.vitals = {
+        health: 9999,
+        maxHealth: 9999,
+        hunger: 100,
+        maxHunger: 100,
+        thirst: 100,
+        maxThirst: 100,
+        stamina: 100,
+        maxStamina: 100,
+        temperatureC: 37.0,
+      };
+      this.dayCount = 1;
+      this.timeOfDay = 0.42;
+      this.lastIsNight = false;
+      this.playerVisibility = 1.0;
+      this.nocturnalActiveCount = 0;
+      this.weather = 'clear';
+      this.weatherTimer = 9999;
+      this.lightningFlash = 0;
+      this.gameOver = false;
+      this.gameOverReason = '';
+
+      this.inventory = [
+        { itemId: 'coaster_station', quantity: 10 },
+        { itemId: 'smart_tv', quantity: 4 },
+        { itemId: 'stone_block', quantity: 50 },
+        { itemId: 'stone_pillar', quantity: 30 },
+        { itemId: 'stone_arch', quantity: 30 },
+        { itemId: 'timber_beam', quantity: 30 },
+        { itemId: 'timber_pillar', quantity: 24 },
+        { itemId: 'crafting_table', quantity: 4 },
+        { itemId: 'storage_chest', quantity: 4 },
+        { itemId: 'basic_shelter', quantity: 4 },
+        { itemId: 'excavator_shovel', quantity: 1 },
+        { itemId: 'vehicle_chassis_kit', quantity: 24 },
+        { itemId: 'belt_pulley', quantity: 10 },
+        { itemId: 'drive_shaft', quantity: 12 },
+        { itemId: 'gear_box', quantity: 6 },
+        { itemId: 'steam_boiler', quantity: 4 },
+        { itemId: 'steam_engine', quantity: 4 },
+        { itemId: 'auto_assembler', quantity: 2 },
+        { itemId: 'portal_gun', quantity: 1 },
+      ];
+      this.backpackCompartments = [];
+      this.hotbarItemIds = [
+        'coaster_station',
+        'stone_block',
+        'stone_arch',
+        'timber_beam',
+        'smart_tv',
+        'vehicle_chassis_kit',
+        'excavator_shovel',
+        'belt_pulley',
+        'portal_gun',
+      ];
+      this.equippedSlot = 0;
+      this.weaponMagazines.clear();
+      this.cancelReload();
+
+      resetTerrainDeformation();
+      this.terrainEngine.clearAll();
+      this.clearStructuralWorld();
+      this.clearKineticAndVehicleWorld();
+      this.coins = 99999;
+      this.seatedState = null;
+      this.fridgeItems = [];
+      this.clearPlantedCrops();
+      this.clearPlacedStructures();
+      this.clearPickups();
+      this.clearCarcasses();
+      this.visitedBiomes = new Set(['grassland']);
+      this.exploredCells = new Set();
+      this.markExploredAroundPlayer();
+      this.discoveredLocations = new Set();
+      this.completedMissionIds = new Set();
+      this.stats = this.createEmptyStats();
+      this.cinematicActive = false;
+      this.cinematicSubtitle = '';
+      this.shipModel.visible = false;
+
+      // Starter Coaster Station & Park Cyclone roller coaster right beside the Park Plaza
+      this.spawnStructure({
+        id: 'flat_starter_coaster_station',
+        type: 'coaster_station',
+        x: 18,
+        y: FLAT_GROUND_Y,
+        z: -4,
+        rotationY: 0,
+      });
+      this.coasterRuntime?.createCoaster(
+        'Park Cyclone',
+        { x: 18, y: FLAT_GROUND_Y, z: -6 },
+        0,
+        true,
+        '#ef4444',
+      );
+
+      this.emitHud();
+      return;
+    }
+
     this.playerX = PLAYER_SPAWN.x;
     this.playerZ = PLAYER_SPAWN.z;
     this.playerY = getTerrainHeight(this.playerX, this.playerZ);
@@ -2427,8 +2716,8 @@ export class GameEngine {
     this.currentEyeHeight = 1.62;
 
     this.vitals = {
-      health: 100,
-      maxHealth: 100,
+      health: nextMode === 'sandbox' ? 9999 : 100,
+      maxHealth: nextMode === 'sandbox' ? 9999 : 100,
       hunger: 100,
       maxHunger: 100,
       thirst: 100,
@@ -2486,6 +2775,7 @@ export class GameEngine {
       { itemId: 'fluid_pipe', quantity: 4 },
       { itemId: 'auto_assembler', quantity: 1 },
       { itemId: 'vehicle_chassis_kit', quantity: 14 },
+      { itemId: 'coaster_station', quantity: 2 },
     ];
     this.backpackCompartments = [];
     this.hotbarItemIds = [
@@ -2636,6 +2926,9 @@ export class GameEngine {
       this.shipModel.visible = false;
     }
 
+    if (this.gameMode === 'boss_hunt') {
+      this.creatures.spawnGuardianBosses();
+    }
     this.ensurePlayerHasGun(true);
     this.emitHud();
   }
@@ -2668,6 +2961,24 @@ export class GameEngine {
 
   public loadFromSave(save: GameSaveData): void {
     this.currentSlotId = save.slotId;
+    const loadedWorldType: WorldType = save.worldType === 'flat' ? 'flat' : 'island';
+    const loadedSurface: FlatSurfaceStyle =
+      save.flatSurfaceStyle === 'concrete_plaza' ? 'concrete_plaza' : 'turf_grid';
+    this.worldName =
+      save.worldName ||
+      (loadedWorldType === 'flat' ? 'Flat Park Grounds' : 'Survival Island');
+    this.gameMode = resolveAllowedGameMode(
+      loadedWorldType,
+      save.gameMode || (loadedWorldType === 'flat' ? 'sandbox' : 'survival'),
+    );
+    this.ridingCoasterId = null;
+    this.currentDimension = 'overworld';
+    if (this.activeDimensionWorld) {
+      disposeDimensionWorld(this.activeDimensionWorld);
+      this.activeDimensionWorld = null;
+    }
+    this.applyWorldEnvironment(loadedWorldType, loadedSurface);
+
     this.playerX = save.player.x;
     this.playerY = save.player.y;
     this.playerZ = save.player.z;
@@ -2675,15 +2986,15 @@ export class GameEngine {
     this.camYaw = this.playerYaw - Math.PI;
     this.camPitch = save.player.pitch ?? -0.05;
     this.vitals = {
-      health: save.player.vitals.health ?? 100,
-      maxHealth: save.player.vitals.maxHealth ?? 100,
-      hunger: save.player.vitals.hunger ?? 100,
+      health: loadedWorldType === 'flat' ? 9999 : (save.player.vitals.health ?? 100),
+      maxHealth: loadedWorldType === 'flat' ? 9999 : (save.player.vitals.maxHealth ?? 100),
+      hunger: loadedWorldType === 'flat' ? 100 : (save.player.vitals.hunger ?? 100),
       maxHunger: save.player.vitals.maxHunger ?? 100,
-      thirst: save.player.vitals.thirst ?? 100,
+      thirst: loadedWorldType === 'flat' ? 100 : (save.player.vitals.thirst ?? 100),
       maxThirst: save.player.vitals.maxThirst ?? 100,
-      stamina: save.player.vitals.stamina ?? 100,
+      stamina: loadedWorldType === 'flat' ? 100 : (save.player.vitals.stamina ?? 100),
       maxStamina: save.player.vitals.maxStamina ?? 100,
-      temperatureC: save.player.vitals.temperatureC ?? 37.0,
+      temperatureC: loadedWorldType === 'flat' ? 37.0 : (save.player.vitals.temperatureC ?? 37.0),
     };
     this.equippedSlot = save.player.equippedSlot;
     this.hotbarItemIds = [...save.player.hotbarItemIds];
@@ -2695,10 +3006,9 @@ export class GameEngine {
     }
     this.dayCount = save.dayCount;
     this.timeOfDay = save.timeOfDay;
-    this.gameMode = save.gameMode || 'survival';
     this.lastIsNight =
       Math.sin((this.timeOfDay - 0.25) * Math.PI * 2) < -0.05;
-    this.weather = save.weather || 'clear';
+    this.weather = loadedWorldType === 'flat' ? 'clear' : (save.weather || 'clear');
     this.inventory = save.inventory.map((s) => ({ ...s }));
     this.backpackCompartments = Array.isArray(save.backpackCompartments)
       ? save.backpackCompartments.map((c) => ({ ...c }))
@@ -2706,15 +3016,17 @@ export class GameEngine {
     this.coins = typeof save.coins === 'number' ? save.coins : 150;
     this.fridgeItems = Array.isArray(save.fridgeItems)
       ? save.fridgeItems.map((s) => ({ ...s }))
-      : [
-          { itemId: 'milk', quantity: 2 },
-          { itemId: 'egg', quantity: 6 },
-          { itemId: 'butter', quantity: 3 },
-          { itemId: 'chocolate', quantity: 2 },
-          { itemId: 'salt', quantity: 4 },
-          { itemId: 'lettuce', quantity: 2 },
-          { itemId: 'tomato', quantity: 2 },
-        ];
+      : loadedWorldType === 'island'
+        ? [
+            { itemId: 'milk', quantity: 2 },
+            { itemId: 'egg', quantity: 6 },
+            { itemId: 'butter', quantity: 3 },
+            { itemId: 'chocolate', quantity: 2 },
+            { itemId: 'salt', quantity: 4 },
+            { itemId: 'lettuce', quantity: 2 },
+            { itemId: 'tomato', quantity: 2 },
+          ]
+        : [];
     this.seatedState = null;
     this.clearPlantedCrops();
     if (Array.isArray(save.plantedCrops)) {
@@ -2742,7 +3054,7 @@ export class GameEngine {
         }
       });
     }
-    if (this.armoryChestState) {
+    if (this.armoryChestState && loadedWorldType === 'island') {
       const opened = Boolean(save.baseArmoryOpened);
       this.armoryChestState.opened = opened;
       this.armoryChestState.lidGroup.rotation.x = opened ? -Math.PI * 0.45 : 0;
@@ -2760,10 +3072,12 @@ export class GameEngine {
 
     importSparseTerrainDeltas(save.terrainDeltas);
     this.terrainEngine.clearAll();
-    this.terrainEngine.syncAllDeformedVertices(
-      this.world.terrainMesh,
-      this.world.baseTerrainColors,
-    );
+    if (loadedWorldType === 'island') {
+      this.terrainEngine.syncAllDeformedVertices(
+        this.world.terrainMesh,
+        this.world.baseTerrainColors,
+      );
+    }
 
     this.clearStructuralWorld();
     if (Array.isArray(save.structuralBlocks)) {
@@ -2782,7 +3096,7 @@ export class GameEngine {
         });
       }
       this.rebuildKineticNetwork(false);
-    } else {
+    } else if (loadedWorldType === 'island') {
       this.setupStarterEngineeringShowcase(false, true);
     }
 
@@ -2797,41 +3111,47 @@ export class GameEngine {
           cargoItems: (v.cargoItems || []).map((c) => ({ ...c })),
         });
       }
-      if (!this.vehicles.some((v) => v.preset === 'donk')) {
-        const bay2X = VEHICLE_GARAGE_POS.x;
-        const bay2Z = VEHICLE_GARAGE_POS.z + 0.6;
-        this.spawnVehicleInstance(
-          createVehicleFromPreset(
-            'veh_starter_donk',
-            'donk',
-            bay2X,
-            getTerrainHeight(bay2X, bay2Z) + 0.14,
-            bay2Z,
-            0,
-          ),
-        );
+      if (loadedWorldType === 'island') {
+        if (!this.vehicles.some((v) => v.preset === 'donk')) {
+          const bay2X = VEHICLE_GARAGE_POS.x;
+          const bay2Z = VEHICLE_GARAGE_POS.z + 0.6;
+          this.spawnVehicleInstance(
+            createVehicleFromPreset(
+              'veh_starter_donk',
+              'donk',
+              bay2X,
+              getTerrainHeight(bay2X, bay2Z) + 0.14,
+              bay2Z,
+              0,
+            ),
+          );
+        }
+        if (!this.vehicles.some((v) => v.preset === 'slab')) {
+          const bay3X = VEHICLE_GARAGE_POS.x + 6.0;
+          const bay3Z = VEHICLE_GARAGE_POS.z + 0.6;
+          this.spawnVehicleInstance(
+            createVehicleFromPreset(
+              'veh_starter_slab',
+              'slab',
+              bay3X,
+              getTerrainHeight(bay3X, bay3Z) + 0.14,
+              bay3Z,
+              0,
+            ),
+          );
+        }
       }
-      if (!this.vehicles.some((v) => v.preset === 'slab')) {
-        const bay3X = VEHICLE_GARAGE_POS.x + 6.0;
-        const bay3Z = VEHICLE_GARAGE_POS.z + 0.6;
-        this.spawnVehicleInstance(
-          createVehicleFromPreset(
-            'veh_starter_slab',
-            'slab',
-            bay3X,
-            getTerrainHeight(bay3X, bay3Z) + 0.14,
-            bay3Z,
-            0,
-          ),
-        );
-      }
-    } else {
+    } else if (loadedWorldType === 'island') {
       this.setupStarterEngineeringShowcase(true, false);
     }
 
     this.clearPlacedStructures();
     save.structures.forEach((st) => this.spawnStructure(st));
-    this.ensurePremadeShelterDryingRack();
+    if (loadedWorldType === 'island') {
+      this.ensurePremadeShelterDryingRack();
+    }
+
+    this.coasterRuntime?.importCoasters(save.coasters);
 
     // Restore saved Smart TV channel, power state & playback controls
     if (typeof save.tvVolume === 'number') {
@@ -2852,32 +3172,34 @@ export class GameEngine {
       this.smartTv.setPaused(true);
     }
 
-    // Restore resource node states (felled stumps, rock damage, depleted nodes)
-    this.nodeHitShakeTimers.clear();
-    const savedNodeMap = new Map<string, SavedResourceNodeState>();
-    if (save.resourceStates) {
-      save.resourceStates.forEach((rs) => savedNodeMap.set(rs.id, rs));
+    if (loadedWorldType === 'island') {
+      // Restore resource node states (felled stumps, rock damage, depleted nodes)
+      this.nodeHitShakeTimers.clear();
+      const savedNodeMap = new Map<string, SavedResourceNodeState>();
+      if (save.resourceStates) {
+        save.resourceStates.forEach((rs) => savedNodeMap.set(rs.id, rs));
+      }
+      this.world.resourceNodes.forEach((n) => {
+        const savedNode = savedNodeMap.get(n.id);
+        if (savedNode) {
+          n.hp = savedNode.hp;
+          n.respawnTimer = savedNode.respawnTimer;
+          n.felled = Boolean(savedNode.felled);
+          n.fallTimer = 0;
+        } else {
+          n.hp = n.maxHp;
+          n.respawnTimer = 0;
+          n.felled = false;
+          n.fallTimer = 0;
+        }
+        if (!n.felled && n.hp >= n.maxHp) {
+          this.world.restoreBatchedNode(n.id);
+        } else if (!n.felled && n.hp > 0) {
+          this.world.activateInteractiveNode(n.id);
+        }
+        this.syncResourceVisual(n);
+      });
     }
-    this.world.resourceNodes.forEach((n) => {
-      const savedNode = savedNodeMap.get(n.id);
-      if (savedNode) {
-        n.hp = savedNode.hp;
-        n.respawnTimer = savedNode.respawnTimer;
-        n.felled = Boolean(savedNode.felled);
-        n.fallTimer = 0;
-      } else {
-        n.hp = n.maxHp;
-        n.respawnTimer = 0;
-        n.felled = false;
-        n.fallTimer = 0;
-      }
-      if (!n.felled && n.hp >= n.maxHp) {
-        this.world.restoreBatchedNode(n.id);
-      } else if (!n.felled && n.hp > 0) {
-        this.world.activateInteractiveNode(n.id);
-      }
-      this.syncResourceVisual(n);
-    });
 
     // Restore physical ground pickups and carcasses
     this.clearPickups();
@@ -2889,7 +3211,7 @@ export class GameEngine {
         this.spawnPickup(p.itemId, p.quantity, p.x, p.z, p.life, p.id);
       });
     }
-    if (save.activeCarcasses) {
+    if (loadedWorldType === 'island' && save.activeCarcasses) {
       save.activeCarcasses.forEach((c) => {
         this.spawnCarcass(
           c.species,
@@ -2908,20 +3230,44 @@ export class GameEngine {
       });
     }
 
-    // Ensure vital survival gear exists in backpack without overriding emptied HUD bar
-    this.ensurePlayerHasGun(false);
-    const hasBeachBottle = this.pickups.some(
-      (p) =>
-        p.itemId === 'dirty_water_bottle' ||
-        p.itemId === 'filtered_water_bottle',
-    );
-    if (!hasBeachBottle) {
-      this.spawnBeachBottles();
+    if (loadedWorldType === 'island') {
+      // Ensure vital survival gear exists in backpack without overriding emptied HUD bar
+      this.ensurePlayerHasGun(false);
+      const hasBeachBottle = this.pickups.some(
+        (p) =>
+          p.itemId === 'dirty_water_bottle' ||
+          p.itemId === 'filtered_water_bottle',
+      );
+      if (!hasBeachBottle) {
+        this.spawnBeachBottles();
+      }
+      if (this.gameMode === 'boss_hunt') {
+        this.creatures.spawnGuardianBosses();
+      }
     }
+    this.emitHud();
   }
 
   public respawnPlayer(): void {
     this.seatedState = null;
+    this.ridingCoasterId = null;
+    if (this.worldType === 'flat') {
+      this.playerX = FLAT_PLAYER_SPAWN.x;
+      this.playerZ = FLAT_PLAYER_SPAWN.z;
+      this.playerY = FLAT_GROUND_Y;
+      this.playerVelY = 0;
+      this.vitals.health = 9999;
+      this.vitals.maxHealth = 9999;
+      this.vitals.hunger = 100;
+      this.vitals.thirst = 100;
+      this.vitals.stamina = 100;
+      this.vitals.temperatureC = 37.0;
+      this.gameOver = false;
+      this.gameOverReason = '';
+      this.toast('Returned to Flat Park Plaza.', 'info');
+      this.emitHud();
+      return;
+    }
     const campBed = this.structures.find(
       (s) => s.type === 'basic_shelter' || s.type === 'sleeping_area',
     );
@@ -2950,6 +3296,7 @@ export class GameEngine {
    * Runs at every new game, load game (even previous/last saved games), and respawn.
    */
   public ensurePlayerHasGun(forceEquip = true): void {
+    if (this.worldType === 'flat') return;
     // 1. Ensure Gun in inventory
     const existingGun = this.inventory.find((slot) => slot.itemId === 'gun');
     if (!existingGun) {
@@ -3459,16 +3806,20 @@ export class GameEngine {
   }
 
   public exportSaveData(slotId = this.currentSlotId): GameSaveData {
-    this.ensurePlayerHasGun(false);
+    if (this.worldType === 'island') {
+      this.ensurePlayerHasGun(false);
+    }
     const resourceStates: SavedResourceNodeState[] = [];
-    for (const n of this.world.resourceNodes) {
-      if (n.hp < n.maxHp || n.felled || n.respawnTimer > 0) {
-        resourceStates.push({
-          id: n.id,
-          hp: n.hp,
-          respawnTimer: n.respawnTimer,
-          felled: n.felled,
-        });
+    if (this.worldType === 'island') {
+      for (const n of this.world.resourceNodes) {
+        if (n.hp < n.maxHp || n.felled || n.respawnTimer > 0) {
+          resourceStates.push({
+            id: n.id,
+            hp: n.hp,
+            respawnTimer: n.respawnTimer,
+            felled: n.felled,
+          });
+        }
       }
     }
 
@@ -3484,26 +3835,34 @@ export class GameEngine {
         life: p.life,
       }));
 
-    const activeCarcasses: CarcassSaveData[] = this.carcasses
-      .filter((c) => !c.harvested)
-      .map((c) => ({
-        id: c.id,
-        species: c.species,
-        displayName: c.displayName,
-        isDino: c.isDino,
-        x: c.x,
-        y: c.y,
-        z: c.z,
-        yaw: c.yaw,
-        drops: c.drops.map((d) => ({ ...d })),
-        life: c.life,
-        owner: c.owner,
-      }));
+    const activeCarcasses: CarcassSaveData[] =
+      this.worldType === 'island'
+        ? this.carcasses
+            .filter((c) => !c.harvested)
+            .map((c) => ({
+              id: c.id,
+              species: c.species,
+              displayName: c.displayName,
+              isDino: c.isDino,
+              x: c.x,
+              y: c.y,
+              z: c.z,
+              yaw: c.yaw,
+              drops: c.drops.map((d) => ({ ...d })),
+              life: c.life,
+              owner: c.owner,
+            }))
+        : [];
+
+    const effectiveMode = resolveAllowedGameMode(this.worldType, this.gameMode);
 
     return {
-      version: 3,
+      version: 4,
       slotId,
       savedAt: Date.now(),
+      worldType: this.worldType,
+      worldName: this.worldName,
+      flatSurfaceStyle: this.flatSurfaceStyle,
       player: {
         x: this.playerX,
         y: this.playerY,
@@ -3517,7 +3876,7 @@ export class GameEngine {
       },
       dayCount: this.dayCount,
       timeOfDay: this.timeOfDay,
-      weather: this.weather,
+      weather: this.worldType === 'flat' ? 'clear' : this.weather,
       inventory: this.inventory.map((s) => ({ ...s })),
       backpackCompartments: this.backpackCompartments.map((c) => ({ ...c })),
       structures: this.structures.map((s) => ({
@@ -3534,7 +3893,8 @@ export class GameEngine {
         modules: v.modules.map((m) => ({ ...m })),
         cargoItems: v.cargoItems.map((c) => ({ ...c })),
       })),
-      terrainDeltas: exportSparseTerrainDeltas(),
+      coasters: this.coasterRuntime?.exportCoasters() || [],
+      terrainDeltas: this.worldType === 'island' ? exportSparseTerrainDeltas() : [],
       visitedBiomes: Array.from(this.visitedBiomes),
       exploredCells: Array.from(this.exploredCells),
       resourceStates,
@@ -3548,7 +3908,7 @@ export class GameEngine {
       completedMissionIds: Array.from(this.completedMissionIds),
       discoveredLocations: Array.from(this.discoveredLocations),
       coins: this.coins,
-      gameMode: this.gameMode,
+      gameMode: effectiveMode,
       plantedCrops: this.plantedCrops.map((c) => ({ ...c })),
       fridgeItems: this.fridgeItems.map((s) => ({ ...s })),
       tvChannel: this.smartTv.currentChannel,
@@ -4035,7 +4395,10 @@ export class GameEngine {
 
   public placeStructureFromInventory(itemId: ItemId): boolean {
     const def = ITEMS[itemId];
-    if (!def.structureType || this.getItemCount(itemId) <= 0) return false;
+    const creativeBuild = this.gameMode === 'sandbox' || this.worldType === 'flat';
+    if (!def.structureType || (!creativeBuild && this.getItemCount(itemId) <= 0)) {
+      return false;
+    }
 
     const placeDist = 2.8;
     const fwdX = -Math.sin(this.camYaw);
@@ -4049,7 +4412,9 @@ export class GameEngine {
       return false;
     }
 
-    this.removeItem(itemId, 1);
+    if (!creativeBuild && this.getItemCount(itemId) > 0) {
+      this.removeItem(itemId, 1);
+    }
     const st: PlacedStructure = {
       id: `struct_${Date.now()}_${Math.floor(Math.random() * 999)}`,
       type: def.structureType,
@@ -4211,7 +4576,10 @@ export class GameEngine {
 
   public placeItemInWorld(itemId: ItemId): boolean {
     const def = ITEMS[itemId];
-    if (this.getItemCount(itemId) <= 0) {
+    const creativeBuild =
+      (this.gameMode === 'sandbox' || this.worldType === 'flat') &&
+      Boolean(def.structureType || def.structuralKind || def.kineticKind);
+    if (!creativeBuild && this.getItemCount(itemId) <= 0) {
       this.toast(`You don't have any ${def.name}`, 'warning');
       return false;
     }
@@ -4791,6 +5159,12 @@ export class GameEngine {
       return;
     }
 
+    if (this.ridingCoasterId) {
+      this.exitCoasterRide();
+      this.actionCooldown = 0.4;
+      return;
+    }
+
     // Prioritize Shipwreck Chests, Base Armory Chest & Vehicle Garage Bench regardless of held tool/gun
     const near = this.nearbyInteraction;
     if (near && near.kind === 'shipwreck') {
@@ -4819,7 +5193,7 @@ export class GameEngine {
         near.kind === 'house_studio_drums' ||
         near.kind === 'house_studio_booth')
     ) {
-      const st = this.world.houseStations.find((s) => s.id === near.id);
+      const st = this.getActiveStations().find((s) => s.id === near.id);
       if (st) {
         this.interactHouseStation(st);
         this.actionCooldown = 0.45;
@@ -5194,12 +5568,16 @@ export class GameEngine {
         near.kind === 'house_studio_drums' ||
         near.kind === 'house_studio_booth'
       ) {
-        const st = this.world.houseStations.find((s) => s.id === near.id);
+        const st = this.getActiveStations().find((s) => s.id === near.id);
         if (st) {
           this.interactHouseStation(st);
           this.actionCooldown = 0.45;
           return;
         }
+      }
+      if (near.kind === 'coaster_station') {
+        this.callbacks.onOpenStation('coaster', near.structureId);
+        return;
       }
       if (near.kind === 'campfire' || near.kind === 'cooking_station') {
         this.callbacks.onOpenStation('cooking', near.structureId);
@@ -5321,6 +5699,7 @@ export class GameEngine {
     maxRange: number,
     predicate: (n: ResourceNodeState) => boolean,
   ): ResourceNodeState | null {
+    if (this.worldType === 'flat') return null;
     const fwdX = -Math.sin(this.camYaw);
     const fwdZ = -Math.cos(this.camYaw);
     let best: ResourceNodeState | null = null;
@@ -6399,6 +6778,7 @@ export class GameEngine {
     nodeId: string,
     equippedTool: (typeof ITEMS)[ItemId] | null,
   ): void {
+    if (this.worldType === 'flat') return;
     const node = this.world.resourceNodes.find((n) => n.id === nodeId);
     if (!node || node.hp <= 0 || node.felled) return;
 
@@ -6704,6 +7084,7 @@ export class GameEngine {
   }
 
   private evaluateMissions(): void {
+    if (this.worldType === 'flat') return;
     const ctx = {
       inventory: this.inventory,
       structures: this.structures,
@@ -6737,6 +7118,7 @@ export class GameEngine {
   }
 
   private updateWeatherAndAtmosphere(dt: number): void {
+    const isFlat = this.worldType === 'flat';
     if (this.mode === 'playing' && !this.gameOver && !this.cinematicActive) {
       // Full day-night cycle scaled by mod dayLengthMultiplier
       const dayLenMult = Math.max(0.2, this.modSystem?.tweaks.dayLengthMultiplier ?? 1);
@@ -6745,33 +7127,39 @@ export class GameEngine {
         this.timeOfDay -= 1;
         this.dayCount += 1;
         this.stats.daysSurvived = this.dayCount;
-        this.toast(`Day ${this.dayCount} Dawn`, 'info');
+        if (!isFlat) {
+          this.toast(`Day ${this.dayCount} Dawn`, 'info');
+        }
       }
 
-      // Dynamic Weather Cycling
-      this.weatherTimer -= dt;
-      if (this.weatherTimer <= 0) {
-        this.weatherTimer = 65 + Math.random() * 55;
-        const r = Math.random();
-        const next: WeatherType =
-          r < 0.48
-            ? 'clear'
-            : r < 0.72
-              ? 'overcast'
-              : r < 0.9
-                ? 'rain'
-                : 'storm';
-        if (next !== this.weather) {
-          this.weather = next;
-          if (next === 'rain') {
-            this.toast('Tropical rain showers begin to fall.', 'info');
-          } else if (next === 'storm') {
-            this.toast(
-              'A heavy storm approaches! Seek shelter or build a fire.',
-              'warning',
-            );
-          } else if (next === 'clear') {
-            this.toast('The skies clear over the island.', 'info');
+      if (isFlat) {
+        this.weather = 'clear';
+      } else {
+        // Dynamic Weather Cycling
+        this.weatherTimer -= dt;
+        if (this.weatherTimer <= 0) {
+          this.weatherTimer = 65 + Math.random() * 55;
+          const r = Math.random();
+          const next: WeatherType =
+            r < 0.48
+              ? 'clear'
+              : r < 0.72
+                ? 'overcast'
+                : r < 0.9
+                  ? 'rain'
+                  : 'storm';
+          if (next !== this.weather) {
+            this.weather = next;
+            if (next === 'rain') {
+              this.toast('Tropical rain showers begin to fall.', 'info');
+            } else if (next === 'storm') {
+              this.toast(
+                'A heavy storm approaches! Seek shelter or build a fire.',
+                'warning',
+              );
+            } else if (next === 'clear') {
+              this.toast('The skies clear over the island.', 'info');
+            }
           }
         }
       }
@@ -6781,7 +7169,7 @@ export class GameEngine {
     if (this.lightningFlash > 0) {
       this.lightningFlash = Math.max(0, this.lightningFlash - dt * 4.5);
     }
-    if (this.weather === 'storm' || this.cinematicActive) {
+    if (!isFlat && (this.weather === 'storm' || this.cinematicActive)) {
       this.nextLightningTimer -= dt;
       if (this.nextLightningTimer <= 0) {
         this.nextLightningTimer = this.cinematicActive
@@ -6798,6 +7186,7 @@ export class GameEngine {
     const isNight = sunElev < -0.05;
 
     if (
+      !isFlat &&
       this.mode === 'playing' &&
       !this.gameOver &&
       !this.cinematicActive &&
@@ -6992,26 +7381,44 @@ export class GameEngine {
       });
     }
 
-    // Tint ocean & freshwater palette with day-night lighting
-    if (this.world.oceanMesh.material instanceof THREE.MeshStandardMaterial) {
-      this.world.oceanMesh.material.color
-        .setHex(0x052838)
-        .lerp(_oceanDayColor, daylight);
-    }
-    if (this.world.lakeMesh.material instanceof THREE.MeshStandardMaterial) {
-      this.world.lakeMesh.material.color
-        .setHex(0x0a4a4e)
-        .lerp(_lakeDayColor, daylight);
-    }
+    if (this.worldType === 'island') {
+      // Tint ocean & freshwater palette with day-night lighting
+      if (this.world.oceanMesh.material instanceof THREE.MeshStandardMaterial) {
+        this.world.oceanMesh.material.color
+          .setHex(0x052838)
+          .lerp(_oceanDayColor, daylight);
+      }
+      if (this.world.lakeMesh.material instanceof THREE.MeshStandardMaterial) {
+        this.world.lakeMesh.material.color
+          .setHex(0x0a4a4e)
+          .lerp(_lakeDayColor, daylight);
+      }
 
-    // Drifting 3D clouds
-    this.world.cloudsGroup.rotation.y += dt * 0.006;
+      // Drifting 3D clouds
+      this.world.cloudsGroup.rotation.y += dt * 0.006;
+
+      // Waterfall shimmer & ocean normal drift
+      if (
+        this.world.oceanMesh.material instanceof THREE.MeshStandardMaterial &&
+        this.world.oceanMesh.material.normalMap
+      ) {
+        this.world.oceanMesh.material.normalMap.offset.x += dt * 0.025;
+        this.world.oceanMesh.material.normalMap.offset.y += dt * 0.018;
+      }
+      this.world.waterfallStreams.forEach((wf, idx) => {
+        wf.scale.x = 0.92 + Math.sin(this.elapsed * 8 + idx) * 0.08;
+      });
+      this.world.waterfallFoam.scale.setScalar(
+        0.95 + Math.sin(this.elapsed * 5) * 0.12,
+      );
+    }
 
     // Rain particle drop animation
     const showRain =
-      this.weather === 'rain' ||
-      this.weather === 'storm' ||
-      this.cinematicActive;
+      !isFlat &&
+      (this.weather === 'rain' ||
+        this.weather === 'storm' ||
+        this.cinematicActive);
     this.rainPoints.visible = showRain;
     if (showRain) {
       const center = this.cinematicActive
@@ -7048,21 +7455,6 @@ export class GameEngine {
         }
       }
     }
-
-    // Waterfall shimmer & ocean normal drift
-    if (
-      this.world.oceanMesh.material instanceof THREE.MeshStandardMaterial &&
-      this.world.oceanMesh.material.normalMap
-    ) {
-      this.world.oceanMesh.material.normalMap.offset.x += dt * 0.025;
-      this.world.oceanMesh.material.normalMap.offset.y += dt * 0.018;
-    }
-    this.world.waterfallStreams.forEach((wf, idx) => {
-      wf.scale.x = 0.92 + Math.sin(this.elapsed * 8 + idx) * 0.08;
-    });
-    this.world.waterfallFoam.scale.setScalar(
-      0.95 + Math.sin(this.elapsed * 5) * 0.12,
-    );
   }
 
   private updateCinematic(dt: number): void {
@@ -7261,6 +7653,9 @@ export class GameEngine {
       }
     }
 
+    const isFlat = this.worldType === 'flat';
+    const creativeNoNeeds = isFlat || this.gameMode === 'sandbox';
+
     const wantSprint =
       Boolean(
         this.keys['ShiftLeft'] ||
@@ -7270,11 +7665,17 @@ export class GameEngine {
       ) &&
       inputMag > 0.25 &&
       !this.isCrouching &&
-      this.vitals.stamina > 2;
+      (creativeNoNeeds || this.vitals.stamina > 2);
 
     this.isSprinting = wantSprint && !this.isSwimming;
 
-    if (this.isSprinting) {
+    if (creativeNoNeeds) {
+      this.vitals.health = this.vitals.maxHealth;
+      this.vitals.hunger = this.vitals.maxHunger;
+      this.vitals.thirst = this.vitals.maxThirst;
+      this.vitals.stamina = this.vitals.maxStamina;
+      this.vitals.temperatureC = 37.0;
+    } else if (this.isSprinting) {
       this.vitals.stamina = Math.max(0, this.vitals.stamina - dt * 15);
     } else {
       this.vitals.stamina = Math.min(
@@ -7287,7 +7688,7 @@ export class GameEngine {
     const hdx = this.playerX - HILL_HOUSE_POS.x;
     const hdz = this.playerZ - HILL_HOUSE_POS.z;
     const inHilltopHouse =
-      hdx >= -5.6 && hdx <= 5.6 && hdz >= -4.8 && hdz <= 8.8;
+      !isFlat && hdx >= -5.6 && hdx <= 5.6 && hdz >= -4.8 && hdz <= 8.8;
     const nearPlacedSmartTv =
       this.smartTv.power &&
       this.structures.some(
@@ -7297,6 +7698,7 @@ export class GameEngine {
       );
     const sittingOnSofa = this.seatedState?.label === 'Relaxing on Sofa';
     const sheltered =
+      isFlat ||
       inHilltopHouse ||
       this.structures.some(
         (s) =>
@@ -7318,66 +7720,68 @@ export class GameEngine {
           ? 'Hilltop Sanctuary'
           : '';
 
-    if (cozyActive && !this.isSprinting) {
-      this.vitals.stamina = Math.min(
-        this.vitals.maxStamina,
-        this.vitals.stamina + dt * 7,
-      );
-    }
-
     const sunElev = Math.sin((this.timeOfDay - 0.25) * Math.PI * 2);
     const isNight = sunElev < -0.05;
 
-    let targetTemp = 37.0;
-    if (cozyActive) {
-      targetTemp = nearFire ? 37.2 : 37.0;
-    } else {
-      if (isNight) targetTemp -= 1.5;
-      if (this.weather === 'rain') targetTemp -= 1.3;
-      if (this.weather === 'storm') targetTemp -= 2.6;
-      if (this.isSwimming) targetTemp -= 2.4;
-      if (sheltered) targetTemp += 1.8;
-      if (nearFire) targetTemp += 3.8;
-      if (this.isSprinting) targetTemp += 0.6;
-    }
-    targetTemp = THREE.MathUtils.clamp(targetTemp, 31.5, 37.8);
-    this.vitals.temperatureC = THREE.MathUtils.damp(
-      this.vitals.temperatureC,
-      targetTemp,
-      cozyActive ? 0.45 : 0.16,
-      dt,
-    );
-
-    // Survival needs drain
-    const drainScale = cozyActive ? 0.35 : sheltered ? 0.55 : 1.0;
-    this.vitals.hunger = Math.max(
-      0,
-      this.vitals.hunger -
-        dt * (0.26 + (this.isSprinting ? 0.2 : 0)) * drainScale,
-    );
-    this.vitals.thirst = Math.max(
-      0,
-      this.vitals.thirst -
-        dt * (0.34 + (this.isSprinting ? 0.25 : 0)) * drainScale,
-    );
-
-    if (this.vitals.temperatureC < 34.0) {
-      this.vitals.stamina = Math.max(0, this.vitals.stamina - dt * 4);
-      if (this.coldWarnCooldown <= 0) {
-        this.coldWarnCooldown = 18;
-        this.toast(
-          'Body temperature dropping! Warm up near a Campfire or Shelter.',
-          'warning',
+    if (!creativeNoNeeds) {
+      if (cozyActive && !this.isSprinting) {
+        this.vitals.stamina = Math.min(
+          this.vitals.maxStamina,
+          this.vitals.stamina + dt * 7,
         );
       }
-    }
 
-    // Hyper-fast ("faster than the speed of light") health auto-regeneration
-    if (this.vitals.health < this.vitals.maxHealth) {
-      this.vitals.health = Math.min(
-        this.vitals.maxHealth,
-        this.vitals.health + Math.max(40, dt * 6000),
+      let targetTemp = 37.0;
+      if (cozyActive) {
+        targetTemp = nearFire ? 37.2 : 37.0;
+      } else {
+        if (isNight) targetTemp -= 1.5;
+        if (this.weather === 'rain') targetTemp -= 1.3;
+        if (this.weather === 'storm') targetTemp -= 2.6;
+        if (this.isSwimming) targetTemp -= 2.4;
+        if (sheltered) targetTemp += 1.8;
+        if (nearFire) targetTemp += 3.8;
+        if (this.isSprinting) targetTemp += 0.6;
+      }
+      targetTemp = THREE.MathUtils.clamp(targetTemp, 31.5, 37.8);
+      this.vitals.temperatureC = THREE.MathUtils.damp(
+        this.vitals.temperatureC,
+        targetTemp,
+        cozyActive ? 0.45 : 0.16,
+        dt,
       );
+
+      // Survival needs drain
+      const drainScale = cozyActive ? 0.35 : sheltered ? 0.55 : 1.0;
+      this.vitals.hunger = Math.max(
+        0,
+        this.vitals.hunger -
+          dt * (0.26 + (this.isSprinting ? 0.2 : 0)) * drainScale,
+      );
+      this.vitals.thirst = Math.max(
+        0,
+        this.vitals.thirst -
+          dt * (0.34 + (this.isSprinting ? 0.25 : 0)) * drainScale,
+      );
+
+      if (this.vitals.temperatureC < 34.0) {
+        this.vitals.stamina = Math.max(0, this.vitals.stamina - dt * 4);
+        if (this.coldWarnCooldown <= 0) {
+          this.coldWarnCooldown = 18;
+          this.toast(
+            'Body temperature dropping! Warm up near a Campfire or Shelter.',
+            'warning',
+          );
+        }
+      }
+
+      // Hyper-fast ("faster than the speed of light") health auto-regeneration
+      if (this.vitals.health < this.vitals.maxHealth) {
+        this.vitals.health = Math.min(
+          this.vitals.maxHealth,
+          this.vitals.health + Math.max(40, dt * 6000),
+        );
+      }
     }
 
     // Terrain, Built Bridges/Decks & Swimming state
@@ -7385,7 +7789,7 @@ export class GameEngine {
     const terrainY = getTerrainHeight(this.playerX, this.playerZ);
     const deckY = this.getStructuralSurfaceY(this.playerX, this.playerZ, this.playerY);
     const standingSurfaceY = Math.max(terrainY, deckY);
-    this.isSwimming = standingSurfaceY < waterLevel - 0.45;
+    this.isSwimming = !isFlat && standingSurfaceY < waterLevel - 0.45;
 
     let baseSpeed =
       (this.isSwimming
@@ -7414,7 +7818,7 @@ export class GameEngine {
 
       const maxClimbSlope = this.grounded ? 1.85 : 2.2;
       const canStep = (tx: number, tz: number): boolean => {
-        if (this.isSwimming) return true;
+        if (this.isSwimming || isFlat) return true;
         const th = Math.max(
           getTerrainHeight(tx, tz),
           this.getStructuralSurfaceY(tx, tz, this.playerY),
@@ -7423,11 +7827,13 @@ export class GameEngine {
         return getTerrainSlope(tx, tz) <= maxClimbSlope;
       };
 
-      const stepSlope = getTerrainSlope(
-        this.playerX + nx * baseSpeed * inputMag * dt,
-        this.playerZ + nz * baseSpeed * inputMag * dt,
-      );
-      if (!this.isSwimming && stepSlope > 0.72 && deckY < -900) {
+      const stepSlope = isFlat
+        ? 0
+        : getTerrainSlope(
+            this.playerX + nx * baseSpeed * inputMag * dt,
+            this.playerZ + nz * baseSpeed * inputMag * dt,
+          );
+      if (!this.isSwimming && !creativeNoNeeds && stepSlope > 0.72 && deckY < -900) {
         baseSpeed *= 0.65;
         this.vitals.stamina = Math.max(0, this.vitals.stamina - dt * 4);
       }
@@ -7445,31 +7851,34 @@ export class GameEngine {
         if (!allowZ) nextZ = this.playerZ;
       }
 
-      // Playable Island Boundary
+      // Playable World Boundary
+      const maxRadius = getPlayableMaxRadius();
       const rad = Math.hypot(nextX, nextZ);
-      if (rad > PLAYABLE_MAX_RADIUS) {
-        nextX *= PLAYABLE_MAX_RADIUS / rad;
-        nextZ *= PLAYABLE_MAX_RADIUS / rad;
+      if (rad > maxRadius) {
+        nextX *= maxRadius / rad;
+        nextZ *= maxRadius / rad;
       }
 
-      // Collision detection (skip depleted rocks/crates; tighten radius on felled stumps; bypass shipwreck area)
-      for (const col of this.world.colliders) {
-        if (Math.hypot(col.x - (-4), col.z - 135) < 14) continue;
-        let activeRadius = col.radius;
-        if (col.nodeId) {
-          const node = this.nodeById.get(col.nodeId);
-          if (node && node.hp <= 0) {
-            if (!node.felled) continue;
-            activeRadius *= 0.65;
+      // Collision detection (skip Island colliders in Flat World)
+      if (!isFlat) {
+        for (const col of this.world.colliders) {
+          if (Math.hypot(col.x - (-4), col.z - 135) < 14) continue;
+          let activeRadius = col.radius;
+          if (col.nodeId) {
+            const node = this.nodeById.get(col.nodeId);
+            if (node && node.hp <= 0) {
+              if (!node.felled) continue;
+              activeRadius *= 0.65;
+            }
           }
-        }
-        const cdx = nextX - col.x;
-        const cdz = nextZ - col.z;
-        const dist = Math.hypot(cdx, cdz);
-        const minD = activeRadius + 0.42;
-        if (dist < minD && dist > 0.001) {
-          nextX = col.x + (cdx / dist) * minD;
-          nextZ = col.z + (cdz / dist) * minD;
+          const cdx = nextX - col.x;
+          const cdz = nextZ - col.z;
+          const dist = Math.hypot(cdx, cdz);
+          const minD = activeRadius + 0.42;
+          if (dist < minD && dist > 0.001) {
+            nextX = col.x + (cdx / dist) * minD;
+            nextZ = col.z + (cdz / dist) * minD;
+          }
         }
       }
       for (const st of this.structures) {
@@ -7512,17 +7921,23 @@ export class GameEngine {
       this.footstepAccum += baseSpeed * inputMag * dt;
       if (this.footstepAccum > (this.isSprinting ? 2.6 : 2.1)) {
         this.footstepAccum = 0;
-        const b = getBiomeAt(this.playerX, this.playerZ);
-        if (deckY > terrainY + 0.1) {
-          this.sound.playFootstep('rock');
-        } else if (this.isSwimming || terrainY < waterLevel) {
-          this.sound.playFootstep('water');
-        } else if (b === 'beach') {
-          this.sound.playFootstep('sand');
-        } else if (b === 'mountain' || b === 'cave') {
-          this.sound.playFootstep('rock');
+        if (isFlat) {
+          this.sound.playFootstep(
+            this.flatSurfaceStyle === 'concrete_plaza' ? 'rock' : 'grass',
+          );
         } else {
-          this.sound.playFootstep('grass');
+          const b = getBiomeAt(this.playerX, this.playerZ);
+          if (deckY > terrainY + 0.1) {
+            this.sound.playFootstep('rock');
+          } else if (this.isSwimming || terrainY < waterLevel) {
+            this.sound.playFootstep('water');
+          } else if (b === 'beach') {
+            this.sound.playFootstep('sand');
+          } else if (b === 'mountain' || b === 'cave') {
+            this.sound.playFootstep('rock');
+          } else {
+            this.sound.playFootstep('grass');
+          }
         }
       }
     } else {
@@ -7545,25 +7960,27 @@ export class GameEngine {
       const checkWall = (side: -1 | 1): boolean => {
         const px = this.playerX + rightX * side * 1.15;
         const pz = this.playerZ + rightZ * side * 1.15;
-        // 1. Steep cliff or mountain cavern slope wall
-        const wh = getTerrainHeight(px, pz);
-        if (wh >= this.playerY + 0.95 && getTerrainSlope(px, pz) >= 1.15) {
-          detectedNormX = -rightX * side;
-          detectedNormZ = -rightZ * side;
-          return true;
-        }
-        // 2. Large cliff / cavern rock / house wall collider
-        for (const col of this.world.colliders) {
-          if (Math.hypot(col.x - (-4), col.z - 135) < 14) continue;
-          if (col.radius < 1.1) continue;
-          const d = Math.hypot(px - col.x, pz - col.z);
-          if (d <= col.radius + 0.45) {
-            const nx = this.playerX - col.x;
-            const nz = this.playerZ - col.z;
-            const nl = Math.hypot(nx, nz) || 1;
-            detectedNormX = nx / nl;
-            detectedNormZ = nz / nl;
+        if (!isFlat) {
+          // 1. Steep cliff or mountain cavern slope wall
+          const wh = getTerrainHeight(px, pz);
+          if (wh >= this.playerY + 0.95 && getTerrainSlope(px, pz) >= 1.15) {
+            detectedNormX = -rightX * side;
+            detectedNormZ = -rightZ * side;
             return true;
+          }
+          // 2. Large cliff / cavern rock / house wall collider
+          for (const col of this.world.colliders) {
+            if (Math.hypot(col.x - (-4), col.z - 135) < 14) continue;
+            if (col.radius < 1.1) continue;
+            const d = Math.hypot(px - col.x, pz - col.z);
+            if (d <= col.radius + 0.45) {
+              const nx = this.playerX - col.x;
+              const nz = this.playerZ - col.z;
+              const nl = Math.hypot(nx, nz) || 1;
+              detectedNormX = nx / nl;
+              detectedNormZ = nz / nl;
+              return true;
+            }
           }
         }
         // 3. Structural block wall beside player
@@ -7615,7 +8032,7 @@ export class GameEngine {
     const newDeckY = this.getStructuralSurfaceY(this.playerX, this.playerZ, this.playerY);
     const newSurfaceY = Math.max(newTerrainY, newDeckY);
     const newWaterY = getWaterLevelAt(this.playerX, this.playerZ);
-    this.isSwimming = newSurfaceY < newWaterY - 0.45;
+    this.isSwimming = !isFlat && newSurfaceY < newWaterY - 0.45;
     if (this.isSwimming) {
       const swimTargetY = newWaterY - 0.72 + Math.sin(this.elapsed * 3.5) * 0.06;
       this.playerY = THREE.MathUtils.damp(this.playerY, swimTargetY, 8, dt);
@@ -7656,40 +8073,42 @@ export class GameEngine {
       dt,
     );
 
-    // Biome & Homestead discovery tracking
+    // Biome & Homestead discovery tracking (Island World only)
     const currentBiome = getBiomeAt(this.playerX, this.playerZ);
-    if (!this.visitedBiomes.has(currentBiome)) {
-      this.visitedBiomes.add(currentBiome);
-      this.toast(`Discovered ${BIOME_INFO[currentBiome].name}`, 'discovery');
-      this.evaluateMissions();
-    }
-    if (
-      !this.discoveredLocations.has('homestead_pasture') &&
-      Math.hypot(this.playerX - HOMESTEAD_POS.x, this.playerZ - HOMESTEAD_POS.z) < 22
-    ) {
-      this.discoveredLocations.add('homestead_pasture');
-      this.toast('Discovered Homestead Pasture & Barnyard', 'discovery');
-    }
-    if (
-      !this.discoveredLocations.has('snowy_woodland') &&
-      Math.hypot(this.playerX - SNOWY_WOODLAND_POS.x, this.playerZ - SNOWY_WOODLAND_POS.z) < 16
-    ) {
-      this.discoveredLocations.add('snowy_woodland');
-      this.toast('Discovered Snowy Highland Woodland', 'discovery');
-    }
-    if (
-      !this.discoveredLocations.has('autumn_grove') &&
-      Math.hypot(this.playerX - AUTUMN_GROVE_POS.x, this.playerZ - AUTUMN_GROVE_POS.z) < 14
-    ) {
-      this.discoveredLocations.add('autumn_grove');
-      this.toast('Discovered Autumn Forest Undergrowth', 'discovery');
-    }
-    if (
-      !this.discoveredLocations.has('murky_swamp') &&
-      Math.hypot(this.playerX - SWAMP_POS.x, this.playerZ - SWAMP_POS.z) < SWAMP_POS.radius + 4
-    ) {
-      this.discoveredLocations.add('murky_swamp');
-      this.toast('Discovered Murky Jungle Swamp', 'discovery');
+    if (!isFlat) {
+      if (!this.visitedBiomes.has(currentBiome)) {
+        this.visitedBiomes.add(currentBiome);
+        this.toast(`Discovered ${BIOME_INFO[currentBiome].name}`, 'discovery');
+        this.evaluateMissions();
+      }
+      if (
+        !this.discoveredLocations.has('homestead_pasture') &&
+        Math.hypot(this.playerX - HOMESTEAD_POS.x, this.playerZ - HOMESTEAD_POS.z) < 22
+      ) {
+        this.discoveredLocations.add('homestead_pasture');
+        this.toast('Discovered Homestead Pasture & Barnyard', 'discovery');
+      }
+      if (
+        !this.discoveredLocations.has('snowy_woodland') &&
+        Math.hypot(this.playerX - SNOWY_WOODLAND_POS.x, this.playerZ - SNOWY_WOODLAND_POS.z) < 16
+      ) {
+        this.discoveredLocations.add('snowy_woodland');
+        this.toast('Discovered Snowy Highland Woodland', 'discovery');
+      }
+      if (
+        !this.discoveredLocations.has('autumn_grove') &&
+        Math.hypot(this.playerX - AUTUMN_GROVE_POS.x, this.playerZ - AUTUMN_GROVE_POS.z) < 14
+      ) {
+        this.discoveredLocations.add('autumn_grove');
+        this.toast('Discovered Autumn Forest Undergrowth', 'discovery');
+      }
+      if (
+        !this.discoveredLocations.has('murky_swamp') &&
+        Math.hypot(this.playerX - SWAMP_POS.x, this.playerZ - SWAMP_POS.z) < SWAMP_POS.radius + 4
+      ) {
+        this.discoveredLocations.add('murky_swamp');
+        this.toast('Discovered Murky Jungle Swamp', 'discovery');
+      }
     }
 
     // Update First-Person Hands & Held Tool Visuals
@@ -7709,12 +8128,16 @@ export class GameEngine {
     }
 
     // Update crosshair target hitbox & nearby contextual interaction
-    this.probeTargetHitbox();
+    if (!isFlat) {
+      this.probeTargetHitbox();
+    } else {
+      this.targetHitbox = null;
+    }
     this.nearbyInteraction = this.findNearbyInteraction();
 
     // Update environment audio & Player Visibility (daylight, weather, campfire glow, stealth crouch, sprint)
     const shoreDist = Math.abs(Math.hypot(this.playerX, this.playerZ) - 125);
-    const shoreProx = THREE.MathUtils.clamp(1 - shoreDist / 45, 0, 1);
+    const shoreProx = isFlat ? 0 : THREE.MathUtils.clamp(1 - shoreDist / 45, 0, 1);
     const daylight = THREE.MathUtils.clamp((sunElev + 0.16) / 0.65, 0, 1);
     const weatherVis =
       this.weather === 'storm' ? -0.14 : this.weather === 'rain' ? -0.09 : 0;
@@ -7728,9 +8151,9 @@ export class GameEngine {
       this.elapsed,
       shoreProx,
       nearFire,
-      this.weather,
+      isFlat ? 'clear' : this.weather,
       daylight > 0.35,
-      currentBiome === 'forest',
+      !isFlat && currentBiome === 'forest',
     );
   }
 
@@ -7799,18 +8222,19 @@ export class GameEngine {
     const fwdX = -Math.sin(this.camYaw);
     const fwdZ = -Math.cos(this.camYaw);
 
-    // 1. Vault over medium obstacles (logs, crates, rocks, fences) directly ahead (skip premade house walls/furniture)
-    for (const col of this.world.colliders) {
-      if (col.radius > 1.38) continue;
-      const chdx = col.x - HILL_HOUSE_POS.x;
-      const chdz = col.z - HILL_HOUSE_POS.z;
-      if (chdx >= -6.2 && chdx <= 6.8 && chdz >= -4.8 && chdz <= 9.0) continue;
-      const dx = col.x - this.playerX;
-      const dz = col.z - this.playerZ;
-      const dist = Math.hypot(dx, dz);
-      if (dist > col.radius + 1.55 || dist < 0.45) continue;
-      const dot = (dx * fwdX + dz * fwdZ) / (dist || 1);
-      if (dot < 0.48) continue;
+    // 1. Vault over medium obstacles (logs, crates, rocks, fences) directly ahead (Island World only)
+    if (this.worldType === 'island') {
+      for (const col of this.world.colliders) {
+        if (col.radius > 1.38) continue;
+        const chdx = col.x - HILL_HOUSE_POS.x;
+        const chdz = col.z - HILL_HOUSE_POS.z;
+        if (chdx >= -6.2 && chdx <= 6.8 && chdz >= -4.8 && chdz <= 9.0) continue;
+        const dx = col.x - this.playerX;
+        const dz = col.z - this.playerZ;
+        const dist = Math.hypot(dx, dz);
+        if (dist > col.radius + 1.55 || dist < 0.45) continue;
+        const dot = (dx * fwdX + dz * fwdZ) / (dist || 1);
+        if (dot < 0.48) continue;
 
       const endX = col.x + fwdX * (col.radius + 0.95);
       const endZ = col.z + fwdZ * (col.radius + 0.95);
@@ -7832,6 +8256,7 @@ export class GameEngine {
       this.sound.playWallRunStep();
       this.toast('Obstacle Vault!', 'info');
       return true;
+      }
     }
 
     // 2. Vault onto waist-to-chest cliff ledges or engineered stone/timber blocks
@@ -8263,7 +8688,7 @@ export class GameEngine {
   private findNearestHouseStationInteraction(): NearbyInteraction | null {
     let bestHouse: HouseStationTarget | null = null;
     let bestHouseDist = 3.6;
-    for (const hs of this.world.houseStations) {
+    for (const hs of this.getActiveStations()) {
       if (Math.abs(hs.y - this.playerY) > 2.2) continue;
       const d = Math.hypot(hs.x - this.playerX, hs.z - this.playerZ);
       if (d <= hs.range && d < bestHouseDist) {
@@ -8943,100 +9368,102 @@ export class GameEngine {
     }
     if (best) return best;
 
-    // 1A. Base Armory Chest & Vehicle Garage Bench near Hilltop House
-    if (this.armoryChestState) {
-      const ac = this.armoryChestState;
-      const dArmory = Math.hypot(ac.x - this.playerX, ac.z - this.playerZ);
-      if (dArmory < 4.2 && Math.abs(ac.y - this.playerY) < 3.0 && dArmory < bestDist) {
-        bestDist = dArmory;
-        best = {
-          id: 'base_armory_chest',
-          label: ac.opened
-            ? 'Resupply Base Armory Chest'
-            : 'Open Base Armory Supply Chest',
-          sublabel: ac.opened
-            ? 'Salvage 25x Reserve Cartridges'
-            : 'Glock 19, Remington 870, M4A1 & 120x Ammo',
-          kind: 'armory_chest',
-          actionCategory: 'search',
-          distance: dArmory,
-          targetX: ac.x,
-          targetY: ac.y,
-          targetZ: ac.z,
-        };
+    if (this.worldType === 'island') {
+      // 1A. Base Armory Chest & Vehicle Garage Bench near Hilltop House
+      if (this.armoryChestState) {
+        const ac = this.armoryChestState;
+        const dArmory = Math.hypot(ac.x - this.playerX, ac.z - this.playerZ);
+        if (dArmory < 4.2 && Math.abs(ac.y - this.playerY) < 3.0 && dArmory < bestDist) {
+          bestDist = dArmory;
+          best = {
+            id: 'base_armory_chest',
+            label: ac.opened
+              ? 'Resupply Base Armory Chest'
+              : 'Open Base Armory Supply Chest',
+            sublabel: ac.opened
+              ? 'Salvage 25x Reserve Cartridges'
+              : 'Glock 19, Remington 870, M4A1 & 120x Ammo',
+            kind: 'armory_chest',
+            actionCategory: 'search',
+            distance: dArmory,
+            targetX: ac.x,
+            targetY: ac.y,
+            targetZ: ac.z,
+          };
+        }
       }
-    }
 
-    if (this.world?.garageBenchPos) {
-      const gb = this.world.garageBenchPos;
-      const dBench = Math.hypot(gb.x - this.playerX, gb.z - this.playerZ);
-      if (dBench < 4.2 && Math.abs(gb.y - this.playerY) < 3.0 && dBench < bestDist) {
-        bestDist = dBench;
-        const parkedNeedsService = this.vehicles.some(
-          (v) =>
-            Math.hypot(v.x - VEHICLE_GARAGE_POS.x, v.z - VEHICLE_GARAGE_POS.z) <= 14.5 &&
-            (v.hp < v.maxHp || v.fuel < 98),
-        );
-        best = {
-          id: 'garage_bench',
-          label: parkedNeedsService
-            ? 'Service & Refuel Garage Vehicles'
-            : 'Open Garage Vehicle Workshop',
-          sublabel: parkedNeedsService
-            ? 'Restore 100% Fuel & Hull Armor'
-            : 'Build, Customize & Spawn Rovers',
-          kind: 'garage_bench',
-          actionCategory: 'craft',
-          distance: dBench,
-          targetX: gb.x,
-          targetY: gb.y,
-          targetZ: gb.z,
-        };
+      if (this.world?.garageBenchPos) {
+        const gb = this.world.garageBenchPos;
+        const dBench = Math.hypot(gb.x - this.playerX, gb.z - this.playerZ);
+        if (dBench < 4.2 && Math.abs(gb.y - this.playerY) < 3.0 && dBench < bestDist) {
+          bestDist = dBench;
+          const parkedNeedsService = this.vehicles.some(
+            (v) =>
+              Math.hypot(v.x - VEHICLE_GARAGE_POS.x, v.z - VEHICLE_GARAGE_POS.z) <= 14.5 &&
+              (v.hp < v.maxHp || v.fuel < 98),
+          );
+          best = {
+            id: 'garage_bench',
+            label: parkedNeedsService
+              ? 'Service & Refuel Garage Vehicles'
+              : 'Open Garage Vehicle Workshop',
+            sublabel: parkedNeedsService
+              ? 'Restore 100% Fuel & Hull Armor'
+              : 'Build, Customize & Spawn Rovers',
+            kind: 'garage_bench',
+            actionCategory: 'craft',
+            distance: dBench,
+            targetX: gb.x,
+            targetY: gb.y,
+            targetZ: gb.z,
+          };
+        }
       }
-    }
 
-    // 1B. Shipwreck Loot Chests (unrestricted access across decks, cargo hold & cabins)
-    for (const chest of this.shipwreckChests) {
-      const d = Math.hypot(chest.x - this.playerX, chest.z - this.playerZ);
-      const dy = Math.abs(chest.y - this.playerY);
-      if (d < 4.5 && dy < 3.2 && d < bestDist) {
-        bestDist = d;
+      // 1B. Shipwreck Loot Chests (unrestricted access across decks, cargo hold & cabins)
+      for (const chest of this.shipwreckChests) {
+        const d = Math.hypot(chest.x - this.playerX, chest.z - this.playerZ);
+        const dy = Math.abs(chest.y - this.playerY);
+        if (d < 4.5 && dy < 3.2 && d < bestDist) {
+          bestDist = d;
+          best = {
+            id: `shipwreck_chest_${chest.id}`,
+            label: chest.opened ? `Search ${chest.name}` : `Open ${chest.name}`,
+            sublabel: chest.opened ? 'Salvage Spare Ammo' : chest.sublabel,
+            kind: 'shipwreck',
+            actionCategory: 'search',
+            distance: d,
+            targetX: chest.x,
+            targetY: chest.y,
+            targetZ: chest.z,
+          };
+        }
+      }
+
+      // 1C. General Beached Shipwreck Area Check (at -4, 135)
+      const shipDist = Math.hypot(-4 - this.playerX, 135 - this.playerZ);
+      if (shipDist < 13.0 && shipDist < bestDist) {
+        const unopened = this.shipwreckChests.filter((c) => !c.opened).length;
+        bestDist = shipDist;
         best = {
-          id: `shipwreck_chest_${chest.id}`,
-          label: chest.opened ? `Search ${chest.name}` : `Open ${chest.name}`,
-          sublabel: chest.opened ? 'Salvage Spare Ammo' : chest.sublabel,
+          id: 'search_shipwreck',
+          label:
+            unopened > 0
+              ? `Search Beached Shipwreck (${unopened}/4 Chests Unopened)`
+              : 'Search Beached Shipwreck (Fully Looted)',
+          sublabel:
+            unopened > 0
+              ? 'Collect Real-Life Firearms & Treasure'
+              : 'All 4 Chests Looted',
           kind: 'shipwreck',
           actionCategory: 'search',
-          distance: d,
-          targetX: chest.x,
-          targetY: chest.y,
-          targetZ: chest.z,
+          distance: shipDist,
+          targetX: -4,
+          targetY: OCEAN_LEVEL + 0.5,
+          targetZ: 135,
         };
       }
-    }
-
-    // 1C. General Beached Shipwreck Area Check (at -4, 135)
-    const shipDist = Math.hypot(-4 - this.playerX, 135 - this.playerZ);
-    if (shipDist < 13.0 && shipDist < bestDist) {
-      const unopened = this.shipwreckChests.filter((c) => !c.opened).length;
-      bestDist = shipDist;
-      best = {
-        id: 'search_shipwreck',
-        label:
-          unopened > 0
-            ? `Search Beached Shipwreck (${unopened}/4 Chests Unopened)`
-            : 'Search Beached Shipwreck (Fully Looted)',
-        sublabel:
-          unopened > 0
-            ? 'Collect Real-Life Firearms & Treasure'
-            : 'All 4 Chests Looted',
-        kind: 'shipwreck',
-        actionCategory: 'search',
-        distance: shipDist,
-        targetX: -4,
-        targetY: OCEAN_LEVEL + 0.5,
-        targetZ: 135,
-      };
     }
 
     for (const st of this.structures) {
@@ -9056,6 +9483,7 @@ export class GameEngine {
           auto_turret: 'Auto-Turret Defense',
           smart_tv: 'Watch Smart TV',
           drying_rack: 'Meat Drying Rack',
+          coaster_station: 'Open Roller Coaster Studio',
         };
         const catMap: Record<
           CampStructureType,
@@ -9073,6 +9501,7 @@ export class GameEngine {
           auto_turret: 'use',
           smart_tv: 'use',
           drying_rack: 'use',
+          coaster_station: 'craft',
         };
         best = {
           id: st.id,
@@ -9090,31 +9519,33 @@ export class GameEngine {
     if (best) return best;
 
     // Check nearby fallen animal / dinosaur carcasses ready for pickup & preparation
-    const bestCarcass = this.findNearbyCarcass();
-    if (bestCarcass) {
-      const bestCarcassDist = Math.hypot(
-        bestCarcass.x - this.playerX,
-        bestCarcass.z - this.playerZ,
-      );
-      const hasKnife = this.getItemCount('hunting_knife') > 0;
-      const cutSummary = bestCarcass.drops
-        .map((d) => `${d.quantity}× ${ITEMS[d.itemId].name}`)
-        .join(' · ');
-      return {
-        id: bestCarcass.id,
-        label: hasKnife
-          ? `Cut & Prepare ${bestCarcass.displayName} Carcass`
-          : `Pick up & Prepare ${bestCarcass.displayName} Carcass`,
-        sublabel: hasKnife ? `Knife Ready · ${cutSummary}` : cutSummary || 'Butcher Meat & Hide',
-        kind: 'carcass',
-        actionCategory: 'harvest',
-        distance: bestCarcassDist,
-        targetX: bestCarcass.x,
-        targetY: bestCarcass.y,
-        targetZ: bestCarcass.z,
-        carcassId: bestCarcass.id,
-        species: bestCarcass.species,
-      };
+    if (this.worldType === 'island') {
+      const bestCarcass = this.findNearbyCarcass();
+      if (bestCarcass) {
+        const bestCarcassDist = Math.hypot(
+          bestCarcass.x - this.playerX,
+          bestCarcass.z - this.playerZ,
+        );
+        const hasKnife = this.getItemCount('hunting_knife') > 0;
+        const cutSummary = bestCarcass.drops
+          .map((d) => `${d.quantity}× ${ITEMS[d.itemId].name}`)
+          .join(' · ');
+        return {
+          id: bestCarcass.id,
+          label: hasKnife
+            ? `Cut & Prepare ${bestCarcass.displayName} Carcass`
+            : `Pick up & Prepare ${bestCarcass.displayName} Carcass`,
+          sublabel: hasKnife ? `Knife Ready · ${cutSummary}` : cutSummary || 'Butcher Meat & Hide',
+          kind: 'carcass',
+          actionCategory: 'harvest',
+          distance: bestCarcassDist,
+          targetX: bestCarcass.x,
+          targetY: bestCarcass.y,
+          targetZ: bestCarcass.z,
+          carcassId: bestCarcass.id,
+          species: bestCarcass.species,
+        };
+      }
     }
 
     // Check nearby ground resource pickups
@@ -9144,66 +9575,68 @@ export class GameEngine {
       };
     }
 
-    for (const c of this.creatures.creatures) {
-      if (!c.alive || c.species !== 'dolphin') continue;
-      const d = Math.hypot(c.x - this.playerX, c.z - this.playerZ);
-      if (d < 13) {
+    if (this.worldType === 'island') {
+      for (const c of this.creatures.creatures) {
+        if (!c.alive || c.species !== 'dolphin') continue;
+        const d = Math.hypot(c.x - this.playerX, c.z - this.playerZ);
+        if (d < 13) {
+          return {
+            id: c.id,
+            label: 'Play with Coastal Dolphin',
+            sublabel: 'Marine Wildlife',
+            kind: 'dolphin',
+            actionCategory: 'use',
+            distance: d,
+            targetX: c.x,
+            targetY: c.y,
+            targetZ: c.z,
+            creatureId: c.id,
+            species: 'dolphin',
+          };
+        }
+      }
+
+      const expDist = Math.hypot(
+        this.world.expeditionJournalPos.x - this.playerX,
+        this.world.expeditionJournalPos.z - this.playerZ,
+      );
+      if (expDist < 3.2) {
         return {
-          id: c.id,
-          label: 'Play with Coastal Dolphin',
-          sublabel: 'Marine Wildlife',
-          kind: 'dolphin',
+          id: 'expedition_journal',
+          label: 'Read Expedition Journal',
+          kind: 'expedition_journal',
           actionCategory: 'use',
-          distance: d,
-          targetX: c.x,
-          targetY: c.y,
-          targetZ: c.z,
-          creatureId: c.id,
-          species: 'dolphin',
+          distance: expDist,
+          targetX: this.world.expeditionJournalPos.x,
+          targetY: this.world.expeditionJournalPos.y,
+          targetZ: this.world.expeditionJournalPos.z,
+        };
+      }
+
+      // Check Farmer NPC beside the Farm Market
+      const farmerDist = Math.hypot(
+        this.world.farmerNpcPos.x - this.playerX,
+        this.world.farmerNpcPos.z - this.playerZ,
+      );
+      if (farmerDist < 3.6 && Math.abs(this.world.farmerNpcPos.y - this.playerY) < 2.2) {
+        return {
+          id: 'farmer_npc',
+          label: 'Talk to Farmer Elias',
+          sublabel: 'Buy Seeds, Veggies & Sell Harvest',
+          kind: 'farmer',
+          actionCategory: 'use',
+          distance: farmerDist,
+          targetX: this.world.farmerNpcPos.x,
+          targetY: this.world.farmerNpcPos.y,
+          targetZ: this.world.farmerNpcPos.z,
         };
       }
     }
 
-    const expDist = Math.hypot(
-      this.world.expeditionJournalPos.x - this.playerX,
-      this.world.expeditionJournalPos.z - this.playerZ,
-    );
-    if (expDist < 3.2) {
-      return {
-        id: 'expedition_journal',
-        label: 'Read Expedition Journal',
-        kind: 'expedition_journal',
-        actionCategory: 'use',
-        distance: expDist,
-        targetX: this.world.expeditionJournalPos.x,
-        targetY: this.world.expeditionJournalPos.y,
-        targetZ: this.world.expeditionJournalPos.z,
-      };
-    }
-
-    // Check Farmer NPC beside the Farm Market
-    const farmerDist = Math.hypot(
-      this.world.farmerNpcPos.x - this.playerX,
-      this.world.farmerNpcPos.z - this.playerZ,
-    );
-    if (farmerDist < 3.6 && Math.abs(this.world.farmerNpcPos.y - this.playerY) < 2.2) {
-      return {
-        id: 'farmer_npc',
-        label: 'Talk to Farmer Elias',
-        sublabel: 'Buy Seeds, Veggies & Sell Harvest',
-        kind: 'farmer',
-        actionCategory: 'use',
-        distance: farmerDist,
-        targetX: this.world.farmerNpcPos.x,
-        targetY: this.world.farmerNpcPos.y,
-        targetZ: this.world.farmerNpcPos.z,
-      };
-    }
-
-    // Check Hilltop House Functional Furniture & Appliances
+    // Check Hilltop House / Park Pavilion Functional Stations
     let bestHouse: HouseStationTarget | null = null;
     let bestHouseDist = 3.6;
-    for (const hs of this.world.houseStations) {
+    for (const hs of this.getActiveStations()) {
       if (Math.abs(hs.y - this.playerY) > 2.2) continue;
       const d = Math.hypot(hs.x - this.playerX, hs.z - this.playerZ);
       if (d <= hs.range && d < bestHouseDist) {
@@ -9406,44 +9839,46 @@ export class GameEngine {
       }
     }
 
-    for (const n of this.world.resourceNodes) {
-      if (n.felled && (n.fallTimer ?? 0) > 0) {
-        n.fallTimer = Math.max(0, (n.fallTimer ?? 0) - dt);
-        const handle = this.world.resourceHandles.get(n.id);
-        if (handle?.felledPivot) {
-          const t = 1 - (n.fallTimer ?? 0) / 1.05;
-          const tilt = t * t * (Math.PI / 2.08);
-          const fdx = n.fallDirX ?? 1;
-          const fdz = n.fallDirZ ?? 0;
-          handle.felledPivot.rotation.z = -fdx * tilt;
-          handle.felledPivot.rotation.x = fdz * tilt;
-        }
-        if ((n.fallTimer ?? 0) <= 0) {
-          this.syncResourceVisual(n);
-          const fdx = n.fallDirX ?? 1;
-          const fdz = n.fallDirZ ?? 0;
-          const dropX = n.x + fdx * 2.1;
-          const dropZ = n.z + fdz * 2.1;
-          this.spawnParticles(dropX, getTerrainHeight(dropX, dropZ) + 0.35, dropZ, 0x85532a, 10);
-          const grants = this.pendingTreeDrops.get(n.id);
-          if (grants) {
-            this.pendingTreeDrops.delete(n.id);
-            this.spawnWorldPickupsFromGrants(n.x, n.z, grants, fdx * 2.1, fdz * 2.1, 1.85);
+    if (this.worldType === 'island') {
+      for (const n of this.world.resourceNodes) {
+        if (n.felled && (n.fallTimer ?? 0) > 0) {
+          n.fallTimer = Math.max(0, (n.fallTimer ?? 0) - dt);
+          const handle = this.world.resourceHandles.get(n.id);
+          if (handle?.felledPivot) {
+            const t = 1 - (n.fallTimer ?? 0) / 1.05;
+            const tilt = t * t * (Math.PI / 2.08);
+            const fdx = n.fallDirX ?? 1;
+            const fdz = n.fallDirZ ?? 0;
+            handle.felledPivot.rotation.z = -fdx * tilt;
+            handle.felledPivot.rotation.x = fdz * tilt;
+          }
+          if ((n.fallTimer ?? 0) <= 0) {
+            this.syncResourceVisual(n);
+            const fdx = n.fallDirX ?? 1;
+            const fdz = n.fallDirZ ?? 0;
+            const dropX = n.x + fdx * 2.1;
+            const dropZ = n.z + fdz * 2.1;
+            this.spawnParticles(dropX, getTerrainHeight(dropX, dropZ) + 0.35, dropZ, 0x85532a, 10);
+            const grants = this.pendingTreeDrops.get(n.id);
+            if (grants) {
+              this.pendingTreeDrops.delete(n.id);
+              this.spawnWorldPickupsFromGrants(n.x, n.z, grants, fdx * 2.1, fdz * 2.1, 1.85);
+            }
           }
         }
-      }
 
-      if (n.hp <= 0) {
-        n.respawnTimer -= dt;
-        if (n.respawnTimer <= 0) {
-          n.hp = n.maxHp;
-          n.felled = false;
-          n.fallTimer = 0;
-          this.shakenTreeDropIds.delete(n.id);
-          this.pendingTreeDrops.delete(n.id);
-          this.nodeHitShakeTimers.delete(n.id);
-          this.world.restoreBatchedNode(n.id);
-          this.syncResourceVisual(n);
+        if (n.hp <= 0) {
+          n.respawnTimer -= dt;
+          if (n.respawnTimer <= 0) {
+            n.hp = n.maxHp;
+            n.felled = false;
+            n.fallTimer = 0;
+            this.shakenTreeDropIds.delete(n.id);
+            this.pendingTreeDrops.delete(n.id);
+            this.nodeHitShakeTimers.delete(n.id);
+            this.world.restoreBatchedNode(n.id);
+            this.syncResourceVisual(n);
+          }
         }
       }
     }
@@ -9626,7 +10061,7 @@ export class GameEngine {
       }
 
       // If high velocity bullet didn't hit creature, check if it struck a breakable resource node
-      if (!remove && a.isBullet) {
+      if (!remove && a.isBullet && this.worldType === 'island') {
         for (const n of this.world.resourceNodes) {
           if (n.hp <= 0) continue;
           const d = Math.hypot(a.pos.x - n.x, a.pos.z - n.z);
@@ -9869,19 +10304,41 @@ export class GameEngine {
     }
 
     if (this.mode === 'menu') {
+      this.camera.up.set(0, 1, 0);
       this.handsRig.root.visible = false;
       const angle = this.elapsed * 0.14;
-      const r = 92;
+      const r = this.worldType === 'flat' ? 68 : 92;
       _vec3A.set(
         Math.cos(angle) * r,
-        28 + Math.sin(angle * 0.7) * 6,
+        (this.worldType === 'flat' ? 22 : 28) + Math.sin(angle * 0.7) * 5,
         Math.sin(angle) * r,
       );
-      _vec3B.set(0, 6, 0);
+      _vec3B.set(0, this.worldType === 'flat' ? 3 : 6, 0);
       this.camera.position.lerp(_vec3A, 0.04);
       this.camera.lookAt(_vec3B);
       return;
     }
+
+    if (this.ridingCoasterId && this.coasterRuntime) {
+      const rideCam = this.coasterRuntime.getRideCameraTransform(this.ridingCoasterId);
+      if (rideCam) {
+        this.handsRig.root.visible = false;
+        this.camera.position.copy(rideCam.position);
+        this.camera.up.copy(rideCam.up);
+        this.camera.lookAt(rideCam.lookAt);
+        this.playerX = rideCam.position.x;
+        this.playerY = rideCam.position.y;
+        this.playerZ = rideCam.position.z;
+
+        if (rideCam.progressPercent >= 98 && rideCam.segmentLabel === 'Load Station') {
+          this.exitCoasterRide();
+          this.toast('Train arrived back at Load Station — automatically disembarked rider!', 'discovery');
+        }
+        return;
+      }
+      this.ridingCoasterId = null;
+    }
+    this.camera.up.set(0, 1, 0);
 
     if (this.cinematicActive) {
       this.handsRig.root.visible = false;
@@ -10023,12 +10480,14 @@ export class GameEngine {
   }
 
   private emitHud(): void {
+    const isFlat = this.worldType === 'flat';
     const biome = getBiomeAt(this.playerX, this.playerZ);
     const hdx = this.playerX - HILL_HOUSE_POS.x;
     const hdz = this.playerZ - HILL_HOUSE_POS.z;
     const inHilltopHouse =
-      hdx >= -5.6 && hdx <= 5.6 && hdz >= -4.8 && hdz <= 8.8;
+      !isFlat && hdx >= -5.6 && hdx <= 5.6 && hdz >= -4.8 && hdz <= 8.8;
     const sheltered =
+      isFlat ||
       inHilltopHouse ||
       this.structures.some(
         (s) =>
@@ -10175,13 +10634,19 @@ export class GameEngine {
       }
     }
 
+    const coasters = this.coasterRuntime ? this.coasterRuntime.getHudSummaries() : [];
+    const activeRideData =
+      this.ridingCoasterId && this.coasterRuntime
+        ? this.coasterRuntime.getRideCameraTransform(this.ridingCoasterId)
+        : null;
+
     this.callbacks.onHudUpdate({
       vitals: { ...this.vitals },
       dayCount: this.dayCount,
       timeOfDay: this.timeOfDay,
-      weather: this.weather,
+      weather: isFlat ? 'clear' : this.weather,
       biome,
-      biomeName: BIOME_INFO[biome].name,
+      biomeName: isFlat ? 'Park Grounds' : BIOME_INFO[biome].name,
       playerX: this.playerX,
       playerY: this.playerY,
       playerZ: this.playerZ,
@@ -10245,10 +10710,30 @@ export class GameEngine {
       })),
       activeVehicle,
       selectedCargoVehicleId: this.selectedCargoVehicleId,
-      gameMode: this.gameMode,
+      worldType: this.worldType,
+      worldName: this.worldName,
+      flatSurfaceStyle: this.flatSurfaceStyle,
+      gameMode: resolveAllowedGameMode(this.worldType, this.gameMode),
+      coasters,
+      activeCoasterRide:
+        this.ridingCoasterId && activeRideData
+          ? {
+              coasterId: this.ridingCoasterId,
+              coasterName: activeRideData.coasterName,
+              speedKmh: activeRideData.speedKmh,
+              heightM: activeRideData.heightM,
+              progressPercent: activeRideData.progressPercent,
+              firstPerson: true,
+              verticalG: activeRideData.verticalG,
+              lateralG: activeRideData.lateralG,
+              segmentLabel: activeRideData.segmentLabel,
+            }
+          : null,
       bloodMoonActive: this.isBloodMoonNight(),
-      daysUntilBloodMoon: 7 - ((this.dayCount - 1) % 7),
-      bossesDefeatedCount: this.creatures.creatures.filter((c) => c.isBoss && !c.alive).length,
+      daysUntilBloodMoon: isFlat ? 0 : 7 - ((this.dayCount - 1) % 7),
+      bossesDefeatedCount: isFlat
+        ? 0
+        : this.creatures.creatures.filter((c) => c.isBoss && !c.alive).length,
       objectiveText: this.computeObjectiveText(),
       hitMarkerActive: this.hitMarkerActive,
       tvState: (() => {
@@ -10398,7 +10883,11 @@ export class GameEngine {
     this.modSystem?.tick(dt);
     this.updateMultiplayer(dt);
     this.updateWeatherAndAtmosphere(dt);
-    if (this.realisticOcean && this.currentDimension === 'overworld') {
+    if (
+      this.realisticOcean &&
+      this.currentDimension === 'overworld' &&
+      this.worldType === 'island'
+    ) {
       this.realisticOcean.update(dt);
     }
 
@@ -10419,6 +10908,7 @@ export class GameEngine {
         if (this.currentDimension === 'overworld') {
           this.updateStructuralAndTerrainSystems(dt);
           this.updateKineticNetwork(dt);
+          this.coasterRuntime?.update(dt);
         }
         this.updateVehicles(dt);
         this.updateBuildPreview();
@@ -10456,7 +10946,7 @@ export class GameEngine {
         }
 
         let nocturnalActiveCount = 0;
-        if (inOverworld) {
+        if (inOverworld && this.worldType === 'island') {
           const scavengerTargets: ScavengerCarcassTarget[] = [];
           for (const c of this.carcasses) {
             if (
@@ -10526,24 +11016,32 @@ export class GameEngine {
         this.kineticPreviewGroup.visible = false;
       }
       this.updateKineticNetwork(dt);
-      const creatureCycle = this.creatures.update(
-        dt,
-        this.elapsed,
-        9999,
-        9999,
-        false,
-        false,
-        false,
-        1.0,
-        () => {},
-        () => {},
-        () => {},
-      );
-      this.nocturnalActiveCount = creatureCycle.nocturnalActiveCount;
+      if (this.worldType === 'island') {
+        const creatureCycle = this.creatures.update(
+          dt,
+          this.elapsed,
+          9999,
+          9999,
+          false,
+          false,
+          false,
+          1.0,
+          () => {},
+          () => {},
+          () => {},
+        );
+        this.nocturnalActiveCount = creatureCycle.nocturnalActiveCount;
+      } else {
+        this.nocturnalActiveCount = 0;
+      }
     }
 
-    // Subtle idle life for Farmer NPC & glowing TV screen inside the Hilltop House
-    if (this.world.farmerNpcGroup && this.currentDimension === 'overworld') {
+    // Subtle idle life for Farmer NPC & glowing TV screen inside the Hilltop House (Island World)
+    if (
+      this.worldType === 'island' &&
+      this.world.farmerNpcGroup &&
+      this.currentDimension === 'overworld'
+    ) {
       const distFarmer = Math.hypot(
         this.world.farmerNpcPos.x - this.playerX,
         this.world.farmerNpcPos.z - this.playerZ,
@@ -10562,35 +11060,48 @@ export class GameEngine {
       }
     }
 
-    // Rotate unlooted shipwreck chest & Base Armory beacon beams gently
-    for (const chest of this.shipwreckChests) {
-      if (chest.glowMesh && !chest.opened) {
-        chest.glowMesh.rotation.y += dt * 1.5;
+    // Rotate unlooted shipwreck chest & Base Armory beacon beams gently (Island World)
+    if (this.worldType === 'island') {
+      for (const chest of this.shipwreckChests) {
+        if (chest.glowMesh && !chest.opened) {
+          chest.glowMesh.rotation.y += dt * 1.5;
+        }
       }
-    }
-    if (this.armoryChestState?.glowMesh && !this.armoryChestState.opened) {
-      this.armoryChestState.glowMesh.rotation.y += dt * 1.5;
+      if (this.armoryChestState?.glowMesh && !this.armoryChestState.opened) {
+        this.armoryChestState.glowMesh.rotation.y += dt * 1.5;
+      }
     }
 
     // Update 3D Smart TV OS CanvasTexture & Sync CSS3DRenderer YouTube Frame onto the physical 3D TV screen
     this.smartTv.update(dt, {
       dayCount: this.dayCount,
       timeOfDay: this.timeOfDay,
-      weather: this.weather,
-      erosionActive: this.terrainEngine.getActiveStreamCount() > 0,
-      tamedCount: this.creatures.creatures.filter((c) => c.alive && c.tamed).length,
-      dinoCount: this.creatures.creatures.filter(
-        (c) =>
-          c.alive &&
-          (c.spec.species === 'trex' ||
-            c.spec.species === 'triceratops' ||
-            c.spec.species === 'velociraptor' ||
-            c.spec.species === 'stegosaurus' ||
-            c.spec.species === 'brachiosaurus' ||
-            c.spec.species === 'parasaurolophus'),
-      ).length,
-      daysUntilBloodMoon: 7 - ((this.dayCount - 1) % 7),
-      playerBiome: BIOME_INFO[getBiomeAt(this.playerX, this.playerZ)].name,
+      weather: this.worldType === 'flat' ? 'clear' : this.weather,
+      erosionActive:
+        this.worldType === 'island' && this.terrainEngine.getActiveStreamCount() > 0,
+      tamedCount:
+        this.worldType === 'island'
+          ? this.creatures.creatures.filter((c) => c.alive && c.tamed).length
+          : 0,
+      dinoCount:
+        this.worldType === 'island'
+          ? this.creatures.creatures.filter(
+              (c) =>
+                c.alive &&
+                (c.spec.species === 'trex' ||
+                  c.spec.species === 'triceratops' ||
+                  c.spec.species === 'velociraptor' ||
+                  c.spec.species === 'stegosaurus' ||
+                  c.spec.species === 'brachiosaurus' ||
+                  c.spec.species === 'parasaurolophus'),
+            ).length
+          : 0,
+      daysUntilBloodMoon:
+        this.worldType === 'flat' ? 0 : 7 - ((this.dayCount - 1) % 7),
+      playerBiome:
+        this.worldType === 'flat'
+          ? 'Flat Park Grounds'
+          : BIOME_INFO[getBiomeAt(this.playerX, this.playerZ)].name,
     });
     if (this.mode !== 'menu' && !this.cinematicActive) {
       const audioX = this.tvModalOpen ? this.camera.position.x : this.playerX;
@@ -10708,37 +11219,39 @@ export class GameEngine {
         }
       }
     }
-    // Shipwreck walkable deck surfaces (smooth elevation support, zero lateral collision barriers)
-    const distToShip = Math.hypot(x - (-4), z - 135);
-    if (distToShip < 14) {
-      // 1. Collapsed mast bridge & Forecastle deck (gentle ramp from shoreline up to upper deck)
-      if (z >= 124 && z <= 132 && x >= -9.0 && x <= -1.5) {
-        const rampT = (z - 124) / 8;
-        const rampY = (OCEAN_LEVEL + 0.15) * (1 - rampT) + (OCEAN_LEVEL + 0.85) * rampT;
-        if (footY >= rampY - 0.95 && rampY > bestY) {
-          bestY = rampY;
+    // Shipwreck walkable deck surfaces (Island World only)
+    if (this.worldType === 'island') {
+      const distToShip = Math.hypot(x - (-4), z - 135);
+      if (distToShip < 14) {
+        // 1. Collapsed mast bridge & Forecastle deck (gentle ramp from shoreline up to upper deck)
+        if (z >= 124 && z <= 132 && x >= -9.0 && x <= -1.5) {
+          const rampT = (z - 124) / 8;
+          const rampY = (OCEAN_LEVEL + 0.15) * (1 - rampT) + (OCEAN_LEVEL + 0.85) * rampT;
+          if (footY >= rampY - 0.95 && rampY > bestY) {
+            bestY = rampY;
+          }
+        }
+        // 2. Mid Deck platform & Armory
+        if (z > 132 && z <= 138 && x >= -7.0 && x <= 0.5) {
+          const midDeckY = OCEAN_LEVEL + 0.95;
+          if (footY >= midDeckY - 0.95 && midDeckY > bestY) {
+            bestY = midDeckY;
+          }
+        }
+        // 3. Captain's Quarters (Aft Cabin at raised stern)
+        if (z > 138 && z <= 145 && x >= -5.5 && x <= 1.5) {
+          const aftDeckY = OCEAN_LEVEL + 1.75;
+          if (footY >= aftDeckY - 0.95 && aftDeckY > bestY) {
+            bestY = aftDeckY;
+          }
         }
       }
-      // 2. Mid Deck platform & Armory
-      if (z > 132 && z <= 138 && x >= -7.0 && x <= 0.5) {
-        const midDeckY = OCEAN_LEVEL + 0.95;
-        if (footY >= midDeckY - 0.95 && midDeckY > bestY) {
-          bestY = midDeckY;
-        }
-      }
-      // 3. Captain's Quarters (Aft Cabin at raised stern)
-      if (z > 138 && z <= 145 && x >= -5.5 && x <= 1.5) {
-        const aftDeckY = OCEAN_LEVEL + 1.75;
-        if (footY >= aftDeckY - 0.95 && aftDeckY > bestY) {
-          bestY = aftDeckY;
-        }
-      }
-    }
 
-    // Premade Hilltop Base, Front Porch, Entry Step & Music Studio Wing solid floor support
-    const hilltopFloorY = getHilltopBaseFloorY(x, z, footY);
-    if (hilltopFloorY > bestY) {
-      bestY = hilltopFloorY;
+      // Premade Hilltop Base, Front Porch, Entry Step & Music Studio Wing solid floor support
+      const hilltopFloorY = getHilltopBaseFloorY(x, z, footY);
+      if (hilltopFloorY > bestY) {
+        bestY = hilltopFloorY;
+      }
     }
 
     return bestY;
@@ -10998,7 +11511,8 @@ export class GameEngine {
   public placeStructuralBlock(itemId: ItemId): boolean {
     const def = ITEMS[itemId];
     const kind = def.structuralKind;
-    if (!kind || this.getItemCount(itemId) <= 0) return false;
+    const creativeBuild = this.gameMode === 'sandbox' || this.worldType === 'flat';
+    if (!kind || (!creativeBuild && this.getItemCount(itemId) <= 0)) return false;
 
     const target = this.computeStructuralPlacementTarget(kind);
     if (
@@ -11010,7 +11524,9 @@ export class GameEngine {
       return false;
     }
 
-    this.removeItem(itemId, 1);
+    if (!creativeBuild && this.getItemCount(itemId) > 0) {
+      this.removeItem(itemId, 1);
+    }
     const block: StructuralBlock = {
       id: `sblk_${Date.now()}_${Math.floor(Math.random() * 9999)}`,
       kind,
@@ -11704,7 +12220,8 @@ export class GameEngine {
   public placeKineticNode(itemId: ItemId): boolean {
     const def = ITEMS[itemId];
     const kind = def.kineticKind;
-    if (!kind || this.getItemCount(itemId) <= 0) return false;
+    const creativeBuild = this.gameMode === 'sandbox' || this.worldType === 'flat';
+    if (!kind || (!creativeBuild && this.getItemCount(itemId) <= 0)) return false;
 
     const target = this.computeKineticPlacementTarget(kind);
     const tooClose = this.kineticNodes.some(
@@ -11724,7 +12241,9 @@ export class GameEngine {
       return false;
     }
 
-    this.removeItem(itemId, 1);
+    if (!creativeBuild && this.getItemCount(itemId) > 0) {
+      this.removeItem(itemId, 1);
+    }
     const node: KineticNode = {
       id: `knode_${Date.now()}_${Math.floor(Math.random() * 9999)}`,
       kind,
@@ -12751,14 +13270,15 @@ export class GameEngine {
 
     let nextX = v.x + v.vx * dt;
     let nextZ = v.z + v.vz * dt;
+    const maxVehicleRadius = getPlayableMaxRadius() + 18;
     const rad = Math.hypot(nextX, nextZ);
-    if (rad > PLAYABLE_MAX_RADIUS + 18) {
-      nextX *= (PLAYABLE_MAX_RADIUS + 18) / rad;
-      nextZ *= (PLAYABLE_MAX_RADIUS + 18) / rad;
+    if (rad > maxVehicleRadius) {
+      nextX *= maxVehicleRadius / rad;
+      nextZ *= maxVehicleRadius / rad;
     }
 
-    // Ground & bridge collision vs Airship clearance
-    if (!airborne || v.y < Math.max(surfY, waterY) + 3.2) {
+    // Ground & bridge collision vs Airship clearance (Island World colliders)
+    if (this.worldType === 'island' && (!airborne || v.y < Math.max(surfY, waterY) + 3.2)) {
       for (const col of this.world.colliders) {
         if (col.radius < 0.9) continue;
         const dx = nextX - col.x;
@@ -13234,7 +13754,7 @@ export class GameEngine {
 
     let desiredDirX = dx;
     let desiredDirZ = dz;
-    if (job.phase === 'approach') {
+    if (job.phase === 'approach' && this.worldType === 'island') {
       for (const col of this.world.colliders) {
         if (col.radius < 0.9) continue;
         if (
@@ -13319,26 +13839,29 @@ export class GameEngine {
     let nextX = v.x + v.vx * dt;
     let nextZ = v.z + v.vz * dt;
 
-    for (const col of this.world.colliders) {
-      if (col.radius < 0.9) continue;
-      if (
-        Math.abs(col.x - VEHICLE_GARAGE_POS.x) < 14 &&
-        Math.abs(col.z - VEHICLE_GARAGE_POS.z) < 9
-      ) {
-        continue;
-      }
-      const cdx = nextX - col.x;
-      const cdz = nextZ - col.z;
-      const cd = Math.hypot(cdx, cdz);
-      const minD = col.radius + 1.45;
-      if (cd < minD && cd > 0.01) {
-        nextX = col.x + (cdx / cd) * minD;
-        nextZ = col.z + (cdz / cd) * minD;
+    if (this.worldType === 'island') {
+      for (const col of this.world.colliders) {
+        if (col.radius < 0.9) continue;
+        if (
+          Math.abs(col.x - VEHICLE_GARAGE_POS.x) < 14 &&
+          Math.abs(col.z - VEHICLE_GARAGE_POS.z) < 9
+        ) {
+          continue;
+        }
+        const cdx = nextX - col.x;
+        const cdz = nextZ - col.z;
+        const cd = Math.hypot(cdx, cdz);
+        const minD = col.radius + 1.45;
+        if (cd < minD && cd > 0.01) {
+          nextX = col.x + (cdx / cd) * minD;
+          nextZ = col.z + (cdz / cd) * minD;
+        }
       }
     }
 
-    v.x = THREE.MathUtils.clamp(nextX, -(PLAYABLE_MAX_RADIUS + 14), PLAYABLE_MAX_RADIUS + 14);
-    v.z = THREE.MathUtils.clamp(nextZ, -(PLAYABLE_MAX_RADIUS + 14), PLAYABLE_MAX_RADIUS + 14);
+    const parkClampRadius = getPlayableMaxRadius() + 14;
+    v.x = THREE.MathUtils.clamp(nextX, -parkClampRadius, parkClampRadius);
+    v.z = THREE.MathUtils.clamp(nextZ, -parkClampRadius, parkClampRadius);
 
     job.stuckTimer += dt;
     if (job.stuckTimer >= 1.2) {
@@ -14382,8 +14905,11 @@ export class GameEngine {
   }
 
   private setOverworldActiveState(active: boolean): void {
+    const showIsland = active && this.worldType === 'island';
+    const showFlat = active && this.worldType === 'flat';
+
     if (this.world?.overworldGroup) {
-      if (active) {
+      if (showIsland) {
         if (!this.world.overworldGroup.parent) {
           this.scene.add(this.world.overworldGroup);
         }
@@ -14393,15 +14919,16 @@ export class GameEngine {
         this.scene.remove(this.world.overworldGroup);
       }
     }
-    this.realisticOcean?.setVisible(active);
-    this.creatures?.setOverworldActive(active);
+    this.flatWorld?.setVisible(showFlat);
+    this.realisticOcean?.setVisible(showIsland);
+    this.creatures?.setOverworldActive(showIsland);
     for (const v of this.structureVisuals.values()) v.group.visible = active;
     for (const m of this.structuralMeshes.values()) m.visible = active;
     for (const h of this.kineticMeshes.values()) h.root.visible = active;
     for (const bm of this.beltSpanMeshes) bm.group.visible = active;
     for (const cm of this.cropMeshes.values()) cm.visible = active;
     for (const p of this.pickups) p.mesh.visible = active;
-    for (const c of this.carcasses) c.mesh.visible = active;
+    for (const c of this.carcasses) c.mesh.visible = showIsland;
   }
 
   private updateActivePortals(dt: number): void {
@@ -14598,6 +15125,8 @@ export class GameEngine {
     this.creatures?.dispose();
     this.realisticOcean?.dispose();
     this.world?.dispose();
+    this.flatWorld?.dispose();
+    this.coasterRuntime?.dispose();
     if (this.terrainEngine) {
       this.terrainEngine.dispose(this.scene);
     }
@@ -14636,5 +15165,281 @@ export class GameEngine {
       this.smartTv.dispose();
     }
     this.renderer.dispose();
+  }
+
+  // =========================================================================
+  // ROLLER COASTER CREATOR & PARK RIDE API (ISLAND & FLAT WORLDS)
+  // =========================================================================
+
+  public createCoaster(name?: string, withStation = true): string | null {
+    if (!this.coasterRuntime) return null;
+    const fwdX = -Math.sin(this.camYaw);
+    const fwdZ = -Math.cos(this.camYaw);
+    const sx = this.playerX + fwdX * 5.5;
+    const sz = this.playerZ + fwdZ * 5.5;
+    const sy = getTerrainHeight(sx, sz);
+
+    if (withStation) {
+      const stationStruct: PlacedStructure = {
+        id: `struct_coaster_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+        type: 'coaster_station',
+        x: sx,
+        y: sy,
+        z: sz,
+        rotationY: this.camYaw,
+      };
+      this.spawnStructure(stationStruct);
+    }
+
+    const coasterId = this.coasterRuntime.createCoaster(
+      name || `Park Coaster ${this.coasterRuntime.getHudSummaries().length + 1}`,
+      { x: sx, y: sy, z: sz },
+      this.camYaw,
+      true,
+    );
+    this.sound.playWeldSnap();
+    this.toast('Created new Roller Coaster track & station!', 'craft');
+    this.emitHud();
+    return coasterId;
+  }
+
+  public createDemoCoaster(demoName: string, coasterType: CoasterModelType): string | null {
+    if (!this.coasterRuntime) return null;
+    const fwdX = -Math.sin(this.camYaw);
+    const fwdZ = -Math.cos(this.camYaw);
+    const sx = this.playerX + fwdX * 6.5;
+    const sz = this.playerZ + fwdZ * 6.5;
+    const sy = getTerrainHeight(sx, sz);
+
+    const stationStruct: PlacedStructure = {
+      id: `struct_demo_coaster_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+      type: 'coaster_station',
+      x: sx,
+      y: sy,
+      z: sz,
+      rotationY: this.camYaw,
+    };
+    this.spawnStructure(stationStruct);
+
+    const coasterId = this.coasterRuntime.createCoaster(
+      demoName,
+      { x: sx, y: sy, z: sz },
+      this.camYaw,
+      true,
+      undefined,
+      coasterType,
+    );
+    this.sound.playWeldSnap();
+    this.toast(`Loaded demo coaster: ${demoName} (${coasterType})!`, 'discovery');
+    this.emitHud();
+    return coasterId;
+  }
+
+  public deleteCoaster(coasterId: string): boolean {
+    if (!this.coasterRuntime) return false;
+    if (this.ridingCoasterId === coasterId) {
+      this.ridingCoasterId = null;
+    }
+    const ok = this.coasterRuntime.deleteCoaster(coasterId);
+    if (ok) {
+      this.toast('Deleted roller coaster', 'info');
+      this.emitHud();
+    }
+    return ok;
+  }
+
+  public renameCoaster(coasterId: string, nextName: string): boolean {
+    if (!this.coasterRuntime) return false;
+    const ok = this.coasterRuntime.renameCoaster(coasterId, nextName);
+    if (ok) this.emitHud();
+    return ok;
+  }
+
+  public setCoasterColor(coasterId: string, color: string): boolean {
+    if (!this.coasterRuntime) return false;
+    const ok = this.coasterRuntime.setCoasterColor(coasterId, color);
+    if (ok) this.emitHud();
+    return ok;
+  }
+
+  public setCoasterType(coasterId: string, coasterType: CoasterModelType): boolean {
+    if (!this.coasterRuntime) return false;
+    const ok = this.coasterRuntime.setCoasterType(coasterId, coasterType);
+    if (ok) {
+      this.toast(`Updated coaster ride archetype to ${coasterType}`, 'craft');
+      this.emitHud();
+    }
+    return ok;
+  }
+
+  public setCoasterTrainCars(coasterId: string, count: number): boolean {
+    if (!this.coasterRuntime) return false;
+    const ok = this.coasterRuntime.setTrainCarCount(coasterId, count);
+    if (ok) this.emitHud();
+    return ok;
+  }
+
+  public appendCoasterPiece(
+    coasterId: string,
+    pieceKey: CoasterPiecePresetKey,
+  ): boolean {
+    if (!this.coasterRuntime) return false;
+    const ok = this.coasterRuntime.appendPresetPiece(coasterId, pieceKey);
+    if (ok) {
+      this.sound.playWeldSnap();
+      this.toast(`Welded ${pieceKey} track block`, 'craft');
+      this.emitHud();
+    }
+    return ok;
+  }
+
+  public appendCoasterInversion(
+    coasterId: string,
+    settings: CustomInversion,
+  ): boolean {
+    if (!this.coasterRuntime) return false;
+    const ok = this.coasterRuntime.appendCustomInversion(coasterId, settings);
+    if (ok) {
+      this.sound.playWeldSnap();
+      this.toast(`Fabricated custom element: ${settings.name}`, 'discovery');
+      this.emitHud();
+    }
+    return ok;
+  }
+
+  public completeCoasterCircuit(coasterId: string): boolean {
+    if (!this.coasterRuntime) return false;
+    const ok = this.coasterRuntime.completeCircuit(coasterId);
+    if (ok) {
+      this.sound.playWeldSnap();
+      this.toast('Closed complete circuit back to Load Station brake run!', 'discovery');
+      this.emitHud();
+    } else {
+      this.toast('Circuit already closed or needs more track blocks first.', 'warning');
+    }
+    return ok;
+  }
+
+  public addCoasterNodeAhead(coasterId: string): boolean {
+    if (!this.coasterRuntime) return false;
+    const summary = this.coasterRuntime
+      .getHudSummaries()
+      .find((c) => c.id === coasterId);
+    const lastNode = summary?.nodes[summary.nodes.length - 1];
+    const baseX = lastNode ? lastNode.position.x : this.playerX;
+    const baseZ = lastNode ? lastNode.position.z : this.playerZ;
+    const baseY = lastNode ? lastNode.position.y : getTerrainHeight(baseX, baseZ) + 2;
+    const fwdX = -Math.sin(this.camYaw);
+    const fwdZ = -Math.cos(this.camYaw);
+    const ok = this.coasterRuntime.addNode(
+      coasterId,
+      { x: baseX + fwdX * 14, y: baseY, z: baseZ + fwdZ * 14 },
+      0,
+    );
+    if (ok) {
+      this.sound.playWeldSnap();
+      this.emitHud();
+    }
+    return ok;
+  }
+
+  public updateCoasterNode(
+    coasterId: string,
+    index: number,
+    patch: {
+      x?: number;
+      y?: number;
+      z?: number;
+      bank?: number;
+      segmentType?: CoasterSegmentKind;
+    },
+  ): boolean {
+    if (!this.coasterRuntime) return false;
+    const ok = this.coasterRuntime.updateNode(coasterId, index, patch);
+    if (ok) this.emitHud();
+    return ok;
+  }
+
+  public removeCoasterNode(coasterId: string, index: number): boolean {
+    if (!this.coasterRuntime) return false;
+    const ok = this.coasterRuntime.removeNode(coasterId, index);
+    if (ok) this.emitHud();
+    return ok;
+  }
+
+  public depumpCoaster(coasterId: string): boolean {
+    if (!this.coasterRuntime) return false;
+    const ok = this.coasterRuntime.depumpCoaster(coasterId);
+    if (ok) {
+      this.sound.playWeldSnap();
+      this.toast('Depumped track NURBS control points for smooth banking', 'craft');
+      this.emitHud();
+    }
+    return ok;
+  }
+
+  public exportCoasterCSV(coasterId: string): string {
+    if (!this.coasterRuntime) return '';
+    return this.coasterRuntime.exportCoasterCSV(coasterId);
+  }
+
+  public importCoasterCSV(coasterId: string, csvText: string): boolean {
+    if (!this.coasterRuntime) return false;
+    const ok = this.coasterRuntime.importCoasterCSV(coasterId, csvText);
+    if (ok) {
+      this.sound.playWeldSnap();
+      this.toast('Imported track CSV successfully', 'discovery');
+      this.emitHud();
+    } else {
+      this.toast('Failed to parse track CSV data', 'warning');
+    }
+    return ok;
+  }
+
+  public toggleCoasterDispatch(coasterId: string, running?: boolean): boolean {
+    if (!this.coasterRuntime) return false;
+    const ok = this.coasterRuntime.dispatchTrain(coasterId, running);
+    if (!ok) {
+      this.toast('Spline validation failed — fix track before dispatch', 'warning');
+      return false;
+    }
+    this.sound.playKineticGearTick();
+    this.emitHud();
+    return true;
+  }
+
+  public resetCoasterTrain(coasterId: string): boolean {
+    if (!this.coasterRuntime) return false;
+    const ok = this.coasterRuntime.resetTrain(coasterId);
+    if (ok) this.emitHud();
+    return ok;
+  }
+
+  public boardCoasterRide(coasterId: string): boolean {
+    if (!this.coasterRuntime) return false;
+    const summary = this.coasterRuntime
+      .getHudSummaries()
+      .find((c) => c.id === coasterId);
+    if (!summary || !summary.valid || summary.nodeCount < 2) {
+      this.toast('Track validation required before dispatching train!', 'warning');
+      return false;
+    }
+    this.coasterRuntime.dispatchTrain(coasterId, true);
+    this.ridingCoasterId = coasterId;
+    this.toast(`Dispatched front row on ${summary.name} — press E to disembark`, 'discovery');
+    this.emitHud();
+    return true;
+  }
+
+  public exitCoasterRide(): void {
+    if (!this.ridingCoasterId) return;
+    this.ridingCoasterId = null;
+    this.camera.up.set(0, 1, 0);
+    const groundY = getTerrainHeight(this.playerX, this.playerZ);
+    this.playerY = groundY;
+    this.playerVelY = 0;
+    this.grounded = true;
+    this.toast('Disembarked at unload platform', 'info');
+    this.emitHud();
   }
 }

@@ -29,6 +29,7 @@ interface IslandMapModalProps {
 
 export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const isFlat = hud.worldType === 'flat';
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -37,183 +38,245 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
     if (!ctx) return;
 
     const size = 340;
-    const worldSpan = 320; // -160 .. +160
+    const worldSpan = isFlat ? 640 : 320; // Flat covers -320..+320, Island covers -160..+160
     const fogGrid = 32;
     const exploredSet = new Set(hud.exploredCells || []);
     const isExploredWorld = (wx: number, wz: number) => {
+      if (isFlat) return true;
       const gx = Math.floor(((wx + worldSpan / 2) / worldSpan) * fogGrid);
       const gz = Math.floor(((wz + worldSpan / 2) / worldSpan) * fogGrid);
       return exploredSet.has(gz * fogGrid + gx);
     };
-
-    const img = ctx.createImageData(size, size);
-
-    for (let py = 0; py < size; py++) {
-      for (let px = 0; px < size; px++) {
-        const wx = ((px / size) - 0.5) * worldSpan;
-        const wz = ((py / size) - 0.5) * worldSpan;
-        const explored = isExploredWorld(wx, wz);
-
-        let r = 15,
-          g = 23,
-          b = 34;
-
-        if (explored) {
-          const h = getTerrainHeight(wx, wz);
-          const biome = getBiomeAt(wx, wz);
-          const dSnow = Math.hypot(wx - SNOWY_WOODLAND_POS.x, wz - SNOWY_WOODLAND_POS.z);
-          const dAutumn = Math.hypot(wx - AUTUMN_GROVE_POS.x, wz - AUTUMN_GROVE_POS.z);
-          const dSwamp = Math.hypot(wx - SWAMP_POS.x, wz - SWAMP_POS.z);
-          const dWheat = Math.hypot(wx - WHEATFIELD_POS.x, wz - WHEATFIELD_POS.z);
-          const inHouse =
-            Math.abs(wx - HILL_HOUSE_POS.x) < 5.6 &&
-            Math.abs(wz - HILL_HOUSE_POS.z) < 4.6;
-          const inGarage =
-            Math.abs(wx - VEHICLE_GARAGE_POS.x) < 11.2 &&
-            Math.abs(wz - VEHICLE_GARAGE_POS.z) < 6.8;
-
-          if (inHouse) {
-            r = 165;
-            g = 96;
-            b = 58;
-          } else if (inGarage) {
-            r = 100;
-            g = 116;
-            b = 139;
-          } else if (dWheat < 7.8) {
-            r = 212;
-            g = 172;
-            b = 64;
-          } else if (dSwamp < SWAMP_POS.radius + 1.5) {
-            r = 45;
-            g = 62;
-            b = 34;
-          } else if (dSnow < 12.5) {
-            r = 216;
-            g = 226;
-            b = 238;
-          } else if (dAutumn < 10.5) {
-            r = 152;
-            g = 90;
-            b = 44;
-          } else if (biome === 'ocean' || h < -0.2) {
-            const depth = Math.max(0, Math.min(1, (-h) / 5));
-            r = 12 - depth * 6;
-            g = 84 - depth * 35;
-            b = 125 - depth * 35;
-          } else if (biome === 'lake' || biome === 'river') {
-            r = 20;
-            g = 184;
-            b = 166;
-          } else if (biome === 'beach') {
-            r = 230;
-            g = 200;
-            b = 135;
-          } else if (biome === 'mountain' || biome === 'cave') {
-            const shade = Math.min(45, h * 1.8);
-            r = 82 + shade;
-            g = 76 + shade;
-            b = 70 + shade;
-          } else if (biome === 'grassland') {
-            r = 128;
-            g = 162;
-            b = 60;
-          } else if (biome === 'expedition') {
-            r = 165;
-            g = 120;
-            b = 70;
-          } else {
-            r = 46;
-            g = 112;
-            b = 54;
-          }
-        }
-
-        const idx = (py * size + px) * 4;
-        img.data[idx] = r;
-        img.data[idx + 1] = g;
-        img.data[idx + 2] = b;
-        img.data[idx + 3] = 255;
-      }
-    }
-    ctx.putImageData(img, 0, 0);
 
     const toPx = (wx: number, wz: number) => ({
       x: ((wx / worldSpan) + 0.5) * size,
       y: ((wz / worldSpan) + 0.5) * size,
     });
 
-    // Discovered Landmarks only
-    const landmarks = [
-      { label: 'Waterfall', pos: WATERFALL_POS, color: '#67e8f9' },
-      { label: 'Obsidian Cave', pos: CAVE_POS, color: '#cbd5e1' },
-      { label: 'Snowy Woodland', pos: SNOWY_WOODLAND_POS, color: '#e2e8f0' },
-      { label: 'Expedition', pos: EXPEDITION_POS, color: '#fbbf24' },
-      { label: 'Autumn Grove', pos: AUTUMN_GROVE_POS, color: '#f97316' },
-      { label: 'Murky Swamp', pos: SWAMP_POS, color: '#65a30d' },
-      { label: 'Dead Oak Perch', pos: DEAD_OAK_POS, color: '#d6d3d1' },
-      { label: 'Homestead Pasture', pos: HOMESTEAD_POS, color: '#f59e0b' },
-      { label: 'Wheatfield', pos: WHEATFIELD_POS, color: '#facc15' },
-      { label: 'Farmer Market', pos: FARMER_POS, color: '#4ade80' },
-      { label: 'Hilltop House', pos: HILL_HOUSE_POS, color: '#fb923c' },
-      { label: 'Vehicle Garage', pos: VEHICLE_GARAGE_POS, color: '#38bdf8' },
-      { label: 'Azure Lake', pos: LAKE_CENTER, color: '#2dd4bf' },
-    ];
-    ctx.font = '600 10px sans-serif';
-    landmarks.forEach((lm) => {
-      if (!isExploredWorld(lm.pos.x, lm.pos.z)) return;
-      const p = toPx(lm.pos.x, lm.pos.z);
-      ctx.fillStyle = lm.color;
+    if (isFlat) {
+      // Level Flat Park Grounds background + grid
+      const concrete = hud.flatSurfaceStyle === 'concrete_plaza';
+      ctx.fillStyle = concrete ? '#475569' : '#245228';
+      ctx.fillRect(0, 0, size, size);
+
+      ctx.strokeStyle = concrete ? '#64748b' : '#2f6b35';
+      ctx.lineWidth = 1;
+      for (let w = -320; w <= 320; w += 32) {
+        const p = toPx(w, w);
+        ctx.beginPath();
+        ctx.moveTo(p.x, 0);
+        ctx.lineTo(p.x, size);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, p.y);
+        ctx.lineTo(size, p.y);
+        ctx.stroke();
+      }
+
+      // Park boundary circle (310m radius)
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+      ctx.arc(size / 2, size / 2, (310 / worldSpan) * size, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Park Hub & Music Pro Pavilion at center
+      const hub = toPx(0, 0);
+      ctx.fillStyle = '#38bdf8';
+      ctx.beginPath();
+      ctx.arc(hub.x, hub.y, 5, 0, Math.PI * 2);
       ctx.fill();
+      ctx.font = '600 10px sans-serif';
       ctx.strokeStyle = '#0c0a09';
       ctx.lineWidth = 2;
-      ctx.strokeText(lm.label, p.x + 6, p.y + 3);
-      ctx.fillText(lm.label, p.x + 6, p.y + 3);
+      ctx.strokeText('Park Hub & Music Pro', hub.x + 7, hub.y + 3);
+      ctx.fillText('Park Hub & Music Pro', hub.x + 7, hub.y + 3);
+    } else {
+      const img = ctx.createImageData(size, size);
+
+      for (let py = 0; py < size; py++) {
+        for (let px = 0; px < size; px++) {
+          const wx = ((px / size) - 0.5) * worldSpan;
+          const wz = ((py / size) - 0.5) * worldSpan;
+          const explored = isExploredWorld(wx, wz);
+
+          let r = 15,
+            g = 23,
+            b = 34;
+
+          if (explored) {
+            const h = getTerrainHeight(wx, wz);
+            const biome = getBiomeAt(wx, wz);
+            const dSnow = Math.hypot(wx - SNOWY_WOODLAND_POS.x, wz - SNOWY_WOODLAND_POS.z);
+            const dAutumn = Math.hypot(wx - AUTUMN_GROVE_POS.x, wz - AUTUMN_GROVE_POS.z);
+            const dSwamp = Math.hypot(wx - SWAMP_POS.x, wz - SWAMP_POS.z);
+            const dWheat = Math.hypot(wx - WHEATFIELD_POS.x, wz - WHEATFIELD_POS.z);
+            const inHouse =
+              Math.abs(wx - HILL_HOUSE_POS.x) < 5.6 &&
+              Math.abs(wz - HILL_HOUSE_POS.z) < 4.6;
+            const inGarage =
+              Math.abs(wx - VEHICLE_GARAGE_POS.x) < 11.2 &&
+              Math.abs(wz - VEHICLE_GARAGE_POS.z) < 6.8;
+
+            if (inHouse) {
+              r = 165;
+              g = 96;
+              b = 58;
+            } else if (inGarage) {
+              r = 100;
+              g = 116;
+              b = 139;
+            } else if (dWheat < 7.8) {
+              r = 212;
+              g = 172;
+              b = 64;
+            } else if (dSwamp < SWAMP_POS.radius + 1.5) {
+              r = 45;
+              g = 62;
+              b = 34;
+            } else if (dSnow < 12.5) {
+              r = 216;
+              g = 226;
+              b = 238;
+            } else if (dAutumn < 10.5) {
+              r = 152;
+              g = 90;
+              b = 44;
+            } else if (biome === 'ocean' || h < -0.2) {
+              const depth = Math.max(0, Math.min(1, (-h) / 5));
+              r = 12 - depth * 6;
+              g = 84 - depth * 35;
+              b = 125 - depth * 35;
+            } else if (biome === 'lake' || biome === 'river') {
+              r = 20;
+              g = 184;
+              b = 166;
+            } else if (biome === 'beach') {
+              r = 230;
+              g = 200;
+              b = 135;
+            } else if (biome === 'mountain' || biome === 'cave') {
+              const shade = Math.min(45, h * 1.8);
+              r = 82 + shade;
+              g = 76 + shade;
+              b = 70 + shade;
+            } else if (biome === 'grassland') {
+              r = 128;
+              g = 162;
+              b = 60;
+            } else if (biome === 'expedition') {
+              r = 165;
+              g = 120;
+              b = 70;
+            } else {
+              r = 46;
+              g = 112;
+              b = 54;
+            }
+          }
+
+          const idx = (py * size + px) * 4;
+          img.data[idx] = r;
+          img.data[idx + 1] = g;
+          img.data[idx + 2] = b;
+          img.data[idx + 3] = 255;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+
+      // Discovered Landmarks only
+      const landmarks = [
+        { label: 'Waterfall', pos: WATERFALL_POS, color: '#67e8f9' },
+        { label: 'Obsidian Cave', pos: CAVE_POS, color: '#cbd5e1' },
+        { label: 'Snowy Woodland', pos: SNOWY_WOODLAND_POS, color: '#e2e8f0' },
+        { label: 'Expedition', pos: EXPEDITION_POS, color: '#fbbf24' },
+        { label: 'Autumn Grove', pos: AUTUMN_GROVE_POS, color: '#f97316' },
+        { label: 'Murky Swamp', pos: SWAMP_POS, color: '#65a30d' },
+        { label: 'Dead Oak Perch', pos: DEAD_OAK_POS, color: '#d6d3d1' },
+        { label: 'Homestead Pasture', pos: HOMESTEAD_POS, color: '#f59e0b' },
+        { label: 'Wheatfield', pos: WHEATFIELD_POS, color: '#facc15' },
+        { label: 'Farmer Market', pos: FARMER_POS, color: '#4ade80' },
+        { label: 'Hilltop House', pos: HILL_HOUSE_POS, color: '#fb923c' },
+        { label: 'Vehicle Garage', pos: VEHICLE_GARAGE_POS, color: '#38bdf8' },
+        { label: 'Azure Lake', pos: LAKE_CENTER, color: '#2dd4bf' },
+      ];
+      ctx.font = '600 10px sans-serif';
+      landmarks.forEach((lm) => {
+        if (!isExploredWorld(lm.pos.x, lm.pos.z)) return;
+        const p = toPx(lm.pos.x, lm.pos.z);
+        ctx.fillStyle = lm.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#0c0a09';
+        ctx.lineWidth = 2;
+        ctx.strokeText(lm.label, p.x + 6, p.y + 3);
+        ctx.fillText(lm.label, p.x + 6, p.y + 3);
+      });
+    }
+
+    // Roller Coasters overlay (works on both Flat and Island worlds)
+    (hud.coasters || []).forEach((coaster) => {
+      if (!coaster.nodes || coaster.nodes.length < 2) return;
+      ctx.strokeStyle = coaster.trackColor || '#38bdf8';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      coaster.nodes.forEach((node, idx) => {
+        const p = toPx(node.position.x, node.position.z);
+        if (idx === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      });
+      ctx.stroke();
     });
 
-    // Placed Camp Structures
+    // Placed Structures
     hud.structures.forEach((st) => {
       const p = toPx(st.x, st.z);
-      ctx.fillStyle = st.type === 'campfire' ? '#f97316' : '#fcd34d';
+      ctx.fillStyle =
+        st.type === 'coaster_station'
+          ? '#38bdf8'
+          : st.type === 'campfire'
+            ? '#f97316'
+            : '#fcd34d';
       ctx.fillRect(p.x - 3, p.y - 3, 6, 6);
     });
 
-    // Tracked Dinosaur / Wildlife Sightings in explored areas
-    hud.trackedSightings.forEach((s) => {
-      if (!isExploredWorld(s.x, s.z)) return;
-      const p = toPx(s.x, s.z);
-      ctx.fillStyle =
-        s.species === 'trex' ||
-        s.species === 'spinosaurus' ||
-        s.species === 'allosaurus' ||
-        s.species === 'dilophosaurus' ||
-        s.species === 'velociraptor' ||
-        s.species === 'grizzly_bear' ||
-        s.species === 'polar_bear' ||
-        s.species === 'gray_wolf' ||
-        s.species === 'african_lion' ||
-        s.species === 'tiger' ||
-        s.species === 'cheetah' ||
-        s.species === 'hyena' ||
-        s.species === 'great_white_shark' ||
-        s.species === 'saltwater_crocodile'
-          ? '#ef4444'
-          : s.species === 'dolphin' ||
-              s.species === 'sea_turtle' ||
-              s.species === 'manta_ray' ||
-              s.species === 'bald_eagle' ||
-              s.species === 'peregrine_falcon' ||
-              s.species === 'pteranodon' ||
-              s.species === 'toucan' ||
-              s.species === 'flamingo'
-            ? '#38bdf8'
-            : '#a3e635';
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
-      ctx.fill();
-    });
+    // Tracked Dinosaur / Wildlife Sightings in explored areas (Island World)
+    if (!isFlat) {
+      hud.trackedSightings.forEach((s) => {
+        if (!isExploredWorld(s.x, s.z)) return;
+        const p = toPx(s.x, s.z);
+        ctx.fillStyle =
+          s.species === 'trex' ||
+          s.species === 'spinosaurus' ||
+          s.species === 'allosaurus' ||
+          s.species === 'dilophosaurus' ||
+          s.species === 'velociraptor' ||
+          s.species === 'grizzly_bear' ||
+          s.species === 'polar_bear' ||
+          s.species === 'gray_wolf' ||
+          s.species === 'african_lion' ||
+          s.species === 'tiger' ||
+          s.species === 'cheetah' ||
+          s.species === 'hyena' ||
+          s.species === 'great_white_shark' ||
+          s.species === 'saltwater_crocodile'
+            ? '#ef4444'
+            : s.species === 'dolphin' ||
+                s.species === 'sea_turtle' ||
+                s.species === 'manta_ray' ||
+                s.species === 'bald_eagle' ||
+                s.species === 'peregrine_falcon' ||
+                s.species === 'pteranodon' ||
+                s.species === 'toucan' ||
+                s.species === 'flamingo'
+              ? '#38bdf8'
+              : '#a3e635';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
 
     // Player Marker + Heading Arrow
     const playerP = toPx(hud.playerX, hud.playerZ);
@@ -233,6 +296,9 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
     ctx.fill();
     ctx.restore();
   }, [
+    isFlat,
+    hud.flatSurfaceStyle,
+    hud.coasters,
     hud.playerX,
     hud.playerZ,
     hud.playerYaw,
@@ -248,7 +314,7 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
           <div className="flex items-center gap-2.5">
             <Compass className="w-5 h-5 text-amber-400" />
             <h2 className="font-display text-lg font-bold text-stone-100">
-              Island Topographical Map
+              {isFlat ? 'Flat Park Grounds Map' : 'Island Topographical Map'}
             </h2>
           </div>
           <button
@@ -272,13 +338,17 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
 
           <div className="space-y-4">
             <div className="rounded-xl bg-stone-950/70 border border-stone-800 p-3.5">
-              <div className="text-xs text-stone-400">Current Region</div>
+              <div className="text-xs text-stone-400">
+                {isFlat ? 'Park Zone' : 'Current Region'}
+              </div>
               <div className="text-base font-semibold text-amber-300 mt-0.5 flex items-center gap-1.5">
                 <MapPin className="w-4 h-4 shrink-0" />
-                <span>{hud.biomeName}</span>
+                <span>{isFlat ? 'Flat Park Grounds' : hud.biomeName}</span>
               </div>
               <p className="text-xs text-stone-400 mt-1">
-                {BIOME_INFO[hud.biome].description}
+                {isFlat
+                  ? '310m radius level buildable terrain with central Music Pro Pavilion, Smart TV Lounge, and Roller Coaster build zones.'
+                  : BIOME_INFO[hud.biome].description}
               </p>
               <div className="text-xs font-mono-tabular text-stone-300 mt-2">
                 Coords: X {Math.round(hud.playerX)} · Z {Math.round(hud.playerZ)}
@@ -290,33 +360,39 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
               <div className="grid grid-cols-2 gap-2">
                 <div className="flex items-center gap-2">
                   <span className="w-3 h-3 rounded-full bg-white border border-stone-950 inline-block" />
-                  <span>Explorer</span>
+                  <span>{isFlat ? 'Builder' : 'Explorer'}</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="w-3 h-3 rounded-sm bg-orange-500 inline-block" />
-                  <span>Campfire / Base</span>
+                  <span className="w-3 h-3 rounded-sm bg-sky-400 inline-block" />
+                  <span>Coaster Station / Hub</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="w-3 h-3 rounded-full bg-red-500 inline-block" />
-                  <span>Predator Nearby</span>
+                  <span className="w-3 h-3 rounded-sm bg-amber-300 inline-block" />
+                  <span>Placed Structure</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-3 h-3 rounded-full bg-lime-400 inline-block" />
-                  <span>Herbivore Herd</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-3 h-3 rounded-full bg-sky-400 inline-block" />
-                  <span>Coastal Dolphins</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-3 h-3 rounded-full bg-amber-400 inline-block" />
-                  <span>Expedition Camp</span>
-                </div>
+                {!isFlat && (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full bg-red-500 inline-block" />
+                      <span>Predator Nearby</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full bg-lime-400 inline-block" />
+                      <span>Herbivore Herd</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full bg-amber-400 inline-block" />
+                      <span>Expedition Camp</span>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 
             <div className="text-xs text-stone-400">
-              Discovered Regions: {hud.visitedBiomes.length} / 9
+              {isFlat
+                ? `Active Coasters: ${hud.coasters?.length ?? 0} · Placed Structures: ${hud.structures.length}`
+                : `Discovered Regions: ${hud.visitedBiomes.length} / 9`}
             </div>
           </div>
         </div>
