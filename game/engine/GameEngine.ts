@@ -30,6 +30,12 @@ import {
   ScavengerCarcassTarget,
 } from '../systems/creatureSystem';
 import {
+  ActiveStructureEntity,
+  StructureManager,
+  StructureSite,
+  registerDefaultIslandStructures,
+} from '../systems/structureManager';
+import {
   GUNSHOT_FLEE_DISTANCE,
   canAnimalEatCarcass,
 } from '../systems/animalReactionSystem';
@@ -414,6 +420,7 @@ export class GameEngine {
   private rainPoints!: THREE.Points;
   private rainGeo!: THREE.BufferGeometry;
   private creatures!: CreatureManager;
+  private structureManager!: StructureManager;
 
   private frameId = 0;
   private disposed = false;
@@ -1087,6 +1094,8 @@ export class GameEngine {
     this.scene.add(this.rainPoints);
 
     this.creatures = new CreatureManager(this.scene);
+    this.structureManager = new StructureManager(this.scene);
+    registerDefaultIslandStructures(this.structureManager);
 
     // Pre-allocate Zero-GC VFX Pools (1 InstancedMesh particle batch = 1 draw call)
     this.vehicleShadowGeo.rotateX(-Math.PI / 2);
@@ -2607,6 +2616,7 @@ export class GameEngine {
 
     this.applyWorldEnvironment(nextWorldType, nextSurfaceStyle);
     this.coasterRuntime?.clearAll();
+    this.structureManager?.resetCleared();
 
     if (nextWorldType === 'flat') {
       this.playerX = FLAT_PLAYER_SPAWN.x;
@@ -3263,6 +3273,9 @@ export class GameEngine {
         this.creatures.spawnGuardianBosses();
       }
     }
+    this.structureManager?.importClearedIds(
+      loadedWorldType === 'island' ? save.clearedStructureIds : [],
+    );
     this.emitHud();
   }
 
@@ -3941,6 +3954,10 @@ export class GameEngine {
       tvPaused: this.smartTv.isPaused,
       weaponMagazines: Object.fromEntries(this.weaponMagazines.entries()),
       baseArmoryOpened: Boolean(this.armoryChestState?.opened),
+      clearedStructureIds:
+        this.worldType === 'island'
+          ? this.structureManager?.exportClearedIds() || []
+          : [],
     };
   }
 
@@ -5551,7 +5568,7 @@ export class GameEngine {
         return;
       }
       if (near.kind === 'farmer') {
-        this.callbacks.onOpenStation('farmer', 'farmer_npc');
+        this.callbacks.onOpenStation('farmer', near.id || 'farmer_npc');
         return;
       }
       if (near.kind === 'planted_crop') {
@@ -5860,6 +5877,51 @@ export class GameEngine {
     }
   }
 
+  private handleStructureCleared(site: StructureSite): void {
+    this.coins += 120;
+    this.addItem('emerald', 2, false);
+    this.addItem('totem_of_undying', 1, false);
+    const groundY = getTerrainHeight(site.x, site.z);
+    this.spawnParticles(site.x, groundY + 1.5, site.z, 0xfbbf24, 24);
+    this.spawnParticles(site.x, groundY + 1.8, site.z, 0x10b981, 18);
+    this.sound.playTotemUndying();
+    this.toast(
+      `${site.name} Liberated! +120 Coins, +2 Emeralds & Totem of Undying!`,
+      'discovery',
+    );
+    this.emitHud();
+  }
+
+  private damageStructureEntity(
+    entity: ActiveStructureEntity,
+    rawDamage: number,
+    sourceLabel: string,
+    hitX: number,
+    hitY: number,
+    hitZ: number,
+  ): void {
+    const dmgMult = this.modSystem?.tweaks.damageMultiplier ?? 1;
+    const dmg = Math.max(1, Math.round(rawDamage * dmgMult));
+    const res = this.structureManager.damageEntity(entity, dmg, {
+      onStructureCleared: (site) => this.handleStructureCleared(site),
+    });
+    this.spawnParticles(hitX, hitY, hitZ, 0xef4444, res.killed ? 14 : 8);
+    if (res.killed) {
+      this.stats.animalsHunted += 1;
+      const granted: string[] = [];
+      for (const d of res.drops) {
+        if (d.quantity <= 0) continue;
+        this.addItem(d.itemId, d.quantity, false);
+        granted.push(`${d.quantity}× ${ITEMS[d.itemId].name}`);
+      }
+      this.spawnParticles(entity.x, entity.y + 1.0, entity.z, 0xfbbf24, 16);
+      this.spawnParticles(entity.x, entity.y + 1.2, entity.z, 0x10b981, 12);
+      const dropText = granted.length > 0 ? ` Looted ${granted.join(', ')}!` : '';
+      this.toast(`${sourceLabel}: ${entity.displayName} defeated!${dropText}`, 'discovery');
+      this.emitHud();
+    }
+  }
+
   private handleCreatureDefeated(
     c: ActiveCreature,
     drops: { itemId: ItemId; quantity: number }[],
@@ -5994,6 +6056,28 @@ export class GameEngine {
       this.creatures.creatures,
       0.22,
     );
+    const structHit =
+      this.worldType === 'island' && this.currentDimension === 'overworld'
+        ? this.structureManager.raycastEntities(
+            _probeOrigin,
+            _probeDir,
+            range + 1.1,
+            false,
+          )
+        : null;
+
+    if (structHit && (!zoneHit || structHit.distance < zoneHit.distance)) {
+      this.damageStructureEntity(
+        structHit.entity,
+        damage,
+        weaponDef.name,
+        structHit.hitPoint.x,
+        structHit.hitPoint.y,
+        structHit.hitPoint.z,
+      );
+      return;
+    }
+
     if (zoneHit) {
       const target = this.creatures.creatures.find((c) => c.id === zoneHit.creatureId);
       if (target) {
@@ -6042,7 +6126,28 @@ export class GameEngine {
             knockback: weaponId === 'rope_whip' ? 2.2 : undefined,
           },
         );
-        break;
+        return;
+      }
+    }
+
+    if (this.worldType === 'island' && this.currentDimension === 'overworld') {
+      for (const site of this.structureManager.structures) {
+        if (!site.isAwake) continue;
+        for (const entity of site.activeEntities) {
+          if (entity.type === 'villager' || entity.hp <= 0) continue;
+          const dist = Math.hypot(entity.x - this.playerX, entity.z - this.playerZ);
+          if (dist <= range + 0.9 && Math.abs(entity.y - this.playerY) <= 3.6) {
+            this.damageStructureEntity(
+              entity,
+              damage,
+              weaponDef.name,
+              entity.x,
+              entity.y + 1.0,
+              entity.z,
+            );
+            return;
+          }
+        }
       }
     }
   }
@@ -8422,6 +8527,37 @@ export class GameEngine {
       this.creatures.creatures,
       0.14,
     );
+    const structHit =
+      this.currentDimension === 'overworld'
+        ? this.structureManager.raycastEntities(_probeOrigin, _probeDir, 38, true)
+        : null;
+
+    if (structHit && (!hit || structHit.distance < hit.distance)) {
+      const se = structHit.entity;
+      this.targetHitbox = {
+        creatureId: se.id,
+        name: se.displayName,
+        hp: se.hp,
+        maxHp: se.maxHp,
+        zone: 'chest',
+        armorTier: 'none',
+        armorHp: 0,
+        armorMaxHp: 0,
+        isGapSlip: false,
+        reactionHint:
+          se.type === 'villager'
+            ? se.canTrade
+              ? 'Press E to Trade'
+              : 'Friendly Villager'
+            : `${structHit.site.name} Defender`,
+        blinded: false,
+        staggered: false,
+        isBoss: se.type === 'evoker',
+        distance: structHit.distance,
+      };
+      return;
+    }
+
     if (!hit) {
       this.targetHitbox = null;
       return;
@@ -9880,6 +10016,28 @@ export class GameEngine {
           targetZ: this.world.farmerNpcPos.z,
         };
       }
+
+      // Check awake Village Merchants within 3 meters (StructureManager)
+      if (this.currentDimension === 'overworld') {
+        const villager = this.structureManager.getNearestTradableVillager({
+          x: this.playerX,
+          y: this.playerY,
+          z: this.playerZ,
+        });
+        if (villager) {
+          return {
+            id: villager.id,
+            label: `Trade with ${villager.displayName}`,
+            sublabel: 'Buy Seeds, Supplies & Sell Loot',
+            kind: 'farmer',
+            actionCategory: 'use',
+            distance: Math.hypot(villager.x - this.playerX, villager.z - this.playerZ),
+            targetX: villager.x,
+            targetY: villager.y,
+            targetZ: villager.z,
+          };
+        }
+      }
     }
 
     // Check Hilltop House / Park Pavilion Functional Stations
@@ -10312,7 +10470,27 @@ export class GameEngine {
             this.creatures.creatures,
             a.isBullet ? 0.28 : 0.22,
           );
-          if (zoneHit) {
+          const structHit =
+            this.worldType === 'island' && this.currentDimension === 'overworld'
+              ? this.structureManager.raycastEntities(
+                  _vec3A,
+                  _vec3B,
+                  segLen + 0.65,
+                  false,
+                )
+              : null;
+
+          if (structHit && (!zoneHit || structHit.distance < zoneHit.distance)) {
+            this.damageStructureEntity(
+              structHit.entity,
+              a.damage,
+              a.isBullet ? 'Gunshot' : 'Bow Shot',
+              structHit.hitPoint.x,
+              structHit.hitPoint.y,
+              structHit.hitPoint.z,
+            );
+            remove = true;
+          } else if (zoneHit) {
             const c = this.creatures.creatures.find((cr) => cr.id === zoneHit.creatureId);
             if (c) {
               this.applyCreatureZoneWeaponHit(
@@ -11281,6 +11459,29 @@ export class GameEngine {
             },
           );
           nocturnalActiveCount = creatureCycle.nocturnalActiveCount;
+
+          this.structureManager.update(
+            { x: this.playerX, y: this.playerY, z: this.playerZ },
+            dt,
+            {
+              onPlayerDamaged: (amount, sourceName) => {
+                this.applyPlayerDamage(amount, sourceName);
+              },
+              onEntityCall: (type, dist) => {
+                if (type !== 'villager') {
+                  const mapped: CreatureSpecies =
+                    type === 'vindicator' ? 'pillager' : type;
+                  this.sound.playCreatureCall(
+                    mapped,
+                    Math.max(0.2, 1 - dist / 50),
+                  );
+                }
+              },
+              onStructureCleared: (site) => {
+                this.handleStructureCleared(site);
+              },
+            },
+          );
         }
         this.nocturnalActiveCount = nocturnalActiveCount;
 
@@ -15272,6 +15473,7 @@ export class GameEngine {
     this.flatWorld?.setVisible(showFlat);
     this.realisticOcean?.setVisible(showIsland);
     this.creatures?.setOverworldActive(showIsland);
+    this.structureManager?.setDimensionVisible(showIsland);
     for (const v of this.structureVisuals.values()) v.group.visible = active;
     for (const m of this.structuralMeshes.values()) m.visible = active;
     for (const h of this.kineticMeshes.values()) h.root.visible = active;
@@ -15473,6 +15675,7 @@ export class GameEngine {
     this.portalHandles.clear();
 
     this.creatures?.dispose();
+    this.structureManager?.hibernateAll();
     this.realisticOcean?.dispose();
     this.world?.dispose();
     this.flatWorld?.dispose();

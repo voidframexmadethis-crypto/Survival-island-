@@ -1022,6 +1022,7 @@ export interface GameSaveData {
   crystalArmorHp?: number;
   visitedDimensions?: DimensionId[];
   ecosystem?: EcosystemSimulationData;
+  clearedStructureIds?: string[];
 }
 
 export interface CarcassSaveData {

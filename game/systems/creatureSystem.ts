@@ -1457,15 +1457,6 @@ export class CreatureManager {
       ['gray_wolf', 18, -12, 'always'],
       ['velociraptor', 26, -6, 'always'],
       ['dilophosaurus', 16, -2, 'always'],
-      // Woodland Mansion Interior Defenders (Vex, Evoker, Pillager, Witch) & Pillager Outpost Guards
-      ['evoker', WOODLAND_MANSION_POS.x, WOODLAND_MANSION_POS.z - 2.6, 'always'],
-      ['vex', WOODLAND_MANSION_POS.x - 1.1, WOODLAND_MANSION_POS.z + 0.4, 'always'],
-      ['vex', WOODLAND_MANSION_POS.x + 1.1, WOODLAND_MANSION_POS.z - 0.8, 'always'],
-      ['pillager', WOODLAND_MANSION_POS.x - 4.4, WOODLAND_MANSION_POS.z + 0.6, 'always'],
-      ['pillager', WOODLAND_MANSION_POS.x + 0.2, WOODLAND_MANSION_POS.z + 2.6, 'always'],
-      ['witch', WOODLAND_MANSION_POS.x + 4.4, WOODLAND_MANSION_POS.z - 0.4, 'always'],
-      ['pillager', PILLAGER_OUTPOST_POS.x - 1.2, PILLAGER_OUTPOST_POS.z + 1.4, 'always'],
-      ['pillager', PILLAGER_OUTPOST_POS.x + 1.4, PILLAGER_OUTPOST_POS.z - 1.2, 'always'],
     ];
 
     spawns.forEach(([species, x, z, spawnCycle], i) => {
