@@ -40,6 +40,7 @@ import {
   createFarmerNpcModel,
   createHilltopHouse,
 } from './models';
+import { enhanceSurfaceMaterial } from './shaders';
 
 export interface CaveCeilingCluster {
   id: string;
@@ -232,12 +233,15 @@ export function buildIslandWorld(
   terrainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   terrainGeo.computeVertexNormals();
 
-  const terrainMat = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    map: groundTex,
-    roughness: 0.92,
-    metalness: 0.02,
-  });
+  const terrainMat = enhanceSurfaceMaterial(
+    new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      map: groundTex,
+      roughness: 0.9,
+      metalness: 0.03,
+    }),
+    'terrain',
+  );
   const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
   terrainMesh.receiveShadow = true;
   overworldGroup.add(terrainMesh);
@@ -257,6 +261,8 @@ export function buildIslandWorld(
   const oceanMesh = new THREE.Mesh(oceanGeo, oceanMat);
   oceanMesh.position.y = OCEAN_LEVEL;
   oceanMesh.receiveShadow = true;
+  oceanMesh.userData.noShadowCast = true;
+  oceanMesh.userData.preserveEnvMapIntensity = true;
   overworldGroup.add(oceanMesh);
 
   // 3. Azure Lake & Crystal River Freshwater Planes
@@ -273,6 +279,8 @@ export function buildIslandWorld(
   });
   const lakeMesh = new THREE.Mesh(lakeGeo, freshwaterMat);
   lakeMesh.position.set(LAKE_CENTER.x, LAKE_CENTER.waterY, LAKE_CENTER.z);
+  lakeMesh.userData.noShadowCast = true;
+  lakeMesh.userData.preserveEnvMapIntensity = true;
   overworldGroup.add(lakeMesh);
 
   const riverSegs: [number, number, number][] = [
@@ -294,6 +302,8 @@ export function buildIslandWorld(
     rib.position.set((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2);
     rib.rotation.y = Math.atan2(bx - ax, bz - az);
     rib.rotation.x = Math.atan2(by - ay, len);
+    rib.userData.noShadowCast = true;
+    rib.userData.preserveEnvMapIntensity = true;
     overworldGroup.add(rib);
   }
 
@@ -1330,7 +1340,11 @@ export function buildIslandWorld(
   // 6) Tall Golden Savanna Grass Patch (African Lion prowling & Bison windswept prairie)
   const goldenSavannaBladeGeo = new THREE.ConeGeometry(0.08, 1.32, 4);
   goldenSavannaBladeGeo.translate(0, 0.66, 0);
-  const goldenSavannaMat = new THREE.MeshStandardMaterial({ color: 0xd4a438, roughness: 0.88 });
+  const goldenSavannaMat = enhanceSurfaceMaterial(
+    new THREE.MeshStandardMaterial({ color: 0xd4a438, roughness: 0.88 }),
+    'foliage',
+    0.055,
+  );
   const savannaGrassCount = 180;
   const savannaGrassMesh = new THREE.InstancedMesh(
     goldenSavannaBladeGeo,
@@ -1359,7 +1373,10 @@ export function buildIslandWorld(
 
   // 7) Gnarled Dead Oak Tree & Exposed Perch Branch (Great Horned Owl at DEAD_OAK_POS = (18, 78))
   const deadOakBaseY = getTerrainHeight(DEAD_OAK_POS.x, DEAD_OAK_POS.z);
-  const deadOakMat = new THREE.MeshStandardMaterial({ color: 0x574c43, map: barkTex, roughness: 0.96 });
+  const deadOakMat = enhanceSurfaceMaterial(
+    new THREE.MeshStandardMaterial({ color: 0x574c43, map: barkTex, roughness: 0.96 }),
+    'wood',
+  );
   const deadOakGroup = new THREE.Group();
   deadOakGroup.position.set(DEAD_OAK_POS.x, deadOakBaseY, DEAD_OAK_POS.z);
   const oakTrunk = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.56, 4.4, 9), deadOakMat);
@@ -1398,32 +1415,32 @@ export function buildIslandWorld(
   const resourceMeshes = new Map<string, THREE.Object3D>();
   const resourceHandles = new Map<string, ResourceVisualHandle>();
 
-  const palmTrunkMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x855a3c, map: barkTex, roughness: 0.92 }));
-  const palmLeafMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x358f42, map: leafTex, roughness: 0.76 }));
-  const jungleTrunkMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x5c3d28, map: barkTex, roughness: 0.94 }));
-  const jungleLeafMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x227038, map: leafTex, roughness: 0.8 }));
-  const banyanTrunkMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x6b4b34, map: barkTex, roughness: 0.93 }));
-  const banyanLeafMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x1b5e30, map: leafTex, roughness: 0.82 }));
-  const cedarTrunkMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x4f3422, map: barkTex, roughness: 0.95 }));
-  const cedarLeafMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x1f5c3a, map: leafTex, roughness: 0.84 }));
+  const palmTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x855a3c, map: barkTex, roughness: 0.92 }), 'wood'));
+  const palmLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x358f42, map: leafTex, roughness: 0.74 }), 'foliage', 0.06));
+  const jungleTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x5c3d28, map: barkTex, roughness: 0.94 }), 'wood'));
+  const jungleLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x227038, map: leafTex, roughness: 0.78 }), 'foliage', 0.045));
+  const banyanTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x6b4b34, map: barkTex, roughness: 0.93 }), 'wood'));
+  const banyanLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x1b5e30, map: leafTex, roughness: 0.8 }), 'foliage', 0.04));
+  const cedarTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x4f3422, map: barkTex, roughness: 0.95 }), 'wood'));
+  const cedarLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x1f5c3a, map: leafTex, roughness: 0.82 }), 'foliage', 0.038));
   const heartwoodCutMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xd4a36a, roughness: 0.78 }));
   const coconutMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x4b2e19, roughness: 0.85 }));
 
-  const boulderMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x7c7670, map: rockTex, roughness: 0.92 }));
-  const smallStoneMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x8b8680, map: rockTex, roughness: 0.88 }));
-  const mountainRockMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x5d5853, map: rockTex, roughness: 0.94 }));
+  const boulderMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x7c7670, map: rockTex, roughness: 0.92 }), 'rock'));
+  const smallStoneMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x8b8680, map: rockTex, roughness: 0.88 }), 'rock'));
+  const mountainRockMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x5d5853, map: rockTex, roughness: 0.94 }), 'rock'));
   const flintMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.32, metalness: 0.25 }));
-  const oreRockMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x4a4540, map: rockTex, roughness: 0.9 }));
+  const oreRockMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x4a4540, map: rockTex, roughness: 0.9 }), 'rock'));
   const oreVeinMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.28, metalness: 0.82 }));
   const crackMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x171412, roughness: 0.98 }));
 
-  const wheatMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.86 }));
-  const sugarcaneMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x84cc16, roughness: 0.72 }));
+  const wheatMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.86 }), 'foliage', 0.04));
+  const sugarcaneMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x84cc16, roughness: 0.72 }), 'foliage', 0.045));
   const sugarcaneNodeMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.8 }));
-  const grassMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x65a30d, roughness: 0.88 }));
-  const berryBushMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x15803d, map: leafTex, roughness: 0.85 }));
+  const grassMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x65a30d, roughness: 0.88 }), 'foliage', 0.05));
+  const berryBushMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x15803d, map: leafTex, roughness: 0.85 }), 'foliage', 0.03));
   const berryFruitMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.45 }));
-  const fernMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.84 }));
+  const fernMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.84 }), 'foliage', 0.035));
   const mushroomCapMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xc27849, roughness: 0.7 }));
   const mushroomStemMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xe7e5e4, roughness: 0.85 }));
   const clayMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.94 }));
@@ -1876,6 +1893,7 @@ export function buildIslandWorld(
       const batchKey = `res_${geoId}_${matId}_${castShadow ? 1 : 0}`;
       addBatchInstance(batchKey, child.geometry, mat, child.matrixWorld, {
         castShadow,
+        receiveShadow: !noShadowKind,
         nodeId: id,
       });
     });
@@ -2564,8 +2582,14 @@ export function buildIslandWorld(
   const grassCount = 260;
   const grassBladeGeo = new THREE.ConeGeometry(0.11, 0.55, 4);
   grassBladeGeo.translate(0, 0.27, 0);
-  const ambientGrassMat = new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.9 });
+  const ambientGrassMat = enhanceSurfaceMaterial(
+    new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.9 }),
+    'foliage',
+    0.048,
+  );
   const grassInstanced = new THREE.InstancedMesh(grassBladeGeo, ambientGrassMat, grassCount);
+  grassInstanced.receiveShadow = true;
+  grassInstanced.userData.noShadowCast = true;
   const pebbleCount = 75;
   const pebbleGeo = new THREE.DodecahedronGeometry(0.14, 0);
   const pebbleInstanced = new THREE.InstancedMesh(pebbleGeo, smallStoneMat, pebbleCount);
@@ -2643,6 +2667,9 @@ export function buildIslandWorld(
     const im = new THREE.InstancedMesh(entry.geo, entry.mat, entry.matrices.length);
     im.castShadow = entry.castShadow;
     im.receiveShadow = entry.receiveShadow;
+    if (!entry.castShadow) {
+      im.userData.noShadowCast = true;
+    }
     for (let i = 0; i < entry.matrices.length; i++) {
       im.setMatrixAt(i, entry.matrices[i]);
       if (entry.colors && entry.colors[i]) {
@@ -2700,6 +2727,22 @@ export function buildIslandWorld(
     if (!meta) return undefined;
     setBatchedNodeVisible(nodeId, false);
     const handle = buildNodeMesh(meta);
+    const noShadowKind =
+      meta.kind === 'wheat_patch' ||
+      meta.kind === 'grass_tuft' ||
+      meta.kind === 'fiber_fern' ||
+      meta.kind === 'plant_cluster' ||
+      meta.kind === 'mushroom_cluster' ||
+      meta.kind === 'branch_pile' ||
+      meta.kind === 'clay_deposit' ||
+      meta.kind === 'sand_mound';
+    handle.root.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        obj.castShadow = shadowsEnabledState && !noShadowKind;
+        obj.receiveShadow = !noShadowKind;
+        if (noShadowKind) obj.userData.noShadowCast = true;
+      }
+    });
     handle.root.position.set(meta.x, meta.y, meta.z);
     handle.root.rotation.y = meta.yaw;
     overworldGroup.add(handle.root);
@@ -2721,12 +2764,13 @@ export function buildIslandWorld(
   const setWorldShadowCasting = (enabled: boolean): void => {
     shadowsEnabledState = enabled;
     for (let i = 0; i < shadowCasters.length; i++) {
-      shadowCasters[i].castShadow = enabled;
+      shadowCasters[i].castShadow =
+        enabled && !shadowCasters[i].userData?.noShadowCast;
     }
     for (const handle of resourceHandles.values()) {
       handle.root.traverse((obj) => {
         if (obj instanceof THREE.Mesh) {
-          obj.castShadow = enabled;
+          obj.castShadow = enabled && !obj.userData?.noShadowCast;
         }
       });
     }

@@ -103,6 +103,12 @@ export function ItemIcon({
     case 'bread':
     case 'bread_loaf':
       return <Croissant {...props} />;
+    case 'cheese':
+      return <Package {...props} />;
+    case 'cheeseburger':
+      return <Utensils {...props} />;
+    case 'burnt_food':
+      return <Flame {...props} />;
     case 'milk':
       return <Milk {...props} />;
     case 'egg':

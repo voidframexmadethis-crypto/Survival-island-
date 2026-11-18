@@ -1,0 +1,1422 @@
+
+/*
+================================================================
+SURVIVAL ISLAND: LOST WORLD
+COMPLETE MARINE WILDLIFE ECOSYSTEM
+================================================================
+
+SYSTEMS:
+1. Marine species database
+2. Ocean habitat classification
+3. Depth-based spawning
+4. Natural swimming
+5. Fish schools
+6. Predator and prey behavior
+7. Marine wildlife animation
+8. Coral reef ecosystem
+9. Seagrass ecosystem
+10. Deep ocean ecosystem
+11. Marine reproduction
+12. Baby marine animals
+13. Seafood collection
+14. Harvesting integration
+15. Inventory integration
+16. Full-color wildlife icons
+17. Underwater interaction
+18. Marine population management
+
+IMPORTANT:
+Integrate with the existing game architecture.
+Reuse existing models, physics, inventory, animation,
+rendering and save systems.
+Do not create duplicate systems.
+Do not remove existing features.
+================================================================
+*/
+
+// ============================================================
+// 1. TYPES
+// ============================================================
+
+export type MarineHabitat =
+  | "open_ocean"
+  | "deep_ocean"
+  | "coral_reef"
+  | "coastal_water"
+  | "tropical_ocean"
+  | "cold_ocean"
+  | "polar_water"
+  | "seagrass"
+  | "mangrove"
+  | "estuary"
+  | "seabed"
+  | "shoreline"
+  | "beach"
+  | "freshwater";
+
+export type MarineBehavior =
+  | "peaceful"
+  | "schooling"
+  | "predator"
+  | "territorial"
+  | "bottom_dweller"
+  | "filter_feeder"
+  | "slow_drifter";
+
+export interface MarineSpecies {
+  id: string;
+  name: string;
+  habitat: MarineHabitat[];
+  behavior: MarineBehavior;
+  minDepth: number;
+  maxDepth: number;
+  swimSpeed: number;
+  schoolSize: number;
+  collectible: boolean;
+  harvestable: boolean;
+  predator: boolean;
+  icon: string;
+  color: string;
+}
+
+// ============================================================
+// 2. MARINE SPECIES DATABASE
+// ============================================================
+
+export const MARINE_SPECIES: MarineSpecies[] = [
+
+  // SHARKS
+
+  {
+    id: "great_white",
+    name: "Great White Shark",
+    habitat: ["open_ocean", "coastal_water"],
+    behavior: "predator",
+    minDepth: 0,
+    maxDepth: 900,
+    swimSpeed: 0.38,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: true,
+    predator: true,
+    icon: "great-white.png",
+    color: "#87949B"
+  },
+
+  {
+    id: "tiger_shark",
+    name: "Tiger Shark",
+    habitat: ["open_ocean", "coastal_water"],
+    behavior: "predator",
+    minDepth: 0,
+    maxDepth: 350,
+    swimSpeed: 0.34,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: true,
+    predator: true,
+    icon: "tiger-shark.png",
+    color: "#747C70"
+  },
+
+  {
+    id: "bull_shark",
+    name: "Bull Shark",
+    habitat: ["coastal_water", "estuary"],
+    behavior: "predator",
+    minDepth: 0,
+    maxDepth: 150,
+    swimSpeed: 0.32,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: true,
+    predator: true,
+    icon: "bull-shark.png",
+    color: "#777D83"
+  },
+
+  {
+    id: "hammerhead",
+    name: "Hammerhead Shark",
+    habitat: ["open_ocean", "coral_reef"],
+    behavior: "predator",
+    minDepth: 0,
+    maxDepth: 275,
+    swimSpeed: 0.30,
+    schoolSize: 3,
+    collectible: false,
+    harvestable: true,
+    predator: true,
+    icon: "hammerhead.png",
+    color: "#89939A"
+  },
+
+  {
+    id: "whale_shark",
+    name: "Whale Shark",
+    habitat: ["open_ocean", "tropical_ocean"],
+    behavior: "filter_feeder",
+    minDepth: 0,
+    maxDepth: 1000,
+    swimSpeed: 0.12,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: false,
+    predator: false,
+    icon: "whale-shark.png",
+    color: "#536F85"
+  },
+
+  {
+    id: "reef_shark",
+    name: "Blacktip Reef Shark",
+    habitat: ["coral_reef"],
+    behavior: "predator",
+    minDepth: 0,
+    maxDepth: 75,
+    swimSpeed: 0.22,
+    schoolSize: 2,
+    collectible: false,
+    harvestable: true,
+    predator: true,
+    icon: "reef-shark.png",
+    color: "#657984"
+  },
+
+  // WHALES AND DOLPHINS
+
+  {
+    id: "blue_whale",
+    name: "Blue Whale",
+    habitat: ["open_ocean"],
+    behavior: "filter_feeder",
+    minDepth: 0,
+    maxDepth: 500,
+    swimSpeed: 0.09,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: false,
+    predator: false,
+    icon: "blue-whale.png",
+    color: "#477B9D"
+  },
+
+  {
+    id: "humpback",
+    name: "Humpback Whale",
+    habitat: ["open_ocean", "coastal_water"],
+    behavior: "filter_feeder",
+    minDepth: 0,
+    maxDepth: 300,
+    swimSpeed: 0.10,
+    schoolSize: 2,
+    collectible: false,
+    harvestable: false,
+    predator: false,
+    icon: "humpback.png",
+    color: "#4D687A"
+  },
+
+  {
+    id: "orca",
+    name: "Killer Whale",
+    habitat: ["open_ocean", "cold_ocean"],
+    behavior: "predator",
+    minDepth: 0,
+    maxDepth: 300,
+    swimSpeed: 0.24,
+    schoolSize: 5,
+    collectible: false,
+    harvestable: false,
+    predator: true,
+    icon: "orca.png",
+    color: "#151C25"
+  },
+
+  {
+    id: "bottlenose_dolphin",
+    name: "Bottlenose Dolphin",
+    habitat: ["coastal_water", "open_ocean"],
+    behavior: "schooling",
+    minDepth: 0,
+    maxDepth: 300,
+    swimSpeed: 0.26,
+    schoolSize: 6,
+    collectible: false,
+    harvestable: false,
+    predator: false,
+    icon: "dolphin.png",
+    color: "#778C9A"
+  },
+
+  // TURTLES AND RAYS
+
+  {
+    id: "green_turtle",
+    name: "Green Sea Turtle",
+    habitat: ["coral_reef", "seagrass"],
+    behavior: "peaceful",
+    minDepth: 0,
+    maxDepth: 200,
+    swimSpeed: 0.08,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: false,
+    predator: false,
+    icon: "green-turtle.png",
+    color: "#557B45"
+  },
+
+  {
+    id: "leatherback",
+    name: "Leatherback Sea Turtle",
+    habitat: ["open_ocean"],
+    behavior: "peaceful",
+    minDepth: 0,
+    maxDepth: 1000,
+    swimSpeed: 0.12,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: false,
+    predator: false,
+    icon: "leatherback.png",
+    color: "#39434C"
+  },
+
+  {
+    id: "manta_ray",
+    name: "Giant Manta Ray",
+    habitat: ["open_ocean", "coral_reef"],
+    behavior: "filter_feeder",
+    minDepth: 0,
+    maxDepth: 500,
+    swimSpeed: 0.13,
+    schoolSize: 2,
+    collectible: false,
+    harvestable: false,
+    predator: false,
+    icon: "manta-ray.png",
+    color: "#242B35"
+  },
+
+  {
+    id: "stingray",
+    name: "Southern Stingray",
+    habitat: ["seabed", "coastal_water"],
+    behavior: "bottom_dweller",
+    minDepth: 0,
+    maxDepth: 100,
+    swimSpeed: 0.07,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: true,
+    predator: false,
+    icon: "stingray.png",
+    color: "#766A5C"
+  },
+
+  // REEF FISH
+
+  {
+    id: "clownfish",
+    name: "Clownfish",
+    habitat: ["coral_reef"],
+    behavior: "schooling",
+    minDepth: 1,
+    maxDepth: 30,
+    swimSpeed: 0.06,
+    schoolSize: 8,
+    collectible: false,
+    harvestable: true,
+    predator: false,
+    icon: "clownfish.png",
+    color: "#EF762C"
+  },
+
+  {
+    id: "blue_tang",
+    name: "Blue Tang",
+    habitat: ["coral_reef"],
+    behavior: "schooling",
+    minDepth: 1,
+    maxDepth: 40,
+    swimSpeed: 0.07,
+    schoolSize: 10,
+    collectible: false,
+    harvestable: true,
+    predator: false,
+    icon: "blue-tang.png",
+    color: "#176BBD"
+  },
+
+  {
+    id: "yellow_tang",
+    name: "Yellow Tang",
+    habitat: ["coral_reef"],
+    behavior: "schooling",
+    minDepth: 1,
+    maxDepth: 40,
+    swimSpeed: 0.07,
+    schoolSize: 8,
+    collectible: false,
+    harvestable: true,
+    predator: false,
+    icon: "yellow-tang.png",
+    color: "#F3D32E"
+  },
+
+  {
+    id: "lionfish",
+    name: "Lionfish",
+    habitat: ["coral_reef"],
+    behavior: "territorial",
+    minDepth: 1,
+    maxDepth: 50,
+    swimSpeed: 0.035,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: true,
+    predator: true,
+    icon: "lionfish.png",
+    color: "#B65D36"
+  },
+
+  {
+    id: "parrotfish",
+    name: "Parrotfish",
+    habitat: ["coral_reef"],
+    behavior: "peaceful",
+    minDepth: 1,
+    maxDepth: 50,
+    swimSpeed: 0.06,
+    schoolSize: 5,
+    collectible: false,
+    harvestable: true,
+    predator: false,
+    icon: "parrotfish.png",
+    color: "#31A88B"
+  },
+
+  {
+    id: "pufferfish",
+    name: "Pufferfish",
+    habitat: ["coral_reef"],
+    behavior: "peaceful",
+    minDepth: 1,
+    maxDepth: 50,
+    swimSpeed: 0.035,
+    schoolSize: 2,
+    collectible: false,
+    harvestable: false,
+    predator: false,
+    icon: "pufferfish.png",
+    color: "#D6BD65"
+  },
+
+  {
+    id: "seahorse",
+    name: "Seahorse",
+    habitat: ["seagrass", "coral_reef"],
+    behavior: "slow_drifter",
+    minDepth: 1,
+    maxDepth: 30,
+    swimSpeed: 0.015,
+    schoolSize: 2,
+    collectible: true,
+    harvestable: false,
+    predator: false,
+    icon: "seahorse.png",
+    color: "#DBA94B"
+  },
+
+  // LARGE FISH
+
+  {
+    id: "bluefin_tuna",
+    name: "Bluefin Tuna",
+    habitat: ["open_ocean"],
+    behavior: "schooling",
+    minDepth: 0,
+    maxDepth: 500,
+    swimSpeed: 0.20,
+    schoolSize: 6,
+    collectible: false,
+    harvestable: true,
+    predator: true,
+    icon: "bluefin-tuna.png",
+    color: "#345D7C"
+  },
+
+  {
+    id: "swordfish",
+    name: "Swordfish",
+    habitat: ["open_ocean"],
+    behavior: "predator",
+    minDepth: 0,
+    maxDepth: 800,
+    swimSpeed: 0.19,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: true,
+    predator: true,
+    icon: "swordfish.png",
+    color: "#526D83"
+  },
+
+  {
+    id: "barracuda",
+    name: "Barracuda",
+    habitat: ["coral_reef", "open_ocean"],
+    behavior: "predator",
+    minDepth: 0,
+    maxDepth: 100,
+    swimSpeed: 0.16,
+    schoolSize: 3,
+    collectible: false,
+    harvestable: true,
+    predator: true,
+    icon: "barracuda.png",
+    color: "#82918B"
+  },
+
+  {
+    id: "grouper",
+    name: "Grouper",
+    habitat: ["coral_reef", "seabed"],
+    behavior: "bottom_dweller",
+    minDepth: 1,
+    maxDepth: 150,
+    swimSpeed: 0.035,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: true,
+    predator: true,
+    icon: "grouper.png",
+    color: "#82785A"
+  },
+
+  // EELS
+
+  {
+    id: "moray_eel",
+    name: "Moray Eel",
+    habitat: ["coral_reef"],
+    behavior: "territorial",
+    minDepth: 1,
+    maxDepth: 100,
+    swimSpeed: 0.025,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: true,
+    predator: true,
+    icon: "moray-eel.png",
+    color: "#777C43"
+  },
+
+  // CEPHALOPODS
+
+  {
+    id: "common_octopus",
+    name: "Common Octopus",
+    habitat: ["coral_reef", "seabed"],
+    behavior: "slow_drifter",
+    minDepth: 1,
+    maxDepth: 200,
+    swimSpeed: 0.018,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: true,
+    predator: false,
+    icon: "octopus.png",
+    color: "#A85E68"
+  },
+
+  {
+    id: "giant_octopus",
+    name: "Giant Pacific Octopus",
+    habitat: ["cold_ocean", "seabed"],
+    behavior: "slow_drifter",
+    minDepth: 1,
+    maxDepth: 1000,
+    swimSpeed: 0.012,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: true,
+    predator: false,
+    icon: "giant-octopus.png",
+    color: "#9A514C"
+  },
+
+  {
+    id: "reef_squid",
+    name: "Reef Squid",
+    habitat: ["coral_reef"],
+    behavior: "schooling",
+    minDepth: 1,
+    maxDepth: 100,
+    swimSpeed: 0.08,
+    schoolSize: 5,
+    collectible: false,
+    harvestable: true,
+    predator: false,
+    icon: "reef-squid.png",
+    color: "#C6A7A0"
+  },
+
+  {
+    id: "giant_squid",
+    name: "Giant Squid",
+    habitat: ["deep_ocean"],
+    behavior: "slow_drifter",
+    minDepth: 300,
+    maxDepth: 1000,
+    swimSpeed: 0.035,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: false,
+    predator: true,
+    icon: "giant-squid.png",
+    color: "#A84D56"
+  },
+
+  // CRUSTACEANS
+
+  {
+    id: "blue_crab",
+    name: "Blue Crab",
+    habitat: ["coastal_water", "seabed"],
+    behavior: "bottom_dweller",
+    minDepth: 0,
+    maxDepth: 50,
+    swimSpeed: 0.012,
+    schoolSize: 3,
+    collectible: false,
+    harvestable: true,
+    predator: false,
+    icon: "blue-crab.png",
+    color: "#3479BC"
+  },
+
+  {
+    id: "king_crab",
+    name: "King Crab",
+    habitat: ["cold_ocean", "seabed"],
+    behavior: "bottom_dweller",
+    minDepth: 10,
+    maxDepth: 300,
+    swimSpeed: 0.008,
+    schoolSize: 2,
+    collectible: false,
+    harvestable: true,
+    predator: false,
+    icon: "king-crab.png",
+    color: "#B44A37"
+  },
+
+  {
+    id: "hermit_crab",
+    name: "Hermit Crab",
+    habitat: ["shoreline", "coral_reef"],
+    behavior: "bottom_dweller",
+    minDepth: 0,
+    maxDepth: 20,
+    swimSpeed: 0.006,
+    schoolSize: 2,
+    collectible: true,
+    harvestable: false,
+    predator: false,
+    icon: "hermit-crab.png",
+    color: "#C68B55"
+  },
+
+  {
+    id: "lobster",
+    name: "American Lobster",
+    habitat: ["coastal_water", "seabed"],
+    behavior: "bottom_dweller",
+    minDepth: 1,
+    maxDepth: 200,
+    swimSpeed: 0.009,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: true,
+    predator: false,
+    icon: "lobster.png",
+    color: "#A94C36"
+  },
+
+  {
+    id: "spiny_lobster",
+    name: "Caribbean Spiny Lobster",
+    habitat: ["coral_reef"],
+    behavior: "bottom_dweller",
+    minDepth: 1,
+    maxDepth: 100,
+    swimSpeed: 0.009,
+    schoolSize: 2,
+    collectible: false,
+    harvestable: true,
+    predator: false,
+    icon: "spiny-lobster.png",
+    color: "#B77B43"
+  },
+
+  // SHELLFISH
+
+  {
+    id: "oyster",
+    name: "Oyster",
+    habitat: ["coastal_water", "estuary"],
+    behavior: "bottom_dweller",
+    minDepth: 0,
+    maxDepth: 30,
+    swimSpeed: 0,
+    schoolSize: 1,
+    collectible: true,
+    harvestable: false,
+    predator: false,
+    icon: "oyster.png",
+    color: "#A99A87"
+  },
+
+  {
+    id: "clam",
+    name: "Clam",
+    habitat: ["shoreline", "seabed"],
+    behavior: "bottom_dweller",
+    minDepth: 0,
+    maxDepth: 50,
+    swimSpeed: 0,
+    schoolSize: 1,
+    collectible: true,
+    harvestable: false,
+    predator: false,
+    icon: "clam.png",
+    color: "#BDA18B"
+  },
+
+  {
+    id: "mussel",
+    name: "Mussel",
+    habitat: ["coastal_water"],
+    behavior: "bottom_dweller",
+    minDepth: 0,
+    maxDepth: 30,
+    swimSpeed: 0,
+    schoolSize: 1,
+    collectible: true,
+    harvestable: false,
+    predator: false,
+    icon: "mussel.png",
+    color: "#354C50"
+  },
+
+  {
+    id: "scallop",
+    name: "Scallop",
+    habitat: ["seabed"],
+    behavior: "bottom_dweller",
+    minDepth: 1,
+    maxDepth: 100,
+    swimSpeed: 0,
+    schoolSize: 1,
+    collectible: true,
+    harvestable: false,
+    predator: false,
+    icon: "scallop.png",
+    color: "#C9A68C"
+  },
+
+  // JELLYFISH
+
+  {
+    id: "moon_jellyfish",
+    name: "Moon Jellyfish",
+    habitat: ["coastal_water", "open_ocean"],
+    behavior: "slow_drifter",
+    minDepth: 0,
+    maxDepth: 100,
+    swimSpeed: 0.004,
+    schoolSize: 5,
+    collectible: false,
+    harvestable: false,
+    predator: false,
+    icon: "moon-jellyfish.png",
+    color: "#C6D6E8"
+  },
+
+  {
+    id: "box_jellyfish",
+    name: "Box Jellyfish",
+    habitat: ["tropical_ocean"],
+    behavior: "slow_drifter",
+    minDepth: 0,
+    maxDepth: 50,
+    swimSpeed: 0.006,
+    schoolSize: 2,
+    collectible: false,
+    harvestable: false,
+    predator: true,
+    icon: "box-jellyfish.png",
+    color: "#B6D8DB"
+  },
+
+  // DEEP OCEAN
+
+  {
+    id: "anglerfish",
+    name: "Anglerfish",
+    habitat: ["deep_ocean"],
+    behavior: "predator",
+    minDepth: 200,
+    maxDepth: 1500,
+    swimSpeed: 0.008,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: false,
+    predator: true,
+    icon: "anglerfish.png",
+    color: "#594C40"
+  },
+
+  {
+    id: "lanternfish",
+    name: "Lanternfish",
+    habitat: ["deep_ocean"],
+    behavior: "schooling",
+    minDepth: 100,
+    maxDepth: 1000,
+    swimSpeed: 0.018,
+    schoolSize: 20,
+    collectible: false,
+    harvestable: true,
+    predator: false,
+    icon: "lanternfish.png",
+    color: "#3E6783"
+  },
+
+  {
+    id: "viperfish",
+    name: "Viperfish",
+    habitat: ["deep_ocean"],
+    behavior: "predator",
+    minDepth: 200,
+    maxDepth: 1500,
+    swimSpeed: 0.012,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: false,
+    predator: true,
+    icon: "viperfish.png",
+    color: "#4B5965"
+  },
+
+  {
+    id: "gulper_eel",
+    name: "Gulper Eel",
+    habitat: ["deep_ocean"],
+    behavior: "slow_drifter",
+    minDepth: 500,
+    maxDepth: 2000,
+    swimSpeed: 0.006,
+    schoolSize: 1,
+    collectible: false,
+    harvestable: false,
+    predator: true,
+    icon: "gulper-eel.png",
+    color: "#483F50"
+  },
+
+  {
+    id: "giant_isopod",
+    name: "Giant Isopod",
+    habitat: ["deep_ocean", "seabed"],
+    behavior: "bottom_dweller",
+    minDepth: 200,
+    maxDepth: 2000,
+    swimSpeed: 0.003,
+    schoolSize: 1,
+    collectible: true,
+    harvestable: false,
+    predator: false,
+    icon: "giant-isopod.png",
+    color: "#A18B8B"
+  }
+
+];
+
+// ============================================================
+// 3. HABITAT SPAWNING
+// ============================================================
+
+export interface MarineSpawnPoint {
+  x: number;
+  y: number;
+  z: number;
+  depth: number;
+  habitat: MarineHabitat;
+}
+
+export function getMarineSpeciesForHabitat(
+  habitat: MarineHabitat,
+  depth: number
+): MarineSpecies[] {
+
+  return MARINE_SPECIES.filter(species =>
+    species.habitat.includes(habitat) &&
+    depth >= species.minDepth &&
+    depth <= species.maxDepth
+  );
+}
+
+// ============================================================
+// 4. NATURAL SLOW SWIMMING
+// ============================================================
+
+export interface MarineAnimalState {
+  id: string;
+  speciesId: string;
+  x: number;
+  y: number;
+  z: number;
+  direction: number;
+  targetDirection: number;
+  speed: number;
+  turnTimer: number;
+  alive: boolean;
+}
+
+export function createMarineAnimal(
+  species: MarineSpecies,
+  position: { x: number; y: number; z: number }
+): MarineAnimalState {
+
+  return {
+    id: `${species.id}_${Math.random().toString(36).slice(2)}`,
+    speciesId: species.id,
+    x: position.x,
+    y: position.y,
+    z: position.z,
+    direction: Math.random() * Math.PI * 2,
+    targetDirection: Math.random() * Math.PI * 2,
+    speed: species.swimSpeed,
+    turnTimer: 2 + Math.random() * 5,
+    alive: true
+  };
+}
+
+export function updateMarineAnimal(
+  animal: MarineAnimalState,
+  deltaTime: number
+): MarineAnimalState {
+
+  if (!animal.alive) return animal;
+
+  const dt = Math.min(deltaTime, 0.05);
+
+  animal.turnTimer -= dt;
+
+  if (animal.turnTimer <= 0) {
+    animal.targetDirection +=
+      (Math.random() - 0.5) * 0.8;
+
+    animal.turnTimer = 3 + Math.random() * 5;
+  }
+
+  let directionDifference =
+    animal.targetDirection - animal.direction;
+
+  directionDifference = Math.atan2(
+    Math.sin(directionDifference),
+    Math.cos(directionDifference)
+  );
+
+  animal.direction +=
+    directionDifference * Math.min(dt * 0.35, 1);
+
+  animal.x +=
+    Math.cos(animal.direction) * animal.speed * dt;
+
+  animal.z +=
+    Math.sin(animal.direction) * animal.speed * dt;
+
+  // Gentle vertical swimming.
+  animal.y += Math.sin(
+    animal.x * 0.15 + animal.z * 0.15
+  ) * animal.speed * dt * 0.12;
+
+  return animal;
+}
+
+// ============================================================
+// 5. FISH SCHOOL FORMATION
+// ============================================================
+
+export interface MarineSchool {
+  leaderId: string;
+  members: string[];
+  spacing: number;
+}
+
+export function calculateSchoolPosition(
+  leader: MarineAnimalState,
+  memberIndex: number,
+  school: MarineSchool
+) {
+
+  const angle =
+    leader.direction +
+    Math.PI +
+    (memberIndex % 5) * 0.35;
+
+  const distance =
+    school.spacing * (1 + Math.floor(memberIndex / 5));
+
+  return {
+    x: leader.x + Math.cos(angle) * distance,
+    y: leader.y + Math.sin(memberIndex) * 0.3,
+    z: leader.z + Math.sin(angle) * distance
+  };
+}
+
+// ============================================================
+// 6. DEPTH-BASED VISUAL SETTINGS
+// ============================================================
+
+export interface UnderwaterVisualSettings {
+  waterColor: string;
+  visibility: number;
+  lightIntensity: number;
+  fogDensity: number;
+}
+
+export function getUnderwaterVisualSettings(
+  depth: number
+): UnderwaterVisualSettings {
+
+  if (depth < 10) {
+    return {
+      waterColor: "#62B9D5",
+      visibility: 100,
+      lightIntensity: 1,
+      fogDensity: 0.002
+    };
+  }
+
+  if (depth < 50) {
+    return {
+      waterColor: "#176D9B",
+      visibility: 65,
+      lightIntensity: 0.75,
+      fogDensity: 0.008
+    };
+  }
+
+  if (depth < 150) {
+    return {
+      waterColor: "#10446F",
+      visibility: 35,
+      lightIntensity: 0.45,
+      fogDensity: 0.018
+    };
+  }
+
+  if (depth < 500) {
+    return {
+      waterColor: "#092844",
+      visibility: 15,
+      lightIntensity: 0.2,
+      fogDensity: 0.035
+    };
+  }
+
+  return {
+    waterColor: "#030D1C",
+    visibility: 5,
+    lightIntensity: 0.06,
+    fogDensity: 0.06
+  };
+}
+
+// ============================================================
+// 7. MARINE ANIMAL REPRODUCTION
+// ============================================================
+
+export interface MarineBaby {
+  id: string;
+  speciesId: string;
+  parentIds: string[];
+  bornAt: number;
+  growth: number;
+  mature: boolean;
+}
+
+export function createMarineBaby(
+  speciesId: string,
+  parentIds: string[]
+): MarineBaby {
+
+  return {
+    id: `baby_${speciesId}_${Date.now()}_${Math.random()}`,
+    speciesId,
+    parentIds,
+    bornAt: Date.now(),
+    growth: 0,
+    mature: false
+  };
+}
+
+export function updateMarineBaby(
+  baby: MarineBaby,
+  elapsedDays: number,
+  maturityDays: number
+): MarineBaby {
+
+  baby.growth = Math.min(
+    1,
+    elapsedDays / maturityDays
+  );
+
+  baby.mature = baby.growth >= 1;
+
+  return baby;
+}
+
+// ============================================================
+// 8. SEAFOOD COLLECTION CATALOG
+// ============================================================
+
+export interface MarineCollectible {
+  id: string;
+  name: string;
+  icon: string;
+  habitat: MarineHabitat[];
+  itemType: "shellfish" | "crustacean" | "sea_creature";
+  harvestable: boolean;
+  blocksPlayerMovement: false;
+}
+
+export const MARINE_COLLECTIBLES: MarineCollectible[] = [
+
+  {
+    id: "lobster",
+    name: "Lobster",
+    icon: "🦞",
+    habitat: ["coral_reef", "coastal_water"],
+    itemType: "crustacean",
+    harvestable: true,
+    blocksPlayerMovement: false
+  },
+
+  {
+    id: "blue_crab",
+    name: "Blue Crab",
+    icon: "🦀",
+    habitat: ["coastal_water", "seabed"],
+    itemType: "crustacean",
+    harvestable: true,
+    blocksPlayerMovement: false
+  },
+
+  {
+    id: "oyster",
+    name: "Oyster",
+    icon: "🦪",
+    habitat: ["coastal_water", "estuary"],
+    itemType: "shellfish",
+    harvestable: true,
+    blocksPlayerMovement: false
+  },
+
+  {
+    id: "clam",
+    name: "Clam",
+    icon: "🐚",
+    habitat: ["shoreline", "seabed"],
+    itemType: "shellfish",
+    harvestable: true,
+    blocksPlayerMovement: false
+  },
+
+  {
+    id: "scallop",
+    name: "Scallop",
+    icon: "🐚",
+    habitat: ["seabed"],
+    itemType: "shellfish",
+    harvestable: true,
+    blocksPlayerMovement: false
+  },
+
+  {
+    id: "starfish",
+    name: "Starfish",
+    icon: "⭐",
+    habitat: ["coral_reef", "shoreline"],
+    itemType: "sea_creature",
+    harvestable: false,
+    blocksPlayerMovement: false
+  },
+
+  {
+    id: "sea_urchin",
+    name: "Sea Urchin",
+    icon: "🟣",
+    habitat: ["coral_reef", "seabed"],
+    itemType: "sea_creature",
+    harvestable: true,
+    blocksPlayerMovement: false
+  },
+
+  {
+    id: "shrimp",
+    name: "Shrimp",
+    icon: "🦐",
+    habitat: ["coastal_water", "coral_reef"],
+    itemType: "crustacean",
+    harvestable: true,
+    blocksPlayerMovement: false
+  },
+
+  {
+    id: "squid",
+    name: "Squid",
+    icon: "🦑",
+    habitat: ["open_ocean", "coral_reef"],
+    itemType: "sea_creature",
+    harvestable: true,
+    blocksPlayerMovement: false
+  }
+
+];
+
+// ============================================================
+// 9. UNDERWATER COLLECTIBLE COLLISION RULES
+// ============================================================
+
+export function shouldBlockPlayer(
+  object: { userData?: { marineCollectible?: boolean } }
+): boolean {
+
+  if (object.userData?.marineCollectible) {
+    return false;
+  }
+
+  return true;
+}
+
+// IMPORTANT:
+// Connect this function to the actual physics collision filter.
+// Do not disable terrain, rocks, caves, or world boundaries.
+
+// ============================================================
+// 10. HARVEST INVENTORY ITEM
+// ============================================================
+
+export interface MarineInventoryItem {
+  id: string;
+  name: string;
+  icon: string;
+  quantity: number;
+  category: string;
+  speciesId?: string;
+}
+
+export function addMarineInventoryItem(
+  inventory: MarineInventoryItem[],
+  newItem: MarineInventoryItem
+): MarineInventoryItem[] {
+
+  const existing = inventory.find(
+    item => item.id === newItem.id
+  );
+
+  if (existing) {
+    return inventory.map(item =>
+      item.id === newItem.id
+        ? {
+            ...item,
+            quantity: item.quantity + newItem.quantity
+          }
+        : item
+    );
+  }
+
+  return [...inventory, { ...newItem }];
+}
+
+// ============================================================
+// 11. HARVEST REWARDS
+// ============================================================
+
+export function getMarineHarvestReward(
+  speciesId: string
+): MarineInventoryItem | null {
+
+  const rewards: Record<string, MarineInventoryItem> = {
+
+    lobster: {
+      id: "lobster_meat",
+      name: "Lobster Meat",
+      icon: "🦞",
+      quantity: 1,
+      category: "food"
+    },
+
+    blue_crab: {
+      id: "crab_meat",
+      name: "Crab Meat",
+      icon: "🦀",
+      quantity: 1,
+      category: "food"
+    },
+
+    oyster: {
+      id: "oyster_meat",
+      name: "Oyster",
+      icon: "🦪",
+      quantity: 1,
+      category: "food"
+    },
+
+    clam: {
+      id: "clam_meat",
+      name: "Clam Meat",
+      icon: "🐚",
+      quantity: 1,
+      category: "food"
+    },
+
+    shrimp: {
+      id: "shrimp_meat",
+      name: "Shrimp",
+      icon: "🦐",
+      quantity: 1,
+      category: "food"
+    },
+
+    squid: {
+      id: "squid_meat",
+      name: "Squid Meat",
+      icon: "🦑",
+      quantity: 1,
+      category: "food"
+    }
+
+  };
+
+  return rewards[speciesId] ?? null;
+}
+
+// ============================================================
+// 12. MARINE POPULATION MANAGEMENT
+// ============================================================
+
+export interface MarinePopulation {
+  speciesId: string;
+  currentCount: number;
+  maximumCount: number;
+}
+
+export function canSpawnMarineAnimal(
+  population: MarinePopulation
+): boolean {
+
+  return population.currentCount <
+    population.maximumCount;
+}
+
+// ============================================================
+// 13. HABITAT SPAWN CONFIGURATION
+// ============================================================
+
+export const MARINE_SPAWN_LIMITS: Record<
+  MarineHabitat,
+  number
+> = {
+
+  open_ocean: 40,
+  deep_ocean: 25,
+  coral_reef: 55,
+  coastal_water: 35,
+  tropical_ocean: 40,
+  cold_ocean: 25,
+  polar_water: 20,
+  seagrass: 30,
+  mangrove: 25,
+  estuary: 25,
+  seabed: 40,
+  shoreline: 20,
+  beach: 15,
+  freshwater: 30
+
+};
+
+// ============================================================
+// 14. MARINE ANIMAL SPECIES LOOKUP
+// ============================================================
+
+export function getMarineSpecies(
+  speciesId: string
+): MarineSpecies | undefined {
+
+  return MARINE_SPECIES.find(
+    species => species.id === speciesId
+  );
+}
+
+// ============================================================
+// 15. FINAL INTEGRATION REQUIREMENTS
+// ============================================================
+
+/*
+CONNECT ALL SYSTEMS TO THE EXISTING GAME.
+
+REQUIRED:
+
+1. Register marine species with the existing animal manager.
+
+2. Connect habitat spawning to actual ocean biome positions.
+
+3. Connect swimming state to actual 3D animal transforms.
+
+4. Connect school positions to actual fish models.
+
+5. Connect depth settings to the existing underwater renderer.
+
+6. Connect baby animals to the existing animal population system.
+
+7. Connect collectible seafood to actual underwater models.
+
+8. Connect harvest rewards to the authoritative player inventory.
+
+9. Connect inventory changes to the actual HUD hotbar.
+
+10. Connect collectible collision rules to the real physics engine.
+
+11. Use existing models and animations where available.
+
+12. Do not display missing models as invisible animals.
+
+13. Do not spawn every species in every biome.
+
+14. Avoid excessive spawning that harms performance.
+
+15. Preserve existing save data and player progress.
+
+16. Ensure the ocean remains traversable.
+
+17. Ensure marine creatures move slowly and naturally.
+
+18. Ensure deep-ocean species only appear at appropriate depths.
+
+19. Ensure non-harvestable animals cannot be harvested.
+
+20. Verify the actual running game after integration.
+
+DO NOT CLAIM THAT THE SYSTEM IS COMPLETE JUST BECAUSE
+THE DATABASE HAS BEEN CREATED.
+
+THE SPAWNING, MODELS, ANIMATIONS, INVENTORY AND HUD
+MUST ALL BE CONNECTED TO THE EXISTING GAME.
+*/

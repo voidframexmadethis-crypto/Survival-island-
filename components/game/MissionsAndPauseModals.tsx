@@ -21,7 +21,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { STAGE_1_MISSIONS } from '@/game/data/missions';
-import { getPresetSettings } from '@/game/systems/saveManager';
+import { getPresetSettings, normalizeGraphicsPreset } from '@/game/systems/saveManager';
 import {
   DrawDistanceTier,
   GameSettings,
@@ -141,9 +141,9 @@ const PRESET_CARDS: {
   title: string;
   subtitle: string;
 }[] = [
-  { id: 'ultra', title: 'Ultra', subtitle: '60 FPS Desktop' },
-  { id: 'balanced', title: 'Balanced', subtitle: '60 FPS Mobile Default' },
-  { id: 'performance', title: 'Performance Boost', subtitle: 'Max Battery & FPS' },
+  { id: 'low', title: 'Low', subtitle: 'Max Battery & FPS' },
+  { id: 'medium', title: 'Medium', subtitle: 'iPhone Default' },
+  { id: 'high', title: 'High', subtitle: 'Full Shadows & Shaders' },
 ];
 
 export function SettingsModal({
@@ -155,9 +155,10 @@ export function SettingsModal({
   onChange: (next: GameSettings) => void;
   onClose: () => void;
 }) {
-  const activePreset: GraphicsPreset =
-    settings.graphicsPreset ??
-    (settings.graphicsQuality === 'high' ? 'ultra' : 'balanced');
+  const activePreset: GraphicsPreset = normalizeGraphicsPreset(
+    settings.graphicsPreset,
+    settings.graphicsQuality,
+  );
   const shadowsOn = settings.shadowsEnabled !== false;
   const reflectionsOn = settings.waterReflectionsEnabled !== false;
   const particlesOn = settings.particlesEnabled !== false;

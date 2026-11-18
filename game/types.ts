@@ -142,6 +142,9 @@ export type ItemId =
   | 'hearty_stew'
   | 'grilled_fish'
   | 'roasted_mushrooms'
+  | 'cheese'
+  | 'cheeseburger'
+  | 'burnt_food'
   // Tools & Weapons & Equipment
   | 'gun'
   | 'ammo'
@@ -751,7 +754,7 @@ export interface GameStats {
   daysSurvived: number;
 }
 
-export type GraphicsPreset = 'ultra' | 'balanced' | 'performance';
+export type GraphicsPreset = 'low' | 'medium' | 'high';
 export type DrawDistanceTier = 'near' | 'medium' | 'far';
 export type TvSafetyMode = 'auto' | 'safe_mini' | 'full_3d';
 
@@ -759,7 +762,7 @@ export interface GameSettings {
   masterVolume: number;
   sfxEnabled: boolean;
   ambienceEnabled: boolean;
-  graphicsQuality: 'balanced' | 'high';
+  graphicsQuality: GraphicsPreset;
   graphicsPreset?: GraphicsPreset;
   shadowsEnabled?: boolean;
   waterReflectionsEnabled?: boolean;
@@ -865,6 +868,7 @@ export interface CarcassSaveData {
   yaw: number;
   drops: { itemId: ItemId; quantity: number }[];
   life: number;
+  owner?: 'player' | 'world';
 }
 
 export type ActiveModal =

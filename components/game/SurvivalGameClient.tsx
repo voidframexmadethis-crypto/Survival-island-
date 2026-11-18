@@ -954,48 +954,65 @@ export function SurvivalGameClient() {
         </div>
       )}
 
-      {/* IN-GAME FIRST-PERSON HUD */}
+      {/* IN-GAME FIRST-PERSON HUD (CLEAN MINECRAFT-INSPIRED LAYOUT) */}
       {screen === 'playing' && hud && !hud.cinematicActive && (
-        <div className="pointer-events-none relative z-10 min-h-[100dvh] w-full flex flex-col justify-between gap-2 p-2.5 sm:p-4 safe-top safe-bottom pb-5 sm:pb-5">
-          {/* Subtle First-Person Aim Reticle + Dynamic Hitbox & Armor Inspector */}
+        <div className="pointer-events-none relative z-10 min-h-[100dvh] w-full flex flex-col justify-between gap-1.5 p-2 sm:p-3.5 safe-top safe-bottom pb-2 sm:pb-3">
+          {/* Subtle Center Crosshair + Target Hitbox Readout (Only when aiming at enemy) */}
           {!activeModal && !hud.gameOver && (
             <div className="fixed inset-0 pointer-events-none flex items-center justify-center">
-              <div
-                className={`w-1.5 h-1.5 rounded-full border border-black/60 ${
-                  hud.targetHitbox
-                    ? hud.targetHitbox.isGapSlip ||
-                      hud.targetHitbox.armorHp <= 0
-                      ? 'bg-emerald-400 scale-125'
-                      : 'bg-amber-400 scale-125'
-                    : hud.nearbyInteraction
-                      ? 'bg-amber-400 scale-125'
-                      : 'bg-white/75'
-                }`}
-              />
+              {(() => {
+                const aimedTarget =
+                  hud.targetHitbox ||
+                  hud.nearbyCarcass ||
+                  (hud.nearbyInteraction &&
+                    hud.nearbyInteraction.kind !== 'tool_action' &&
+                    hud.nearbyInteraction.kind !== 'gun_action' &&
+                    !(
+                      hud.nearbyInteraction.kind === 'wash_meat' &&
+                      !hud.nearLakeWater
+                    ));
+                const colorClass = hud.targetHitbox
+                  ? hud.targetHitbox.isGapSlip || hud.targetHitbox.armorHp <= 0
+                    ? 'bg-emerald-400'
+                    : 'bg-amber-300'
+                  : hud.nearbyCarcass
+                    ? 'bg-emerald-400'
+                    : aimedTarget
+                      ? 'bg-amber-300'
+                      : 'bg-white/85';
+                return (
+                  <div
+                    className="relative w-4 h-4 flex items-center justify-center opacity-90"
+                    aria-hidden="true"
+                  >
+                    <div
+                      className={`absolute w-3.5 h-[2px] rounded-full shadow-[0_0_2px_rgba(0,0,0,0.95)] ${colorClass}`}
+                    />
+                    <div
+                      className={`absolute h-3.5 w-[2px] rounded-full shadow-[0_0_2px_rgba(0,0,0,0.95)] ${colorClass}`}
+                    />
+                  </div>
+                );
+              })()}
+
               {hud.targetHitbox && (
-                <div className="absolute top-[54%] left-1/2 -translate-x-1/2 w-64 sm:w-72 rounded-xl bg-stone-950/90 border border-stone-700/85 px-3 py-2 shadow-2xl space-y-1.5">
+                <div className="absolute top-[55%] left-1/2 -translate-x-1/2 w-56 sm:w-64 rounded-lg bg-stone-950/90 border border-stone-700/85 px-2.5 py-1.5 shadow-2xl space-y-1">
                   <div className="flex items-center justify-between gap-2 text-[11px]">
-                    <div className="flex items-center gap-1.5 min-w-0">
+                    <div className="flex items-center gap-1 min-w-0">
                       {hud.targetHitbox.isBoss && (
                         <Skull className="w-3.5 h-3.5 text-red-400 shrink-0" />
                       )}
                       <span className="font-bold text-stone-100 truncate">
                         {hud.targetHitbox.name}
                       </span>
-                      {hud.targetHitbox.isBoss && (
-                        <span className="px-1 py-0.5 rounded bg-red-950 border border-red-600/70 text-[9px] font-bold text-red-300 uppercase shrink-0">
-                          Boss
-                        </span>
-                      )}
                     </div>
                     <span className="font-mono-tabular text-stone-400 shrink-0">
                       {hud.targetHitbox.distance.toFixed(1)}m
                     </span>
                   </div>
 
-                  {/* Target Health Bar */}
                   <div className="flex items-center gap-2">
-                    <div className="flex-1 h-1.5 rounded-full bg-stone-800 overflow-hidden">
+                    <div className="flex-1 h-1.5 rounded-sm bg-stone-800 overflow-hidden">
                       <div
                         className="h-full bg-red-500 transition-all duration-100"
                         style={{
@@ -1008,66 +1025,43 @@ export function SurvivalGameClient() {
                     </span>
                   </div>
 
-                  {/* Body Zone + Armor Material Tier + Debuff Badges */}
-                  <div className="flex flex-wrap items-center gap-1 text-[10px] font-semibold">
-                    <span className="px-1.5 py-0.5 rounded bg-stone-800 border border-stone-600 text-amber-300 uppercase">
-                      Zone: {hud.targetHitbox.zone}
+                  <div className="flex flex-wrap items-center gap-1 text-[9px] font-semibold">
+                    <span className="px-1 py-0.5 rounded bg-stone-800 text-amber-300 uppercase">
+                      {hud.targetHitbox.zone}
                     </span>
                     {hud.targetHitbox.armorTier !== 'none' &&
                     hud.targetHitbox.armorHp > 0 ? (
-                      <span className="px-1.5 py-0.5 rounded bg-stone-900 border border-stone-500/80 text-stone-200 flex items-center gap-1 uppercase font-mono-tabular">
-                        <ShieldAlert className="w-3 h-3 text-amber-400" />
-                        {hud.targetHitbox.armorTier}{' '}
-                        {Math.ceil(hud.targetHitbox.armorHp)}/
-                        {hud.targetHitbox.armorMaxHp}
+                      <span className="px-1 py-0.5 rounded bg-stone-900 border border-stone-600 text-stone-200 flex items-center gap-1 uppercase font-mono-tabular">
+                        <ShieldAlert className="w-2.5 h-2.5 text-amber-400" />
+                        {hud.targetHitbox.armorTier} {Math.ceil(hud.targetHitbox.armorHp)}
                       </span>
                     ) : (
-                      <span className="px-1.5 py-0.5 rounded bg-emerald-950/90 border border-emerald-600/70 text-emerald-300 flex items-center gap-1 uppercase">
-                        <ShieldOff className="w-3 h-3" />
-                        {hud.targetHitbox.armorMaxHp > 0
-                          ? 'Armor Shattered'
-                          : 'Unarmored'}
+                      <span className="px-1 py-0.5 rounded bg-emerald-950/90 text-emerald-300 flex items-center gap-1 uppercase">
+                        <ShieldOff className="w-2.5 h-2.5" />
+                        Exposed
                       </span>
                     )}
                     {hud.targetHitbox.blinded && (
-                      <span className="px-1.5 py-0.5 rounded bg-amber-950/90 border border-amber-500 text-amber-200 flex items-center gap-1 uppercase">
-                        <EyeOff className="w-3 h-3" />
+                      <span className="px-1 py-0.5 rounded bg-amber-950/90 text-amber-200 uppercase">
                         Blinded
                       </span>
                     )}
                     {hud.targetHitbox.staggered && (
-                      <span className="px-1.5 py-0.5 rounded bg-sky-950/90 border border-sky-500 text-sky-200 uppercase">
+                      <span className="px-1 py-0.5 rounded bg-sky-950/90 text-sky-200 uppercase">
                         Staggered
                       </span>
                     )}
-                  </div>
-
-                  {/* Weapon Material Reaction Hint */}
-                  <div
-                    className={`text-[10px] font-semibold leading-tight ${
-                      hud.targetHitbox.isGapSlip ||
-                      hud.targetHitbox.reactionHint.includes('Shatter') ||
-                      hud.targetHitbox.reactionHint.includes('CRIT') ||
-                      hud.targetHitbox.reactionHint.includes('Unarmored')
-                        ? 'text-emerald-300'
-                        : hud.targetHitbox.reactionHint.includes('Deflect') ||
-                            hud.targetHitbox.reactionHint.includes('Ricochet')
-                          ? 'text-red-300'
-                          : 'text-amber-200'
-                    }`}
-                  >
-                    {hud.targetHitbox.reactionHint}
                   </div>
                 </div>
               )}
             </div>
           )}
 
-          {/* Top Row: Vitals (Left), Active Objective (Center), Menu Buttons (Right) */}
-          <div className="flex flex-wrap lg:flex-nowrap items-start justify-between gap-2">
-            {/* Survival Status Panel */}
-            <div className="pointer-events-auto rounded-xl bg-stone-950/85 border border-stone-700/70 p-2.5 sm:p-3 w-48 sm:w-60 space-y-1.5">
-              <div className="flex items-center justify-between text-[11px] text-stone-300 pb-1 border-b border-stone-800">
+          {/* Top Bar: Compact Survival Vitals (Left), Slim Compass (Center), Menu/Exit (Right) */}
+          <div className="flex flex-nowrap items-start justify-between gap-1.5 sm:gap-2">
+            {/* Compact Survival Vitals Panel */}
+            <div className="pointer-events-auto rounded-lg bg-stone-950/85 border border-stone-700/80 p-1.5 sm:p-2.5 w-[148px] sm:w-[208px] space-y-1 shadow-lg">
+              <div className="flex items-center justify-between gap-1 text-[10px] sm:text-[11px] text-stone-300 pb-0.5 border-b border-stone-800">
                 <span className="font-semibold text-amber-300 truncate">
                   {hud.biomeName}
                 </span>
@@ -1083,145 +1077,114 @@ export function SurvivalGameClient() {
                   ) : (
                     <Sun className="w-3 h-3 text-amber-400" />
                   )}
-                  D{hud.dayCount} · {formatTimePhase(hud.timeOfDay)}
+                  D{hud.dayCount}
                 </span>
               </div>
 
               <VitalBar
-                icon={<Heart className="w-3.5 h-3.5 text-red-400" />}
+                icon={<Heart className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-red-400" />}
                 label="Health"
                 value={hud.vitals.health}
                 barColor="bg-red-500"
               />
               <VitalBar
-                icon={<Utensils className="w-3.5 h-3.5 text-amber-400" />}
+                icon={<Utensils className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-400" />}
                 label="Hunger"
                 value={hud.vitals.hunger}
                 barColor="bg-amber-500"
               />
               <VitalBar
-                icon={<Droplets className="w-3.5 h-3.5 text-sky-400" />}
+                icon={<Droplets className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-sky-400" />}
                 label="Thirst"
                 value={hud.vitals.thirst}
                 barColor="bg-sky-500"
               />
               <VitalBar
-                icon={<Zap className="w-3.5 h-3.5 text-lime-400" />}
+                icon={<Zap className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-lime-400" />}
                 label="Stamina"
                 value={hud.vitals.stamina}
                 barColor="bg-lime-500"
               />
 
-              {/* Body Temperature, Visibility & Resource Summary (Collapsible) */}
-              <div className="pt-1 border-t border-stone-800">
+              {/* Optional Collapsible Extra Telemetry */}
+              <div className="pt-0.5 border-t border-stone-800/80">
                 <button
                   type="button"
                   onClick={() => setTelemetryExpanded(!telemetryExpanded)}
-                  className="w-full flex items-center justify-between text-[11px] text-stone-400 hover:text-stone-200 py-0.5"
+                  className="w-full flex items-center justify-between text-[10px] text-stone-400 hover:text-stone-200"
                 >
-                  <span className="font-semibold">Telemetry &amp; Stats</span>
+                  <span className="truncate">{formatTimePhase(hud.timeOfDay)}</span>
                   {telemetryExpanded ? (
-                    <ChevronUp className="w-3.5 h-3.5" />
+                    <ChevronUp className="w-3 h-3 shrink-0" />
                   ) : (
-                    <ChevronDown className="w-3.5 h-3.5" />
+                    <ChevronDown className="w-3 h-3 shrink-0" />
                   )}
                 </button>
                 {telemetryExpanded && (
-                  <div className="space-y-1 text-[11px] font-mono-tabular text-stone-300 pt-1 border-t border-stone-800/60 mt-1">
+                  <div className="space-y-1 text-[10px] font-mono-tabular text-stone-300 pt-1 mt-0.5 border-t border-stone-800/60">
                     <div className="flex items-center justify-between">
-                      <span
-                        className={`flex items-center gap-1 ${
-                          hud.vitals.temperatureC < 34.5
-                            ? 'text-sky-300'
-                            : hud.nearFire
-                              ? 'text-orange-300'
-                              : 'text-stone-200'
-                        }`}
-                      >
+                      <span className="flex items-center gap-0.5">
                         <Thermometer className="w-3 h-3" />
                         {hud.vitals.temperatureC.toFixed(1)}°C
                       </span>
-                      <span
-                        className={`flex items-center gap-1 ${
-                          hud.visibilityPercent <= 38
-                            ? 'text-emerald-300'
-                            : hud.visibilityPercent >= 78
-                              ? 'text-amber-300'
-                              : 'text-stone-300'
-                        }`}
-                        title="Player Visibility"
-                      >
+                      <span className="flex items-center gap-0.5">
                         <Eye className="w-3 h-3" />
-                        Vis {hud.visibilityPercent}%
+                        {hud.visibilityPercent}%
                       </span>
                     </div>
-                    {!settings.compactHud && (
-                      <div className="flex items-center justify-between text-stone-400">
-                        <span>W:{countOf('wood')}</span>
-                        <span>S:{countOf('stone')}</span>
-                        <span className="text-amber-300 flex items-center gap-0.5">
-                          <Coins className="w-3 h-3" />
-                          {hud.coins}
-                        </span>
-                      </div>
-                    )}
+                    <div className="flex items-center justify-between text-stone-400">
+                      <span>W:{countOf('wood')}</span>
+                      <span>S:{countOf('stone')}</span>
+                      <span className="text-amber-300 flex items-center gap-0.5">
+                        <Coins className="w-3 h-3" />
+                        {hud.coins}
+                      </span>
+                    </div>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Top-Center Horizontal Compass & Active Objective Tracker */}
-            <div className="flex flex-col items-center gap-1.5 max-w-sm">
+            {/* Top-Center Slim Compass (No permanent objective box blocking center view) */}
+            <div className="flex flex-col items-center gap-1 min-w-0">
               {settings.showCompass !== false && (
                 <CompassStrip playerYaw={hud.playerYaw} />
               )}
-              {hud.objectiveText && (
-                <div className="pointer-events-auto px-4 py-1.5 rounded-xl bg-stone-950/90 border border-amber-500/60 shadow-xl text-center">
-                  <div className="text-[10px] font-bold text-amber-300 uppercase tracking-wide">
-                    Active Objective
-                  </div>
-                  <div className="text-xs text-stone-100 font-medium">
-                    {hud.objectiveText}
-                  </div>
-                </div>
-              )}
             </div>
 
-            {/* Top-Right HUD Action Triggers / Menu / Exit Car / Mic Toggle / Xbox Active Speaker Badges */}
-            <div className="pointer-events-auto flex flex-col items-end gap-1.5">
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const muted = engineRef.current?.toggleMicMute();
-                    pushToast({
-                      id: `mic_${Date.now()}`,
-                      text: muted ? 'Microphone Muted' : 'Microphone Unmuted',
-                      tone: muted ? 'warning' : 'craft',
-                    });
-                  }}
-                  className={`px-3.5 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 shadow-lg transition ${
-                    hud.multiplayerState?.micMuted
-                      ? 'bg-red-950/90 border-red-500 text-red-200'
-                      : hud.multiplayerState?.localSpeaking
-                        ? 'bg-emerald-500 border-emerald-200 text-stone-950 shadow-emerald-500/40 animate-pulse'
-                        : 'bg-emerald-950/90 border-emerald-500/60 text-emerald-200'
-                  }`}
-                  title="Toggle Mic (M or D-Pad Down)"
-                >
-                  {hud.multiplayerState?.micMuted ? (
-                    <VolumeX className="w-4 h-4" />
-                  ) : (
-                    <Volume2 className="w-4 h-4" />
-                  )}
-                  <span>
-                    {hud.multiplayerState?.micMuted
-                      ? 'MUTED'
-                      : hud.multiplayerState?.localSpeaking
-                        ? 'SPEAKING'
-                        : 'MIC ON'}
-                  </span>
-                </button>
+            {/* Top-Right Compact Actions: Menu / Exit Vehicle / Stand Up / Multiplayer Mic */}
+            <div className="pointer-events-auto flex flex-col items-end gap-1 shrink-0">
+              <div className="flex items-center gap-1.5">
+                {hud.multiplayerState?.connected && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const muted = engineRef.current?.toggleMicMute();
+                      pushToast({
+                        id: `mic_${Date.now()}`,
+                        text: muted ? 'Microphone Muted' : 'Microphone Unmuted',
+                        tone: muted ? 'warning' : 'craft',
+                      });
+                    }}
+                    className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold flex items-center gap-1 shadow-lg transition ${
+                      hud.multiplayerState?.micMuted
+                        ? 'bg-red-950/90 border-red-500 text-red-200'
+                        : hud.multiplayerState?.localSpeaking
+                          ? 'bg-emerald-500 border-emerald-200 text-stone-950'
+                          : 'bg-emerald-950/90 border-emerald-500/60 text-emerald-200'
+                    }`}
+                    title="Toggle Mic (M)"
+                  >
+                    {hud.multiplayerState?.micMuted ? (
+                      <VolumeX className="w-3.5 h-3.5" />
+                    ) : (
+                      <Volume2 className="w-3.5 h-3.5" />
+                    )}
+                    <span className="hidden sm:inline">
+                      {hud.multiplayerState?.micMuted ? 'MUTED' : 'MIC'}
+                    </span>
+                  </button>
+                )}
 
                 {hud?.activeVehicle ? (
                   <button
@@ -1236,12 +1199,12 @@ export function SurvivalGameClient() {
                       e.stopPropagation();
                       engineRef.current?.exitVehicle();
                     }}
-                    className="pointer-events-auto px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 active:bg-amber-400 text-stone-950 font-display font-extrabold text-xs sm:text-sm shadow-2xl border-2 border-amber-200 flex items-center gap-1.5 transition cursor-pointer"
+                    className="pointer-events-auto px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-stone-950 font-display font-extrabold text-xs shadow-lg border border-amber-200 flex items-center gap-1 cursor-pointer"
                     style={{ position: 'relative', zIndex: 60 }}
                     title="Exit Vehicle (E)"
                   >
-                    <LogOut className="w-4 h-4" />
-                    <span>EXIT CAR [E]</span>
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>EXIT</span>
                   </button>
                 ) : hud?.seatedLabel ? (
                   <button
@@ -1256,11 +1219,11 @@ export function SurvivalGameClient() {
                       e.stopPropagation();
                       engineRef.current?.standUp();
                     }}
-                    className="pointer-events-auto px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-stone-950 font-display font-extrabold text-xs sm:text-sm shadow-2xl border-2 border-sky-200 flex items-center gap-1.5 transition cursor-pointer"
+                    className="pointer-events-auto px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-lg bg-sky-500 hover:bg-sky-400 text-stone-950 font-display font-extrabold text-xs shadow-lg border border-sky-200 flex items-center gap-1 cursor-pointer"
                     style={{ position: 'relative', zIndex: 60 }}
                   >
-                    <LogOut className="w-4 h-4" />
-                    <span>STAND UP</span>
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>STAND</span>
                   </button>
                 ) : (
                   <button
@@ -1269,22 +1232,22 @@ export function SurvivalGameClient() {
                       setActiveModal('menu_drawer');
                       engineRef.current?.setMode('paused');
                     }}
-                    className="px-4 py-2 rounded-xl bg-amber-600/90 hover:bg-amber-500 text-stone-950 font-display font-bold text-sm flex items-center gap-2 shadow-lg border border-amber-400/60 transition"
+                    className="px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-lg bg-stone-950/85 hover:bg-stone-900 text-amber-300 font-display font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-lg border border-stone-700/85 transition"
                   >
-                    <Settings className="w-4 h-4" />
+                    <Settings className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                     <span>MENU</span>
                   </button>
                 )}
               </div>
 
-              {/* Xbox-Style Active Speaker Indicator Stack (HUD Party/Proximity Voice) */}
-              {hud.multiplayerState &&
+              {/* Active Voice Speakers (Only during Multiplayer Voice) */}
+              {hud.multiplayerState?.connected &&
                 (hud.multiplayerState.localSpeaking ||
                   (hud.multiplayerState.speakingPeers?.length ?? 0) > 0) && (
                   <div className="flex flex-col items-end gap-1 pointer-events-none">
                     {hud.multiplayerState.localSpeaking && (
-                      <div className="px-2.5 py-1 rounded-lg bg-stone-950/90 border border-emerald-400/80 shadow-[0_0_12px_rgba(16,185,129,0.45)] flex items-center gap-1.5 text-xs font-bold text-emerald-300">
-                        <AudioLines className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                      <div className="px-2 py-0.5 rounded bg-stone-950/90 border border-emerald-400/80 flex items-center gap-1 text-[11px] font-bold text-emerald-300">
+                        <AudioLines className="w-3 h-3 text-emerald-400" />
                         <span>{hud.multiplayerState.playerName}</span>
                       </div>
                     )}
@@ -1293,9 +1256,9 @@ export function SurvivalGameClient() {
                       return (
                         <div
                           key={pid}
-                          className="px-2.5 py-1 rounded-lg bg-stone-950/90 border border-emerald-400/80 shadow-[0_0_12px_rgba(16,185,129,0.45)] flex items-center gap-1.5 text-xs font-bold text-emerald-300"
+                          className="px-2 py-0.5 rounded bg-stone-950/90 border border-emerald-400/80 flex items-center gap-1 text-[11px] font-bold text-emerald-300"
                         >
-                          <AudioLines className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                          <AudioLines className="w-3 h-3 text-emerald-400" />
                           <span>{peer?.name || 'Survivor'}</span>
                         </div>
                       );
@@ -1305,125 +1268,59 @@ export function SurvivalGameClient() {
             </div>
           </div>
 
-          {/* Upper Status Badges & Resource Toasts (Clear of Bottom Touch Controls & Empty Hands Banner) */}
-          <div className="flex flex-col items-center gap-1.5 mt-1 mb-auto pointer-events-none">
-            <div className="flex flex-wrap items-center justify-center gap-1.5">
-              {hud.isSheltered && (
-                <div className="px-2.5 py-0.5 rounded-lg bg-emerald-950/85 border border-emerald-700/60 text-[11px] font-medium text-emerald-200 flex items-center gap-1.5">
-                  <Shield className="w-3.5 h-3.5" />
-                  <span>Sheltered</span>
-                </div>
-              )}
-              {hud.cozyComfort?.active ? (
-                <button
-                  type="button"
-                  onClick={() => openModal('tv')}
-                  className="pointer-events-auto px-2.5 py-0.5 rounded-lg bg-amber-950/90 hover:bg-amber-900 border border-amber-500/65 text-[11px] font-medium text-amber-200 flex items-center gap-1.5 transition"
-                  title="Open Smart TV Remote"
-                >
-                  <Tv className="w-3.5 h-3.5 text-amber-300" />
-                  <span>Cozy Base · Watch TV</span>
-                </button>
-              ) : (
-                (hud.gameMode === 'sandbox' ||
-                  (hud.tvState?.isYouTubeActive &&
-                    hud.tvState?.power &&
-                    !hud.tvState?.isStopped)) && (
-                  <button
-                    type="button"
-                    onClick={() => openModal('tv')}
-                    className="pointer-events-auto px-2.5 py-0.5 rounded-lg bg-stone-900/90 hover:bg-stone-800 border border-amber-500/60 text-[11px] font-medium text-amber-200 flex items-center gap-1.5 transition"
-                    title="Open Smart TV Remote"
-                  >
-                    <Tv className="w-3.5 h-3.5 text-amber-300" />
-                    <span>
-                      {hud.tvState?.isYouTubeActive &&
-                      hud.tvState?.power &&
-                      !hud.tvState?.isStopped
-                        ? 'TV Remote'
-                        : 'Smart TV'}
-                    </span>
-                  </button>
-                )
-              )}
-              {tvPipDismissed &&
-                hud.tvState?.isYouTubeActive &&
-                hud.tvState?.power &&
-                !hud.tvState?.isStopped && (
-                  <button
-                    type="button"
-                    onClick={() => setTvPipDismissed(false)}
-                    className="pointer-events-auto px-2.5 py-0.5 rounded-lg bg-red-950/90 hover:bg-red-900 border border-red-500/60 text-[11px] font-medium text-red-200 flex items-center gap-1.5 transition"
-                    title="Restore floating YouTube TV screen"
-                  >
-                    <Play className="w-3 h-3 fill-current text-red-300" />
-                    <span>Show TV Screen</span>
-                  </button>
-                )}
-              {hud.nearFire && (
-                <div className="px-2.5 py-0.5 rounded-lg bg-orange-950/85 border border-orange-700/60 text-[11px] font-medium text-orange-200 flex items-center gap-1.5">
-                  <Flame className="w-3.5 h-3.5" />
-                  <span>Fire Warmth</span>
-                </div>
-              )}
-              {hud.isCrouching && (
-                <div className="px-2.5 py-0.5 rounded-lg bg-stone-900/90 border border-stone-600 text-[11px] font-medium text-stone-200">
-                  Crouching (Stealth)
-                </div>
-              )}
-              {hud.isNight && hud.nocturnalActiveCount > 0 && (
-                <div className="px-2.5 py-0.5 rounded-lg bg-indigo-950/85 border border-indigo-700/60 text-[11px] font-medium text-indigo-200 flex items-center gap-1.5">
-                  <Moon className="w-3.5 h-3.5" />
-                  <span>Nocturnal Stalkers Active</span>
-                </div>
-              )}
-              {hud.structuralSummary && hud.structuralSummary.bucklingCount > 0 && (
-                <div className="px-2.5 py-0.5 rounded-lg bg-red-950/90 border border-red-600/80 text-[11px] font-bold text-red-200 flex items-center gap-1.5">
-                  <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
-                  <span>
-                    Structural Buckling ({hud.structuralSummary.bucklingCount})
-                  </span>
-                </div>
-              )}
-              {hud.terrainSummary &&
-                (hud.terrainSummary.activeWaterStreams > 0 ||
-                  (hud.terrainSummary.puddleCount ?? 0) > 0) && (
-                  <div className="px-2.5 py-0.5 rounded-lg bg-sky-950/85 border border-sky-700/70 text-[11px] font-medium text-sky-200 flex items-center gap-1.5 font-mono-tabular">
-                    <Waves className="w-3.5 h-3.5 text-sky-400" />
-                    <span>
-                      {hud.terrainSummary.activeWaterStreams > 0
-                        ? `Fluid Erosion${(hud.terrainSummary.puddleCount ?? 0) > 0 ? ` · ${hud.terrainSummary.puddleCount} Puddles` : ''}`
-                        : `Rainwater Pooling (${hud.terrainSummary.puddleCount})`}
-                    </span>
+          {/* Minimal Brief Toasts & Critical Contextual Controls Only (Center viewport stays completely open) */}
+          <div className="flex flex-col items-center gap-1 mt-1 mb-auto pointer-events-none">
+            {((hud.tvState?.isYouTubeActive &&
+              hud.tvState?.power &&
+              !hud.tvState?.isStopped) ||
+              (hud.structuralSummary && hud.structuralSummary.bucklingCount > 0) ||
+              hud.momentumState?.wallRunning) && (
+              <div className="flex flex-wrap items-center justify-center gap-1.5">
+                {hud.tvState?.isYouTubeActive &&
+                  hud.tvState?.power &&
+                  !hud.tvState?.isStopped && (
+                    <button
+                      type="button"
+                      onClick={() => openModal('tv')}
+                      className="pointer-events-auto px-2.5 py-0.5 rounded-lg bg-stone-950/90 hover:bg-stone-800 border border-amber-500/60 text-[11px] font-medium text-amber-200 flex items-center gap-1.5 transition"
+                      title="Open Smart TV Remote"
+                    >
+                      <Tv className="w-3 h-3 text-amber-300" />
+                      <span>TV Remote</span>
+                    </button>
+                  )}
+                {tvPipDismissed &&
+                  hud.tvState?.isYouTubeActive &&
+                  hud.tvState?.power &&
+                  !hud.tvState?.isStopped && (
+                    <button
+                      type="button"
+                      onClick={() => setTvPipDismissed(false)}
+                      className="pointer-events-auto px-2.5 py-0.5 rounded-lg bg-red-950/90 hover:bg-red-900 border border-red-500/60 text-[11px] font-medium text-red-200 flex items-center gap-1 transition"
+                    >
+                      <Play className="w-3 h-3 fill-current text-red-300" />
+                      <span>Show TV</span>
+                    </button>
+                  )}
+                {hud.structuralSummary && hud.structuralSummary.bucklingCount > 0 && (
+                  <div className="px-2.5 py-0.5 rounded-lg bg-red-950/90 border border-red-600/80 text-[11px] font-bold text-red-200 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3 text-red-400" />
+                    <span>Buckling ({hud.structuralSummary.bucklingCount})</span>
                   </div>
                 )}
-              {hud.momentumState?.wallRunning && (
-                <div className="px-2.5 py-0.5 rounded-lg bg-emerald-950/90 border border-emerald-500/80 text-[11px] font-bold text-emerald-200 flex items-center gap-1.5">
-                  <Footprints className="w-3.5 h-3.5 text-emerald-300" />
-                  <span>
-                    Wall-Run ({hud.momentumState.wallSide < 0 ? 'Left' : 'Right'}) · Space Wall-Kick
-                  </span>
-                </div>
-              )}
-              {hud.momentumState?.vaulting && (
-                <div className="px-2.5 py-0.5 rounded-lg bg-sky-950/90 border border-sky-500/80 text-[11px] font-bold text-sky-200 flex items-center gap-1.5">
-                  <Zap className="w-3.5 h-3.5 text-sky-300" />
-                  <span>Obstacle Vault</span>
-                </div>
-              )}
-              {hud.momentumState?.nearCaveBoss && (
-                <div className="px-2.5 py-0.5 rounded-lg bg-red-950/90 border border-red-500/80 text-[11px] font-bold text-amber-200 flex items-center gap-1.5">
-                  <Skull className="w-3.5 h-3.5 text-red-400" />
-                  <span>
-                    Cave Boss Lair · Shoot/Strike Glowing Ceiling Stalactites to Crush Armor!
-                  </span>
-                </div>
-              )}
-            </div>
+                {hud.momentumState?.wallRunning && (
+                  <div className="px-2.5 py-0.5 rounded-lg bg-emerald-950/90 border border-emerald-500/80 text-[11px] font-bold text-emerald-200 flex items-center gap-1">
+                    <Footprints className="w-3 h-3 text-emerald-300" />
+                    <span>Wall-Run</span>
+                  </div>
+                )}
+              </div>
+            )}
+
             {toasts.map((t) => (
               <div
                 key={t.id}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold border shadow-lg flex items-center gap-2 ${
+                className={`px-3 py-1 rounded-lg text-[11px] sm:text-xs font-semibold border shadow-lg flex items-center gap-1.5 ${
                   t.tone === 'warning'
                     ? 'bg-red-950/90 border-red-700 text-red-100'
                     : t.tone === 'craft'
@@ -1434,27 +1331,25 @@ export function SurvivalGameClient() {
                 }`}
               >
                 {t.itemId && (
-                  <ItemIcon itemId={t.itemId} className="w-4 h-4 shrink-0" />
+                  <ItemIcon itemId={t.itemId} className="w-3.5 h-3.5 shrink-0" />
                 )}
                 <span>{t.text}</span>
               </div>
             ))}
           </div>
 
-          {/* Bottom-Center Contextual Prompt + Seated Stand Up + Collect Carcass + Equipped Readout + 6-Slot Quick Hotbar */}
-          <div className="flex flex-col items-center gap-1.5 pb-1">
-            <div className="flex flex-wrap items-center justify-center gap-2">
+          {/* Bottom-Center Contextual Prompts (Only when needed) + Compact Minecraft-Style Hotbar */}
+          <div className="flex flex-col items-center gap-1.5">
+            {/* Contextual Action Buttons: Unmistakable COLLECT for carcasses & targeted world prompts */}
+            <div className="flex flex-wrap items-center justify-center gap-1.5 max-w-[min(92vw,460px)]">
               {hud.seatedLabel && !activeModal && (
                 <button
                   type="button"
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={() => engineRef.current?.standUp()}
-                  className="pointer-events-auto min-h-[44px] px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-stone-950 font-bold text-xs sm:text-sm shadow-xl flex items-center gap-2 whitespace-nowrap shrink-0"
+                  className="pointer-events-auto min-h-[40px] px-3.5 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-stone-950 font-bold text-xs shadow-xl flex items-center gap-1.5 whitespace-nowrap shrink-0"
                 >
-                  <span>{hud.seatedLabel} · Stand Up</span>
-                  <span className="hidden sm:inline text-[11px] px-1.5 py-0.5 rounded bg-stone-950/20 font-mono-tabular">
-                    Space / WASD
-                  </span>
+                  <span>Stand Up</span>
                 </button>
               )}
 
@@ -1465,14 +1360,15 @@ export function SurvivalGameClient() {
                   onClick={() =>
                     engineRef.current?.collectNearbyCarcass(hud.nearbyCarcass!.id)
                   }
-                  className="pointer-events-auto min-h-[44px] px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-300 border border-emerald-200 text-stone-950 font-bold text-xs sm:text-sm shadow-xl flex items-center gap-2 whitespace-nowrap shrink-0"
-                  title="Collect & prepare this hunted carcass for meat and hide (F)"
+                  className="pointer-events-auto min-h-[44px] px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-300 border-2 border-emerald-200 text-stone-950 font-extrabold text-xs sm:text-sm shadow-2xl flex items-center gap-2 whitespace-nowrap shrink-0"
+                  title="Collect meat & hide from carcass (F)"
                 >
                   <PackagePlus className="w-4 h-4 shrink-0" />
-                  <span>
-                    Collect {hud.nearbyCarcass.displayName} ({hud.nearbyCarcass.summary})
+                  <span className="tracking-wide">COLLECT</span>
+                  <span className="font-semibold text-[11px] opacity-90">
+                    {hud.nearbyCarcass.displayName} ({hud.nearbyCarcass.summary})
                   </span>
-                  <span className="hidden sm:inline text-[11px] px-1.5 py-0.5 rounded bg-stone-950/20 font-mono-tabular">
+                  <span className="hidden sm:inline text-[10px] px-1.5 py-0.5 rounded bg-stone-950/20 font-mono-tabular">
                     F
                   </span>
                 </button>
@@ -1480,12 +1376,18 @@ export function SurvivalGameClient() {
 
               {hud.nearbyInteraction &&
                 !activeModal &&
-                hud.nearbyInteraction.kind !== 'carcass' && (
+                hud.nearbyInteraction.kind !== 'carcass' &&
+                hud.nearbyInteraction.kind !== 'tool_action' &&
+                hud.nearbyInteraction.kind !== 'gun_action' &&
+                !(
+                  hud.nearbyInteraction.kind === 'wash_meat' &&
+                  !hud.nearLakeWater
+                ) && (
                   <button
                     type="button"
                     onPointerDown={(e) => e.stopPropagation()}
                     onClick={() => engineRef.current?.triggerPrimaryAction()}
-                    className="pointer-events-auto min-h-[44px] px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-xs sm:text-sm shadow-xl flex items-center gap-2 whitespace-nowrap shrink-0"
+                    className="pointer-events-auto min-h-[40px] px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 border border-amber-300/80 text-stone-950 font-bold text-xs sm:text-sm shadow-xl flex items-center gap-1.5 whitespace-nowrap shrink-0"
                   >
                     {hud.nearbyInteraction.actionCategory === 'chop' ? (
                       <Axe className="w-4 h-4" />
@@ -1511,10 +1413,10 @@ export function SurvivalGameClient() {
                     <span>
                       {hud.nearbyInteraction.label}
                       {hud.nearbyInteraction.sublabel
-                        ? ` (${hud.nearbyInteraction.sublabel})`
+                        ? ` · ${hud.nearbyInteraction.sublabel}`
                         : ''}
                     </span>
-                    <span className="hidden sm:inline text-[11px] px-1.5 py-0.5 rounded bg-stone-950/20 font-mono-tabular">
+                    <span className="hidden sm:inline text-[10px] px-1.5 py-0.5 rounded bg-stone-950/20 font-mono-tabular">
                       E
                     </span>
                   </button>
@@ -1528,13 +1430,11 @@ export function SurvivalGameClient() {
                     type="button"
                     onPointerDown={(e) => e.stopPropagation()}
                     onClick={() => engineRef.current?.washAndScrubMeat()}
-                    className="pointer-events-auto min-h-[44px] px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-stone-950 font-bold text-xs sm:text-sm shadow-xl flex items-center gap-2 whitespace-nowrap shrink-0"
+                    className="pointer-events-auto min-h-[40px] px-3.5 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-stone-950 font-bold text-xs shadow-xl flex items-center gap-1.5 whitespace-nowrap shrink-0"
                   >
                     <Sparkles className="w-4 h-4" />
                     <span>
-                      {hud.hasSoap
-                        ? 'Wash & Scrub Meat (Soap + Lake)'
-                        : 'Need Soap to Wash Meat'}
+                      {hud.hasSoap ? 'Wash & Scrub Meat' : 'Need Soap to Wash'}
                     </span>
                   </button>
                 )}
@@ -1546,19 +1446,19 @@ export function SurvivalGameClient() {
                     type="button"
                     onPointerDown={(e) => e.stopPropagation()}
                     onClick={() => engineRef.current?.cutDriedMeatWithKnife()}
-                    className="pointer-events-auto min-h-[44px] px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-stone-950 font-bold text-xs sm:text-sm shadow-xl flex items-center gap-2 whitespace-nowrap shrink-0"
+                    className="pointer-events-auto min-h-[40px] px-3.5 py-1.5 rounded-lg bg-rose-500 hover:bg-rose-400 text-stone-950 font-bold text-xs shadow-xl flex items-center gap-1.5 whitespace-nowrap shrink-0"
                   >
                     <Utensils className="w-4 h-4" />
-                    <span>Cut Dried Meat with Knife</span>
+                    <span>Cut Dried Meat</span>
                   </button>
                 )}
             </div>
 
-            {/* Active Vehicle Driving HUD (Lowrider Hydraulics, DONK 30" Clearance, SLAB Trunk Bass, Aircraft Flight) */}
+            {/* Active Vehicle Driving HUD */}
             {hud.activeVehicle && !activeModal && (
               <div
                 onPointerDown={(e) => e.stopPropagation()}
-                className="pointer-events-auto relative z-30 w-[min(95vw,600px)] rounded-2xl bg-stone-950/92 border border-amber-500/50 px-3.5 py-2.5 shadow-2xl space-y-2"
+                className="pointer-events-auto relative z-30 w-[min(95vw,600px)] rounded-xl bg-stone-950/92 border border-amber-500/50 px-3 py-2 shadow-2xl space-y-1.5"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
@@ -1575,7 +1475,7 @@ export function SurvivalGameClient() {
                         )}
                         {hud.activeVehicle.inWater && (
                           <span className="px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-500/60 text-[9px] font-bold text-cyan-300 uppercase shrink-0">
-                            Fording Water
+                            Water
                           </span>
                         )}
                       </div>
@@ -1609,8 +1509,7 @@ export function SurvivalGameClient() {
                         e.stopPropagation();
                         engineRef.current?.openVehicleCargo(hud.activeVehicle!.id);
                       }}
-                      className="min-h-[36px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-600 text-stone-100 text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
-                      title="Vehicle Cargo (F)"
+                      className="min-h-[34px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-600 text-stone-100 text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
                     >
                       <Box className="w-3.5 h-3.5 text-amber-300" />
                       <span>Cargo [F]</span>
@@ -1627,8 +1526,7 @@ export function SurvivalGameClient() {
                         e.stopPropagation();
                         engineRef.current?.exitVehicle();
                       }}
-                      className="min-h-[36px] px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 active:bg-amber-400 text-stone-950 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
-                      title="Exit Vehicle (E)"
+                      className="min-h-[34px] px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-stone-950 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
                     >
                       <LogOut className="w-3.5 h-3.5" />
                       <span>Exit [E]</span>
@@ -1637,71 +1535,55 @@ export function SurvivalGameClient() {
                 </div>
 
                 {hud.activeVehicle.hasHydraulics && (
-                  <div className="flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-stone-800">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-purple-300 flex items-center gap-1 mr-1">
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>
-                        {hud.activeVehicle.hydraulicStyle === 'up_down_side'
-                          ? 'DONK Hydraulics (Up / Down / Side)'
-                          : 'Lowrider High-Bounce'}
-                      </span>
-                    </span>
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-stone-800">
                     {hud.activeVehicle.hydraulicStyle === 'up_down_side' ? (
                       <>
                         <button
                           type="button"
-                          onClick={() =>
-                            engineRef.current?.triggerHydraulicAction('lock_up')
-                          }
-                          className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
+                          onClick={() => engineRef.current?.triggerHydraulicAction('lock_up')}
+                          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 ${
                             hud.activeVehicle.hydraulicMode === 'lock_up'
                               ? 'bg-sky-500 border-sky-200 text-stone-950'
-                              : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                              : 'bg-stone-900 border-stone-700 text-stone-200'
                           }`}
                         >
                           <ArrowUp className="w-3.5 h-3.5" />
-                          <span>Up [Space]</span>
+                          <span>Up</span>
                         </button>
                         <button
                           type="button"
-                          onClick={() =>
-                            engineRef.current?.triggerHydraulicAction('drop')
-                          }
-                          className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
+                          onClick={() => engineRef.current?.triggerHydraulicAction('drop')}
+                          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 ${
                             hud.activeVehicle.hydraulicMode === 'drop_down'
                               ? 'bg-sky-500 border-sky-200 text-stone-950'
-                              : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                              : 'bg-stone-900 border-stone-700 text-stone-200'
                           }`}
                         >
                           <ArrowDown className="w-3.5 h-3.5" />
-                          <span>Down [Z]</span>
+                          <span>Down</span>
                         </button>
                         <button
                           type="button"
-                          onClick={() =>
-                            engineRef.current?.triggerHydraulicAction('left_tilt')
-                          }
-                          className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
+                          onClick={() => engineRef.current?.triggerHydraulicAction('left_tilt')}
+                          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 ${
                             hud.activeVehicle.hydraulicMode === 'left_tilt'
                               ? 'bg-amber-500 border-amber-300 text-stone-950'
-                              : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                              : 'bg-stone-900 border-stone-700 text-stone-200'
                           }`}
                         >
                           <ChevronLeft className="w-3.5 h-3.5" />
-                          <span>Side L [Q]</span>
+                          <span>Side L</span>
                         </button>
                         <button
                           type="button"
-                          onClick={() =>
-                            engineRef.current?.triggerHydraulicAction('right_tilt')
-                          }
-                          className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
+                          onClick={() => engineRef.current?.triggerHydraulicAction('right_tilt')}
+                          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 ${
                             hud.activeVehicle.hydraulicMode === 'right_tilt'
                               ? 'bg-amber-500 border-amber-300 text-stone-950'
-                              : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                              : 'bg-stone-900 border-stone-700 text-stone-200'
                           }`}
                         >
-                          <span>Side R [R]</span>
+                          <span>Side R</span>
                           <ChevronRight className="w-3.5 h-3.5" />
                         </button>
                       </>
@@ -1709,64 +1591,52 @@ export function SurvivalGameClient() {
                       <>
                         <button
                           type="button"
-                          onClick={() =>
-                            engineRef.current?.triggerHydraulicAction('front_hop')
-                          }
-                          className="min-h-[34px] px-2.5 py-1 rounded-lg bg-purple-950/90 hover:bg-purple-700 border border-purple-500/60 text-purple-100 text-[11px] font-bold flex items-center gap-1 transition"
+                          onClick={() => engineRef.current?.triggerHydraulicAction('front_hop')}
+                          className="min-h-[32px] px-2.5 py-1 rounded-lg bg-purple-950/90 border border-purple-500/60 text-purple-100 text-[11px] font-bold flex items-center gap-1"
                         >
                           <ArrowUp className="w-3.5 h-3.5" />
-                          <span>Front Hop [Space]</span>
+                          <span>Front</span>
                         </button>
                         <button
                           type="button"
-                          onClick={() =>
-                            engineRef.current?.triggerHydraulicAction('rear_hop')
-                          }
-                          className="min-h-[34px] px-2.5 py-1 rounded-lg bg-purple-950/90 hover:bg-purple-700 border border-purple-500/60 text-purple-100 text-[11px] font-bold flex items-center gap-1 transition"
+                          onClick={() => engineRef.current?.triggerHydraulicAction('rear_hop')}
+                          className="min-h-[32px] px-2.5 py-1 rounded-lg bg-purple-950/90 border border-purple-500/60 text-purple-100 text-[11px] font-bold flex items-center gap-1"
                         >
                           <ArrowDown className="w-3.5 h-3.5" />
-                          <span>Rear Hop [Z]</span>
+                          <span>Rear</span>
                         </button>
                         <button
                           type="button"
-                          onClick={() =>
-                            engineRef.current?.triggerHydraulicAction('left_tilt')
-                          }
-                          className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
+                          onClick={() => engineRef.current?.triggerHydraulicAction('left_tilt')}
+                          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
                             hud.activeVehicle.hydraulicMode === 'left_tilt'
                               ? 'bg-amber-500 border-amber-300 text-stone-950'
-                              : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                              : 'bg-stone-900 border-stone-700 text-stone-200'
                           }`}
                         >
-                          <ChevronLeft className="w-3.5 h-3.5" />
-                          <span>Tilt L [Q]</span>
+                          Tilt L
                         </button>
                         <button
                           type="button"
-                          onClick={() =>
-                            engineRef.current?.triggerHydraulicAction('right_tilt')
-                          }
-                          className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
+                          onClick={() => engineRef.current?.triggerHydraulicAction('right_tilt')}
+                          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
                             hud.activeVehicle.hydraulicMode === 'right_tilt'
                               ? 'bg-amber-500 border-amber-300 text-stone-950'
-                              : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                              : 'bg-stone-900 border-stone-700 text-stone-200'
                           }`}
                         >
-                          <span>Tilt R [R]</span>
-                          <ChevronRight className="w-3.5 h-3.5" />
+                          Tilt R
                         </button>
                         <button
                           type="button"
-                          onClick={() =>
-                            engineRef.current?.triggerHydraulicAction('lock_up')
-                          }
-                          className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
+                          onClick={() => engineRef.current?.triggerHydraulicAction('lock_up')}
+                          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
                             hud.activeVehicle.hydraulicMode === 'lock_up'
                               ? 'bg-purple-500 border-purple-200 text-stone-950'
-                              : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                              : 'bg-stone-900 border-stone-700 text-stone-200'
                           }`}
                         >
-                          Lock-Up [X]
+                          Lock [X]
                         </button>
                       </>
                     )}
@@ -1774,17 +1644,15 @@ export function SurvivalGameClient() {
                 )}
 
                 {hud.activeVehicle.hasTrunkBass && (
-                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-stone-800">
-                    <span className="text-[11px] text-stone-300">
-                      Swanger Elbows &amp; Candy Trunk Sub-Bass Audio
-                    </span>
+                  <div className="flex items-center justify-between gap-2 pt-1 border-t border-stone-800">
+                    <span className="text-[11px] text-stone-300">Trunk Bass</span>
                     <button
                       type="button"
                       onClick={() => engineRef.current?.toggleTrunkBass()}
-                      className={`min-h-[34px] px-3 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1.5 transition ${
+                      className={`min-h-[32px] px-3 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1.5 ${
                         hud.activeVehicle.trunkBassOn
-                          ? 'bg-pink-600 border-pink-300 text-white shadow-lg'
-                          : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-stone-200'
+                          ? 'bg-pink-600 border-pink-300 text-white'
+                          : 'bg-stone-900 border-stone-700 text-stone-200'
                       }`}
                     >
                       {hud.activeVehicle.trunkBassOn ? (
@@ -1792,55 +1660,39 @@ export function SurvivalGameClient() {
                       ) : (
                         <VolumeX className="w-3.5 h-3.5" />
                       )}
-                      <span>
-                        {hud.activeVehicle.trunkBassOn
-                          ? 'Trunk Bass: SLAMMING [T]'
-                          : 'Trunk Bass OFF [T]'}
-                      </span>
+                      <span>{hud.activeVehicle.trunkBassOn ? 'ON [T]' : 'OFF [T]'}</span>
                     </button>
                   </div>
                 )}
 
                 {hud.activeVehicle.canFly && (
-                  <div className="flex items-center gap-2 pt-1.5 border-t border-stone-800">
+                  <div className="flex items-center gap-2 pt-1 border-t border-stone-800">
                     <button
                       type="button"
-                      onPointerDown={() =>
-                        engineRef.current?.setVehicleVerticalHold('up')
-                      }
-                      onPointerUp={() =>
-                        engineRef.current?.setVehicleVerticalHold(null)
-                      }
-                      onPointerLeave={() =>
-                        engineRef.current?.setVehicleVerticalHold(null)
-                      }
-                      className="min-h-[34px] px-3 py-1 rounded-lg bg-sky-900 hover:bg-sky-800 border border-sky-500/60 text-sky-100 text-[11px] font-bold flex items-center gap-1"
+                      onPointerDown={() => engineRef.current?.setVehicleVerticalHold('up')}
+                      onPointerUp={() => engineRef.current?.setVehicleVerticalHold(null)}
+                      onPointerLeave={() => engineRef.current?.setVehicleVerticalHold(null)}
+                      className="min-h-[32px] px-3 py-1 rounded-lg bg-sky-900 border border-sky-500/60 text-sky-100 text-[11px] font-bold flex items-center gap-1"
                     >
                       <ArrowUp className="w-3.5 h-3.5" />
-                      <span>Ascend [Space]</span>
+                      <span>Ascend</span>
                     </button>
                     <button
                       type="button"
-                      onPointerDown={() =>
-                        engineRef.current?.setVehicleVerticalHold('down')
-                      }
-                      onPointerUp={() =>
-                        engineRef.current?.setVehicleVerticalHold(null)
-                      }
-                      onPointerLeave={() =>
-                        engineRef.current?.setVehicleVerticalHold(null)
-                      }
-                      className="min-h-[34px] px-3 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-600 text-stone-200 text-[11px] font-bold flex items-center gap-1"
+                      onPointerDown={() => engineRef.current?.setVehicleVerticalHold('down')}
+                      onPointerUp={() => engineRef.current?.setVehicleVerticalHold(null)}
+                      onPointerLeave={() => engineRef.current?.setVehicleVerticalHold(null)}
+                      className="min-h-[32px] px-3 py-1 rounded-lg bg-stone-900 border border-stone-600 text-stone-200 text-[11px] font-bold flex items-center gap-1"
                     >
                       <ArrowDown className="w-3.5 h-3.5" />
-                      <span>Descend [C]</span>
+                      <span>Descend</span>
                     </button>
                   </div>
                 )}
               </div>
             )}
 
-            {/* Current Equipped Item Indicator + Strictly Scoped Quick Actions (Hidden while driving) */}
+            {/* Compact Equipped Item Label + Strictly Contextual Action Pills (No Permanent Instructional Text) */}
             {!hud.activeVehicle && (() => {
               const eqId =
                 hud.equippedSlot >= 0
@@ -1852,67 +1704,33 @@ export function SurvivalGameClient() {
                 eqDef && isFirearmItem(eqDef.id) ? hud.equippedWeaponState : null;
               const dirtyBottleCount = countOf('dirty_water_bottle');
               const filteredBottleCount = countOf('filtered_water_bottle');
+              const showAnyContextual =
+                Boolean(eqDef) ||
+                (!weaponActive && dirtyBottleCount > 0 && hud.nearOceanWater) ||
+                (!weaponActive && filteredBottleCount > 0 && hud.vitals.thirst < 85);
+
+              if (!showAnyContextual) return null;
+
               return (
                 <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-1.5">
-                  <div className="px-3 py-1 rounded-lg bg-stone-950/85 border border-stone-700/75 text-[11px] text-stone-200 flex items-center gap-2 shadow-md">
-                    {eqDef ? (
-                      <>
-                        <ItemIcon itemId={eqDef.id} className="w-3.5 h-3.5 shrink-0" />
-                        <span className="font-semibold text-amber-300">
-                          {eqDef.name}
-                        </span>
-                        {gunState ? (
-                          <div className="flex items-center gap-2 font-mono-tabular">
-                            <span
-                              className={
-                                gunState.magCurrent === 0
-                                  ? 'text-red-400 font-bold'
-                                  : 'text-stone-200 font-bold'
-                              }
-                            >
-                              {gunState.magCurrent}/{gunState.magMax}
-                            </span>
-                            <span className="text-stone-400">
-                              / {gunState.reserveAmmo} · {gunState.caliberLabel}
-                            </span>
-                            {gunState.isReloading && (
-                              <span className="inline-flex items-center gap-1.5 text-amber-300">
-                                <span>Reloading</span>
-                                <span className="w-12 h-1.5 rounded-full bg-stone-800 overflow-hidden inline-block">
-                                  <span
-                                    className="block h-full bg-amber-400 transition-all duration-75"
-                                    style={{
-                                      width: `${Math.round(gunState.reloadProgress * 100)}%`,
-                                    }}
-                                  />
-                                </span>
-                              </span>
-                            )}
-                          </div>
-                        ) : eqDef.id === 'primitive_bow' ? (
-                          <span className="text-stone-400 font-mono-tabular">
-                            · DMG {eqDef.attackDamage} · {countOf('arrows')} arrows
-                          </span>
-                        ) : eqDef.preferredResource && !weaponActive ? (
-                          <span className="text-stone-400 font-mono-tabular">
-                            · {eqDef.preferredResource} ×{eqDef.gatherPower || 1}
-                          </span>
-                        ) : eqDef.attackDamage ? (
-                          <span className="text-stone-400 font-mono-tabular">
-                            · DMG {eqDef.attackDamage}
-                          </span>
-                        ) : null}
-                      </>
-                    ) : (
-                      <span className="text-stone-300 flex items-center gap-1.5">
-                        <Hand className="w-3.5 h-3.5 text-amber-300" />
-                        <span className="sm:hidden">Empty Hands</span>
-                        <span className="hidden sm:inline">
-                          Bare Hands (Gather, Cook &amp; Carcasses)
-                        </span>
+                  {eqDef && (
+                    <div className="px-2.5 py-0.5 rounded bg-stone-950/85 border border-stone-700/80 text-[11px] text-stone-200 flex items-center gap-1.5 shadow">
+                      <span className="font-semibold text-amber-300">
+                        {eqDef.name}
                       </span>
-                    )}
-                  </div>
+                      {gunState && (
+                        <span className="font-mono-tabular text-stone-300">
+                          {gunState.magCurrent}/{gunState.magMax} · {gunState.reserveAmmo}
+                        </span>
+                      )}
+                      {eqDef.id === 'primitive_bow' && (
+                        <span className="font-mono-tabular text-stone-400">
+                          {countOf('arrows')} arr
+                        </span>
+                      )}
+                    </div>
+                  )}
+
                   {gunState &&
                     !gunState.isReloading &&
                     gunState.magCurrent < gunState.magMax &&
@@ -1921,106 +1739,74 @@ export function SurvivalGameClient() {
                         type="button"
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={() => engineRef.current?.reloadEquippedWeapon()}
-                        className="px-2.5 py-1 rounded-lg bg-amber-950/90 hover:bg-amber-600 hover:text-stone-950 border border-amber-500/70 text-amber-200 font-bold text-[11px] shadow-md flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors"
-                        title="Reload firearm (R)"
+                        className="px-2 py-0.5 rounded bg-amber-950/90 hover:bg-amber-600 hover:text-stone-950 border border-amber-500/70 text-amber-200 font-bold text-[11px] flex items-center gap-1"
                       >
-                        <RotateCw className="w-3.5 h-3.5" />
+                        <RotateCw className="w-3 h-3" />
                         <span>Reload [R]</span>
                       </button>
                     )}
-                  {!showTouchControls && (
-                    <button
-                      type="button"
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={() => engineRef.current?.triggerDebrisKick()}
-                      disabled={(hud.momentumState?.kickCooldown ?? 0) > 0}
-                      className={`px-2.5 py-1 rounded-lg font-bold text-[11px] shadow-md flex items-center gap-1 whitespace-nowrap shrink-0 border transition-colors ${
-                        (hud.momentumState?.kickCooldown ?? 0) > 0
-                          ? 'bg-stone-900/75 border-stone-700 text-stone-500 cursor-not-allowed'
-                          : 'bg-stone-900/90 hover:bg-amber-600 hover:text-stone-950 border-amber-500/60 text-amber-300'
-                      }`}
-                      title="Kick dust & gravel debris into enemies' faces to blind them & open armor gaps (V)"
-                    >
-                      <Footprints className="w-3.5 h-3.5" />
-                      <span>
-                        {(hud.momentumState?.kickCooldown ?? 0) > 0
-                          ? `Kick ${hud.momentumState?.kickCooldown.toFixed(1)}s`
-                          : 'Kick Debris [V]'}
-                      </span>
-                    </button>
-                  )}
+
                   {!weaponActive &&
                     dirtyBottleCount > 0 &&
-                    (eqDef?.id === 'dirty_water_bottle' || !eqDef) && (
+                    (eqDef?.id === 'dirty_water_bottle' || (!eqDef && hud.nearOceanWater)) &&
+                    hud.nearOceanWater && (
                       <button
                         type="button"
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={() => engineRef.current?.cleanAndFilterWaterBottle()}
-                        className={`px-2.5 py-1 rounded-lg font-bold text-[11px] shadow-md flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors ${
-                          hud.nearOceanWater
-                            ? 'bg-sky-500 hover:bg-sky-400 text-stone-950'
-                            : 'bg-sky-950/85 hover:bg-sky-900 border border-sky-700/70 text-sky-200'
-                        }`}
-                        title="Clean your water bottle in ocean water and fill it with filtered water"
+                        className="px-2 py-0.5 rounded bg-sky-500 hover:bg-sky-400 text-stone-950 font-bold text-[11px] flex items-center gap-1"
                       >
-                        <Droplets className="w-3.5 h-3.5" />
-                        <span>
-                          {hud.nearOceanWater ? 'Clean Water Bottle' : 'Clean Bottle (Ocean)'}
-                        </span>
+                        <Droplets className="w-3 h-3" />
+                        <span>Clean Bottle</span>
                       </button>
                     )}
+
                   {!weaponActive &&
                     filteredBottleCount > 0 &&
                     (eqDef?.id === 'filtered_water_bottle' ||
-                      (!eqDef && hud.vitals.thirst < 95)) && (
+                      (!eqDef && hud.vitals.thirst < 85)) && (
                       <button
                         type="button"
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={() =>
                           engineRef.current?.useOrEquipItem('filtered_water_bottle')
                         }
-                        className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-stone-950 font-bold text-[11px] shadow-md flex items-center gap-1 whitespace-nowrap shrink-0"
-                        title="Drink filtered water (+55 Thirst)"
+                        className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-stone-950 font-bold text-[11px] flex items-center gap-1"
                       >
-                        <Droplets className="w-3.5 h-3.5" />
+                        <Droplets className="w-3 h-3" />
                         <span>Drink ({filteredBottleCount})</span>
                       </button>
                     )}
+
                   {!weaponActive &&
                     eqDef &&
                     eqDef.structuralKind &&
                     hud.structuralSummary?.previewStressPercent !== null &&
                     hud.structuralSummary?.previewStressPercent !== undefined && (
                       <>
-                        <div
-                          className={`px-2.5 py-1 rounded-lg font-bold text-[11px] border shadow-md flex items-center gap-1.5 whitespace-nowrap shrink-0 font-mono-tabular ${
+                        <span
+                          className={`px-2 py-0.5 rounded font-bold text-[10px] border font-mono-tabular ${
                             hud.structuralSummary.previewStressPercent >= 100
                               ? 'bg-red-950/90 border-red-500 text-red-200'
                               : hud.structuralSummary.previewStressPercent >= 55
                                 ? 'bg-amber-950/90 border-amber-500 text-amber-200'
                                 : 'bg-emerald-950/90 border-emerald-500 text-emerald-200'
                           }`}
-                          title="Real-time structural bending & compression load at target snap point"
                         >
-                          <Layers className="w-3.5 h-3.5" />
-                          <span>
-                            {hud.structuralSummary.previewStressPercent >= 100
-                              ? `OVERLOAD ${hud.structuralSummary.previewStressPercent}% — Add Pillar/Arch!`
-                              : `Load ${hud.structuralSummary.previewStressPercent}%`}
-                          </span>
-                        </div>
+                          Load {hud.structuralSummary.previewStressPercent}%
+                        </span>
                         <button
                           type="button"
                           onPointerDown={(e) => e.stopPropagation()}
                           onClick={() => engineRef.current?.rotateBuildPiece()}
-                          className="px-2.5 py-1 rounded-lg bg-stone-900/90 hover:bg-stone-800 border border-stone-600 text-stone-100 font-semibold text-[11px] shadow-md flex items-center gap-1 whitespace-nowrap shrink-0"
-                          title="Rotate structural piece 90 degrees (R)"
+                          className="px-2 py-0.5 rounded bg-stone-900 border border-stone-600 text-stone-100 font-semibold text-[10px] flex items-center gap-1"
                         >
-                          <RotateCw className="w-3.5 h-3.5" />
+                          <RotateCw className="w-3 h-3" />
                           <span>Rotate [R]</span>
                         </button>
                       </>
                     )}
+
                   {!weaponActive &&
                     eqDef &&
                     eqDef.category !== 'tool' &&
@@ -2030,10 +1816,9 @@ export function SurvivalGameClient() {
                         type="button"
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={() => engineRef.current?.placeItemInWorld(eqDef.id)}
-                        className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-[11px] shadow-md flex items-center gap-1 whitespace-nowrap shrink-0"
-                        title={`Place ${eqDef.name} in front of you`}
+                        className="px-2 py-0.5 rounded bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-[11px] flex items-center gap-1"
                       >
-                        <PackageOpen className="w-3.5 h-3.5" />
+                        <PackageOpen className="w-3 h-3" />
                         <span>
                           {eqDef.structuralKind
                             ? 'Build Span'
@@ -2051,7 +1836,7 @@ export function SurvivalGameClient() {
               );
             })()}
 
-            {/* HUD Bar Manager Popover (Expand up to 5,000 + Empty HUD Bar + Slot Jump) */}
+            {/* HUD Bar Manager Popover */}
             {hudManagerOpen && (
               <div
                 onPointerDown={(e) => e.stopPropagation()}
@@ -2059,49 +1844,49 @@ export function SurvivalGameClient() {
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-xs font-bold text-amber-300">
-                    HUD Bar Capacity: {hud.hotbarItemIds.length.toLocaleString()} /{' '}
-                    {(hud.maxHudBarCapacity ?? 5000).toLocaleString()} Items
+                    Hotbar Capacity: {hud.hotbarItemIds.length.toLocaleString()} /{' '}
+                    {(hud.maxHudBarCapacity ?? 5000).toLocaleString()}
                   </div>
                   <div className="text-[10px] font-mono-tabular text-emerald-300">
-                    {(hud.emptyCompartmentsCount ?? 1_000_005_000).toLocaleString()} Empty Compartments
+                    {(hud.emptyCompartmentsCount ?? 1_000_005_000).toLocaleString()} Pack Slots
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => engineRef.current?.expandHudBar(10, false)}
-                    className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-[11px] font-mono-tabular font-semibold text-stone-100"
+                    className="px-2.5 py-1 rounded bg-stone-800 hover:bg-stone-700 text-[11px] font-mono-tabular font-semibold text-stone-100"
                   >
                     +10
                   </button>
                   <button
                     type="button"
                     onClick={() => engineRef.current?.expandHudBar(100, false)}
-                    className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-[11px] font-mono-tabular font-semibold text-stone-100"
+                    className="px-2.5 py-1 rounded bg-stone-800 hover:bg-stone-700 text-[11px] font-mono-tabular font-semibold text-stone-100"
                   >
                     +100
                   </button>
                   <button
                     type="button"
                     onClick={() => engineRef.current?.expandHudBar(1000, false)}
-                    className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-[11px] font-mono-tabular font-semibold text-stone-100"
+                    className="px-2.5 py-1 rounded bg-stone-800 hover:bg-stone-700 text-[11px] font-mono-tabular font-semibold text-stone-100"
                   >
                     +1,000
                   </button>
                   <button
                     type="button"
                     onClick={() => engineRef.current?.expandHudBar(5000, true)}
-                    className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-[11px] font-mono-tabular font-bold text-stone-950"
+                    className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-[11px] font-mono-tabular font-bold text-stone-950"
                   >
                     Expand to 5,000
                   </button>
                   <button
                     type="button"
                     onClick={() => engineRef.current?.emptyAllHudBarToCompartments()}
-                    className="ml-auto px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-[11px] font-bold text-stone-50 flex items-center gap-1"
+                    className="ml-auto px-2.5 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-[11px] font-bold text-stone-50 flex items-center gap-1"
                   >
                     <ArrowDownToLine className="w-3.5 h-3.5" />
-                    <span>Empty All → Pack</span>
+                    <span>Empty → Pack</span>
                   </button>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-stone-800">
@@ -2112,7 +1897,7 @@ export function SurvivalGameClient() {
                       max={hud.hotbarItemIds.length}
                       value={hudSlotJumpInput}
                       onChange={(e) => setHudSlotJumpInput(e.target.value)}
-                      placeholder={`Jump 1–${hud.hotbarItemIds.length}`}
+                      placeholder={`Slot 1–${hud.hotbarItemIds.length}`}
                       className="w-28 px-2 py-1 rounded bg-stone-900 border border-stone-700 text-[11px] font-mono-tabular text-stone-100"
                     />
                     <button
@@ -2132,7 +1917,7 @@ export function SurvivalGameClient() {
                       }}
                       className="px-2.5 py-1 rounded bg-stone-800 hover:bg-stone-700 text-[11px] font-semibold text-amber-300"
                     >
-                      Go Slot
+                      Go
                     </button>
                   </div>
                   {hud.equippedSlot >= 0 && hud.hotbarItemIds[hud.equippedSlot] && (
@@ -2143,223 +1928,206 @@ export function SurvivalGameClient() {
                       }
                       className="px-2.5 py-1 rounded bg-emerald-900/80 hover:bg-emerald-800 border border-emerald-600/60 text-[11px] font-semibold text-emerald-200"
                     >
-                      Drop Equipped → Compartment
+                      Store Equipped → Pack
                     </button>
                   )}
                 </div>
               </div>
             )}
 
-            {/* Bare Hands Toggle + Windowed HUD Bar (Hidden while driving) */}
+            {/* Compact Minecraft-Style Bottom Hotbar */}
             {!hud.activeVehicle && (
-            <div
-              data-hud-hotbar="true"
-              className="pointer-events-auto flex items-center gap-1 p-1.5 rounded-xl bg-stone-950/92 border border-stone-700/80 shadow-xl max-w-[calc(100vw-20px)] overflow-x-auto survival-scroll"
-              title="Drag any HUD slot to the Compartment drop icon (or right-click) to move it to your 1B+ Backpack Compartments"
-            >
-              <button
-                type="button"
-                aria-label="Bare Hands"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => engineRef.current?.selectHotbarSlot(-1)}
-                className={`relative w-11 h-11 sm:w-12 sm:h-12 shrink-0 rounded-lg border flex flex-col items-center justify-center transition-colors ${
-                  hud.equippedSlot === -1
-                    ? 'bg-amber-950/75 border-amber-400 text-amber-300'
-                    : 'bg-stone-900 border-stone-800 hover:border-stone-600 text-stone-400'
-                }`}
-                title="Bare Hands (0) — Gather, interact, cook & prepare carcasses"
-              >
-                <span className="absolute top-0.5 left-1 text-[9px] font-mono-tabular text-stone-500">
-                  0
-                </span>
-                <Hand className="w-4 h-4" />
-                <span className="text-[9px] font-semibold leading-none mt-0.5">
-                  Hands
-                </span>
-              </button>
-
-              <button
-                type="button"
-                aria-label="Previous HUD Slot"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => {
-                  if (hud.hotbarItemIds.length > HUD_BAR_WINDOW && hudWindowStart > 0) {
-                    setHudWindowStart((p) => Math.max(0, p - HUD_BAR_WINDOW));
-                  } else {
-                    engineRef.current?.cycleHotbarSlot(-1);
-                  }
-                }}
-                className="w-6 h-11 sm:h-12 shrink-0 rounded-lg bg-stone-900/90 hover:bg-stone-800 border border-stone-800 hover:border-stone-600 text-stone-300 flex items-center justify-center transition-colors"
-                title="Scroll Previous Slots"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-
               <div
-                ref={hotbarScrollRef}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="flex items-center gap-1.5 overflow-x-auto survival-scroll pb-1 min-w-0 max-w-[min(44vw,260px)] sm:max-w-[360px] md:max-w-[474px] snap-x snap-mandatory"
-              >
-                {(() => {
-                  const clampedStart = Math.min(
-                    hudWindowStart,
-                    Math.max(0, hud.hotbarItemIds.length - HUD_BAR_WINDOW),
-                  );
-                  return hud.hotbarItemIds
-                    .slice(clampedStart, clampedStart + HUD_BAR_WINDOW)
-                    .map((itemId, localIdx) => {
-                      const idx = clampedStart + localIdx;
-                      const isSelected = hud.equippedSlot === idx;
-                      const qty = itemId ? countOf(itemId) : 0;
-                      return (
-                        <button
-                          key={idx}
-                          ref={(el) => {
-                            slotButtonRefs.current[localIdx] = el;
-                          }}
-                          draggable={Boolean(itemId && qty > 0)}
-                          onDragStart={(e) => {
-                            if (!itemId) return;
-                            e.dataTransfer.setData('text/hud-slot', String(idx));
-                            setDraggingHudSlot(idx);
-                          }}
-                          onDragEnd={() => {
-                            setDraggingHudSlot(null);
-                            setHudDropHover(false);
-                          }}
-                          onContextMenu={(e) => {
-                            if (itemId && qty > 0) {
-                              e.preventDefault();
-                              engineRef.current?.moveHotbarSlotToCompartment(idx);
-                            }
-                          }}
-                          onPointerDown={(e) => e.stopPropagation()}
-                          onClick={() => {
-                            if (
-                              isSelected &&
-                              itemId &&
-                              qty > 0 &&
-                              ITEMS[itemId].category === 'food'
-                            ) {
-                              engineRef.current?.useOrEquipItem(itemId);
-                            } else {
-                              engineRef.current?.selectHotbarSlot(idx);
-                            }
-                          }}
-                          className={`relative w-11 h-11 sm:w-12 sm:h-12 shrink-0 snap-center rounded-lg border flex flex-col items-center justify-center transition-colors ${
-                            isSelected
-                              ? 'bg-amber-950/75 border-amber-400'
-                              : 'bg-stone-900 border-stone-800 hover:border-stone-600'
-                          }`}
-                          title={
-                            itemId && qty > 0
-                              ? `${ITEMS[itemId].name} (Right-click or drag to Empty Compartment icon to remove from HUD bar)`
-                              : `Empty Slot ${idx + 1}`
-                          }
-                        >
-                          <span className="absolute top-0.5 left-1 text-[9px] font-mono-tabular text-stone-500">
-                            {idx + 1}
-                          </span>
-                          {itemId && qty > 0 ? (
-                            <>
-                              <ItemIcon itemId={itemId} className="w-5 h-5" />
-                              <span className="absolute bottom-0.5 right-1 text-[10px] font-mono-tabular font-bold text-stone-200">
-                                {qty > 1 ? qty : ''}
-                              </span>
-                            </>
-                          ) : (
-                            <span className="text-[10px] text-stone-700">—</span>
-                          )}
-                        </button>
-                      );
-                    });
-                })()}
-              </div>
-
-              <button
-                type="button"
-                aria-label="Next HUD Slot"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => {
-                  if (
-                    hud.hotbarItemIds.length > HUD_BAR_WINDOW &&
-                    hudWindowStart + HUD_BAR_WINDOW < hud.hotbarItemIds.length
-                  ) {
-                    setHudWindowStart((p) =>
-                      Math.min(hud.hotbarItemIds.length - HUD_BAR_WINDOW, p + HUD_BAR_WINDOW),
-                    );
-                  } else {
-                    engineRef.current?.cycleHotbarSlot(1);
-                  }
-                }}
-                className="w-6 h-11 sm:h-12 shrink-0 rounded-lg bg-stone-900/90 hover:bg-stone-800 border border-stone-800 hover:border-stone-600 text-stone-300 flex items-center justify-center transition-colors"
-                title="Scroll Next Slots"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-
-              {/* Empty Compartment Drop Zone & Expand to 5,000 Button */}
-              <div
-                onPointerDown={(e) => e.stopPropagation()}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setHudDropHover(true);
-                }}
-                onDragLeave={() => setHudDropHover(false)}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setHudDropHover(false);
-                  const slotStr = e.dataTransfer.getData('text/hud-slot');
-                  const slotIdx = slotStr ? parseInt(slotStr, 10) : draggingHudSlot;
-                  if (slotIdx !== null && !Number.isNaN(slotIdx)) {
-                    engineRef.current?.moveHotbarSlotToCompartment(slotIdx);
-                  }
-                  setDraggingHudSlot(null);
-                }}
-                className="flex items-center gap-1 shrink-0"
+                data-hud-hotbar="true"
+                className="pointer-events-auto flex items-center gap-0.5 sm:gap-1 p-1 rounded-lg bg-stone-950/92 border-2 border-stone-700/90 shadow-2xl max-w-[calc(100vw-16px)]"
               >
                 <button
                   type="button"
-                  onClick={() => setHudManagerOpen((v) => !v)}
-                  className={`h-11 sm:h-12 px-2 shrink-0 rounded-lg border flex flex-col items-center justify-center transition-colors ${
-                    hudDropHover || draggingHudSlot !== null
-                      ? 'bg-emerald-900 border-emerald-400 text-emerald-100'
-                      : hudManagerOpen
-                        ? 'bg-amber-950/80 border-amber-400 text-amber-200'
-                        : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-emerald-300'
+                  aria-label="Bare Hands"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => engineRef.current?.selectHotbarSlot(-1)}
+                  className={`relative w-9 h-9 sm:w-11 sm:h-11 shrink-0 rounded border-2 flex items-center justify-center transition-colors ${
+                    hud.equippedSlot === -1
+                      ? 'bg-stone-800 border-amber-400 text-amber-300 ring-1 ring-amber-300/60'
+                      : 'bg-stone-900/95 border-stone-700/80 hover:border-stone-500 text-stone-400'
                   }`}
-                  title="Drop HUD items here into Empty Backpack Compartments, or click to expand HUD Bar up to 5,000 slots"
+                  title="Hands (0)"
                 >
-                  <div className="flex items-center gap-0.5 text-[10px] font-bold">
+                  <Hand className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  aria-label="Previous HUD Slot"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => {
+                    if (hud.hotbarItemIds.length > HUD_BAR_WINDOW && hudWindowStart > 0) {
+                      setHudWindowStart((p) => Math.max(0, p - HUD_BAR_WINDOW));
+                    } else {
+                      engineRef.current?.cycleHotbarSlot(-1);
+                    }
+                  }}
+                  className="w-5 h-9 sm:w-6 sm:h-11 shrink-0 rounded bg-stone-900/90 hover:bg-stone-800 border border-stone-700/80 text-stone-300 flex items-center justify-center"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+
+                <div
+                  ref={hotbarScrollRef}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="flex items-center gap-1 overflow-x-auto survival-scroll min-w-0 max-w-[196px] sm:max-w-[392px] md:max-w-[444px] snap-x snap-mandatory"
+                >
+                  {(() => {
+                    const clampedStart = Math.min(
+                      hudWindowStart,
+                      Math.max(0, hud.hotbarItemIds.length - HUD_BAR_WINDOW),
+                    );
+                    return hud.hotbarItemIds
+                      .slice(clampedStart, clampedStart + HUD_BAR_WINDOW)
+                      .map((itemId, localIdx) => {
+                        const idx = clampedStart + localIdx;
+                        const isSelected = hud.equippedSlot === idx;
+                        const qty = itemId ? countOf(itemId) : 0;
+                        return (
+                          <button
+                            key={idx}
+                            ref={(el) => {
+                              slotButtonRefs.current[localIdx] = el;
+                            }}
+                            draggable={Boolean(itemId && qty > 0)}
+                            onDragStart={(e) => {
+                              if (!itemId) return;
+                              e.dataTransfer.setData('text/hud-slot', String(idx));
+                              setDraggingHudSlot(idx);
+                            }}
+                            onDragEnd={() => {
+                              setDraggingHudSlot(null);
+                              setHudDropHover(false);
+                            }}
+                            onContextMenu={(e) => {
+                              if (itemId && qty > 0) {
+                                e.preventDefault();
+                                engineRef.current?.moveHotbarSlotToCompartment(idx);
+                              }
+                            }}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={() => {
+                              if (
+                                isSelected &&
+                                itemId &&
+                                qty > 0 &&
+                                ITEMS[itemId].category === 'food'
+                              ) {
+                                engineRef.current?.useOrEquipItem(itemId);
+                              } else {
+                                engineRef.current?.selectHotbarSlot(idx);
+                              }
+                            }}
+                            className={`relative w-9 h-9 sm:w-11 sm:h-11 shrink-0 snap-center rounded border-2 flex items-center justify-center transition-colors ${
+                              isSelected
+                                ? 'bg-stone-800 border-amber-400 ring-1 ring-amber-300/60'
+                                : 'bg-stone-900/95 border-stone-700/80 hover:border-stone-500'
+                            }`}
+                            title={
+                              itemId && qty > 0
+                                ? `${ITEMS[itemId].name}`
+                                : `Slot ${idx + 1}`
+                            }
+                          >
+                            <span className="hidden sm:inline absolute top-0 left-0.5 text-[8px] font-mono-tabular text-stone-500 leading-none">
+                              {idx + 1}
+                            </span>
+                            {itemId && qty > 0 ? (
+                              <>
+                                <ItemIcon itemId={itemId} className="w-5 h-5" />
+                                {qty > 1 && (
+                                  <span className="absolute bottom-0 right-0.5 text-[9px] font-mono-tabular font-bold text-stone-100 drop-shadow-[0_1px_1px_rgba(0,0,0,0.95)] leading-none">
+                                    {qty}
+                                  </span>
+                                )}
+                              </>
+                            ) : (
+                              <span className="text-[9px] text-stone-700">·</span>
+                            )}
+                          </button>
+                        );
+                      });
+                  })()}
+                </div>
+
+                <button
+                  type="button"
+                  aria-label="Next HUD Slot"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => {
+                    if (
+                      hud.hotbarItemIds.length > HUD_BAR_WINDOW &&
+                      hudWindowStart + HUD_BAR_WINDOW < hud.hotbarItemIds.length
+                    ) {
+                      setHudWindowStart((p) =>
+                        Math.min(hud.hotbarItemIds.length - HUD_BAR_WINDOW, p + HUD_BAR_WINDOW),
+                      );
+                    } else {
+                      engineRef.current?.cycleHotbarSlot(1);
+                    }
+                  }}
+                  className="w-5 h-9 sm:w-6 sm:h-11 shrink-0 rounded bg-stone-900/90 hover:bg-stone-800 border border-stone-700/80 text-stone-300 flex items-center justify-center"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+
+                <div
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setHudDropHover(true);
+                  }}
+                  onDragLeave={() => setHudDropHover(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setHudDropHover(false);
+                    const slotStr = e.dataTransfer.getData('text/hud-slot');
+                    const slotIdx = slotStr ? parseInt(slotStr, 10) : draggingHudSlot;
+                    if (slotIdx !== null && !Number.isNaN(slotIdx)) {
+                      engineRef.current?.moveHotbarSlotToCompartment(slotIdx);
+                    }
+                    setDraggingHudSlot(null);
+                  }}
+                  className="flex items-center shrink-0"
+                >
+                  <button
+                    type="button"
+                    aria-label="Hotbar Capacity & Pack"
+                    onClick={() => setHudManagerOpen((v) => !v)}
+                    className={`w-8 h-9 sm:w-10 sm:h-11 shrink-0 rounded border flex items-center justify-center transition-colors ${
+                      hudDropHover || draggingHudSlot !== null
+                        ? 'bg-emerald-900 border-emerald-400 text-emerald-100'
+                        : hudManagerOpen
+                          ? 'bg-amber-950/80 border-amber-400 text-amber-200'
+                          : 'bg-stone-900 hover:bg-stone-800 border-stone-700 text-emerald-300'
+                    }`}
+                    title="Expand Hotbar (up to 5,000) or Pack Slots"
+                  >
                     {draggingHudSlot !== null ? (
                       <ArrowDownToLine className="w-4 h-4" />
                     ) : (
-                      <Plus className="w-3.5 h-3.5" />
+                      <Backpack className="w-4 h-4" />
                     )}
-                    <span className="font-mono-tabular">
-                      {hud.hotbarItemIds.length >= 1000
-                        ? `${(hud.hotbarItemIds.length / 1000).toFixed(1)}K`
-                        : hud.hotbarItemIds.length}
-                    </span>
-                  </div>
-                  <span className="text-[8px] font-mono-tabular text-stone-400 leading-none mt-0.5">
-                    {draggingHudSlot !== null ? 'Drop Pack' : '5K / Pack'}
-                  </span>
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  aria-label="Place Stuff"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => openModal('place')}
+                  className="w-9 h-9 sm:w-auto sm:px-2.5 sm:h-11 shrink-0 rounded bg-amber-600 hover:bg-amber-500 border border-amber-300/70 text-stone-950 font-bold text-xs flex items-center justify-center gap-1"
+                  title="Place Structures or Supplies (P)"
+                >
+                  <PackageOpen className="w-4 h-4" />
+                  <span className="hidden sm:inline">Place</span>
                 </button>
               </div>
-
-              <button
-                type="button"
-                aria-label="Place Stuff"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => openModal('place')}
-                className="h-11 sm:h-12 px-2.5 sm:px-3 shrink-0 rounded-lg bg-amber-600 hover:bg-amber-500 border border-amber-300/70 text-stone-950 font-bold text-xs flex flex-col sm:flex-row items-center justify-center gap-1 whitespace-nowrap"
-                title="Place structures, supplies, or food down (P)"
-              >
-                <PackageOpen className="w-4 h-4" />
-                <span>Place</span>
-              </button>
-            </div>
             )}
           </div>
         </div>
@@ -2494,11 +2262,18 @@ export function SurvivalGameClient() {
           hud={hud}
           atCookingStation={nearCookingStation || activeModal === 'stove'}
           isStove={activeModal === 'stove'}
-          onCook={(recipeId) =>
-            engineRef.current?.cookRecipe(
+          onStartCook={(recipeId) =>
+            engineRef.current?.startInteractiveCook(
               recipeId,
               nearCookingStation || activeModal === 'stove',
             ) || false
+          }
+          onFinishCook={(recipeId, outcome, flipped) =>
+            engineRef.current?.finishInteractiveCook(recipeId, outcome, flipped) ||
+            false
+          }
+          onCancelCook={(recipeId) =>
+            engineRef.current?.cancelInteractiveCook(recipeId)
           }
           onEat={(itemId) => engineRef.current?.useOrEquipItem(itemId)}
           onClose={closeModal}
@@ -2929,17 +2704,17 @@ function VitalBar({
 }) {
   const pct = Math.max(0, Math.min(100, value));
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-1.5">
       <div className="shrink-0" aria-label={label}>
         {icon}
       </div>
-      <div className="flex-1 h-2 rounded-full bg-stone-800 overflow-hidden">
+      <div className="flex-1 h-1.5 sm:h-2 rounded-sm bg-stone-800 overflow-hidden border border-stone-700/60">
         <div
           className={`h-full ${barColor} transition-all duration-150`}
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className="w-7 text-right text-[11px] font-mono-tabular text-stone-200">
+      <span className="w-6 text-right text-[10px] sm:text-[11px] font-mono-tabular text-stone-200">
         {Math.round(pct)}
       </span>
     </div>
@@ -2967,8 +2742,8 @@ function CompassStrip({ playerYaw }: { playerYaw: number }) {
   }, markers[0]);
 
   return (
-    <div className="w-40 sm:w-56 rounded-xl bg-stone-950/85 border border-stone-700/70 px-2.5 py-1.5 flex flex-col items-center gap-0.5 shadow-lg overflow-hidden">
-      <div className="relative w-full h-4 overflow-hidden">
+    <div className="w-24 sm:w-44 rounded-lg bg-stone-950/85 border border-stone-700/80 px-2 py-1 flex flex-col items-center gap-0.5 shadow-lg overflow-hidden">
+      <div className="relative w-full h-3.5 overflow-hidden">
         <div className="absolute left-1/2 top-0 bottom-0 w-px bg-amber-400/90 -translate-x-1/2 z-10" />
         {markers.map((m) => {
           const delta = ((m.deg - bearing + 540) % 360) - 180;
@@ -2978,12 +2753,12 @@ function CompassStrip({ playerYaw }: { playerYaw: number }) {
             <span
               key={m.label}
               style={{ left: `${pct}%` }}
-              className={`absolute top-0 -translate-x-1/2 font-mono-tabular leading-4 ${
+              className={`absolute top-0 -translate-x-1/2 font-mono-tabular leading-3.5 ${
                 m.major
                   ? m.label === 'N'
-                    ? 'text-[11px] font-bold text-amber-400'
-                    : 'text-[11px] font-bold text-stone-100'
-                  : 'text-[9px] text-stone-400'
+                    ? 'text-[10px] font-bold text-amber-400'
+                    : 'text-[10px] font-bold text-stone-100'
+                  : 'text-[8px] text-stone-400'
               }`}
             >
               {m.label}
@@ -2991,8 +2766,8 @@ function CompassStrip({ playerYaw }: { playerYaw: number }) {
           );
         })}
       </div>
-      <div className="text-[10px] font-mono-tabular text-stone-300 leading-none">
-        {nearestCardinal.label} · {String(Math.round(bearing)).padStart(3, '0')}°
+      <div className="text-[9px] sm:text-[10px] font-mono-tabular text-stone-300 leading-none">
+        {nearestCardinal.label} {String(Math.round(bearing)).padStart(3, '0')}°
       </div>
     </div>
   );

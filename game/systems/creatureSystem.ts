@@ -30,6 +30,10 @@ import {
   WHEATFIELD_POS,
 } from '../world/terrain';
 import { getCreatureDefaultArmor } from './combatSystem';
+import {
+  ANIMAL_FLEE_DISTANCE,
+  GUNSHOT_FLEE_DISTANCE,
+} from './animalReactionSystem';
 
 export interface SpeciesSpec {
   species: CreatureSpecies;
@@ -965,6 +969,8 @@ export interface ScavengerCarcassTarget {
   z: number;
   isDino: boolean;
   remainingDrops: number;
+  owner?: 'player' | 'world';
+  collected?: boolean;
 }
 
 export interface ActiveCreature {
@@ -1242,6 +1248,21 @@ export class CreatureManager {
       ['sea_turtle', -12, 128, 'always'],
       ['great_white_shark', 38, 138, 'always'],
       ['manta_ray', -42, 136, 'always'],
+      // Wide Expanded Marine Wildlife Ecosystem Population
+      ['dolphin', -65, 115, 'always'],
+      ['dolphin', 65, -115, 'always'],
+      ['dolphin', -115, -65, 'always'],
+      ['dolphin', 115, 65, 'always'],
+      ['great_white_shark', -90, 100, 'always'],
+      ['great_white_shark', 100, -90, 'always'],
+      ['sea_turtle', -95, -95, 'always'],
+      ['sea_turtle', 95, 95, 'always'],
+      ['manta_ray', -105, 35, 'always'],
+      ['manta_ray', 35, -105, 'always'],
+      ['fish_school', -75, -75, 'always'],
+      ['fish_school', 75, 75, 'always'],
+      ['fish_school', -125, 0, 'always'],
+      ['fish_school', 125, 0, 'always'],
     ];
 
     spawns.forEach(([species, x, z, spawnCycle], i) => {
@@ -1780,6 +1801,49 @@ export class CreatureManager {
     });
   }
 
+  public alertGunshot(
+    originX: number,
+    originZ: number,
+    radius = GUNSHOT_FLEE_DISTANCE,
+  ): void {
+    for (const c of this.creatures) {
+      if (!c.alive || !c.cycleActive || c.isBoss || c.tamed || c.mounted) {
+        continue;
+      }
+      if (
+        c.spec.temperament === 'aquatic_school' ||
+        c.spec.temperament === 'friendly_marine'
+      ) {
+        continue;
+      }
+      const dx = c.x - originX;
+      const dz = c.z - originZ;
+      const d = Math.hypot(dx, dz);
+      if (d >= radius) continue;
+
+      if (c.spec.temperament === 'aerial_ambient') {
+        c.startledTimer = 5.0;
+        c.feedCarcassId = undefined;
+        if (c.species === 'bird' || c.species === 'toucan') {
+          c.state = 'takeoff';
+          c.velY = 6.5;
+        }
+        continue;
+      }
+
+      c.perch = undefined;
+      c.feedCarcassId = undefined;
+      c.provokedTimer = 0;
+      c.state = 'flee';
+      c.stateTimer = 5.0;
+      const inv = d > 0.01 ? 1 / d : 1;
+      const nx = d > 0.01 ? dx * inv : Math.cos(Math.random() * Math.PI * 2);
+      const nz = d > 0.01 ? dz * inv : Math.sin(Math.random() * Math.PI * 2);
+      c.targetX = c.x + nx * 28;
+      c.targetZ = c.z + nz * 28;
+    }
+  }
+
   public setOverworldActive(active: boolean): void {
     if (this.overworldActive === active) return;
     this.overworldActive = active;
@@ -2030,13 +2094,19 @@ export class CreatureManager {
         if ((c.startledTimer ?? 0) <= 0 && carcasses.length > 0) {
           if (c.feedCarcassId) {
             targetCarcass = carcasses.find(
-              (kc) => kc.id === c.feedCarcassId && kc.remainingDrops > 0,
+              (kc) =>
+                kc.id === c.feedCarcassId &&
+                kc.remainingDrops > 0 &&
+                kc.owner !== 'player' &&
+                !kc.collected,
             );
           }
           if (!targetCarcass) {
             let bestDist = 95;
             for (const kc of carcasses) {
-              if (kc.remainingDrops <= 0) continue;
+              if (kc.remainingDrops <= 0 || kc.owner === 'player' || kc.collected) {
+                continue;
+              }
               const d = Math.hypot(kc.x - c.x, kc.z - c.z);
               if (d < bestDist) {
                 bestDist = d;
@@ -2046,15 +2116,14 @@ export class CreatureManager {
           }
         }
 
-        // Startle into steep climb if player approaches close while bird is feeding or swooping low
+        // Startle into steep climb if player approaches within flee distance while bird is feeding or swooping low
         if (
-          targetCarcass &&
-          (c.state === 'feed' || (c.state === 'swoop' && c.y < targetCarcass.y + 4.5)) &&
-          distPlayerBird < 5.2
+          (c.state === 'feed' || (targetCarcass && c.state === 'swoop' && c.y < targetCarcass.y + 4.5)) &&
+          distPlayerBird < ANIMAL_FLEE_DISTANCE
         ) {
           c.state = 'takeoff';
           c.feedCarcassId = undefined;
-          c.startledTimer = 4.5;
+          c.startledTimer = 5.0;
           c.velY = 6.5;
           onCreatureCall('bird', distPlayerBird);
         }
@@ -2193,11 +2262,16 @@ export class CreatureManager {
       // Swimming fish schools
       if (c.species === 'fish_school') {
         const orbit = elapsed * 0.65 + i * 2.3;
-        const nx = c.homeX + Math.cos(orbit) * 5.5;
-        const nz = c.homeZ + Math.sin(orbit) * 5.5;
-        c.yaw = Math.atan2(nx - c.x, nz - c.z);
-        c.x = nx;
-        c.z = nz;
+        const nx = c.homeX + Math.cos(orbit) * 6.5;
+        const nz = c.homeZ + Math.sin(orbit) * 6.5;
+        if (getTerrainHeight(nx, nz) < OCEAN_LEVEL - 0.35) {
+          c.yaw = Math.atan2(nx - c.x, nz - c.z);
+          c.x = nx;
+          c.z = nz;
+        } else {
+          c.homeX *= 1.04;
+          c.homeZ *= 1.04;
+        }
         c.rig.root.position.set(c.x, c.y, c.z);
         c.rig.root.rotation.y = c.yaw;
         continue;
@@ -2227,12 +2301,17 @@ export class CreatureManager {
         const orbitSpd =
           c.species === 'great_white_shark' ? 0.32 : c.species === 'manta_ray' ? 0.22 : 0.25;
         const orbitAngle = elapsed * orbitSpd + i * 2.1;
-        const nextX = c.homeX + Math.cos(orbitAngle) * 14;
-        const nextZ = c.homeZ + Math.sin(orbitAngle) * 11;
-        if (getTerrainHeight(nextX, nextZ) < OCEAN_LEVEL - 0.5) {
+        const rad = c.species === 'great_white_shark' ? 18 : 14;
+        const nextX = c.homeX + Math.cos(orbitAngle) * rad;
+        const nextZ = c.homeZ + Math.sin(orbitAngle) * rad;
+        if (getTerrainHeight(nextX, nextZ) < OCEAN_LEVEL - 0.35) {
           c.yaw = Math.atan2(nextX - c.x, nextZ - c.z);
           c.x = nextX;
           c.z = nextZ;
+        } else {
+          // Steer home center outward into open ocean away from shore/land
+          c.homeX *= 1.05;
+          c.homeZ *= 1.05;
         }
 
         if (c.species === 'dolphin' && c.leaping) {
@@ -2308,30 +2387,29 @@ export class CreatureManager {
           c.targetX = c.homeX;
           c.targetZ = c.homeZ;
         }
-      } else {
-        // Ordinary wild animals yield/retreat when player nears
-        const isWildPredatorOrDefensive =
+      } else if (!c.tamed && !c.mounted) {
+        // Wild animals flee for 5s when player enters ANIMAL_FLEE_DISTANCE (15m)
+        const isWildThreatSensitive =
           c.spec.temperament === 'apex_predator' ||
           c.spec.temperament === 'pack_predator' ||
-          c.spec.temperament === 'defensive_herbivore';
+          c.spec.temperament === 'defensive_herbivore' ||
+          c.spec.temperament === 'timid_herbivore';
 
-        const fleeRange = isWildPredatorOrDefensive
-          ? (playerSprinting ? 12.5 : 9.5) * Math.max(0.75, stealthMult)
-          : c.spec.temperament === 'timid_herbivore'
-            ? (c.species === 'red_fox' ? 6.5 : 8.5) * stealthMult
-            : 0;
+        const fleeRange = isWildThreatSensitive
+          ? ANIMAL_FLEE_DISTANCE * (playerCrouching ? 0.72 : 1.0)
+          : 0;
 
         if (fleeRange > 0 && distToPlayer < fleeRange) {
           if (c.state !== 'flee') {
             c.state = 'flee';
             onCreatureCall(c.species, distToPlayer);
           }
-          c.stateTimer = 4.5;
+          c.stateTimer = 5.0;
           const dx = c.x - playerX;
           const dz = c.z - playerZ;
           const d = Math.hypot(dx, dz) || 1;
-          c.targetX = c.x + (dx / d) * 22;
-          c.targetZ = c.z + (dz / d) * 22;
+          c.targetX = c.x + (dx / d) * 24;
+          c.targetZ = c.z + (dz / d) * 24;
         }
       }
 
@@ -2358,13 +2436,17 @@ export class CreatureManager {
             (kc) =>
               kc.id === c.feedCarcassId &&
               kc.remainingDrops > 0 &&
+              kc.owner !== 'player' &&
+              !kc.collected &&
               Math.hypot(kc.x - c.x, kc.z - c.z) < scentRange + 15,
           );
         }
         if (!feedCarcass) {
           let bestScavDist = scentRange;
           for (const kc of carcasses) {
-            if (kc.remainingDrops <= 0) continue;
+            if (kc.remainingDrops <= 0 || kc.owner === 'player' || kc.collected) {
+              continue;
+            }
             const d = Math.hypot(kc.x - c.x, kc.z - c.z);
             if (d < bestScavDist) {
               bestScavDist = d;

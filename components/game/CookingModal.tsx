@@ -1,9 +1,19 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Flame, Lock, Utensils, X } from 'lucide-react';
+import { Check, Flame, Lock, RotateCw, Utensils, X } from 'lucide-react';
 import { ITEMS } from '@/game/data/items';
 import { COOKING_RECIPES } from '@/game/data/recipes';
+import {
+  CookingItem,
+  CookingStatus,
+  FoodType,
+  flipFood,
+  getCookingProgress,
+  getCookingRawProgress,
+  getCookingStatus,
+  startCooking,
+} from '@/game/systems/cookingSystem';
 import { CookingRecipe, HUDStateSnapshot, ItemId } from '@/game/types';
 import { ItemIcon } from './ItemIcon';
 
@@ -11,23 +21,56 @@ interface CookingModalProps {
   hud: HUDStateSnapshot;
   atCookingStation: boolean;
   isStove?: boolean;
-  onCook: (recipeId: string) => boolean;
+  onStartCook: (recipeId: string) => boolean;
+  onFinishCook: (
+    recipeId: string,
+    outcome: 'cooked' | 'burnt',
+    flipped: boolean,
+  ) => boolean;
+  onCancelCook: (recipeId: string) => void;
   onEat?: (itemId: ItemId) => void;
   onClose: () => void;
 }
 
 type CookFilter = 'all' | 'ready' | 'bakery' | 'veggie' | 'meat' | 'fish' | 'fruit';
 
+function resolveCookingFoodType(recipe: CookingRecipe): FoodType {
+  if (
+    recipe.ingredients.some(
+      (i) => i.itemId === 'freshwater_fish' || i.itemId === 'ocean_fish',
+    )
+  ) {
+    return 'raw_fish';
+  }
+  if (recipe.ingredients.some((i) => i.itemId === 'cheese')) {
+    return 'cheese';
+  }
+  if (
+    recipe.ingredients.some(
+      (i) => i.itemId === 'bread_loaf' || i.itemId === 'wheat_bread' || i.itemId === 'dough',
+    )
+  ) {
+    return 'bread';
+  }
+  if (recipe.ingredients.some((i) => i.itemId === 'milk')) {
+    return 'milk';
+  }
+  return 'raw_meat';
+}
+
 export function CookingModal({
   hud,
   atCookingStation,
   isStove = false,
-  onCook,
+  onStartCook,
+  onFinishCook,
+  onCancelCook,
   onEat,
   onClose,
 }: CookingModalProps) {
   const [cookingRecipe, setCookingRecipe] = useState<CookingRecipe | null>(null);
-  const [progress, setProgress] = useState(0);
+  const [cookingItem, setCookingItem] = useState<CookingItem | null>(null);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [filter, setFilter] = useState<CookFilter>('all');
 
   const countOf = (itemId: ItemId) =>
@@ -36,26 +79,73 @@ export function CookingModal({
       .reduce((acc, s) => acc + s.quantity, 0);
 
   useEffect(() => {
-    if (!cookingRecipe) return;
-    const stepMs = 60;
-    const speedMultiplier = atCookingStation ? 0.75 : 1;
-    const totalMs = cookingRecipe.cookTimeSeconds * speedMultiplier * 1000;
-    let elapsed = 0;
-
+    if (!cookingItem) return;
     const id = window.setInterval(() => {
-      elapsed += stepMs;
-      const pct = Math.min(100, (elapsed / totalMs) * 100);
-      setProgress(pct);
-      if (pct >= 100) {
-        window.clearInterval(id);
-        onCook(cookingRecipe.id);
-        setCookingRecipe(null);
-        setProgress(0);
-      }
-    }, stepMs);
-
+      setNowMs(Date.now());
+    }, 60);
     return () => window.clearInterval(id);
-  }, [cookingRecipe, atCookingStation, onCook]);
+  }, [cookingItem]);
+
+  const beginCookingRecipe = (recipe: CookingRecipe) => {
+    if (cookingRecipe) return;
+    const started = onStartCook(recipe.id);
+    if (!started) return;
+    const speedMultiplier = atCookingStation ? 0.75 : 1;
+    const totalMs = Math.round(recipe.cookTimeSeconds * speedMultiplier * 1000);
+    const now = Date.now();
+    setNowMs(now);
+    setCookingRecipe(recipe);
+    setCookingItem(startCooking(resolveCookingFoodType(recipe), totalMs, now));
+  };
+
+  const handleFlip = () => {
+    if (!cookingItem) return;
+    const updated = flipFood({ ...cookingItem });
+    setCookingItem(updated);
+  };
+
+  const handleTakeOffFire = () => {
+    if (!cookingRecipe || !cookingItem) return;
+    const status = getCookingStatus(cookingItem, nowMs);
+    if (status !== 'cooked' && status !== 'burnt') return;
+    const removedItem: CookingItem = { ...cookingItem, removed: true };
+    onFinishCook(
+      cookingRecipe.id,
+      status === 'burnt' ? 'burnt' : 'cooked',
+      removedItem.flipped,
+    );
+    setCookingRecipe(null);
+    setCookingItem(null);
+  };
+
+  const handleCloseModal = () => {
+    if (cookingRecipe && cookingItem) {
+      const status = getCookingStatus(cookingItem, Date.now());
+      if (status === 'cooked' || status === 'burnt') {
+        onFinishCook(
+          cookingRecipe.id,
+          status === 'burnt' ? 'burnt' : 'cooked',
+          cookingItem.flipped,
+        );
+      } else {
+        onCancelCook(cookingRecipe.id);
+      }
+      setCookingRecipe(null);
+      setCookingItem(null);
+    }
+    onClose();
+  };
+
+  const progress = cookingItem ? getCookingProgress(cookingItem, nowMs) : 0;
+  const rawProgress = cookingItem ? getCookingRawProgress(cookingItem, nowMs) : 0;
+  const status: CookingStatus | null = cookingItem
+    ? getCookingStatus(cookingItem, nowMs)
+    : null;
+  const burnThreshold = cookingItem?.flipped ? 1.65 : 1.5;
+  const burnDangerPct = Math.min(
+    100,
+    Math.max(0, ((rawProgress - 1) / Math.max(0.1, burnThreshold - 1)) * 100),
+  );
 
   const hasIngredients = (r: CookingRecipe) =>
     r.ingredients.every((i) => countOf(i.itemId) >= i.quantity);
@@ -77,6 +167,7 @@ export function CookingModal({
           id === 'cut_dino_meat' ||
           id === 'roasted_dino_meat' ||
           id === 'roasted_meat' ||
+          id === 'cheeseburger' ||
           id === 'dino_feast' ||
           id === 'hearty_stew',
       );
@@ -96,6 +187,8 @@ export function CookingModal({
           id === 'flour' ||
           id === 'sugar' ||
           id === 'dough' ||
+          id === 'cheese' ||
+          id === 'cheeseburger' ||
           id === 'bread_loaf' ||
           id === 'wheat_bread' ||
           id === 'cake' ||
@@ -165,15 +258,15 @@ export function CookingModal({
               </h2>
               <p className="text-xs text-stone-400">
                 {isStove
-                  ? 'Bake real-life bread, cakes & cookies from flour & sugar, or sauté fresh farm vegetables 25% faster.'
+                  ? 'Grill cheeseburgers, steaks & fish or bake bread & cakes 25% faster — flip halfway and pull before burning.'
                   : atCookingStation
-                    ? 'Cook anything 25% faster — bread, cakes, cookies, dinosaur meat, fish, fruit & stews.'
-                    : 'Cook over the fire — bread, meat, fish, coconut, banana, apple, maple glazes & more.'}
+                    ? 'Cook 25% faster — flip at 50% for a golden sear and pull off the fire when ready.'
+                    : 'Grill steaks, fish & cheeseburgers over open flames — flip halfway and pull before 150% burn.'}
               </p>
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleCloseModal}
             className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200"
             aria-label="Close Cooking"
           >
@@ -187,10 +280,10 @@ export function CookingModal({
             [
               ['all', 'All Dishes'],
               ['ready', 'Ready Now'],
-              ['bakery', 'Bread, Cake & Cookies'],
-              ['veggie', 'Salads & Veggies'],
-              ['meat', 'Dino & Meat'],
+              ['meat', 'Burgers & Meat'],
               ['fish', 'Fish'],
+              ['bakery', 'Cheese, Bread & Cake'],
+              ['veggie', 'Salads & Veggies'],
               ['fruit', 'Fruit & Camp'],
             ] as [CookFilter, string][]
           ).map(([key, label]) => (
@@ -209,17 +302,112 @@ export function CookingModal({
           ))}
         </div>
 
-        {cookingRecipe && (
-          <div className="px-5 py-3 bg-orange-950/60 border-b border-orange-800/60">
-            <div className="flex items-center justify-between text-xs font-semibold text-orange-200 mb-1.5">
-              <span>Cooking {ITEMS[cookingRecipe.resultItemId].name}...</span>
-              <span className="font-mono-tabular">{Math.round(progress)}%</span>
+        {cookingRecipe && cookingItem && status && (
+          <div
+            className={`px-5 py-3.5 border-b ${
+              status === 'burnt'
+                ? 'bg-red-950/75 border-red-700/70'
+                : status === 'cooked'
+                  ? 'bg-emerald-950/70 border-emerald-700/70'
+                  : status === 'nearly_ready'
+                    ? 'bg-amber-950/65 border-amber-700/70'
+                    : 'bg-orange-950/60 border-orange-800/60'
+            }`}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold mb-2">
+              <div className="flex items-center gap-2">
+                <span className="text-stone-100">
+                  {ITEMS[cookingRecipe.resultItemId].name}
+                </span>
+                <span
+                  className={`px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wide ${
+                    status === 'burnt'
+                      ? 'bg-red-600 text-stone-50'
+                      : status === 'cooked'
+                        ? 'bg-emerald-500 text-stone-950'
+                        : status === 'nearly_ready'
+                          ? 'bg-amber-400 text-stone-950'
+                          : 'bg-orange-500/30 text-orange-200'
+                  }`}
+                >
+                  {status === 'burnt'
+                    ? 'Burnt!'
+                    : status === 'cooked'
+                      ? 'Cooked — Pull Now'
+                      : status === 'nearly_ready'
+                        ? cookingItem.flipped
+                          ? 'Flipped · Almost Done'
+                          : 'Nearly Ready — Flip!'
+                        : 'Cooking'}
+                </span>
+                {cookingItem.flipped && status !== 'burnt' && (
+                  <span className="text-[11px] text-amber-300">
+                    ✓ Flipped
+                  </span>
+                )}
+              </div>
+              <span className="font-mono-tabular text-stone-200">
+                {status === 'cooked'
+                  ? `100% · Burn Risk ${Math.round(burnDangerPct)}%`
+                  : status === 'burnt'
+                    ? '150%+ Overcooked'
+                    : `${Math.round(progress * 100)}%`}
+              </span>
             </div>
-            <div className="w-full h-2.5 rounded-full bg-stone-950 overflow-hidden">
+
+            <div className="w-full h-2.5 rounded-full bg-stone-950 overflow-hidden mb-3">
               <div
-                className="h-full bg-orange-500 transition-all duration-75"
-                style={{ width: `${progress}%` }}
+                className={`h-full transition-all duration-75 ${
+                  status === 'burnt'
+                    ? 'bg-red-500'
+                    : status === 'cooked'
+                      ? 'bg-emerald-500'
+                      : status === 'nearly_ready'
+                        ? 'bg-amber-400'
+                        : 'bg-orange-500'
+                }`}
+                style={{ width: `${Math.round(progress * 100)}%` }}
               />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={cookingItem.flipped || status === 'burnt'}
+                onClick={handleFlip}
+                className={`min-h-[40px] px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 ${
+                  !cookingItem.flipped && status !== 'burnt'
+                    ? status === 'nearly_ready'
+                      ? 'bg-amber-400 hover:bg-amber-300 text-stone-950'
+                      : 'bg-stone-800 hover:bg-stone-700 text-stone-100 border border-stone-600'
+                    : 'bg-stone-800/60 text-stone-500 cursor-not-allowed'
+                }`}
+              >
+                <RotateCw className="w-3.5 h-3.5" />
+                <span>{cookingItem.flipped ? 'Flipped' : 'Flip Food'}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={status !== 'cooked' && status !== 'burnt'}
+                onClick={handleTakeOffFire}
+                className={`min-h-[40px] px-4 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 ${
+                  status === 'cooked'
+                    ? 'bg-emerald-500 hover:bg-emerald-400 text-stone-950'
+                    : status === 'burnt'
+                      ? 'bg-red-600 hover:bg-red-500 text-stone-50'
+                      : 'bg-stone-800/60 text-stone-500 cursor-not-allowed'
+                }`}
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>
+                  {status === 'burnt'
+                    ? 'Clear Burnt Scrap'
+                    : status === 'cooked'
+                      ? 'Take Off Fire'
+                      : 'Wait Until Cooked'}
+                </span>
+              </button>
             </div>
           </div>
         )}
@@ -227,7 +415,7 @@ export function CookingModal({
         <div className="p-5 overflow-y-auto survival-scroll space-y-3">
           {sortedRecipes.length === 0 ? (
             <div className="rounded-xl bg-stone-950/70 border border-stone-800 p-6 text-center text-xs text-stone-400">
-              No matching recipes ready yet. Gather coconuts, bananas, apples, maple syrup, fish, or hunt wildlife & dinosaurs!
+              No matching recipes ready yet. Gather coconuts, bananas, apples, maple syrup, fish, cheese, or hunt wildlife & dinosaurs!
             </div>
           ) : (
             sortedRecipes.map((recipe) => {
@@ -302,7 +490,7 @@ export function CookingModal({
 
                     <button
                       disabled={!canCook}
-                      onClick={() => setCookingRecipe(recipe)}
+                      onClick={() => beginCookingRecipe(recipe)}
                       className={`min-h-[44px] px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap shrink-0 flex items-center justify-center gap-1.5 ${
                         canCook
                           ? 'bg-orange-600 hover:bg-orange-500 text-stone-950'

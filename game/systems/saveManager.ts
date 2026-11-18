@@ -14,7 +14,7 @@ const SETTINGS_KEY = 'survival_island_settings_v1';
 const ACTIVE_SESSION_KEY = 'survival_island_active_session_v1';
 
 export interface GraphicsPresetProfile {
-  graphicsQuality: 'balanced' | 'high';
+  graphicsQuality: GraphicsPreset;
   graphicsPreset: GraphicsPreset;
   shadowsEnabled: boolean;
   waterReflectionsEnabled: boolean;
@@ -24,20 +24,32 @@ export interface GraphicsPresetProfile {
   tvSafetyMode: TvSafetyMode;
 }
 
+export function normalizeGraphicsPreset(
+  rawPreset?: string,
+  rawQuality?: string,
+): GraphicsPreset {
+  if (rawPreset === 'low' || rawPreset === 'performance') return 'low';
+  if (rawPreset === 'high' || rawPreset === 'ultra') return 'high';
+  if (rawPreset === 'medium' || rawPreset === 'balanced') return 'medium';
+  if (rawQuality === 'high') return 'high';
+  if (rawQuality === 'low') return 'low';
+  return 'medium';
+}
+
 export const GRAPHICS_PRESET_PROFILES: Record<GraphicsPreset, GraphicsPresetProfile> = {
-  ultra: {
-    graphicsQuality: 'high',
-    graphicsPreset: 'ultra',
-    shadowsEnabled: true,
-    waterReflectionsEnabled: true,
+  low: {
+    graphicsQuality: 'low',
+    graphicsPreset: 'low',
+    shadowsEnabled: false,
+    waterReflectionsEnabled: false,
     particlesEnabled: true,
-    drawDistance: 'far',
+    drawDistance: 'near',
     dynamicAutoFps: true,
-    tvSafetyMode: 'auto',
+    tvSafetyMode: 'safe_mini',
   },
-  balanced: {
-    graphicsQuality: 'balanced',
-    graphicsPreset: 'balanced',
+  medium: {
+    graphicsQuality: 'medium',
+    graphicsPreset: 'medium',
     shadowsEnabled: true,
     waterReflectionsEnabled: true,
     particlesEnabled: true,
@@ -45,15 +57,15 @@ export const GRAPHICS_PRESET_PROFILES: Record<GraphicsPreset, GraphicsPresetProf
     dynamicAutoFps: true,
     tvSafetyMode: 'auto',
   },
-  performance: {
-    graphicsQuality: 'balanced',
-    graphicsPreset: 'performance',
-    shadowsEnabled: false,
-    waterReflectionsEnabled: false,
-    particlesEnabled: false,
-    drawDistance: 'near',
+  high: {
+    graphicsQuality: 'high',
+    graphicsPreset: 'high',
+    shadowsEnabled: true,
+    waterReflectionsEnabled: true,
+    particlesEnabled: true,
+    drawDistance: 'far',
     dynamicAutoFps: true,
-    tvSafetyMode: 'safe_mini',
+    tvSafetyMode: 'auto',
   },
 };
 
@@ -80,8 +92,8 @@ export const DEFAULT_SETTINGS: GameSettings = {
   masterVolume: 0.7,
   sfxEnabled: true,
   ambienceEnabled: true,
-  graphicsQuality: 'balanced',
-  graphicsPreset: 'balanced',
+  graphicsQuality: 'medium',
+  graphicsPreset: 'medium',
   shadowsEnabled: true,
   waterReflectionsEnabled: true,
   particlesEnabled: true,
@@ -96,7 +108,8 @@ export const DEFAULT_SETTINGS: GameSettings = {
 };
 
 export function getDefaultSettingsForDevice(): GameSettings {
-  const defaultPreset: GraphicsPreset = isMobileOrTouchClient() ? 'balanced' : 'ultra';
+  // Keep Medium as the smooth iPhone-suitable default across mobile and touch devices
+  const defaultPreset: GraphicsPreset = isMobileOrTouchClient() ? 'medium' : 'medium';
   return {
     ...DEFAULT_SETTINGS,
     ...GRAPHICS_PRESET_PROFILES[defaultPreset],
@@ -109,22 +122,29 @@ export function loadSettings(): GameSettings {
   try {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
     if (!raw) return base;
-    const parsed = JSON.parse(raw) as Partial<GameSettings>;
-    const merged: GameSettings = { ...base, ...parsed };
-    if (!parsed.graphicsPreset) {
-      const derived: GraphicsPreset =
-        parsed.graphicsQuality === 'high' ? 'ultra' : 'balanced';
-      merged.graphicsPreset = derived;
-      const prof = GRAPHICS_PRESET_PROFILES[derived];
-      if (parsed.shadowsEnabled === undefined) merged.shadowsEnabled = prof.shadowsEnabled;
-      if (parsed.waterReflectionsEnabled === undefined) {
-        merged.waterReflectionsEnabled = prof.waterReflectionsEnabled;
-      }
-      if (parsed.particlesEnabled === undefined) {
-        merged.particlesEnabled = prof.particlesEnabled;
-      }
-      if (parsed.drawDistance === undefined) merged.drawDistance = prof.drawDistance;
+    const parsed = JSON.parse(raw) as Partial<GameSettings> & {
+      graphicsPreset?: string;
+      graphicsQuality?: string;
+    };
+    const normalizedPreset = normalizeGraphicsPreset(
+      parsed.graphicsPreset,
+      parsed.graphicsQuality,
+    );
+    const prof = GRAPHICS_PRESET_PROFILES[normalizedPreset];
+    const merged: GameSettings = {
+      ...base,
+      ...parsed,
+      graphicsPreset: normalizedPreset,
+      graphicsQuality: normalizedPreset,
+    };
+    if (parsed.shadowsEnabled === undefined) merged.shadowsEnabled = prof.shadowsEnabled;
+    if (parsed.waterReflectionsEnabled === undefined) {
+      merged.waterReflectionsEnabled = prof.waterReflectionsEnabled;
     }
+    if (parsed.particlesEnabled === undefined) {
+      merged.particlesEnabled = prof.particlesEnabled;
+    }
+    if (parsed.drawDistance === undefined) merged.drawDistance = prof.drawDistance;
     if (merged.dynamicAutoFps === undefined) merged.dynamicAutoFps = true;
     if (
       merged.tvSafetyMode !== 'auto' &&
