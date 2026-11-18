@@ -153,6 +153,7 @@ import {
   EXPEDITION_POS,
   FARMER_POS,
   HILL_HOUSE_POS,
+  HILL_HOUSE_Y,
   HOMESTEAD_POS,
   LAKE_CENTER,
   OCEAN_LEVEL,
@@ -164,6 +165,7 @@ import {
   WHEATFIELD_POS,
   exportSparseTerrainDeltas,
   getBiomeAt,
+  getHilltopBaseFloorY,
   getTerrainHeight,
   getTerrainSlope,
   getWaterLevelAt,
@@ -315,6 +317,7 @@ export interface EngineCallbacks {
       | 'drying_rack'
       | 'vehicles'
       | 'vehicle_cargo'
+      | 'music_studio'
     >,
     structureId?: string,
   ) => void;
@@ -4566,6 +4569,12 @@ export class GameEngine {
         this.emitHud();
         break;
       }
+      case 'house_music_studio':
+      case 'house_studio_drums':
+      case 'house_studio_booth': {
+        this.callbacks.onOpenStation('music_studio', st.id);
+        break;
+      }
       case 'house_tv': {
         this.callbacks.onOpenStation('tv', st.id);
         break;
@@ -4795,6 +4804,27 @@ export class GameEngine {
     if (near && near.kind === 'garage_bench') {
       this.handleGarageBenchInteraction();
       return;
+    }
+    if (
+      near &&
+      (near.kind === 'house_couch' ||
+        near.kind === 'house_bed' ||
+        near.kind === 'house_tv' ||
+        near.kind === 'house_fridge' ||
+        near.kind === 'house_stove' ||
+        near.kind === 'house_toilet' ||
+        near.kind === 'house_sink' ||
+        near.kind === 'house_shower' ||
+        near.kind === 'house_music_studio' ||
+        near.kind === 'house_studio_drums' ||
+        near.kind === 'house_studio_booth')
+    ) {
+      const st = this.world.houseStations.find((s) => s.id === near.id);
+      if (st) {
+        this.interactHouseStation(st);
+        this.actionCooldown = 0.45;
+        return;
+      }
     }
 
     const equippedId = this.getEquippedItemId();
@@ -5159,7 +5189,10 @@ export class GameEngine {
         near.kind === 'house_stove' ||
         near.kind === 'house_toilet' ||
         near.kind === 'house_sink' ||
-        near.kind === 'house_shower'
+        near.kind === 'house_shower' ||
+        near.kind === 'house_music_studio' ||
+        near.kind === 'house_studio_drums' ||
+        near.kind === 'house_studio_booth'
       ) {
         const st = this.world.houseStations.find((s) => s.id === near.id);
         if (st) {
@@ -6005,7 +6038,9 @@ export class GameEngine {
       const oldest = this.pickups.shift();
       if (oldest) this.scene.remove(oldest.mesh);
     }
-    const y = Math.max(OCEAN_LEVEL + 0.08, getTerrainHeight(x, z));
+    const terrainH = getTerrainHeight(x, z);
+    const deckH = this.getStructuralSurfaceY(x, z, (startY ?? terrainH) + 1.5);
+    const y = Math.max(OCEAN_LEVEL + 0.08, terrainH, deckH);
     const initialY = startY !== undefined && startY > y + 0.25 ? startY : y + 0.04;
     const mesh = createPickupMesh(itemId, this.world.woodTex);
     mesh.position.set(x, initialY, z);
@@ -7249,8 +7284,10 @@ export class GameEngine {
     }
 
     // Shelter, Fire, Cozy Base Living & Body Temperature Calculation
+    const hdx = this.playerX - HILL_HOUSE_POS.x;
+    const hdz = this.playerZ - HILL_HOUSE_POS.z;
     const inHilltopHouse =
-      Math.hypot(this.playerX - HILL_HOUSE_POS.x, this.playerZ - HILL_HOUSE_POS.z) < 6.8;
+      hdx >= -5.6 && hdx <= 5.6 && hdz >= -4.8 && hdz <= 8.8;
     const nearPlacedSmartTv =
       this.smartTv.power &&
       this.structures.some(
@@ -7599,7 +7636,7 @@ export class GameEngine {
       const gravMult = this.gravityScale * (this.modSystem?.tweaks.gravityMultiplier ?? 1);
       this.playerVelY -= 21 * gravMult * dt;
       this.playerY += this.playerVelY * dt;
-      if (this.playerY <= newSurfaceY) {
+      if (!Number.isFinite(this.playerY) || this.playerY <= newSurfaceY) {
         this.playerY = newSurfaceY;
         this.playerVelY = 0;
         this.grounded = true;
@@ -7762,9 +7799,12 @@ export class GameEngine {
     const fwdX = -Math.sin(this.camYaw);
     const fwdZ = -Math.cos(this.camYaw);
 
-    // 1. Vault over medium obstacles (logs, crates, rocks, fences) directly ahead
+    // 1. Vault over medium obstacles (logs, crates, rocks, fences) directly ahead (skip premade house walls/furniture)
     for (const col of this.world.colliders) {
       if (col.radius > 1.38) continue;
+      const chdx = col.x - HILL_HOUSE_POS.x;
+      const chdz = col.z - HILL_HOUSE_POS.z;
+      if (chdx >= -6.2 && chdx <= 6.8 && chdz >= -4.8 && chdz <= 9.0) continue;
       const dx = col.x - this.playerX;
       const dz = col.z - this.playerZ;
       const dist = Math.hypot(dx, dz);
@@ -8220,7 +8260,42 @@ export class GameEngine {
     }
   }
 
+  private findNearestHouseStationInteraction(): NearbyInteraction | null {
+    let bestHouse: HouseStationTarget | null = null;
+    let bestHouseDist = 3.6;
+    for (const hs of this.world.houseStations) {
+      if (Math.abs(hs.y - this.playerY) > 2.2) continue;
+      const d = Math.hypot(hs.x - this.playerX, hs.z - this.playerZ);
+      if (d <= hs.range && d < bestHouseDist) {
+        bestHouseDist = d;
+        bestHouse = hs;
+      }
+    }
+    if (!bestHouse) return null;
+    return {
+      id: bestHouse.id,
+      label: bestHouse.label,
+      sublabel: bestHouse.sublabel,
+      kind: bestHouse.kind,
+      actionCategory:
+        bestHouse.kind === 'house_stove'
+          ? 'cook'
+          : bestHouse.kind === 'house_sink' || bestHouse.kind === 'house_shower'
+            ? 'clean'
+            : 'use',
+      distance: bestHouseDist,
+      targetX: bestHouse.x,
+      targetY: bestHouse.y,
+      targetZ: bestHouse.z,
+    };
+  }
+
   private findNearbyInteraction(): NearbyInteraction | null {
+    const nearHouseStation = this.findNearestHouseStationInteraction();
+    if (nearHouseStation) {
+      return nearHouseStation;
+    }
+
     const equippedId = this.getEquippedItemId();
     const equippedDef = equippedId ? ITEMS[equippedId] : null;
 
@@ -9127,11 +9202,11 @@ export class GameEngine {
 
     // Check Hilltop House Functional Furniture & Appliances
     let bestHouse: HouseStationTarget | null = null;
-    let bestHouseDist = 2.6;
+    let bestHouseDist = 3.6;
     for (const hs of this.world.houseStations) {
       if (Math.abs(hs.y - this.playerY) > 2.2) continue;
       const d = Math.hypot(hs.x - this.playerX, hs.z - this.playerZ);
-      if (d < bestHouseDist) {
+      if (d <= hs.range && d < bestHouseDist) {
         bestHouseDist = d;
         bestHouse = hs;
       }
@@ -9949,11 +10024,17 @@ export class GameEngine {
 
   private emitHud(): void {
     const biome = getBiomeAt(this.playerX, this.playerZ);
-    const sheltered = this.structures.some(
-      (s) =>
-        s.type === 'basic_shelter' &&
-        Math.hypot(s.x - this.playerX, s.z - this.playerZ) < 6,
-    );
+    const hdx = this.playerX - HILL_HOUSE_POS.x;
+    const hdz = this.playerZ - HILL_HOUSE_POS.z;
+    const inHilltopHouse =
+      hdx >= -5.6 && hdx <= 5.6 && hdz >= -4.8 && hdz <= 8.8;
+    const sheltered =
+      inHilltopHouse ||
+      this.structures.some(
+        (s) =>
+          s.type === 'basic_shelter' &&
+          Math.hypot(s.x - this.playerX, s.z - this.playerZ) < 6,
+      );
     const nearFire = this.structures.some(
       (s) =>
         (s.type === 'campfire' || s.type === 'cooking_station') &&
@@ -10652,6 +10733,12 @@ export class GameEngine {
           bestY = aftDeckY;
         }
       }
+    }
+
+    // Premade Hilltop Base, Front Porch, Entry Step & Music Studio Wing solid floor support
+    const hilltopFloorY = getHilltopBaseFloorY(x, z, footY);
+    if (hilltopFloorY > bestY) {
+      bestY = hilltopFloorY;
     }
 
     return bestY;
@@ -13484,8 +13571,43 @@ export class GameEngine {
         this.addItem('ammo', 120);
         this.toast('Spawned Creator Kit (Wood, Stone, Gun, Ammo)', 'discovery');
       }
+    } else if (cmd === '/tp' || cmd === '/house' || cmd === '/studio') {
+      const target = cmd === '/house' ? 'house' : cmd === '/studio' ? 'studio' : arg;
+      if (target === 'house') {
+        this.seatedState = null;
+        this.vaultTimer = 0;
+        this.playerX = HILL_HOUSE_POS.x + 8.2;
+        this.playerZ = HILL_HOUSE_POS.z;
+        this.playerY = Math.max(
+          getTerrainHeight(this.playerX, this.playerZ),
+          getHilltopBaseFloorY(this.playerX, this.playerZ, HILL_HOUSE_Y + 1),
+        ) + 0.05;
+        this.playerVelY = 0;
+        this.camYaw = Math.PI / 2; // face West toward porch & front door
+        this.camPitch = -0.05;
+        this.playerYaw = this.camYaw + Math.PI;
+        this.toast('Traveled to Hilltop Premade Shelter Porch', 'discovery');
+      } else if (target === 'studio') {
+        this.seatedState = null;
+        this.vaultTimer = 0;
+        this.playerX = HILL_HOUSE_POS.x + 2.05;
+        this.playerZ = HILL_HOUSE_POS.z + 5.15;
+        this.playerY = Math.max(
+          this.world.hillHousePos.y + 0.08,
+          getHilltopBaseFloorY(this.playerX, this.playerZ, this.world.hillHousePos.y + 1),
+        );
+        this.playerVelY = 0;
+        this.camYaw = Math.PI - 0.34; // face South-West directly toward Control Room Desk & Recording Booth
+        this.camPitch = -0.14;
+        this.playerYaw = this.camYaw + Math.PI;
+        this.toast('Entered Hilltop Shelter Dedicated Music Studio', 'discovery');
+      } else {
+        this.toast('Usage: /tp house | /tp studio', 'warning');
+      }
+      this.nearbyInteraction = this.findNearbyInteraction();
+      this.updateCamera();
     } else {
-      this.toast(`Unknown command: ${cmd}. Available: /god, /spawn, /weather, /time, /gravity, /erosion, /tame, /mount, /clear`, 'warning');
+      this.toast(`Unknown command: ${cmd}. Available: /god, /spawn, /tp house, /tp studio, /weather, /time, /gravity, /erosion, /tame, /mount, /clear`, 'warning');
     }
     this.emitHud();
   }

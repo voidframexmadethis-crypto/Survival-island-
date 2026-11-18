@@ -720,6 +720,9 @@ export interface PlayerVitals {
   stamina: number;
   maxStamina: number;
   temperatureC: number; // ~37°C ideal; drops in storm/night/swim, warms by fire/shelter
+  hygiene?: number; // 0..100 (100 = clean, 0 = filthy)
+  fatigue?: number; // 0..100 (0 = well rested, 100 = exhausted)
+  injuryState?: 'healthy' | 'bruised' | 'bleeding' | 'fractured';
 }
 
 export interface MissionDefinition {
@@ -788,7 +791,7 @@ export interface SaveSlotSummary {
   missionsCompleted: number;
 }
 
-export const TOTAL_BACKPACK_COMPARTMENTS = 1_000_005_000;
+export const TOTAL_BACKPACK_COMPARTMENTS = 12_000_000_000;
 export const MAX_HUD_BAR_SLOTS = 5000;
 export const DEFAULT_HUD_BAR_SLOTS = 9;
 
@@ -893,7 +896,8 @@ export type ActiveModal =
   | 'multiplayer'
   | 'mods'
   | 'multiverse'
-  | 'menu_drawer';
+  | 'menu_drawer'
+  | 'music_studio';
 
 export interface NearbyInteraction {
   id: string;
@@ -938,6 +942,9 @@ export interface NearbyInteraction {
     | 'house_toilet'
     | 'house_sink'
     | 'house_shower'
+    | 'house_music_studio'
+    | 'house_studio_drums'
+    | 'house_studio_booth'
     | 'structural_block'
     | 'kinetic_node'
     | 'modular_vehicle'

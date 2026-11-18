@@ -43,7 +43,14 @@ export function resetTerrainDeformation(): void {
 }
 
 export function isTerrainProtectedAt(x: number, z: number): boolean {
-  if (Math.hypot(x - HILL_HOUSE_POS.x, z - HILL_HOUSE_POS.z) < 10.8) return true;
+  const hdx = x - HILL_HOUSE_POS.x;
+  const hdz = z - HILL_HOUSE_POS.z;
+  if (
+    Math.hypot(hdx, hdz) < 12.2 ||
+    (hdx >= -8.2 && hdx <= 8.8 && hdz >= -7.2 && hdz <= 11.2)
+  ) {
+    return true;
+  }
   if (
     Math.abs(x - VEHICLE_GARAGE_POS.x) < 13.5 &&
     Math.abs(z - VEHICLE_GARAGE_POS.z) < 9.5
@@ -52,6 +59,47 @@ export function isTerrainProtectedAt(x: number, z: number): boolean {
   }
   if (Math.hypot(x - FARMER_POS.x, z - FARMER_POS.z) < 4.5) return true;
   return false;
+}
+
+/**
+ * Walkable solid deck elevations for the Premade Hilltop Base, Front Porch,
+ * Entry Step, and Dedicated Music Studio Wing so the player and dropped items
+ * never sink or fall through the base or studio floor.
+ */
+export function getHilltopBaseFloorY(
+  x: number,
+  z: number,
+  footY: number,
+): number {
+  const dx = x - HILL_HOUSE_POS.x;
+  const dz = z - HILL_HOUSE_POS.z;
+  let bestY = -9999;
+
+  // Main Premade House + Dedicated Music Studio Wing interior floor (X: -5.35..+4.35, Z: -4.35..+8.55)
+  if (dx >= -5.35 && dx <= 4.35 && dz >= -4.35 && dz <= 8.55) {
+    const floorTop = HILL_HOUSE_Y + 0.08;
+    if (footY >= floorTop - 1.5 && floorTop > bestY) {
+      bestY = floorTop;
+    }
+  }
+
+  // East Front Porch deck (X: +4.2..+6.45, Z: -3.15..+3.15)
+  if (dx >= 4.2 && dx <= 6.45 && dz >= -3.15 && dz <= 3.15) {
+    const porchTop = HILL_HOUSE_Y + 0.07;
+    if (footY >= porchTop - 1.5 && porchTop > bestY) {
+      bestY = porchTop;
+    }
+  }
+
+  // Porch East Entry Step (X: +6.4..+7.05, Z: -1.65..+1.65)
+  if (dx >= 6.4 && dx <= 7.05 && dz >= -1.65 && dz <= 1.65) {
+    const stepTop = HILL_HOUSE_Y + 0.03;
+    if (footY >= stepTop - 1.5 && stepTop > bestY) {
+      bestY = stepTop;
+    }
+  }
+
+  return bestY;
 }
 
 export function sampleGridBilinear(grid: Float32Array, x: number, z: number): number {
@@ -398,25 +446,6 @@ export function getBaseTerrainHeight(x: number, z: number): number {
     h = h * (1 - fBlend) + 3.15 * fBlend;
   }
 
-  // Scenic Hilltop Plateau + gentle East Access Ramp for the Premade Furnished House
-  const dHouse = Math.hypot(x - HILL_HOUSE_POS.x, z - HILL_HOUSE_POS.z);
-  if (dHouse < 16.5) {
-    const houseBlend = 1 - smoothstep(9.8, 16.5, dHouse);
-    h = h * (1 - houseBlend) + HILL_HOUSE_Y * houseBlend;
-  }
-  // Gentle walkable ramp along +X (east) side from hilltop porch (x=-37.5) down to farm path (x=-23.5)
-  const dzRamp = Math.abs(z - HILL_HOUSE_POS.z);
-  if (
-    x >= HILL_HOUSE_POS.x + 6.4 &&
-    x <= HILL_HOUSE_POS.x + 21.5 &&
-    dzRamp < 4.6
-  ) {
-    const rampT = smoothstep(HILL_HOUSE_POS.x + 6.8, HILL_HOUSE_POS.x + 20.5, x);
-    const sideBlend = 1 - smoothstep(2.0, 4.6, dzRamp);
-    const rampH = HILL_HOUSE_Y * (1 - rampT) + 3.25 * rampT;
-    h = h * (1 - sideBlend) + rampH * sideBlend;
-  }
-
   // Expanded 3-Bay Custom Vehicle Garage clearing & wide driveways to island trails & beaches
   const gdx = Math.max(0, Math.abs(x - VEHICLE_GARAGE_POS.x) - 11.2);
   const gdz = Math.max(0, Math.abs(z - VEHICLE_GARAGE_POS.z) - 6.8);
@@ -469,6 +498,34 @@ export function getBaseTerrainHeight(x: number, z: number): number {
     const eBlend = 1 - smoothstep(2.4, 5.4, eastDrive.dist);
     const targetEastH = VEHICLE_GARAGE_Y * (1 - eastDrive.t) + 2.85 * eastDrive.t;
     h = h * (1 - eBlend * 0.8) + targetEastH * (eBlend * 0.8);
+  }
+
+  // Scenic Hilltop Plateau (covering Main House, Porch, and South Music Studio Wing) + gentle East Access Ramp
+  // Applied after lower garage clearing so the studio wing never dips toward the lower garage elevation.
+  const hdxBox = Math.max(
+    0,
+    Math.max(HILL_HOUSE_POS.x - 6.6 - x, x - (HILL_HOUSE_POS.x + 7.4)),
+  );
+  const hdzBox = Math.max(
+    0,
+    Math.max(HILL_HOUSE_POS.z - 5.6 - z, z - (HILL_HOUSE_POS.z + 9.8)),
+  );
+  const dHouseBox = Math.hypot(hdxBox, hdzBox);
+  if (dHouseBox < 5.4) {
+    const houseBlend = 1 - smoothstep(0.6, 5.4, dHouseBox);
+    h = h * (1 - houseBlend) + HILL_HOUSE_Y * houseBlend;
+  }
+  // Gentle walkable ramp along +X (east) side from hilltop porch (x=-37.5) down to farm path (x=-23.5)
+  const dzRamp = Math.abs(z - HILL_HOUSE_POS.z);
+  if (
+    x >= HILL_HOUSE_POS.x + 6.4 &&
+    x <= HILL_HOUSE_POS.x + 21.5 &&
+    dzRamp < 4.6
+  ) {
+    const rampT = smoothstep(HILL_HOUSE_POS.x + 6.8, HILL_HOUSE_POS.x + 20.5, x);
+    const sideBlend = 1 - smoothstep(2.0, 4.6, dzRamp);
+    const rampH = HILL_HOUSE_Y * (1 - rampT) + 3.25 * rampT;
+    h = h * (1 - sideBlend) + rampH * sideBlend;
   }
 
   return h;

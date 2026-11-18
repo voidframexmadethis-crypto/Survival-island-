@@ -3608,7 +3608,10 @@ export interface HouseStationTarget {
     | 'house_stove'
     | 'house_toilet'
     | 'house_sink'
-    | 'house_shower';
+    | 'house_shower'
+    | 'house_music_studio'
+    | 'house_studio_drums'
+    | 'house_studio_booth';
   label: string;
   sublabel: string;
   x: number;
@@ -3700,8 +3703,8 @@ export function createHilltopHouse(
   porchFloor.receiveShadow = true;
   group.add(porchFloor);
 
-  const entryStep = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.16, 2.8), foundationMat);
-  entryStep.position.set(6.55, -0.04, 0);
+  const entryStep = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.16, 3.2), foundationMat);
+  entryStep.position.set(6.65, -0.02, 0);
   entryStep.receiveShadow = true;
   group.add(entryStep);
 
@@ -3735,22 +3738,38 @@ export function createHilltopHouse(
 
     if (withColliders) {
       const length = Math.max(sx, sz);
-      const steps = Math.max(1, Math.ceil(length / 1.1));
+      const steps = Math.max(1, Math.ceil(length / 0.85));
       for (let i = 0; i < steps; i++) {
         const t = steps === 1 ? 0 : i / (steps - 1) - 0.5;
-        const cx = sx >= sz ? lx + t * (sx - 0.5) : lx;
-        const cz = sz > sx ? lz + t * (sz - 0.5) : lz;
-        addLocalCollider(cx, cz, 0.42);
+        const cx = sx >= sz ? lx + t * Math.max(0, sx - 0.56) : lx;
+        const cz = sz > sx ? lz + t * Math.max(0, sz - 0.56) : lz;
+        addLocalCollider(cx, cz, 0.30);
       }
     }
   };
 
-  // West Back Wall (with high window cutout feel)
+  // West Back Wall
   addWall(-5.2, 0, 0.24, 8.6);
   // North Wall
   addWall(-0.5, -4.2, 9.6, 0.24);
-  // South Wall
-  addWall(-0.5, 4.2, 9.6, 0.24);
+  // South Partition Wall (Z = +4.2) separating main rooms from Dedicated Music Studio Wing,
+  // leaving a wide 2.7m open archway at X: +1.5 .. +4.2 along the East entry corridor!
+  addWall(-1.85, 4.2, 6.7, 0.24);
+  const studioArchHeader = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.72, 0.26), trimMat);
+  studioArchHeader.position.set(2.85, 2.78, 4.2);
+  studioArchHeader.userData.isHouseWall = true;
+  const studioSignPlaque = new THREE.Mesh(
+    new THREE.BoxGeometry(1.15, 0.24, 0.08),
+    new THREE.MeshStandardMaterial({
+      color: 0xf59e0b,
+      emissive: 0xd97706,
+      emissiveIntensity: 0.9,
+      roughness: 0.3,
+    }),
+  );
+  studioSignPlaque.position.set(2.85, 2.52, 4.05);
+  group.add(studioArchHeader, studioSignPlaque);
+
   // East Front Wall (split cleanly leaving wide 2.6m open doorway at Z: -1.3 .. +1.3!)
   addWall(4.2, -2.75, 0.24, 2.9);
   addWall(4.2, 2.75, 0.24, 2.9);
@@ -3760,9 +3779,8 @@ export function createHilltopHouse(
   doorHeader.userData.isHouseWall = true;
   group.add(doorHeader);
 
-  // Decorative Glazed Windows on South & West & Front walls
+  // Decorative Glazed Windows on West & Front walls
   [
-    [0.5, 1.65, 4.2, 1.8, 1.1, 0.3],
     [4.2, 1.65, 2.75, 0.3, 1.1, 1.4],
     [4.2, 1.65, -2.75, 0.3, 1.1, 1.4],
     [-5.2, 1.65, 2.0, 0.3, 1.1, 1.6],
@@ -3816,46 +3834,46 @@ export function createHilltopHouse(
   // 4. FURNISHINGS (LIVING ROOM, KITCHEN, BEDROOM, BATHROOM)
   // ==========================================================
 
-  // A. Living Room: Carpet/Rug (centered at X=1.4, Z=1.8)
-  const rugBorder = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.025, 2.6), rugBorderMat);
-  rugBorder.position.set(1.4, 0.095, 1.8);
-  const rugInner = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.03, 2.2), rugMat);
-  rugInner.position.set(1.4, 0.1, 1.8);
+  // A. Living Room: Carpet/Rug (centered at X=0.75, Z=1.8 so East corridor X: +2.0..+4.1 stays wide open!)
+  const rugBorder = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.025, 2.5), rugBorderMat);
+  rugBorder.position.set(0.75, 0.095, 1.8);
+  const rugInner = new THREE.Mesh(new THREE.BoxGeometry(2.25, 0.03, 2.15), rugMat);
+  rugInner.position.set(0.75, 0.1, 1.8);
   group.add(rugBorder, rugInner);
 
-  // B. Plush Couch / Sofa (X=1.4, Z=3.35 facing North toward TV stand at Z=0.45!)
+  // B. Plush Couch / Sofa (X=0.75, Z=3.35 facing North toward TV stand at Z=0.35!)
   const couchGroup = new THREE.Group();
-  couchGroup.position.set(1.4, 0.08, 3.35);
-  const couchBase = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.42, 0.95), fabricMat);
+  couchGroup.position.set(0.75, 0.08, 3.35);
+  const couchBase = new THREE.Mesh(new THREE.BoxGeometry(2.05, 0.42, 0.92), fabricMat);
   couchBase.position.y = 0.24;
   couchBase.castShadow = true;
-  const couchBack = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.55, 0.22), fabricMat);
-  couchBack.position.set(0, 0.62, 0.36);
-  const armCouchL = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.48, 0.95), fabricMat);
-  armCouchL.position.set(-1.12, 0.46, 0);
-  const armCouchR = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.48, 0.95), fabricMat);
-  armCouchR.position.set(1.12, 0.46, 0);
+  const couchBack = new THREE.Mesh(new THREE.BoxGeometry(2.05, 0.55, 0.22), fabricMat);
+  couchBack.position.set(0, 0.62, 0.35);
+  const armCouchL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.48, 0.92), fabricMat);
+  armCouchL.position.set(-0.96, 0.46, 0);
+  const armCouchR = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.48, 0.92), fabricMat);
+  armCouchR.position.set(0.96, 0.46, 0);
   couchGroup.add(couchBase, couchBack, armCouchL, armCouchR);
   group.add(couchGroup);
-  addLocalCollider(1.4, 3.35, 0.72);
+  addLocalCollider(0.75, 3.35, 0.68);
 
   // Coffee Table in front of Couch (on the rug)
-  const coffeeTableTop = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.08, 0.7), trimMat);
-  coffeeTableTop.position.set(1.4, 0.46, 1.95);
-  const coffeeLegs = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.38, 0.52), trimMat);
-  coffeeLegs.position.set(1.4, 0.24, 1.95);
+  const coffeeTableTop = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.08, 0.66), trimMat);
+  coffeeTableTop.position.set(0.75, 0.46, 1.95);
+  const coffeeLegs = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.38, 0.48), trimMat);
+  coffeeLegs.position.set(0.75, 0.24, 1.95);
   group.add(coffeeTableTop, coffeeLegs);
-  addLocalCollider(1.4, 1.95, 0.42);
+  addLocalCollider(0.75, 1.95, 0.38);
 
-  // C. Working Flat-Screen TV & Entertainment Stand (X=1.4, Z=0.35 facing South toward Couch!)
-  const tvStand = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.55, 0.52), trimMat);
-  tvStand.position.set(1.4, 0.35, 0.35);
+  // C. Working Flat-Screen TV & Entertainment Stand (X=0.75, Z=0.35 facing South toward Couch!)
+  const tvStand = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.55, 0.5), trimMat);
+  tvStand.position.set(0.75, 0.35, 0.35);
   tvStand.castShadow = true;
-  const tvFrame = new THREE.Mesh(new THREE.BoxGeometry(1.75, 1.0, 0.1), darkTvMat);
-  tvFrame.position.set(1.4, 1.24, 0.35);
+  const tvFrame = new THREE.Mesh(new THREE.BoxGeometry(1.65, 1.0, 0.1), darkTvMat);
+  tvFrame.position.set(0.75, 1.24, 0.35);
   tvFrame.castShadow = true;
-  const tvScreenMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.86), tvScreenMat);
-  tvScreenMesh.position.set(1.4, 1.24, 0.41);
+  const tvScreenMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.86), tvScreenMat);
+  tvScreenMesh.position.set(0.75, 1.24, 0.41);
   const tvStandbyLedMat = new THREE.MeshStandardMaterial({
     color: 0x22c55e,
     emissive: 0x22c55e,
@@ -3863,10 +3881,10 @@ export function createHilltopHouse(
     roughness: 0.2,
   });
   const tvStandbyLed = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.018, 0.015), tvStandbyLedMat);
-  tvStandbyLed.position.set(2.14, 0.76, 0.405);
+  tvStandbyLed.position.set(1.44, 0.76, 0.405);
   tvScreenMesh.userData.standbyLedMat = tvStandbyLedMat;
   group.add(tvStand, tvFrame, tvScreenMesh, tvStandbyLed);
-  addLocalCollider(1.4, 0.35, 0.55);
+  addLocalCollider(0.75, 0.35, 0.52);
 
   // D. Kitchen (North-East wall Z=-3.55): Refrigerator, Stove/Oven, Kitchen Counter & Sink
   // Refrigerator at X=-0.1, Z=-3.5
@@ -3971,17 +3989,389 @@ export function createHilltopHouse(
   group.add(tubBase, tubWater, showerGlass, showerPipe, showerHead);
   addLocalCollider(-4.45, -2.95, 0.65);
 
+  // ==========================================================
+  // G. DEDICATED MUSIC PRODUCTION STUDIO WING (Z: +4.2 .. +8.4, X: -4.2 .. +4.2)
+  // Enterable via South archway from Living Room (X: +2.0 .. +4.1)
+  // ==========================================================
+  const studioFoundation = new THREE.Mesh(new THREE.BoxGeometry(8.8, 1.8, 4.6), foundationMat);
+  studioFoundation.position.set(0.0, -0.88, 6.4);
+  studioFoundation.receiveShadow = true;
+  studioFoundation.castShadow = true;
+  group.add(studioFoundation);
+
+  const studioFloor = new THREE.Mesh(new THREE.BoxGeometry(8.6, 0.14, 4.4), floorMat);
+  studioFloor.position.set(0.0, 0.01, 6.3);
+  studioFloor.receiveShadow = true;
+  group.add(studioFloor);
+
+  // Studio Control Room Carpet + Booth Acoustic Mat
+  const studioRugMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.95 });
+  const studioRugTrimMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.9 });
+  const studioRugTrim = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.025, 2.3), studioRugTrimMat);
+  studioRugTrim.position.set(1.35, 0.092, 6.45);
+  const studioRug = new THREE.Mesh(new THREE.BoxGeometry(3.15, 0.03, 2.05), studioRugMat);
+  studioRug.position.set(1.35, 0.097, 6.45);
+  const boothRug = new THREE.Mesh(new THREE.BoxGeometry(2.35, 0.03, 3.2), studioRugMat);
+  boothRug.position.set(-2.75, 0.097, 6.35);
+  group.add(studioRugTrim, studioRug, boothRug);
+
+  // Studio Exterior Walls & Roof
+  addWall(-4.2, 6.3, 0.24, 4.4); // West outer wall
+  addWall(0.0, 8.4, 8.6, 0.24);  // South outer wall
+  addWall(4.2, 6.3, 0.24, 4.4);  // East outer wall
+
+  // Studio Wing Acoustic Ceiling & Sloped Roof
+  const studioCeiling = new THREE.Mesh(new THREE.BoxGeometry(8.85, 0.22, 4.6), trimMat);
+  studioCeiling.position.set(0.0, 3.22, 6.35);
+  studioCeiling.userData.isHouseWall = true;
+  const studioRoof = new THREE.Mesh(new THREE.BoxGeometry(9.2, 0.22, 4.9), roofMat);
+  studioRoof.position.set(0.0, 3.55, 6.35);
+  studioRoof.rotation.x = -0.14;
+  studioRoof.castShadow = true;
+  studioRoof.userData.isHouseWall = true;
+  group.add(studioCeiling, studioRoof);
+
+  // Glazed Studio Windows (South & East walls)
+  [
+    [1.2, 1.85, 8.4, 2.1, 0.95, 0.3],
+    [4.2, 1.75, 6.3, 0.3, 1.0, 1.5],
+  ].forEach(([wx, wy, wz, sx, sy, sz]) => {
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.08, sy + 0.08, sz + 0.08), trimMat);
+    frame.position.set(wx, wy, wz);
+    const pane = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.12, sy - 0.08, sz - 0.08), glassMat);
+    pane.position.set(wx, wy, wz);
+    group.add(frame, pane);
+  });
+
+  // Acoustic Foam Sound-Absorption Wall Panels
+  const foamMat = new THREE.MeshStandardMaterial({ color: 0x292524, roughness: 0.96 });
+  const foamAccentMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.92 });
+  [
+    [0.05, 1.8, 8.22, 1.2, 1.1, 0.08],
+    [2.35, 1.8, 8.22, 1.2, 1.1, 0.08],
+    [4.02, 1.8, 5.1, 0.08, 1.2, 0.9],
+    [4.02, 1.8, 7.6, 0.08, 1.2, 0.9],
+    [-4.02, 1.7, 5.4, 0.08, 1.4, 1.1],
+    [-4.02, 1.7, 7.1, 0.08, 1.4, 1.1],
+    [-2.75, 1.7, 8.22, 2.1, 1.4, 0.08],
+  ].forEach(([px, py, pz, sx, sy, sz], idx) => {
+    const panel = new THREE.Mesh(
+      new THREE.BoxGeometry(sx, sy, sz),
+      idx % 2 === 0 ? foamMat : foamAccentMat,
+    );
+    panel.position.set(px, py, pz);
+    group.add(panel);
+  });
+
+  // Warm Studio Ceiling Light (keeps total house lights at 3)
+  const studioLight = new THREE.PointLight(0xfde68a, 1.15, 10, 1.5);
+  studioLight.position.set(0.6, 2.85, 6.45);
+  group.add(studioLight);
+
+  // Studio Material Palette
+  const deskWoodMat = new THREE.MeshStandardMaterial({ color: 0x27201c, roughness: 0.55 });
+  const matteBlackMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.42, metalness: 0.35 });
+  const brushedAlumMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.25, metalness: 0.85 });
+  const dawScreenMat = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    emissive: 0x0284c7,
+    emissiveIntensity: 0.72,
+    roughness: 0.2,
+  });
+  const ledAmberMat = new THREE.MeshStandardMaterial({
+    color: 0xfbbf24,
+    emissive: 0xf59e0b,
+    emissiveIntensity: 1.1,
+    roughness: 0.25,
+  });
+  const ledGreenMat = new THREE.MeshStandardMaterial({
+    color: 0x4ade80,
+    emissive: 0x22c55e,
+    emissiveIntensity: 1.1,
+    roughness: 0.25,
+  });
+  const onAirMat = new THREE.MeshStandardMaterial({
+    color: 0xef4444,
+    emissive: 0xdc2626,
+    emissiveIntensity: 1.35,
+    roughness: 0.25,
+  });
+  const coneMat = new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.45, metalness: 0.25 });
+
+  // 1. PRODUCTION DESK & PRODUCER CHAIR (X=1.25, Z=7.5)
+  const deskGroup = new THREE.Group();
+  deskGroup.position.set(1.25, 0.08, 7.5);
+  const deskMainTop = new THREE.Mesh(new THREE.BoxGeometry(2.55, 0.07, 0.96), deskWoodMat);
+  deskMainTop.position.set(0, 0.74, 0);
+  deskMainTop.castShadow = true;
+  const deskBridge = new THREE.Mesh(new THREE.BoxGeometry(2.45, 0.16, 0.34), deskWoodMat);
+  deskBridge.position.set(0, 0.86, 0.28);
+  const deskLegL = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.74, 0.84), matteBlackMat);
+  deskLegL.position.set(-1.18, 0.37, 0);
+  const deskLegR = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.74, 0.84), matteBlackMat);
+  deskLegR.position.set(1.18, 0.37, 0);
+  const deskRackLeft = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.56, 0.7), matteBlackMat);
+  deskRackLeft.position.set(-0.88, 0.44, 0.05);
+  // Producer Swivel Chair in front of desk (no collider so walkways stay smooth)
+  const chairSeat = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.09, 0.52), matteBlackMat);
+  chairSeat.position.set(0, 0.48, -0.78);
+  const chairBack = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.62, 0.09), matteBlackMat);
+  chairBack.position.set(0, 0.82, -1.0);
+  const chairStem = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.4, 8), chromeMat);
+  chairStem.position.set(0, 0.24, -0.78);
+  const chairBase = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.32, 0.06, 8), matteBlackMat);
+  chairBase.position.set(0, 0.04, -0.78);
+  deskGroup.add(
+    deskMainTop,
+    deskBridge,
+    deskLegL,
+    deskLegR,
+    deskRackLeft,
+    chairSeat,
+    chairBack,
+    chairStem,
+    chairBase,
+  );
+  group.add(deskGroup);
+  addLocalCollider(0.55, 7.65, 0.36);
+  addLocalCollider(1.95, 7.65, 0.36);
+
+  // 2. COMPUTER (Dual DAW Displays + PC Tower + QWERTY Keyboard)
+  const monitorStandL = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.24, 0.12), brushedAlumMat);
+  monitorStandL.position.set(0.88, 1.05, 7.82);
+  const pcBezelL = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.42, 0.05), darkTvMat);
+  pcBezelL.position.set(0.88, 1.28, 7.8);
+  pcBezelL.rotation.y = 0.14;
+  const pcScreenL = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.36), dawScreenMat);
+  pcScreenL.position.set(0.875, 1.28, 7.77);
+  pcScreenL.rotation.y = Math.PI + 0.14;
+
+  const monitorStandR = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.24, 0.12), brushedAlumMat);
+  monitorStandR.position.set(1.62, 1.05, 7.82);
+  const pcBezelR = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.42, 0.05), darkTvMat);
+  pcBezelR.position.set(1.62, 1.28, 7.8);
+  pcBezelR.rotation.y = -0.14;
+  const pcScreenR = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.36), dawScreenMat);
+  pcScreenR.position.set(1.625, 1.28, 7.77);
+  pcScreenR.rotation.y = Math.PI - 0.14;
+
+  // DAW timeline waveform bars on left screen & spectrum bars on right screen
+  [1.22, 1.28, 1.34].forEach((by, bIdx) => {
+    const bar = new THREE.Mesh(
+      new THREE.BoxGeometry(0.46, 0.032, 0.01),
+      bIdx % 2 === 0 ? ledAmberMat : ledGreenMat,
+    );
+    bar.position.set(0.875, by, 7.76);
+    bar.rotation.y = 0.14;
+    group.add(bar);
+  });
+  [-0.18, -0.09, 0, 0.09, 0.18].forEach((ox, sIdx) => {
+    const h = 0.09 + (sIdx % 3) * 0.065;
+    const eqBar = new THREE.Mesh(
+      new THREE.BoxGeometry(0.05, h, 0.01),
+      sIdx % 2 === 0 ? ledGreenMat : ledAmberMat,
+    );
+    eqBar.position.set(1.625 + ox, 1.18 + h / 2, 7.76);
+    eqBar.rotation.y = -0.14;
+    group.add(eqBar);
+  });
+
+  // Illuminated Studio Workstation PC Tower beside desk
+  const pcTower = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.54, 0.52), matteBlackMat);
+  pcTower.position.set(2.68, 0.35, 7.65);
+  const pcLedStrip = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.42, 0.02), ledAmberMat);
+  pcLedStrip.position.set(2.62, 0.36, 7.38);
+  const qwertyKb = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.02, 0.15), matteBlackMat);
+  qwertyKb.position.set(1.25, 0.87, 7.45);
+  group.add(
+    monitorStandL,
+    pcBezelL,
+    pcScreenL,
+    monitorStandR,
+    pcBezelR,
+    pcScreenR,
+    pcTower,
+    pcLedStrip,
+    qwertyKb,
+  );
+
+  // 3. STUDIO MONITORS (Left & Right 2-way speakers on isolation pads)
+  [
+    { x: 0.25, rot: 0.22 },
+    { x: 2.25, rot: -0.22 },
+  ].forEach(({ x: sx, rot }) => {
+    const spkGroup = new THREE.Group();
+    spkGroup.position.set(sx, 1.02, 7.76);
+    spkGroup.rotation.y = rot;
+    const isoPad = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.04, 0.3), foamMat);
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.4, 0.28), matteBlackMat);
+    cab.position.y = 0.22;
+    const woofer = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.03, 14), coneMat);
+    woofer.rotation.x = Math.PI / 2;
+    woofer.position.set(0, 0.17, -0.14);
+    const tweeter = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.03, 12), chromeMat);
+    tweeter.rotation.x = Math.PI / 2;
+    tweeter.position.set(0, 0.33, -0.14);
+    spkGroup.add(isoPad, cab, woofer, tweeter);
+    group.add(spkGroup);
+  });
+
+  // 4. MIDI KEYBOARD (49-key controller on front desk with white & black keys)
+  const midiGroup = new THREE.Group();
+  midiGroup.position.set(1.25, 0.87, 7.18);
+  const midiBody = new THREE.Mesh(new THREE.BoxGeometry(1.06, 0.06, 0.28), matteBlackMat);
+  const midiWhiteBed = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.03, 0.15), porcelainMat);
+  midiWhiteBed.position.set(0.05, 0.032, -0.04);
+  midiGroup.add(midiBody, midiWhiteBed);
+  for (let k = 0; k < 14; k++) {
+    if (k % 7 === 2 || k % 7 === 6) continue;
+    const blackKey = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.026, 0.09), darkTvMat);
+    blackKey.position.set(-0.33 + k * 0.058, 0.05, -0.01);
+    midiGroup.add(blackKey);
+  }
+  const pitchWheel = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.03, 0.08), ledAmberMat);
+  pitchWheel.position.set(-0.44, 0.04, -0.02);
+  midiGroup.add(pitchWheel);
+  group.add(midiGroup);
+
+  // 5. MIXING CONSOLE (Multi-fader desk section on left side of production desk)
+  const mixerGroup = new THREE.Group();
+  mixerGroup.position.set(0.32, 0.87, 7.26);
+  const mixerChassis = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.07, 0.44), brushedAlumMat);
+  const mixerMeter = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.02, 0.03), ledGreenMat);
+  mixerMeter.position.set(0, 0.04, 0.14);
+  mixerGroup.add(mixerChassis, mixerMeter);
+  for (let f = 0; f < 6; f++) {
+    const fx = -0.22 + f * 0.088;
+    const slot = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.01, 0.2), darkTvMat);
+    slot.position.set(fx, 0.038, -0.06);
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.028, 0.045), matteBlackMat);
+    cap.position.set(fx, 0.05, -0.08 + (f % 3) * 0.04);
+    const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.025, 8), ledAmberMat);
+    knob.position.set(fx, 0.048, 0.08);
+    mixerGroup.add(slot, cap, knob);
+  }
+  group.add(mixerGroup);
+
+  // 6. AUDIO INTERFACE (Desktop preamp unit with gain halos)
+  const ifaceBox = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.075, 0.2), brushedAlumMat);
+  ifaceBox.position.set(2.05, 0.89, 7.45);
+  const ifaceKnobL = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.03, 10), ledGreenMat);
+  ifaceKnobL.rotation.x = Math.PI / 2;
+  ifaceKnobL.position.set(1.97, 0.89, 7.34);
+  const ifaceKnobR = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.03, 10), ledAmberMat);
+  ifaceKnobR.rotation.x = Math.PI / 2;
+  ifaceKnobR.position.set(2.08, 0.89, 7.34);
+  group.add(ifaceBox, ifaceKnobL, ifaceKnobR);
+
+  // 7. HEADPHONES (Over-ear studio headphones on desk stand)
+  const hpStandPole = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.34, 8), chromeMat);
+  hpStandPole.position.set(2.34, 1.02, 7.22);
+  const hpBand = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.04, 0.05), matteBlackMat);
+  hpBand.position.set(2.34, 1.19, 7.22);
+  const hpCupL = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.04, 12), matteBlackMat);
+  hpCupL.rotation.z = Math.PI / 2;
+  hpCupL.position.set(2.25, 1.08, 7.22);
+  const hpCupR = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.04, 12), matteBlackMat);
+  hpCupR.rotation.z = Math.PI / 2;
+  hpCupR.position.set(2.43, 1.08, 7.22);
+  group.add(hpStandPole, hpBand, hpCupL, hpCupR);
+
+  // 8. DRUM MACHINE / SAMPLER STAND (East Studio Corner X=3.45, Z=7.25)
+  const drumStandPole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.88, 8), chromeMat);
+  drumStandPole.position.set(3.45, 0.52, 7.25);
+  const drumPadChassis = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.08, 0.56), matteBlackMat);
+  drumPadChassis.position.set(3.45, 0.98, 7.25);
+  drumPadChassis.rotation.x = 0.22;
+  drumPadChassis.rotation.y = -0.35;
+  group.add(drumStandPole, drumPadChassis);
+  for (let row = 0; row < 4; row++) {
+    for (let col = 0; col < 4; col++) {
+      const pad = new THREE.Mesh(
+        new THREE.BoxGeometry(0.1, 0.025, 0.09),
+        (row + col) % 2 === 0 ? ledAmberMat : ledGreenMat,
+      );
+      pad.position.set(
+        3.29 + col * 0.11,
+        1.03 - row * 0.018,
+        7.12 + row * 0.095,
+      );
+      group.add(pad);
+    }
+  }
+  addLocalCollider(3.45, 7.25, 0.32);
+
+  // 9. ISOLATED RECORDING BOOTH (West Studio Wing X: -4.1..-1.3, Z: +4.4..+8.2)
+  // Partition wall at X = -1.3 from Z = +6.4..+8.3, leaving wide open booth entry at Z: +4.4..+6.4
+  addWall(-1.3, 7.35, 0.2, 1.9);
+  const boothGlassFrame = new THREE.Mesh(new THREE.BoxGeometry(0.24, 1.08, 1.45), trimMat);
+  boothGlassFrame.position.set(-1.3, 1.65, 7.25);
+  const boothWindowPane = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.94, 1.3), glassMat);
+  boothWindowPane.position.set(-1.3, 1.65, 7.25);
+  const onAirSign = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.22, 0.65), onAirMat);
+  onAirSign.position.set(-1.26, 2.65, 5.25);
+  group.add(boothGlassFrame, boothWindowPane, onAirSign);
+
+  // 10. CONDENSER MICROPHONE ON BOOM STAND + POP FILTER (Inside Recording Booth at X=-2.85, Z=7.05)
+  const micBase = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.24, 0.05, 14), matteBlackMat);
+  micBase.position.set(-2.85, 0.11, 7.05);
+  const micPole = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.024, 1.45, 8), chromeMat);
+  micPole.position.set(-2.85, 0.85, 7.05);
+  const micBoom = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.62, 8), chromeMat);
+  micBoom.position.set(-2.68, 1.56, 6.95);
+  micBoom.rotation.z = -0.95;
+  micBoom.rotation.y = 0.4;
+  const micBody = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.038, 0.2, 12), brushedAlumMat);
+  micBody.position.set(-2.5, 1.52, 6.86);
+  const micCapsule = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 10), chromeMat);
+  micCapsule.position.set(-2.5, 1.64, 6.86);
+  const popFilter = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.095, 0.016, 16), matteBlackMat);
+  popFilter.rotation.z = Math.PI / 2;
+  popFilter.position.set(-2.4, 1.58, 6.8);
+  group.add(micBase, micPole, micBoom, micBody, micCapsule, popFilter);
+  addLocalCollider(-2.85, 7.05, 0.28);
+
   const stations: HouseStationTarget[] = [
+    {
+      id: 'house_music_studio',
+      kind: 'house_music_studio',
+      label: 'Open Music Production Studio',
+      sublabel: 'DAW, MIDI Synth, Sequencer, Mixing Console & Samples',
+      x: worldX + 1.25,
+      y: worldY,
+      z: worldZ + 6.9,
+      range: 2.95,
+    },
+    {
+      id: 'house_studio_drums',
+      kind: 'house_studio_drums',
+      label: 'Play Drum Machine & Sequencer',
+      sublabel: '16-Step Beat Pads, BPM & Custom WAV Kits',
+      x: worldX + 3.25,
+      y: worldY,
+      z: worldZ + 7.0,
+      range: 2.4,
+    },
+    {
+      id: 'house_studio_booth',
+      kind: 'house_studio_booth',
+      label: 'Enter Recording Booth & Mic',
+      sublabel: 'Record live vocals/audio into Studio Sampler',
+      x: worldX - 2.6,
+      y: worldY,
+      z: worldZ + 6.55,
+      range: 2.4,
+    },
     {
       id: 'house_couch',
       kind: 'house_couch',
       label: 'Sit on Living Room Couch',
       sublabel: 'Relax in front of the TV',
-      x: worldX + 1.4,
+      x: worldX + 0.75,
       y: worldY,
       z: worldZ + 3.1,
       range: 2.3,
-      sitX: worldX + 1.4,
+      sitX: worldX + 0.75,
       sitY: worldY + 0.15,
       sitZ: worldZ + 3.25,
       sitYaw: 0, // facing North (-Z) toward TV
@@ -3991,10 +4381,10 @@ export function createHilltopHouse(
       kind: 'house_tv',
       label: 'Watch TV (YouTube)',
       sublabel: 'Stream videos & survival channels',
-      x: worldX + 1.4,
+      x: worldX + 0.75,
       y: worldY,
       z: worldZ + 0.6,
-      range: 3.4,
+      range: 3.2,
     },
     {
       id: 'house_fridge',

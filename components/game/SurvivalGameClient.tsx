@@ -109,6 +109,7 @@ import {
 import { VehicleBuilderModal } from './VehicleBuilderModal';
 import { CommandConsoleModal } from './CommandConsoleModal';
 import { DimensionWheelModal } from './DimensionWheelModal';
+import { MusicStudioModal } from './MusicStudioModal';
 
 function formatTimePhase(t: number): string {
   if (t < 0.2 || t >= 0.84) return 'Night';
@@ -466,6 +467,18 @@ export function SurvivalGameClient() {
     });
     engineRef.current = engine;
 
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('autostart') === '1') {
+      engine.setGameMode('survival');
+      engine.startNewWorldState('slot_1', true);
+      engine.ensurePlayerHasGun(true);
+      engine.setMode('playing');
+      window.requestAnimationFrame(() => {
+        setActiveModal(null);
+        setScreen('playing');
+      });
+    }
+
     return () => {
       engine.dispose();
       engineRef.current = null;
@@ -822,6 +835,7 @@ export function SurvivalGameClient() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <button
+                  data-start="true"
                   onClick={() => handleStartNewGame('survival')}
                   className="p-4 rounded-2xl bg-stone-900/90 hover:bg-stone-800 border border-amber-500/50 hover:border-amber-400 text-left transition shadow-xl flex flex-col justify-between group"
                 >
@@ -2348,6 +2362,24 @@ export function SurvivalGameClient() {
           onLoadLocalVideo={(file) => engineRef.current?.loadLocalTvVideo(file)}
           onDrawPreview={(canvas) => engineRef.current?.drawTvPreview(canvas)}
           onClose={closeModal}
+        />
+      )}
+
+      {activeModal === 'music_studio' && (
+        <MusicStudioModal
+          initialTab={
+            activeStationStructureId === 'house_studio_booth'
+              ? 'booth'
+              : 'sequencer'
+          }
+          onClose={closeModal}
+          onToast={(text, tone = 'info') =>
+            pushToast({
+              id: `studio_${Date.now()}_${Math.random()}`,
+              text,
+              tone,
+            })
+          }
         />
       )}
 

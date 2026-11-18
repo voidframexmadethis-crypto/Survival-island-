@@ -2814,7 +2814,7 @@ export function buildIslandWorld(
     houseStations: hillHouse.stations,
     tvScreenMat: hillHouse.tvScreenMat,
     tvScreenMesh: hillHouse.tvScreenMesh,
-    tvWorldPos: new THREE.Vector3(HILL_HOUSE_POS.x + 1.4, HILL_HOUSE_Y + 1.24, HILL_HOUSE_POS.z + 0.41),
+    tvWorldPos: new THREE.Vector3(HILL_HOUSE_POS.x + 0.75, HILL_HOUSE_Y + 1.24, HILL_HOUSE_POS.z + 0.41),
     hillHousePos: new THREE.Vector3(HILL_HOUSE_POS.x, HILL_HOUSE_Y, HILL_HOUSE_POS.z),
     garagePos,
     garageBenchPos,
