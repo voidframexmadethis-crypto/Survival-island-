@@ -2112,6 +2112,17 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
     iconKey: 'diamond_crystal',
     color: '#38bdf8',
   },
+  totem_of_undying: {
+    id: 'totem_of_undying',
+    name: 'Totem of Undying',
+    category: 'equipment',
+    description:
+      'Golden Woodland Mansion relic dropped by Evokers, Witches, and Pillagers. Automatically activates when your health drops low to prevent death and rapidly regenerate health.',
+    stackable: true,
+    maxStack: 5,
+    iconKey: 'totem_of_undying',
+    color: '#fbbf24',
+  },
 };
 
 export const ALL_ITEM_IDS = Object.keys(ITEMS) as ItemId[];
@@ -2567,5 +2578,6 @@ export const ITEM_SELL_PRICES: Partial<Record<ItemId, number>> = {
   diamond_crystal: 60,
   nether_ember: 48,
   alien_core: 65,
+  totem_of_undying: 95,
 };
 

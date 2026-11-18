@@ -12,12 +12,20 @@ import {
   FARMER_POS,
   HILL_HOUSE_POS,
   HOMESTEAD_POS,
+  JUNGLE_TEMPLE_POS,
   LAKE_CENTER,
+  PILLAGER_OUTPOST_POS,
+  SNOWY_IGLOO_POS,
+  SNOWY_VILLAGE_POS,
   SNOWY_WOODLAND_POS,
   SWAMP_POS,
+  TAIGA_VILLAGE_POS,
+  TRAIL_RUINS_POS,
+  TRIAL_CHAMBERS_POS,
   VEHICLE_GARAGE_POS,
   WATERFALL_POS,
   WHEATFIELD_POS,
+  WOODLAND_MANSION_POS,
   getBiomeAt,
   getTerrainHeight,
 } from '@/game/world/terrain';
@@ -168,6 +176,54 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
               r = 165;
               g = 120;
               b = 70;
+            } else if (biome === 'snowy_taiga') {
+              r = 214;
+              g = 226;
+              b = 238;
+            } else if (biome === 'old_growth_pine_taiga') {
+              r = 78;
+              g = 68;
+              b = 44;
+            } else if (biome === 'old_growth_spruce_taiga') {
+              r = 38;
+              g = 76;
+              b = 58;
+            } else if (biome === 'taiga') {
+              r = 40;
+              g = 94;
+              b = 62;
+            } else if (biome === 'pale_garden') {
+              r = 126;
+              g = 134;
+              b = 129;
+            } else if (biome === 'flower_forest') {
+              r = 198;
+              g = 92;
+              b = 148;
+            } else if (biome === 'birch_forest') {
+              r = 124;
+              g = 176;
+              b = 66;
+            } else if (biome === 'old_growth_birch_forest') {
+              r = 88;
+              g = 142;
+              b = 52;
+            } else if (biome === 'jungle') {
+              r = 24;
+              g = 110;
+              b = 56;
+            } else if (biome === 'sparse_jungle') {
+              r = 66;
+              g = 152;
+              b = 78;
+            } else if (biome === 'bamboo_jungle') {
+              r = 112;
+              g = 172;
+              b = 50;
+            } else if (biome === 'dark_forest') {
+              r = 30;
+              g = 58;
+              b = 36;
             } else {
               r = 46;
               g = 112;
@@ -199,6 +255,14 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
         { label: 'Hilltop House', pos: HILL_HOUSE_POS, color: '#fb923c' },
         { label: 'Vehicle Garage', pos: VEHICLE_GARAGE_POS, color: '#38bdf8' },
         { label: 'Azure Lake', pos: LAKE_CENTER, color: '#2dd4bf' },
+        { label: 'Trial Chambers', pos: TRIAL_CHAMBERS_POS, color: '#ea580c' },
+        { label: 'Woodland Mansion', pos: WOODLAND_MANSION_POS, color: '#78350f' },
+        { label: 'Taiga Village', pos: TAIGA_VILLAGE_POS, color: '#86efac' },
+        { label: 'Pillager Outpost', pos: PILLAGER_OUTPOST_POS, color: '#f87171' },
+        { label: 'Trail Ruins', pos: TRAIL_RUINS_POS, color: '#c084fc' },
+        { label: 'Snowy Village', pos: SNOWY_VILLAGE_POS, color: '#bae6fd' },
+        { label: 'Ice Igloo', pos: SNOWY_IGLOO_POS, color: '#f0f9ff' },
+        { label: 'Jungle Temple', pos: JUNGLE_TEMPLE_POS, color: '#34d399' },
       ];
       ctx.font = '600 10px sans-serif';
       landmarks.forEach((lm) => {
@@ -259,6 +323,11 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
           s.species === 'tiger' ||
           s.species === 'cheetah' ||
           s.species === 'hyena' ||
+          s.species === 'creaking' ||
+          s.species === 'vex' ||
+          s.species === 'evoker' ||
+          s.species === 'pillager' ||
+          s.species === 'witch' ||
           s.species === 'great_white_shark' ||
           s.species === 'saltwater_crocodile'
             ? '#ef4444'
@@ -392,7 +461,7 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
             <div className="text-xs text-stone-400">
               {isFlat
                 ? `Active Coasters: ${hud.coasters?.length ?? 0} · Placed Structures: ${hud.structures.length}`
-                : `Discovered Regions: ${hud.visitedBiomes.length} / 9`}
+                : `Discovered Regions: ${hud.visitedBiomes.length} / ${Object.keys(BIOME_INFO).length}`}
             </div>
           </div>
         </div>

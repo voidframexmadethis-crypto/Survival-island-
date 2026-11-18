@@ -1256,6 +1256,73 @@ export class SoundEngine {
       g.connect(this.masterGain);
       osc.start(now);
       osc.stop(now + 0.48);
+    } else if (species === 'creaking') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(148, now);
+      osc.frequency.linearRampToValueAtTime(96, now + 0.16);
+      osc.frequency.linearRampToValueAtTime(172, now + 0.36);
+      g.gain.setValueAtTime(vol * 0.52, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.44);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.46);
+    } else if (species === 'bee') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(220, now);
+      osc.frequency.linearRampToValueAtTime(245, now + 0.25);
+      g.gain.setValueAtTime(vol * 0.18, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.3);
+    } else if (species === 'parrot' || species === 'white_fox' || species === 'ocelot' || species === 'panda') {
+      osc.type = species === 'panda' ? 'sine' : 'triangle';
+      const f1 = species === 'parrot' ? 1240 : species === 'white_fox' ? 840 : species === 'ocelot' ? 620 : 185;
+      const f2 = species === 'parrot' ? 860 : species === 'white_fox' ? 580 : species === 'ocelot' ? 760 : 145;
+      osc.frequency.setValueAtTime(f1, now);
+      osc.frequency.exponentialRampToValueAtTime(f2, now + 0.22);
+      g.gain.setValueAtTime(vol * 0.4, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.27);
+    } else if (species === 'vex') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(980, now);
+      osc.frequency.exponentialRampToValueAtTime(1420, now + 0.14);
+      osc.frequency.exponentialRampToValueAtTime(720, now + 0.28);
+      g.gain.setValueAtTime(vol * 0.34, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.32);
+    } else if (species === 'evoker' || species === 'pillager') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(species === 'evoker' ? 230 : 175, now);
+      osc.frequency.linearRampToValueAtTime(species === 'evoker' ? 295 : 142, now + 0.14);
+      osc.frequency.linearRampToValueAtTime(species === 'evoker' ? 190 : 162, now + 0.34);
+      g.gain.setValueAtTime(vol * 0.56, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.4);
+    } else if (species === 'witch') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(520, now);
+      osc.frequency.linearRampToValueAtTime(780, now + 0.08);
+      osc.frequency.linearRampToValueAtTime(460, now + 0.18);
+      osc.frequency.linearRampToValueAtTime(710, now + 0.28);
+      g.gain.setValueAtTime(vol * 0.42, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.36);
     } else {
       osc.type = 'triangle';
       osc.frequency.setValueAtTime(150, now);
@@ -1777,5 +1844,26 @@ export class SoundEngine {
     }
 
     return this.trunkBassPulse;
+  }
+
+  public playTotemUndying(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const notes = [523.25, 659.25, 783.99, 1046.5, 1318.5];
+    notes.forEach((freq, idx) => {
+      if (!this.ctx || !this.masterGain) return;
+      const t0 = now + idx * 0.065;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = idx % 2 === 0 ? 'triangle' : 'sine';
+      osc.frequency.setValueAtTime(freq, t0);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.015, t0 + 0.48);
+      g.gain.setValueAtTime(0.22, t0);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.52);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(t0);
+      osc.stop(t0 + 0.54);
+    });
   }
 }

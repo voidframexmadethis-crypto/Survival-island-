@@ -30,7 +30,17 @@ export type ExpandedSpeciesKey =
   | 'allosaurus'
   | 'dilophosaurus'
   | 'diplodocus'
-  | 'pteranodon';
+  | 'pteranodon'
+  | 'bee'
+  | 'creaking'
+  | 'white_fox'
+  | 'parrot'
+  | 'ocelot'
+  | 'panda'
+  | 'vex'
+  | 'evoker'
+  | 'pillager'
+  | 'witch';
 
 const EXPANDED_SPECIES_SET = new Set<string>([
   'elephant',
@@ -61,6 +71,16 @@ const EXPANDED_SPECIES_SET = new Set<string>([
   'dilophosaurus',
   'diplodocus',
   'pteranodon',
+  'bee',
+  'creaking',
+  'white_fox',
+  'parrot',
+  'ocelot',
+  'panda',
+  'vex',
+  'evoker',
+  'pillager',
+  'witch',
 ]);
 
 export function isExpandedCreatureSpecies(species: CreatureSpecies): species is ExpandedSpeciesKey {
@@ -1581,6 +1601,578 @@ export function createExpandedCreatureModel(
       2.1,
       skinMat,
     );
+  } else if (species === 'bee') {
+    const goldMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.52 });
+    const stripeMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.65 });
+    const wingMat = new THREE.MeshStandardMaterial({
+      color: 0xe0f2fe,
+      roughness: 0.2,
+      transparent: true,
+      opacity: 0.72,
+      side: THREE.DoubleSide,
+    });
+    const beeEyeMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.3 });
+    shadowRadius = 0.25;
+
+    root.add(body);
+    const thorax = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.26, 0.42), goldMat);
+    thorax.castShadow = true;
+    body.add(thorax);
+    [-0.1, 0.05].forEach((sz) => {
+      const band = new THREE.Mesh(new THREE.BoxGeometry(0.295, 0.27, 0.075), stripeMat);
+      band.position.z = sz;
+      body.add(band);
+    });
+    const stinger = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.14, 5), stripeMat);
+    stinger.rotation.x = -Math.PI / 2;
+    stinger.position.z = -0.26;
+    body.add(stinger);
+
+    head.position.set(0, 0.02, 0.24);
+    const face = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.21, 0.14), stripeMat);
+    head.add(face);
+    addStandardEyePair(head, 0.075, 0.02, 0.072, 0.03, beeEyeMat);
+    [-1, 1].forEach((side) => {
+      const feeler = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.025, 0.14), stripeMat);
+      feeler.position.set(side * 0.06, 0.09, 0.1);
+      feeler.rotation.x = -0.35;
+      head.add(feeler);
+    });
+    body.add(head);
+
+    wings = [];
+    [-1, 1].forEach((side) => {
+      const wing = new THREE.Group();
+      wing.position.set(side * 0.12, 0.14, 0.02);
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.02, 0.18), wingMat);
+      blade.position.x = side * 0.16;
+      wing.add(blade);
+      body.add(wing);
+      wings!.push(wing);
+    });
+
+    tail.position.set(0, 0, -0.21);
+    body.add(tail);
+    const shadowDisc = makeContactShadow(shadowRadius);
+    shadowDisc.visible = false;
+    root.add(shadowDisc);
+    return { root, body, head, jaw, tail, legs, wings, shadowDisc };
+  } else if (species === 'creaking') {
+    const paleBarkMat = new THREE.MeshStandardMaterial({ color: 0x626764, roughness: 0.94 });
+    const darkCreviceMat = new THREE.MeshStandardMaterial({ color: 0x333735, roughness: 0.96 });
+    const heartCoreMat = new THREE.MeshStandardMaterial({
+      color: 0xf97316,
+      emissive: 0xea580c,
+      emissiveIntensity: 1.3,
+      roughness: 0.3,
+    });
+    eyeGlowMat = new THREE.MeshBasicMaterial({ color: 0xfb923c, transparent: true, opacity: 0.95 });
+    shadowRadius = 0.65;
+
+    body.position.y = 1.48;
+    root.add(body);
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.62, 1.05, 0.36), paleBarkMat);
+    torso.castShadow = true;
+    const hollowChest = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.56, 0.39), darkCreviceMat);
+    hollowChest.position.y = 0.04;
+    const resinHeart = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.24, 0.41), heartCoreMat);
+    resinHeart.position.y = 0.04;
+    const shoulderKnob = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.22, 0.4), paleBarkMat);
+    shoulderKnob.position.set(0.06, 0.44, 0);
+    shoulderKnob.rotation.z = 0.12;
+    body.add(torso, hollowChest, resinHeart, shoulderKnob);
+
+    head.position.set(0.04, 0.72, 0.04);
+    const mask = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.54, 0.38), paleBarkMat);
+    mask.castShadow = true;
+    const crownBough = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.28, 0.16), darkCreviceMat);
+    crownBough.position.set(-0.14, 0.36, -0.04);
+    crownBough.rotation.z = 0.25;
+    head.add(mask, crownBough);
+    // 3 asymmetrical glowing orange resin eyes
+    [
+      [-0.1, 0.08, 0.195, 0.045],
+      [0.11, 0.12, 0.195, 0.04],
+      [0.06, -0.02, 0.195, 0.036],
+    ].forEach(([ex, ey, ez, er]) => {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(er, 6, 6), eyeGlowMat!);
+      eye.position.set(ex, ey, ez);
+      head.add(eye);
+    });
+    body.add(head);
+
+    // Crooked hanging wooden arms
+    [-1, 1].forEach((side) => {
+      const arm = new THREE.Mesh(
+        new THREE.BoxGeometry(0.18, side < 0 ? 1.25 : 1.08, 0.18),
+        paleBarkMat,
+      );
+      arm.position.set(side * 0.44, side < 0 ? -0.08 : 0.04, 0.08);
+      arm.rotation.x = -0.22;
+      arm.castShadow = true;
+      body.add(arm);
+    });
+
+    tail.position.set(0, -0.4, -0.18);
+    body.add(tail);
+
+    [-1, 1].forEach((side) => {
+      const leg = new THREE.Group();
+      leg.position.set(side * 0.18, -0.48, 0);
+      const limb = new THREE.Mesh(new THREE.BoxGeometry(0.22, 1.0, 0.24), darkCreviceMat);
+      limb.position.y = -0.5;
+      limb.castShadow = true;
+      leg.add(limb);
+      body.add(leg);
+      legs.push(leg);
+    });
+  } else if (species === 'white_fox') {
+    const snowFurMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.78 });
+    const slateTipMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.72 });
+    shadowRadius = 0.42;
+
+    body.position.y = 0.44;
+    root.add(body);
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.34, 0.78), snowFurMat);
+    torso.castShadow = true;
+    const chestFluff = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.28, 0.26), snowFurMat);
+    chestFluff.position.set(0, -0.02, 0.26);
+    body.add(torso, chestFluff);
+
+    head.position.set(0, 0.14, 0.44);
+    const skull = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.26, 0.3), snowFurMat);
+    const snout = new THREE.Mesh(new THREE.ConeGeometry(0.085, 0.24, 6), snowFurMat);
+    snout.rotation.x = Math.PI / 2;
+    snout.position.set(0, -0.04, 0.22);
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 6), slateTipMat);
+    nose.position.set(0, -0.04, 0.34);
+    [-1, 1].forEach((side) => {
+      const ear = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.16, 4), slateTipMat);
+      ear.position.set(side * 0.1, 0.18, -0.04);
+      head.add(ear);
+    });
+    head.add(skull, snout, nose);
+    addStandardEyePair(head, 0.085, 0.04, 0.15, 0.026, darkEyeMat);
+    body.add(head);
+
+    tail.position.set(0, 0.04, -0.4);
+    const brush = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.44, 5, 8), snowFurMat);
+    brush.rotation.x = Math.PI / 2.6;
+    brush.position.set(0, 0.06, -0.26);
+    tail.add(brush);
+    body.add(tail);
+
+    make4Legs(
+      body,
+      legs,
+      [
+        [-0.12, -0.14, 0.26],
+        [0.12, -0.14, 0.26],
+        [-0.12, -0.14, -0.26],
+        [0.12, -0.14, -0.26],
+      ],
+      0.075,
+      0.08,
+      0.34,
+      slateTipMat,
+    );
+  } else if (species === 'parrot') {
+    const scarletMat = new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.56 });
+    const cobaltMat = new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.58 });
+    const goldAccentMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.55 });
+    const beakMat = new THREE.MeshStandardMaterial({ color: 0xfef3c7, roughness: 0.5 });
+    shadowRadius = 0.28;
+
+    root.add(body);
+    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.14, 0.32, 6, 8), scarletMat);
+    torso.rotation.x = Math.PI / 2.2;
+    torso.castShadow = true;
+    body.add(torso);
+
+    head.position.set(0, 0.12, 0.22);
+    const cranium = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8), scarletMat);
+    const crest = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.18, 5), goldAccentMat);
+    crest.rotation.x = -0.7;
+    crest.position.set(0, 0.14, -0.04);
+    const beak = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.14, 5), beakMat);
+    beak.rotation.x = Math.PI / 1.75;
+    beak.position.set(0, -0.02, 0.14);
+    head.add(cranium, crest, beak);
+    addStandardEyePair(head, 0.08, 0.03, 0.07, 0.022, darkEyeMat);
+    body.add(head);
+
+    wings = [];
+    [-1, 1].forEach((side) => {
+      const wing = new THREE.Group();
+      wing.position.set(side * 0.12, 0.05, 0.02);
+      const shoulder = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.035, 0.2), goldAccentMat);
+      shoulder.position.x = side * 0.12;
+      const primary = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.028, 0.18), cobaltMat);
+      primary.position.set(side * 0.36, 0, -0.02);
+      wing.add(shoulder, primary);
+      body.add(wing);
+      wings!.push(wing);
+    });
+
+    tail.position.set(0, -0.04, -0.22);
+    const tailFeather = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.03, 0.42), cobaltMat);
+    tailFeather.position.z = -0.2;
+    tail.add(tailFeather);
+    body.add(tail);
+
+    const shadowDisc = makeContactShadow(shadowRadius);
+    shadowDisc.visible = false;
+    root.add(shadowDisc);
+    return { root, body, head, jaw, tail, legs, wings, shadowDisc };
+  } else if (species === 'ocelot') {
+    const coatTex = makePatternTexture((ctx, s) => {
+      ctx.fillStyle = '#eab308';
+      ctx.fillRect(0, 0, s, s);
+      ctx.fillStyle = '#78350f';
+      for (let i = 0; i < 22; i++) {
+        const x = ((i * 37) % (s - 16)) + 8;
+        const y = ((i * 53) % (s - 16)) + 8;
+        ctx.beginPath();
+        ctx.arc(x, y, 5 + (i % 3) * 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+    const coatMat = new THREE.MeshStandardMaterial({ map: coatTex, roughness: 0.72 });
+    const creamMat = new THREE.MeshStandardMaterial({ color: 0xfef3c7, roughness: 0.75 });
+    const greenEyeMat = new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.35 });
+    shadowRadius = 0.46;
+
+    body.position.y = 0.56;
+    root.add(body);
+    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.21, 0.66, 6, 10), coatMat);
+    torso.rotation.x = Math.PI / 2;
+    torso.castShadow = true;
+    body.add(torso);
+
+    head.position.set(0, 0.14, 0.52);
+    const skull = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.25, 0.28), coatMat);
+    const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.11, 0.12), creamMat);
+    muzzle.position.set(0, -0.05, 0.16);
+    [-1, 1].forEach((side) => {
+      const ear = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.13, 4), coatMat);
+      ear.position.set(side * 0.1, 0.16, -0.02);
+      head.add(ear);
+    });
+    head.add(skull, muzzle);
+    addStandardEyePair(head, 0.075, 0.04, 0.14, 0.026, greenEyeMat);
+    body.add(head);
+
+    tail.position.set(0, 0.06, -0.46);
+    const tMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.65, 4, 6), coatMat);
+    tMesh.rotation.x = Math.PI / 2.6;
+    tMesh.position.set(0, 0.08, -0.34);
+    tail.add(tMesh);
+    body.add(tail);
+
+    make4Legs(
+      body,
+      legs,
+      [
+        [-0.14, -0.14, 0.28],
+        [0.14, -0.14, 0.28],
+        [-0.14, -0.14, -0.28],
+        [0.14, -0.14, -0.28],
+      ],
+      0.07,
+      0.075,
+      0.44,
+      coatMat,
+    );
+  } else if (species === 'panda') {
+    const whiteFurMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.82 });
+    const charcoalMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.8 });
+    shadowRadius = 0.78;
+
+    body.position.y = 0.82;
+    root.add(body);
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.74, 1.15), whiteFurMat);
+    torso.castShadow = true;
+    const saddle = new THREE.Mesh(new THREE.BoxGeometry(0.88, 0.76, 0.34), charcoalMat);
+    saddle.position.z = 0.26;
+    body.add(torso, saddle);
+
+    head.position.set(0, 0.2, 0.68);
+    const cranium = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.56, 0.54), whiteFurMat);
+    cranium.castShadow = true;
+    const snout = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.2, 0.16), whiteFurMat);
+    snout.position.set(0, -0.12, 0.3);
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.06), charcoalMat);
+    nose.position.set(0, -0.06, 0.38);
+    [-1, 1].forEach((side) => {
+      const ear = new THREE.Mesh(new THREE.SphereGeometry(0.12, 7, 7), charcoalMat);
+      ear.position.set(side * 0.26, 0.3, -0.04);
+      const patch = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.15, 0.05), charcoalMat);
+      patch.position.set(side * 0.15, 0.05, 0.265);
+      head.add(ear, patch);
+    });
+    head.add(cranium, snout, nose);
+    addStandardEyePair(head, 0.15, 0.06, 0.295, 0.025, darkEyeMat);
+    body.add(head);
+
+    tail.position.set(0, 0.08, -0.6);
+    const bob = new THREE.Mesh(new THREE.SphereGeometry(0.11, 6, 6), charcoalMat);
+    tail.add(bob);
+    body.add(tail);
+
+    make4Legs(
+      body,
+      legs,
+      [
+        [-0.28, -0.28, 0.36],
+        [0.28, -0.28, 0.36],
+        [-0.28, -0.28, -0.36],
+        [0.28, -0.28, -0.36],
+      ],
+      0.16,
+      0.16,
+      0.56,
+      charcoalMat,
+    );
+  } else if (species === 'vex') {
+    const spiritMat = new THREE.MeshStandardMaterial({
+      color: 0x7dd3fc,
+      emissive: 0x0284c7,
+      emissiveIntensity: 0.45,
+      transparent: true,
+      opacity: 0.86,
+      roughness: 0.35,
+    });
+    const wingMat = new THREE.MeshStandardMaterial({
+      color: 0xe0f2fe,
+      emissive: 0x38bdf8,
+      emissiveIntensity: 0.35,
+      transparent: true,
+      opacity: 0.65,
+      side: THREE.DoubleSide,
+    });
+    const bladeMat = new THREE.MeshStandardMaterial({
+      color: 0xe2e8f0,
+      metalness: 0.82,
+      roughness: 0.24,
+    });
+    eyeGlowMat = new THREE.MeshBasicMaterial({ color: 0xf43f5e });
+    shadowRadius = 0.26;
+
+    root.add(body);
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.42, 0.18), spiritMat);
+    torso.castShadow = true;
+    body.add(torso);
+
+    head.position.set(0, 0.36, 0);
+    const skull = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.28), spiritMat);
+    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.06, 0.06), wingMat);
+    brow.position.set(0, 0.06, 0.15);
+    head.add(skull, brow);
+    addStandardEyePair(head, 0.075, 0.01, 0.145, 0.032, eyeGlowMat);
+    body.add(head);
+
+    // Ghostly winged vex arms & glowing iron sword
+    [-1, 1].forEach((side) => {
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.34, 0.1), spiritMat);
+      arm.position.set(side * 0.2, 0.04, 0.08);
+      arm.rotation.x = -0.65;
+      body.add(arm);
+    });
+    const sword = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.48, 0.08), bladeMat);
+    sword.position.set(0.22, -0.02, 0.28);
+    sword.rotation.x = Math.PI / 3;
+    body.add(sword);
+
+    wings = [];
+    [-1, 1].forEach((side) => {
+      const wing = new THREE.Group();
+      wing.position.set(side * 0.12, 0.14, -0.1);
+      const membrane = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.36, 0.02), wingMat);
+      membrane.position.set(side * 0.28, 0.06, -0.06);
+      membrane.rotation.y = side * -0.45;
+      wing.add(membrane);
+      body.add(wing);
+      wings!.push(wing);
+    });
+
+    tail.position.set(0, -0.22, -0.04);
+    const wisp = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.34, 5), spiritMat);
+    wisp.rotation.x = Math.PI;
+    wisp.position.y = -0.14;
+    tail.add(wisp);
+    body.add(tail);
+
+    const shadowDisc = makeContactShadow(shadowRadius);
+    shadowDisc.visible = false;
+    root.add(shadowDisc);
+    return { root, body, head, jaw, tail, legs, wings, eyeGlowMat, shadowDisc };
+  } else if (species === 'evoker') {
+    const robeMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.78 });
+    const goldTrimMat = new THREE.MeshStandardMaterial({
+      color: 0xfbbf24,
+      emissive: 0xd97706,
+      emissiveIntensity: 0.35,
+      metalness: 0.68,
+      roughness: 0.3,
+    });
+    const skinMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.72 });
+    const emeraldGlowMat = new THREE.MeshBasicMaterial({ color: 0x10b981 });
+    shadowRadius = 0.48;
+
+    body.position.y = 1.08;
+    root.add(body);
+    const robe = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.92, 0.34), robeMat);
+    robe.castShadow = true;
+    const goldStall = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.88, 0.37), goldTrimMat);
+    const sash = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.12, 0.38), goldTrimMat);
+    sash.position.y = -0.06;
+    body.add(robe, goldStall, sash);
+
+    head.position.set(0, 0.66, 0);
+    const skull = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.48, 0.4), skinMat);
+    skull.castShadow = true;
+    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.08, 0.07), robeMat);
+    brow.position.set(0, 0.08, 0.21);
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.2, 0.14), skinMat);
+    nose.position.set(0, -0.08, 0.24);
+    head.add(skull, brow, nose);
+    addStandardEyePair(head, 0.11, 0.02, 0.21, 0.032, emeraldGlowMat);
+    body.add(head);
+
+    [-1, 1].forEach((side) => {
+      const sleeve = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.56, 0.2), robeMat);
+      sleeve.position.set(side * 0.38, 0.1, 0.16);
+      sleeve.rotation.x = -0.78;
+      sleeve.castShadow = true;
+      const orb = new THREE.Mesh(new THREE.SphereGeometry(0.085, 7, 7), emeraldGlowMat);
+      orb.position.set(side * 0.38, 0.16, 0.44);
+      body.add(sleeve, orb);
+    });
+
+    tail.position.set(0, -0.35, -0.16);
+    body.add(tail);
+
+    [-1, 1].forEach((side) => {
+      const leg = new THREE.Group();
+      leg.position.set(side * 0.14, -0.46, 0);
+      const boot = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.62, 0.24), robeMat);
+      boot.position.y = -0.31;
+      leg.add(boot);
+      body.add(leg);
+      legs.push(leg);
+    });
+  } else if (species === 'pillager') {
+    const jacketMat = new THREE.MeshStandardMaterial({ color: 0x3b2f2f, roughness: 0.8 });
+    const crimsonMat = new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.72 });
+    const skinMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.74 });
+    const bowWoodMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.78 });
+    const ironTipMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.75, roughness: 0.3 });
+    shadowRadius = 0.48;
+
+    body.position.y = 1.06;
+    root.add(body);
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.84, 0.34), jacketMat);
+    torso.castShadow = true;
+    const chestPlate = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.52, 0.36), crimsonMat);
+    chestPlate.position.y = 0.08;
+    body.add(torso, chestPlate);
+
+    head.position.set(0, 0.64, 0);
+    const skull = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.46, 0.4), skinMat);
+    skull.castShadow = true;
+    const helmBand = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.1, 0.42), jacketMat);
+    helmBand.position.y = 0.12;
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.2, 0.14), skinMat);
+    nose.position.set(0, -0.07, 0.24);
+    head.add(skull, helmBand, nose);
+    addStandardEyePair(head, 0.11, 0.02, 0.21, 0.032, darkEyeMat);
+    body.add(head);
+
+    [-1, 1].forEach((side) => {
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.56, 0.18), jacketMat);
+      arm.position.set(side * 0.36, 0.14, 0.18);
+      arm.rotation.x = -1.1;
+      arm.castShadow = true;
+      body.add(arm);
+    });
+    // Aimed Pillager Crossbow
+    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.56), bowWoodMat);
+    stock.position.set(0.14, 0.22, 0.46);
+    const prod = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.08, 0.1), bowWoodMat);
+    prod.position.set(0.14, 0.22, 0.68);
+    const bolt = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.42), ironTipMat);
+    bolt.position.set(0.14, 0.26, 0.58);
+    body.add(stock, prod, bolt);
+
+    tail.position.set(0, -0.32, -0.16);
+    body.add(tail);
+
+    [-1, 1].forEach((side) => {
+      const leg = new THREE.Group();
+      leg.position.set(side * 0.14, -0.44, 0);
+      const limb = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.62, 0.22), jacketMat);
+      limb.position.y = -0.31;
+      leg.add(limb);
+      body.add(leg);
+      legs.push(leg);
+    });
+  } else if (species === 'witch') {
+    const cloakMat = new THREE.MeshStandardMaterial({ color: 0x581c87, roughness: 0.78 });
+    const hatMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.85 });
+    const beltMat = new THREE.MeshStandardMaterial({ color: 0x22c55e, emissive: 0x15803d, emissiveIntensity: 0.45 });
+    const skinMat = new THREE.MeshStandardMaterial({ color: 0xa1a1aa, roughness: 0.72 });
+    const potionMat = new THREE.MeshStandardMaterial({
+      color: 0xd946ef,
+      emissive: 0xa21caf,
+      emissiveIntensity: 0.85,
+      roughness: 0.25,
+    });
+    shadowRadius = 0.48;
+
+    body.position.y = 1.06;
+    root.add(body);
+    const robe = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.9, 0.36), cloakMat);
+    robe.castShadow = true;
+    body.add(robe);
+
+    head.position.set(0, 0.64, 0);
+    const skull = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.44, 0.38), skinMat);
+    skull.castShadow = true;
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.2, 0.14), skinMat);
+    nose.position.set(0, -0.06, 0.23);
+    const hatBrim = new THREE.Mesh(new THREE.CylinderGeometry(0.44, 0.46, 0.06, 8), hatMat);
+    hatBrim.position.y = 0.22;
+    const hatBand = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.25, 0.08, 8), beltMat);
+    hatBand.position.y = 0.28;
+    const hatCone = new THREE.Mesh(new THREE.ConeGeometry(0.23, 0.56, 7), hatMat);
+    hatCone.position.set(0, 0.56, -0.04);
+    hatCone.rotation.x = -0.18;
+    head.add(skull, nose, hatBrim, hatBand, hatCone);
+    addStandardEyePair(head, 0.1, 0.03, 0.2, 0.03, potionMat);
+    body.add(head);
+
+    [-1, 1].forEach((side) => {
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.52, 0.17), cloakMat);
+      arm.position.set(side * 0.35, 0.14, 0.14);
+      arm.rotation.x = -0.65;
+      body.add(arm);
+    });
+    const flask = new THREE.Mesh(new THREE.SphereGeometry(0.11, 7, 7), potionMat);
+    flask.position.set(0.36, 0.05, 0.34);
+    body.add(flask);
+
+    tail.position.set(0, -0.34, -0.16);
+    body.add(tail);
+
+    [-1, 1].forEach((side) => {
+      const leg = new THREE.Group();
+      leg.position.set(side * 0.14, -0.45, 0);
+      const boot = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.6, 0.22), hatMat);
+      boot.position.y = -0.3;
+      leg.add(boot);
+      body.add(leg);
+      legs.push(leg);
+    });
   } else {
     // Pteranodon — crested soaring pterosaur with broad leathery wings
     const hideMat = new THREE.MeshStandardMaterial({ color: 0x9a3412, roughness: 0.72 });

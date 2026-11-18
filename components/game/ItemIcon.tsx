@@ -51,6 +51,7 @@ import {
   Settings2,
   Shield,
   ShieldAlert,
+  ShieldPlus,
   Soup,
   Sparkles,
   Sprout,
@@ -295,6 +296,8 @@ export function ItemIcon({
       return <Gem {...props} />;
     case 'coaster_station':
       return <RollerCoaster {...props} />;
+    case 'totem_of_undying':
+      return <ShieldPlus {...props} />;
     default:
       return <Box {...props} />;
   }

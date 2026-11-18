@@ -1,7 +1,21 @@
+import { EcosystemSimulationData } from './systems/livingEcosystemSystem';
+
 export type BiomeId =
   | 'ocean'
   | 'beach'
   | 'forest'
+  | 'flower_forest'
+  | 'birch_forest'
+  | 'old_growth_birch_forest'
+  | 'dark_forest'
+  | 'pale_garden'
+  | 'taiga'
+  | 'old_growth_pine_taiga'
+  | 'old_growth_spruce_taiga'
+  | 'snowy_taiga'
+  | 'jungle'
+  | 'sparse_jungle'
+  | 'bamboo_jungle'
   | 'grassland'
   | 'river'
   | 'lake'
@@ -190,7 +204,6 @@ export type ItemId =
   | 'belt_pulley'
   | 'fluid_pipe'
   | 'auto_assembler'
-  // Modular Vehicle & Craft Parts
   | 'vehicle_chassis_kit'
   // 7-Day Blood Moon & Advanced Lost World Tech
   | 'core_shard'
@@ -236,7 +249,8 @@ export type ItemId =
   | 'nether_ember'
   | 'alien_core'
   | 'diamond_crystal'
-  | 'coaster_station';
+  | 'coaster_station'
+  | 'totem_of_undying';
 
 export type StructuralBlockKind =
   | 'stone_block'
@@ -680,8 +694,32 @@ export interface PlantedCrop {
 export type ResourceNodeKind =
   | 'palm_tree'
   | 'tropical_tree'
+  | 'oak_tree'
+  | 'dark_oak_tree'
+  | 'huge_red_mushroom'
+  | 'huge_brown_mushroom'
   | 'banyan_tree'
   | 'highland_cedar'
+  | 'birch_tree'
+  | 'old_growth_birch_tree'
+  | 'pale_oak_tree'
+  | 'taiga_pine_tree'
+  | 'old_growth_pine_tree'
+  | 'spruce_tree'
+  | 'mega_spruce_tree'
+  | 'snowy_spruce_tree'
+  | 'jungle_tree'
+  | 'mega_jungle_tree'
+  | 'jungle_bush'
+  | 'bamboo_stalk'
+  | 'flower_patch'
+  | 'rose_bush'
+  | 'lilac_bush'
+  | 'peony_bush'
+  | 'eyeblossom_patch'
+  | 'dead_bush'
+  | 'melon_patch'
+  | 'mossy_cobble_boulder'
   | 'branch_pile'
   | 'small_stone'
   | 'stone_boulder'
@@ -782,6 +820,18 @@ export type CreatureSpecies =
   | 'sea_turtle'
   | 'great_white_shark'
   | 'manta_ray'
+  // Biome-Specific Wildlife & Pale Garden Creaking
+  | 'bee'
+  | 'creaking'
+  | 'white_fox'
+  | 'parrot'
+  | 'ocelot'
+  | 'panda'
+  // Woodland Mansion & Pillager Outpost Illager Enemies
+  | 'vex'
+  | 'evoker'
+  | 'pillager'
+  | 'witch'
   // Prehistoric Dinosaurs & Pterosaurs
   | 'trex'
   | 'triceratops'
@@ -971,6 +1021,7 @@ export interface GameSaveData {
   unlockedGildedPaint?: boolean;
   crystalArmorHp?: number;
   visitedDimensions?: DimensionId[];
+  ecosystem?: EcosystemSimulationData;
 }
 
 export interface CarcassSaveData {
@@ -1011,7 +1062,8 @@ export type ActiveModal =
   | 'multiverse'
   | 'menu_drawer'
   | 'music_studio'
-  | 'coaster';
+  | 'coaster'
+  | 'ecosystem_journal';
 
 export interface NearbyInteraction {
   id: string;
@@ -1218,6 +1270,9 @@ export interface HUDStateSnapshot {
   bossesDefeatedCount?: number;
   objectiveText?: string;
   hitMarkerActive?: boolean;
+  fps: number;
+  totemFlashTimer?: number;
+  totemRegenSeconds?: number;
   tvState?: {
     power: boolean;
     channel: number;

@@ -20,6 +20,14 @@ export const SNOWY_WOODLAND_POS = { x: -24, z: -72 };
 export const AUTUMN_GROVE_POS = { x: 26, z: 22 };
 export const SWAMP_POS = { x: 46, z: 44, radius: 9.0, waterY: 1.55 };
 export const DEAD_OAK_POS = { x: 18, z: 78 };
+export const TRIAL_CHAMBERS_POS = { x: 2, z: 36 };
+export const WOODLAND_MANSION_POS = { x: 20, z: -8 };
+export const TAIGA_VILLAGE_POS = { x: 32, z: -36 };
+export const PILLAGER_OUTPOST_POS = { x: 14, z: -32 };
+export const TRAIL_RUINS_POS = { x: -46, z: -34 };
+export const SNOWY_VILLAGE_POS = { x: -34, z: -84 };
+export const SNOWY_IGLOO_POS = { x: -50, z: -64 };
+export const JUNGLE_TEMPLE_POS = { x: 74, z: 38 };
 export const PLAYER_SPAWN = { x: 0, z: 112 };
 
 export const WORLD_RADIUS = 175;
@@ -122,6 +130,93 @@ export function getHilltopBaseFloorY(
   return bestY;
 }
 
+export interface BiomeCabinPlacement {
+  x: number;
+  z: number;
+  rotY: number;
+  snowy: boolean;
+  baseY: number;
+}
+
+export const BIOME_CABIN_DEFS: BiomeCabinPlacement[] = [
+  // Taiga Village (3 walk-in spruce cabins around central hearth)
+  { x: TAIGA_VILLAGE_POS.x - 5.2, z: TAIGA_VILLAGE_POS.z - 2.6, rotY: 0.35, snowy: false, baseY: 5.2 },
+  { x: TAIGA_VILLAGE_POS.x + 5.2, z: TAIGA_VILLAGE_POS.z - 1.8, rotY: -0.45, snowy: false, baseY: 5.2 },
+  { x: TAIGA_VILLAGE_POS.x + 0.6, z: TAIGA_VILLAGE_POS.z + 5.8, rotY: Math.PI, snowy: false, baseY: 5.2 },
+  // Snowy Taiga Village (3 walk-in snow-roofed cabins)
+  { x: SNOWY_VILLAGE_POS.x - 5.2, z: SNOWY_VILLAGE_POS.z - 2.4, rotY: 0.25, snowy: true, baseY: 9.4 },
+  { x: SNOWY_VILLAGE_POS.x + 5.0, z: SNOWY_VILLAGE_POS.z - 1.6, rotY: -0.42, snowy: true, baseY: 9.4 },
+  { x: SNOWY_VILLAGE_POS.x + 0.2, z: SNOWY_VILLAGE_POS.z + 5.6, rotY: Math.PI, snowy: true, baseY: 9.4 },
+];
+
+/**
+ * Walkable interior floor support for enterable Woodland Mansion, Taiga/Snowy Village
+ * cabins, Snowy Igloo, and Pillager Outpost ground hall.
+ */
+export function getLandmarkFloorY(
+  x: number,
+  z: number,
+  footY: number,
+): number {
+  if (activeTerrainWorldType === 'flat') return -9999;
+  let bestY = -9999;
+
+  // 1. Woodland Mansion Plinth & Ground Hall Floor (14.4m x 10.6m centered at WOODLAND_MANSION_POS)
+  const mdx = x - WOODLAND_MANSION_POS.x;
+  const mdz = z - WOODLAND_MANSION_POS.z;
+  if (mdx >= -7.3 && mdx <= 7.3 && mdz >= -5.4 && mdz <= 5.4) {
+    const mansionFloorTop = 4.1 + 0.14;
+    if (footY >= mansionFloorTop - 1.5 && mansionFloorTop > bestY) {
+      bestY = mansionFloorTop;
+    }
+  } else if (mdx >= -1.7 && mdx <= 1.7 && mdz >= 5.3 && mdz <= 6.2) {
+    const stepTop = 4.1 + 0.07;
+    if (footY >= stepTop - 1.5 && stepTop > bestY) {
+      bestY = stepTop;
+    }
+  }
+
+  // 2. Pillager Outpost Ground Pavilion (5.6m x 5.6m open archways)
+  const podx = x - PILLAGER_OUTPOST_POS.x;
+  const podz = z - PILLAGER_OUTPOST_POS.z;
+  if (Math.abs(podx) <= 2.9 && Math.abs(podz) <= 2.9) {
+    const poFloorTop = 5.0 + 0.12;
+    if (footY >= poFloorTop - 1.5 && poFloorTop > bestY) {
+      bestY = poFloorTop;
+    }
+  }
+
+  // 3. All Taiga & Snowy Taiga Village Cabins (rotated 4.8m x 4.4m cabins)
+  for (const cab of BIOME_CABIN_DEFS) {
+    const ddx = x - cab.x;
+    const ddz = z - cab.z;
+    if (Math.abs(ddx) > 3.6 || Math.abs(ddz) > 3.6) continue;
+    const c = Math.cos(cab.rotY);
+    const s = Math.sin(cab.rotY);
+    // Inverse Ry(rotY): lx = ddx * cos - ddz * sin; lz = ddx * sin + ddz * cos
+    const lx = ddx * c - ddz * s;
+    const lz = ddx * s + ddz * c;
+    if (Math.abs(lx) <= 2.45 && Math.abs(lz) <= 2.25) {
+      const floorTop = cab.baseY + 0.12;
+      if (footY >= floorTop - 1.5 && floorTop > bestY) {
+        bestY = floorTop;
+      }
+    }
+  }
+
+  // 4. Snowy Igloo packed floor
+  const igdx = x - SNOWY_IGLOO_POS.x;
+  const igdz = z - SNOWY_IGLOO_POS.z;
+  if (Math.hypot(igdx, igdz) <= 2.95 || (Math.abs(igdx) <= 0.9 && igdz >= 2.2 && igdz <= 4.1)) {
+    const igFloorTop = 9.0 + 0.05;
+    if (footY >= igFloorTop - 1.5 && igFloorTop > bestY) {
+      bestY = igFloorTop;
+    }
+  }
+
+  return bestY;
+}
+
 export function sampleGridBilinear(grid: Float32Array, x: number, z: number): number {
   const gx = (x + TERRAIN_HALF) / TERRAIN_STEP;
   const gz = (z + TERRAIN_HALF) / TERRAIN_STEP;
@@ -184,7 +279,67 @@ export const BIOME_INFO: Record<
   forest: {
     name: 'Emerald Canopy',
     color: '#15803d',
-    description: 'Dense prehistoric jungle teeming with hardwood, berries, and raptors.',
+    description: 'Dense prehistoric woodland teeming with hardwood, berries, and raptors.',
+  },
+  flower_forest: {
+    name: 'Flower Forest',
+    color: '#ec4899',
+    description: 'Sun-dappled woodland glades carpeted in vibrant wildflowers, birch trees, and sweet berries.',
+  },
+  birch_forest: {
+    name: 'Birch Forest',
+    color: '#a3e635',
+    description: 'Bright open forest of pale white-barked birches, ferns, and gentle woodland wildlife.',
+  },
+  old_growth_birch_forest: {
+    name: 'Old Growth Birch Forest',
+    color: '#65a30d',
+    description: 'Towering ancient birch groves with lofty crowns and mossy forest undergrowth.',
+  },
+  dark_forest: {
+    name: 'Dark Forest',
+    color: '#1e3a24',
+    description: 'Shadowy dense canopy of dark oaks and giant mushrooms hiding the Woodland Mansion and daytime prowlers.',
+  },
+  pale_garden: {
+    name: 'Pale Garden',
+    color: '#94a3b8',
+    description: 'Eerie mist-shrouded grove of gnarled pale oaks, hanging moss curtains, eyeblossoms, and nocturnal Creaking.',
+  },
+  taiga: {
+    name: 'Taiga',
+    color: '#166534',
+    description: 'Crisp northern evergreen forest of resinous pines, spruce boughs, and wild berries.',
+  },
+  old_growth_pine_taiga: {
+    name: 'Old Growth Pine Taiga',
+    color: '#14532d',
+    description: 'Ancient highland timberland of towering red-barked pines, mossy boulders, and podzol soil.',
+  },
+  old_growth_spruce_taiga: {
+    name: 'Old Growth Spruce Taiga',
+    color: '#115e59',
+    description: 'Cathedral-like boreal woods dominated by colossal dense-needled spruce giants.',
+  },
+  snowy_taiga: {
+    name: 'Snowy Taiga',
+    color: '#cbd5e1',
+    description: 'Frost-blanketed boreal spruce woods prowled by timber wolves, reindeer, and moose.',
+  },
+  jungle: {
+    name: 'Jungle',
+    color: '#059669',
+    description: 'Lush multi-tiered tropical rainforest draped in vines, towering canopy trees, and tigers.',
+  },
+  sparse_jungle: {
+    name: 'Sparse Jungle',
+    color: '#34d399',
+    description: 'Breezy tropical woodland clearings dotted with spaced jungle trees, bananas, and sunny glades.',
+  },
+  bamboo_jungle: {
+    name: 'Bamboo Jungle',
+    color: '#84cc16',
+    description: 'Rustling thickets of towering green bamboo culms beside humid tropical pools.',
   },
   grassland: {
     name: 'Amber Savanna',
@@ -552,6 +707,23 @@ export function getBaseTerrainHeight(x: number, z: number): number {
     h = h * (1 - sideBlend) + rampH * sideBlend;
   }
 
+  // Flatten foundation terraces for new biome landmarks (Mansions, Villages, Outposts, Ruins, Igloos, Temples)
+  const flattenPad = (px: number, pz: number, innerR: number, outerR: number, targetH: number) => {
+    const d = Math.hypot(x - px, z - pz);
+    if (d < outerR) {
+      const blend = 1 - smoothstep(innerR, outerR, d);
+      h = h * (1 - blend) + targetH * blend;
+    }
+  };
+  flattenPad(TRIAL_CHAMBERS_POS.x, TRIAL_CHAMBERS_POS.z, 6.5, 13.5, 3.6);
+  flattenPad(WOODLAND_MANSION_POS.x, WOODLAND_MANSION_POS.z, 10.5, 17.5, 4.1);
+  flattenPad(TAIGA_VILLAGE_POS.x, TAIGA_VILLAGE_POS.z, 11.5, 18.0, 5.2);
+  flattenPad(PILLAGER_OUTPOST_POS.x, PILLAGER_OUTPOST_POS.z, 6.2, 12.5, 5.0);
+  flattenPad(TRAIL_RUINS_POS.x, TRAIL_RUINS_POS.z, 6.5, 13.0, 4.5);
+  flattenPad(SNOWY_VILLAGE_POS.x, SNOWY_VILLAGE_POS.z, 11.5, 18.0, 9.4);
+  flattenPad(SNOWY_IGLOO_POS.x, SNOWY_IGLOO_POS.z, 5.8, 11.5, 9.0);
+  flattenPad(JUNGLE_TEMPLE_POS.x, JUNGLE_TEMPLE_POS.z, 7.5, 14.5, 4.2);
+
   return h;
 }
 
@@ -572,13 +744,81 @@ export function getBiomeAt(x: number, z: number): BiomeId {
 
   if (h < OCEAN_LEVEL - 0.15) return 'ocean';
   if (h < 2.25) return 'beach';
-  if (h > 10.5 || z < -48) return 'mountain';
 
-  // East/Central = Dense Tropical Forest, West = Open Amber Savanna
+  // Anchor biome structure zones cleanly inside their home biome
+  if (Math.hypot(x - TRIAL_CHAMBERS_POS.x, z - TRIAL_CHAMBERS_POS.z) < 9.5) return 'forest';
+  if (Math.hypot(x - WOODLAND_MANSION_POS.x, z - WOODLAND_MANSION_POS.z) < 13.5) return 'dark_forest';
+  if (Math.hypot(x - TAIGA_VILLAGE_POS.x, z - TAIGA_VILLAGE_POS.z) < 12.5) return 'taiga';
+  if (Math.hypot(x - PILLAGER_OUTPOST_POS.x, z - PILLAGER_OUTPOST_POS.z) < 9.5) return 'taiga';
+  if (Math.hypot(x - TRAIL_RUINS_POS.x, z - TRAIL_RUINS_POS.z) < 10.5) return 'old_growth_pine_taiga';
+  if (Math.hypot(x - SNOWY_VILLAGE_POS.x, z - SNOWY_VILLAGE_POS.z) < 12.5) return 'snowy_taiga';
+  if (Math.hypot(x - SNOWY_IGLOO_POS.x, z - SNOWY_IGLOO_POS.z) < 9.5) return 'snowy_taiga';
+  if (Math.hypot(x - JUNGLE_TEMPLE_POS.x, z - JUNGLE_TEMPLE_POS.z) < 12.0) return 'jungle';
+
+  // Keep homestead pasture, farmer market, wheatfield, hilltop house & garage cleanly in Amber Savanna
+  if (x < -8 && z >= 46) return 'grassland';
+
+  // High volcanic northern mountain peaks
+  if (h > 14.5 || (z < -54 && x > -22 && x < 32 && h > 11.2)) {
+    return 'mountain';
+  }
+
+  // Gentle organic domain warp so biome transitions wind naturally across the island
+  const wx = x + (fbm(x * 0.024 + 1.3, z * 0.024 + 5.1, 2) - 0.5) * 14;
+  const wz = z + (fbm(x * 0.024 + 9.7, z * 0.024 + 2.4, 2) - 0.5) * 14;
+
+  // Northern boreal / taiga belt
+  if (wz < -22) {
+    if ((wz < -48 && wx <= 14) || (wz < -58 && wx <= 42)) {
+      return 'snowy_taiga';
+    }
+    if (wz < -22 && wz >= -48 && wx < -14) {
+      return 'old_growth_pine_taiga';
+    }
+    if (wz < -32 && wx >= 44) {
+      return 'old_growth_spruce_taiga';
+    }
+    return 'taiga';
+  }
+
+  // Western Amber Savanna
   const savannaMask = fbm(x * 0.01 + 4, z * 0.01 + 8, 2);
-  if (x < -18 || (x < 4 && savannaMask > 0.54)) {
+  if (wx < -14 || (wx < -2 && savannaMask > 0.58)) {
     return 'grassland';
   }
+
+  // Eastern Pale Garden hollow
+  if (wx >= 48 && wz >= -32 && wz < 16) {
+    return 'pale_garden';
+  }
+
+  // Dark Forest canopy pocket (between crystal river and expedition/pale garden)
+  if (wx >= 10 && wx < 34 && wz >= -22 && wz < 8) {
+    return 'dark_forest';
+  }
+
+  // Southeastern Tropical Jungle belt
+  if (wx >= 34 && wz >= 16) {
+    if (wx < 62 && wz < 52) {
+      return 'bamboo_jungle';
+    }
+    if (wx >= 62 && wz < 72) {
+      return 'jungle';
+    }
+    return 'sparse_jungle';
+  }
+
+  // Central & south-central temperate woodlands
+  if (wx >= 2 && wz >= 56) {
+    return 'flower_forest';
+  }
+  if (wx >= 10 && wz >= 8 && wz < 32) {
+    return 'old_growth_birch_forest';
+  }
+  if (wx >= 10 && wz >= 32 && wz < 56) {
+    return 'birch_forest';
+  }
+
   return 'forest';
 }
 

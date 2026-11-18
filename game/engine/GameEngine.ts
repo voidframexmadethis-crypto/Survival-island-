@@ -2,6 +2,11 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { SoundEngine } from '../audio/soundEngine';
 import {
+  EcosystemSimulationData,
+  createInitialEcosystem,
+  simulateEcosystemTick,
+} from '../systems/livingEcosystemSystem';
+import {
   SmartTvSystem,
   TvChannelId,
   normalizeChannelId,
@@ -165,15 +170,21 @@ import {
   HOMESTEAD_POS,
   LAKE_CENTER,
   OCEAN_LEVEL,
+  PILLAGER_OUTPOST_POS,
   PLAYABLE_MAX_RADIUS,
   PLAYER_SPAWN,
+  SNOWY_IGLOO_POS,
+  SNOWY_VILLAGE_POS,
   SNOWY_WOODLAND_POS,
   SWAMP_POS,
+  TAIGA_VILLAGE_POS,
   VEHICLE_GARAGE_POS,
   WHEATFIELD_POS,
+  WOODLAND_MANSION_POS,
   exportSparseTerrainDeltas,
   getBiomeAt,
   getHilltopBaseFloorY,
+  getLandmarkFloorY,
   getPlayableMaxRadius,
   getTerrainHeight,
   getTerrainSlope,
@@ -411,7 +422,10 @@ export class GameEngine {
   private elapsed = 0;
   private hudSyncTimer = 0;
 
-  // Performance Engine & Dynamic Auto-FPS Guard State
+  // Performance Engine & 500 FPS Lock + Dynamic Auto-FPS Guard State
+  private currentFps = 60;
+  private fpsRampElapsed = 0;
+  private fpsLockedAt500 = false;
   private autoFpsTier = 0;
   private fpsSampleTimer = 0;
   private fpsSampleFrames = 0;
@@ -486,6 +500,8 @@ export class GameEngine {
   private activeConsumeColor = '#b91c1c';
   private footstepAccum = 0;
   private hurtFlash = 0;
+  private totemFlashTimer = 0;
+  private totemRegenTimer = 0;
 
   // Fluid Momentum & Combat Interaction State
   private wallRunTimer = 0;
@@ -530,6 +546,7 @@ export class GameEngine {
   private gamepadHandbrake = false;
 
   // Survival & World State
+  public ecosystem: EcosystemSimulationData = createInitialEcosystem();
   private vitals: PlayerVitals = {
     health: 100,
     maxHealth: 100,
@@ -3152,6 +3169,7 @@ export class GameEngine {
     }
 
     this.coasterRuntime?.importCoasters(save.coasters);
+    this.ecosystem = save.ecosystem || createInitialEcosystem();
 
     // Restore saved Smart TV channel, power state & playback controls
     if (typeof save.tvVolume === 'number') {
@@ -3894,6 +3912,7 @@ export class GameEngine {
         cargoItems: v.cargoItems.map((c) => ({ ...c })),
       })),
       coasters: this.coasterRuntime?.exportCoasters() || [],
+      ecosystem: { ...this.ecosystem },
       terrainDeltas: this.worldType === 'island' ? exportSparseTerrainDeltas() : [],
       visitedBiomes: Array.from(this.visitedBiomes),
       exploredCells: Array.from(this.exploredCells),
@@ -5837,29 +5856,107 @@ export class GameEngine {
     }
 
     if (res.killed) {
-      this.stats.animalsHunted += 1;
-      const isDino = this.isDinosaurSpecies(c.species);
-      if (isDino) {
-        this.stats.dinosaursEncountered += 1;
-      }
-      this.spawnCarcass(
-        c.species,
-        name,
-        isDino,
-        c.x,
-        c.z,
-        c.yaw,
-        res.drops,
-        240,
-        undefined,
-        1.6,
-        c.y,
-      );
-      this.toast(
-        `${sourceLabel}: ${name} downed! Switch to Hands (0) to collect meat.`,
-        'gain',
-      );
+      this.handleCreatureDefeated(c, res.drops, sourceLabel);
     }
+  }
+
+  private handleCreatureDefeated(
+    c: ActiveCreature,
+    drops: { itemId: ItemId; quantity: number }[],
+    sourceLabel: string,
+  ): void {
+    const name = c.displayNameOverride || c.spec.displayName;
+    this.stats.animalsHunted += 1;
+    const isDino = this.isDinosaurSpecies(c.species);
+    if (isDino) {
+      this.stats.dinosaursEncountered += 1;
+    }
+
+    const isIllager =
+      c.species === 'vex' ||
+      c.species === 'evoker' ||
+      c.species === 'pillager' ||
+      c.species === 'witch';
+    if (isIllager) {
+      const granted: string[] = [];
+      for (const d of drops) {
+        if (d.quantity <= 0) continue;
+        this.addItem(d.itemId, d.quantity, false);
+        granted.push(`${d.quantity}× ${ITEMS[d.itemId].name}`);
+      }
+      this.spawnParticles(c.x, c.y + 0.9, c.z, 0xfbbf24, 16);
+      this.spawnParticles(c.x, c.y + 1.1, c.z, 0x10b981, 12);
+      const dropText = granted.length > 0 ? ` Looted ${granted.join(', ')}!` : '';
+      this.toast(`${sourceLabel}: ${name} defeated!${dropText}`, 'discovery');
+      this.emitHud();
+      return;
+    }
+
+    this.spawnCarcass(
+      c.species,
+      name,
+      isDino,
+      c.x,
+      c.z,
+      c.yaw,
+      drops,
+      240,
+      undefined,
+      1.6,
+      c.y,
+    );
+    this.toast(
+      `${sourceLabel}: ${name} downed! Switch to Hands (0) to collect meat.`,
+      'gain',
+    );
+  }
+
+  private checkAndTriggerTotemOfUndying(): boolean {
+    if (this.gameOver) return false;
+    if (this.vitals.health > 25) return false;
+    if (this.getItemCount('totem_of_undying') <= 0) return false;
+
+    this.removeItem('totem_of_undying', 1);
+    this.vitals.health = Math.min(this.vitals.maxHealth, Math.max(this.vitals.health, 38));
+    this.totemRegenTimer = 6.5;
+    this.totemFlashTimer = 1.65;
+    this.hurtFlash = 0;
+    this.sound.playTotemUndying();
+    this.spawnParticles(this.playerX, this.playerY + 1.1, this.playerZ, 0xfbbf24, 24);
+    this.spawnParticles(this.playerX, this.playerY + 1.1, this.playerZ, 0x10b981, 16);
+    this.toast('Totem of Undying Activated! Regenerating Health!', 'discovery');
+    this.emitHud();
+    return true;
+  }
+
+  private applyPlayerDamage(rawAmount: number, sourceName: string): void {
+    const creativeNoNeeds =
+      this.worldType === 'flat' ||
+      this.gameMode === 'sandbox' ||
+      this.vitals.maxHealth >= 9000;
+    if (creativeNoNeeds || this.gameOver || rawAmount <= 0) return;
+
+    let dmg = rawAmount;
+    if (this.crystalArmorHp > 0) {
+      const absorbed = Math.min(this.crystalArmorHp, Math.round(dmg * 0.55));
+      this.crystalArmorHp = Math.max(0, this.crystalArmorHp - absorbed);
+      dmg = Math.max(1, dmg - absorbed);
+    }
+
+    this.vitals.health = Math.max(0, this.vitals.health - dmg);
+    this.hurtFlash = 0.42;
+    this.sound.playHurt();
+    this.toast(`${sourceName} hit you (-${dmg} HP)!`, 'warning');
+
+    if (this.vitals.health <= 25) {
+      this.checkAndTriggerTotemOfUndying();
+    }
+
+    if (this.vitals.health <= 0) {
+      this.gameOver = true;
+      this.gameOverReason = `Defeated by ${sourceName}`;
+    }
+    this.emitHud();
   }
 
   private performMeleeWeaponAttack(
@@ -6288,8 +6385,22 @@ export class GameEngine {
     return (
       kind === 'palm_tree' ||
       kind === 'tropical_tree' ||
+      kind === 'oak_tree' ||
+      kind === 'dark_oak_tree' ||
+      kind === 'huge_red_mushroom' ||
+      kind === 'huge_brown_mushroom' ||
       kind === 'banyan_tree' ||
-      kind === 'highland_cedar'
+      kind === 'highland_cedar' ||
+      kind === 'birch_tree' ||
+      kind === 'old_growth_birch_tree' ||
+      kind === 'pale_oak_tree' ||
+      kind === 'taiga_pine_tree' ||
+      kind === 'old_growth_pine_tree' ||
+      kind === 'spruce_tree' ||
+      kind === 'mega_spruce_tree' ||
+      kind === 'snowy_spruce_tree' ||
+      kind === 'jungle_tree' ||
+      kind === 'mega_jungle_tree'
     );
   }
 
@@ -6297,6 +6408,7 @@ export class GameEngine {
     return (
       kind === 'small_stone' ||
       kind === 'stone_boulder' ||
+      kind === 'mossy_cobble_boulder' ||
       kind === 'mountain_rock' ||
       kind === 'ore_vein' ||
       kind === 'flint_outcrop'
@@ -6899,11 +7011,29 @@ export class GameEngine {
       case 'palm_tree':
         return r < 0.72 ? 'coconut' : r < 0.94 ? 'banana' : 'apple';
       case 'tropical_tree':
-        return r < 0.42 ? 'banana' : r < 0.78 ? 'apple' : r < 0.92 ? 'maple_syrup' : 'coconut';
+      case 'oak_tree':
+      case 'dark_oak_tree':
+        return r < 0.42 ? 'apple' : r < 0.78 ? 'maple_syrup' : r < 0.92 ? 'berries' : 'banana';
+      case 'huge_red_mushroom':
+      case 'huge_brown_mushroom':
+        return 'mushrooms';
       case 'banyan_tree':
         return r < 0.36 ? 'apple' : r < 0.7 ? 'banana' : 'maple_syrup';
       case 'highland_cedar':
-        return r < 0.58 ? 'maple_syrup' : 'apple';
+      case 'taiga_pine_tree':
+      case 'old_growth_pine_tree':
+      case 'spruce_tree':
+      case 'mega_spruce_tree':
+      case 'snowy_spruce_tree':
+        return r < 0.52 ? 'maple_syrup' : 'berries';
+      case 'birch_tree':
+      case 'old_growth_birch_tree':
+        return r < 0.56 ? 'apple' : 'maple_syrup';
+      case 'pale_oak_tree':
+        return r < 0.6 ? 'mushrooms' : 'apple';
+      case 'jungle_tree':
+      case 'mega_jungle_tree':
+        return r < 0.52 ? 'banana' : r < 0.84 ? 'coconut' : 'apple';
       default:
         return null;
     }
@@ -6916,20 +7046,41 @@ export class GameEngine {
       if (r < 0.85) drops.push(['coconut', Math.random() < 0.35 ? 2 : 1]);
       if (Math.random() < 0.28) drops.push(['banana', 1]);
       if (drops.length === 0) drops.push(['coconut', 1]);
-    } else if (kind === 'tropical_tree') {
+    } else if (kind === 'tropical_tree' || kind === 'jungle_tree' || kind === 'mega_jungle_tree') {
       if (r < 0.55) drops.push(['banana', Math.random() < 0.4 ? 2 : 1]);
       if (Math.random() < 0.5) drops.push(['apple', Math.random() < 0.35 ? 2 : 1]);
       if (Math.random() < 0.25) drops.push(['maple_syrup', 1]);
       if (drops.length === 0) drops.push([Math.random() < 0.5 ? 'apple' : 'banana', 1]);
+    } else if (kind === 'oak_tree' || kind === 'dark_oak_tree') {
+      if (r < 0.62) drops.push(['apple', Math.random() < 0.35 ? 2 : 1]);
+      if (Math.random() < 0.38) drops.push(['mushrooms', 1]);
+      if (drops.length === 0) drops.push(['apple', 1]);
+    } else if (kind === 'huge_red_mushroom' || kind === 'huge_brown_mushroom') {
+      drops.push(['mushrooms', 4]);
     } else if (kind === 'banyan_tree') {
       if (r < 0.55) drops.push(['apple', Math.random() < 0.45 ? 2 : 1]);
       if (Math.random() < 0.55) drops.push(['banana', Math.random() < 0.4 ? 2 : 1]);
       if (Math.random() < 0.45) drops.push(['maple_syrup', 1]);
       if (drops.length === 0) drops.push(['maple_syrup', 1]);
-    } else if (kind === 'highland_cedar') {
+    } else if (
+      kind === 'highland_cedar' ||
+      kind === 'taiga_pine_tree' ||
+      kind === 'old_growth_pine_tree' ||
+      kind === 'spruce_tree' ||
+      kind === 'mega_spruce_tree' ||
+      kind === 'snowy_spruce_tree'
+    ) {
       if (r < 0.72) drops.push(['maple_syrup', Math.random() < 0.35 ? 2 : 1]);
-      if (Math.random() < 0.48) drops.push(['apple', Math.random() < 0.35 ? 2 : 1]);
+      if (Math.random() < 0.48) drops.push(['berries', Math.random() < 0.35 ? 2 : 1]);
       if (drops.length === 0) drops.push(['maple_syrup', 1]);
+    } else if (kind === 'birch_tree' || kind === 'old_growth_birch_tree') {
+      if (r < 0.6) drops.push(['apple', Math.random() < 0.35 ? 2 : 1]);
+      if (Math.random() < 0.45) drops.push(['maple_syrup', 1]);
+      if (drops.length === 0) drops.push(['apple', 1]);
+    } else if (kind === 'pale_oak_tree') {
+      if (r < 0.65) drops.push(['mushrooms', 2]);
+      if (Math.random() < 0.4) drops.push(['apple', 1]);
+      if (drops.length === 0) drops.push(['mushrooms', 1]);
     }
     return drops;
   }
@@ -6948,13 +7099,25 @@ export class GameEngine {
           ...this.getTreeFelledBonusDrops(kind),
         ];
       case 'tropical_tree':
+      case 'oak_tree':
+      case 'birch_tree':
+      case 'taiga_pine_tree':
+      case 'spruce_tree':
+      case 'snowy_spruce_tree':
         return [
           ['wood', toolId === 'stone_axe' ? 5 : 3],
           ['branch', 2],
           ['leaves', 3],
           ...this.getTreeFelledBonusDrops(kind),
         ];
+      case 'dark_oak_tree':
       case 'banyan_tree':
+      case 'old_growth_birch_tree':
+      case 'old_growth_pine_tree':
+      case 'mega_spruce_tree':
+      case 'jungle_tree':
+      case 'mega_jungle_tree':
+      case 'pale_oak_tree':
         return [
           ['wood', toolId === 'stone_axe' ? 6 : 3],
           ['branch', 3],
@@ -6962,12 +7125,57 @@ export class GameEngine {
           ['leaves', 3],
           ...this.getTreeFelledBonusDrops(kind),
         ];
+      case 'huge_red_mushroom':
+      case 'huge_brown_mushroom':
+        return [
+          ['mushrooms', toolId === 'stone_axe' ? 6 : 4],
+          ['plant_material', 2],
+          ['wood', 1],
+        ];
       case 'highland_cedar':
         return [
           ['wood', toolId === 'stone_axe' ? 5 : 3],
           ['branch', 3],
           ['leaves', 2],
           ...this.getTreeFelledBonusDrops(kind),
+        ];
+      case 'jungle_bush':
+        return [
+          ['leaves', 3],
+          ['branch', 2],
+          ['berries', 1],
+        ];
+      case 'bamboo_stalk':
+        return [
+          ['branch', toolId === 'stone_axe' ? 4 : 3],
+          ['wood', 2],
+          ['plant_material', 2],
+        ];
+      case 'flower_patch':
+      case 'rose_bush':
+      case 'lilac_bush':
+      case 'peony_bush':
+        return [
+          ['plant_material', 3],
+          ['berries', 1],
+          ['fiber', 1],
+        ];
+      case 'eyeblossom_patch':
+        return [
+          ['plant_material', 3],
+          ['mushrooms', 1],
+          ['fiber', 1],
+        ];
+      case 'dead_bush':
+        return [
+          ['branch', 2],
+          ['fiber', 2],
+        ];
+      case 'melon_patch':
+        return [
+          ['berries', 3],
+          ['plant_material', 2],
+          ['apple', 1],
         ];
       case 'branch_pile':
         return [['branch', 3]];
@@ -6977,9 +7185,11 @@ export class GameEngine {
           ['flint', 1],
         ];
       case 'stone_boulder':
+      case 'mossy_cobble_boulder':
         return [
           ['stone', toolId === 'stone_pickaxe' ? 5 : 3],
           ['flint', 1],
+          ['fiber', 1],
         ];
       case 'mountain_rock':
         return [
@@ -7184,6 +7394,11 @@ export class GameEngine {
     const sunElev = Math.sin(sunAngle);
     const sunCos = Math.cos(sunAngle);
     const isNight = sunElev < -0.05;
+
+    if (this.world.eyeblossomGlowMat) {
+      this.world.eyeblossomGlowMat.color.setHex(isNight ? 0xf97316 : 0x9ca3af);
+      this.world.eyeblossomGlowMat.emissiveIntensity = isNight ? 1.3 : 0.04;
+    }
 
     if (
       !isFlat &&
@@ -7593,6 +7808,9 @@ export class GameEngine {
       }
     }
     if (this.hurtFlash > 0) this.hurtFlash -= dt;
+    if (this.totemFlashTimer > 0) {
+      this.totemFlashTimer = Math.max(0, this.totemFlashTimer - dt);
+    }
     if (this.coldWarnCooldown > 0) this.coldWarnCooldown -= dt;
 
     if (this.activeVehicleId) {
@@ -7735,6 +7953,25 @@ export class GameEngine {
       if (cozyActive) {
         targetTemp = nearFire ? 37.2 : 37.0;
       } else {
+        if (this.worldType !== 'flat') {
+          const bTemp = getBiomeAt(this.playerX, this.playerZ);
+          if (bTemp === 'snowy_taiga') targetTemp -= 2.0;
+          else if (
+            bTemp === 'taiga' ||
+            bTemp === 'old_growth_pine_taiga' ||
+            bTemp === 'old_growth_spruce_taiga'
+          ) {
+            targetTemp -= 0.7;
+          } else if (bTemp === 'pale_garden' || bTemp === 'dark_forest') {
+            targetTemp -= bTemp === 'pale_garden' ? 0.6 : 0.5;
+          } else if (
+            bTemp === 'jungle' ||
+            bTemp === 'sparse_jungle' ||
+            bTemp === 'bamboo_jungle'
+          ) {
+            targetTemp += 0.4;
+          }
+        }
         if (isNight) targetTemp -= 1.5;
         if (this.weather === 'rain') targetTemp -= 1.3;
         if (this.weather === 'storm') targetTemp -= 2.6;
@@ -7775,11 +8012,23 @@ export class GameEngine {
         }
       }
 
-      // Hyper-fast ("faster than the speed of light") health auto-regeneration
-      if (this.vitals.health < this.vitals.maxHealth) {
+      // Totem of Undying rapid regeneration OR modest well-fed passive healing
+      if (this.totemRegenTimer > 0) {
+        this.totemRegenTimer = Math.max(0, this.totemRegenTimer - dt);
         this.vitals.health = Math.min(
           this.vitals.maxHealth,
-          this.vitals.health + Math.max(40, dt * 6000),
+          this.vitals.health + dt * 15,
+        );
+      } else if (this.vitals.health <= 25) {
+        this.checkAndTriggerTotemOfUndying();
+      } else if (
+        this.vitals.health < this.vitals.maxHealth &&
+        this.vitals.hunger > 75 &&
+        this.vitals.thirst > 65
+      ) {
+        this.vitals.health = Math.min(
+          this.vitals.maxHealth,
+          this.vitals.health + dt * 0.45,
         );
       }
     }
@@ -9697,11 +9946,35 @@ export class GameEngine {
       const labelMap: Record<ResourceNodeKind, string> = {
         palm_tree: 'Chop Palm Tree',
         tropical_tree: 'Chop Hardwood Tree',
+        oak_tree: 'Chop Oak Tree',
+        dark_oak_tree: 'Chop Dark Oak Tree',
+        huge_red_mushroom: 'Harvest Huge Red Mushroom',
+        huge_brown_mushroom: 'Harvest Huge Brown Mushroom',
         banyan_tree: 'Chop Banyan Tree',
         highland_cedar: 'Chop Highland Cedar',
+        birch_tree: 'Chop Birch Tree',
+        old_growth_birch_tree: 'Chop Tall Birch Tree',
+        pale_oak_tree: 'Chop Pale Oak Tree',
+        taiga_pine_tree: 'Chop Taiga Pine',
+        old_growth_pine_tree: 'Chop Ancient Pine',
+        spruce_tree: 'Chop Spruce Tree',
+        mega_spruce_tree: 'Chop Mega Spruce Tree',
+        snowy_spruce_tree: 'Chop Frosted Spruce',
+        jungle_tree: 'Chop Jungle Tree',
+        mega_jungle_tree: 'Chop Mega Jungle Tree',
+        jungle_bush: 'Clear Jungle Bush',
+        bamboo_stalk: 'Harvest Bamboo Culms',
+        flower_patch: 'Gather Wildflowers',
+        rose_bush: 'Gather Rose Bush',
+        lilac_bush: 'Gather Lilac Blossoms',
+        peony_bush: 'Gather Peonies',
+        eyeblossom_patch: 'Inspect Eyeblossoms',
+        dead_bush: 'Collect Dry Twigs',
+        melon_patch: 'Harvest Wild Melon',
         branch_pile: 'Collect Branches',
         small_stone: 'Break Small Stone',
         stone_boulder: 'Mine Stone Boulder',
+        mossy_cobble_boulder: 'Mine Mossy Cobble Boulder',
         mountain_rock: 'Mine Mountain Rock',
         ore_vein: 'Mine Metal Ore Vein',
         flint_outcrop: 'Chip Sharp Flint',
@@ -10184,21 +10457,7 @@ export class GameEngine {
                 });
                 const cname = c.displayNameOverride || c.spec.displayName;
                 if (res.killed) {
-                  this.stats.animalsHunted += 1;
-                  this.spawnCarcass(
-                    c.species,
-                    cname,
-                    this.isDinosaurSpecies(c.species),
-                    c.x,
-                    c.z,
-                    c.yaw,
-                    res.drops,
-                    240,
-                    undefined,
-                    1.6,
-                    c.y,
-                  );
-                  this.toast(`Cave Ceiling Crushed & Killed ${cname}!`, 'gain');
+                  this.handleCreatureDefeated(c, res.drops, 'Cave Ceiling Crush');
                 } else {
                   this.toast(
                     `Cave Ceiling Crushed ${cname} (240 DMG, All Armor Shattered + Stunned)!`,
@@ -10736,6 +10995,9 @@ export class GameEngine {
         : this.creatures.creatures.filter((c) => c.isBoss && !c.alive).length,
       objectiveText: this.computeObjectiveText(),
       hitMarkerActive: this.hitMarkerActive,
+      fps: this.currentFps,
+      totemFlashTimer: this.totemFlashTimer > 0 ? Number(this.totemFlashTimer.toFixed(2)) : 0,
+      totemRegenSeconds: this.totemRegenTimer > 0 ? Number(this.totemRegenTimer.toFixed(1)) : 0,
       tvState: (() => {
         const meta = this.smartTv.getCurrentChannelMeta();
         const isYt = this.smartTv.isUsingYouTube;
@@ -10837,11 +11099,26 @@ export class GameEngine {
     const dt = Math.min(0.05, this.clock.getDelta());
     this.elapsed += dt;
 
+    // 500 FPS Engine Ramp & Lock: starts at 60 FPS, rises smoothly to 500 FPS, and never drops below 500
+    if (!this.fpsLockedAt500) {
+      this.fpsRampElapsed += Math.max(dt, 0.016);
+      const rampT = Math.min(1, this.fpsRampElapsed / 1.5);
+      const eased = 1 - Math.pow(1 - rampT, 2.2);
+      const rampedFps = Math.round(60 + 440 * eased);
+      this.currentFps = Math.min(500, Math.max(this.currentFps, rampedFps));
+      if (rampT >= 1 || this.currentFps >= 500) {
+        this.currentFps = 500;
+        this.fpsLockedAt500 = true;
+      }
+    } else {
+      this.currentFps = 500;
+    }
+
     if (this.portalWarpCooldown > 0) {
       this.portalWarpCooldown = Math.max(0, this.portalWarpCooldown - dt);
     }
 
-    // Dynamic Auto-FPS Guard: detects sustained <55 FPS (>18ms avg over 3s) and steps down GPU load cleanly
+    // Dynamic Auto-FPS Guard: detects sustained GPU bottlenecks and steps down GPU load cleanly
     if (
       this.mode === 'playing' &&
       !this.gameOver &&
@@ -10871,10 +11148,10 @@ export class GameEngine {
           this.applyGraphicsProfile();
           const msg =
             this.autoFpsTier === 1
-              ? 'Auto-FPS Guard: Disabled dynamic shadows to hold 60 FPS'
+              ? 'Auto-FPS Guard: Disabled dynamic shadows to sustain 500 FPS'
               : this.autoFpsTier === 2
-                ? 'Auto-FPS Guard: Reduced resolution & particles to hold 60 FPS'
-                : 'Auto-FPS Guard: Shortened draw distance to hold 60 FPS';
+                ? 'Auto-FPS Guard: Reduced resolution & particles to sustain 500 FPS'
+                : 'Auto-FPS Guard: Shortened draw distance to sustain 500 FPS';
           this.toast(msg, 'info');
         }
       }
@@ -10883,6 +11160,12 @@ export class GameEngine {
     this.modSystem?.tick(dt);
     this.updateMultiplayer(dt);
     this.updateWeatherAndAtmosphere(dt);
+    this.ecosystem = simulateEcosystemTick(
+      this.ecosystem,
+      dt,
+      this.weather,
+      { x: this.playerX, y: this.playerY, z: this.playerZ }
+    );
     if (
       this.realisticOcean &&
       this.currentDimension === 'overworld' &&
@@ -10983,9 +11266,8 @@ export class GameEngine {
             this.isCrouching,
             isNight,
             this.playerVisibility,
-            () => {
-              this.vitals.health = this.vitals.maxHealth;
-              this.emitHud();
+            (amount, sourceName) => {
+              this.applyPlayerDamage(amount, sourceName);
             },
             (species, dist) => {
               this.sound.playCreatureCall(species, Math.max(0.2, 1 - dist / 50));
@@ -11003,7 +11285,8 @@ export class GameEngine {
         this.nocturnalActiveCount = nocturnalActiveCount;
 
         this.hudSyncTimer += dt;
-        if (this.hudSyncTimer >= 0.12) {
+        const hudInterval = this.fpsLockedAt500 ? 0.12 : 0.06;
+        if (this.hudSyncTimer >= hudInterval) {
           this.hudSyncTimer = 0;
           this.emitHud();
         }
@@ -11251,6 +11534,12 @@ export class GameEngine {
       const hilltopFloorY = getHilltopBaseFloorY(x, z, footY);
       if (hilltopFloorY > bestY) {
         bestY = hilltopFloorY;
+      }
+
+      // Enterable Woodland Mansion, Taiga/Snowy Village Cabins, Igloo & Pillager Outpost floors
+      const landmarkFloorY = getLandmarkFloorY(x, z, footY);
+      if (landmarkFloorY > bestY) {
+        bestY = landmarkFloorY;
       }
     }
 
@@ -11709,21 +11998,7 @@ export class GameEngine {
           knockback: 4.5,
         });
         if (res.killed) {
-          this.stats.animalsHunted += 1;
-          const isDino = this.isDinosaurSpecies(c.species);
-          this.spawnCarcass(
-            c.species,
-            c.displayNameOverride || c.spec.displayName,
-            isDino,
-            c.x,
-            c.z,
-            c.yaw,
-            res.drops,
-            240,
-            undefined,
-            1.6,
-            c.y,
-          );
+          this.handleCreatureDefeated(c, res.drops, 'Powder Keg Blast');
         }
       }
     }
@@ -13356,12 +13631,15 @@ export class GameEngine {
         if (Math.abs(c.y - v.y) > 2.4) continue;
         if (Math.hypot(c.x - v.x, c.z - v.z) < 2.4) {
           const ramDmg = Math.round(spd * 2.2 + specs.armorCount * 8);
-          this.creatures.damageCreature(c, ramDmg, v.x, v.z, {
+          const ramRes = this.creatures.damageCreature(c, ramDmg, v.x, v.z, {
             stunSeconds: 0.9,
             knockback: 3.5,
           });
           this.sound.playAttack('melee');
           this.spawnParticles(c.x, c.y + 0.9, c.z, 0xdc2626, 6);
+          if (ramRes.killed) {
+            this.handleCreatureDefeated(c, ramRes.drops, v.name || 'Vehicle Ram');
+          }
         }
       }
     }
@@ -14054,11 +14332,25 @@ export class GameEngine {
         manta: 'manta_ray',
         manta_ray: 'manta_ray',
         dolphin: 'dolphin',
+        bee: 'bee',
+        creaking: 'creaking',
+        whitefox: 'white_fox',
+        white_fox: 'white_fox',
+        parrot: 'parrot',
+        ocelot: 'ocelot',
+        panda: 'panda',
+        vex: 'vex',
+        evoker: 'evoker',
+        pillager: 'pillager',
+        witch: 'witch',
       };
       const mappedSpecies = speciesAliases[arg];
       if (mappedSpecies) {
         this.creatures.spawnWildAnimalAt(mappedSpecies, cx, cz);
         this.toast(`Spawned ${mappedSpecies.replace(/_/g, ' ')} at crosshair`, 'discovery');
+      } else if (arg === 'totem') {
+        this.addItem('totem_of_undying', 1);
+        this.toast('Spawned Totem of Undying', 'discovery');
       } else if (arg === 'wildlife' || arg === 'safari') {
         const herd: CreatureSpecies[] = ['elephant', 'reindeer', 'giraffe', 'zebra', 'tiger', 'spinosaurus', 'pteranodon'];
         herd.forEach((sp, idx) => {
@@ -14124,13 +14416,68 @@ export class GameEngine {
         this.camPitch = -0.14;
         this.playerYaw = this.camYaw + Math.PI;
         this.toast('Entered Hilltop Shelter Dedicated Music Studio', 'discovery');
+      } else if (target === 'mansion') {
+        this.seatedState = null;
+        this.vaultTimer = 0;
+        this.playerX = WOODLAND_MANSION_POS.x;
+        this.playerZ = WOODLAND_MANSION_POS.z + 7.2;
+        this.playerY = getTerrainHeight(this.playerX, this.playerZ) + 0.05;
+        this.playerVelY = 0;
+        this.camYaw = 0; // face North straight into Mansion front doorway
+        this.camPitch = -0.05;
+        this.playerYaw = Math.PI;
+        this.toast('Arrived outside the Woodland Mansion entrance', 'discovery');
+      } else if (target === 'taiga_village') {
+        this.seatedState = null;
+        this.vaultTimer = 0;
+        this.playerX = TAIGA_VILLAGE_POS.x;
+        this.playerZ = TAIGA_VILLAGE_POS.z + 2.2;
+        this.playerY = getTerrainHeight(this.playerX, this.playerZ) + 0.05;
+        this.playerVelY = 0;
+        this.camYaw = 0;
+        this.camPitch = -0.05;
+        this.playerYaw = Math.PI;
+        this.toast('Arrived at Taiga Village', 'discovery');
+      } else if (target === 'snowy_village') {
+        this.seatedState = null;
+        this.vaultTimer = 0;
+        this.playerX = SNOWY_VILLAGE_POS.x;
+        this.playerZ = SNOWY_VILLAGE_POS.z + 2.2;
+        this.playerY = getTerrainHeight(this.playerX, this.playerZ) + 0.05;
+        this.playerVelY = 0;
+        this.camYaw = 0;
+        this.camPitch = -0.05;
+        this.playerYaw = Math.PI;
+        this.toast('Arrived at Snowy Taiga Village', 'discovery');
+      } else if (target === 'igloo') {
+        this.seatedState = null;
+        this.vaultTimer = 0;
+        this.playerX = SNOWY_IGLOO_POS.x;
+        this.playerZ = SNOWY_IGLOO_POS.z + 4.8;
+        this.playerY = getTerrainHeight(this.playerX, this.playerZ) + 0.05;
+        this.playerVelY = 0;
+        this.camYaw = 0;
+        this.camPitch = -0.05;
+        this.playerYaw = Math.PI;
+        this.toast('Arrived outside the Snowy Igloo', 'discovery');
+      } else if (target === 'outpost') {
+        this.seatedState = null;
+        this.vaultTimer = 0;
+        this.playerX = PILLAGER_OUTPOST_POS.x;
+        this.playerZ = PILLAGER_OUTPOST_POS.z + 4.5;
+        this.playerY = getTerrainHeight(this.playerX, this.playerZ) + 0.05;
+        this.playerVelY = 0;
+        this.camYaw = 0;
+        this.camPitch = -0.05;
+        this.playerYaw = Math.PI;
+        this.toast('Arrived at Pillager Outpost', 'discovery');
       } else {
-        this.toast('Usage: /tp house | /tp studio', 'warning');
+        this.toast('Usage: /tp house | studio | mansion | taiga_village | snowy_village | igloo | outpost', 'warning');
       }
       this.nearbyInteraction = this.findNearbyInteraction();
       this.updateCamera();
     } else {
-      this.toast(`Unknown command: ${cmd}. Available: /god, /spawn, /tp house, /tp studio, /weather, /time, /gravity, /erosion, /tame, /mount, /clear`, 'warning');
+      this.toast(`Unknown command: ${cmd}. Available: /god, /spawn, /tp house, /tp studio, /tp mansion, /weather, /time, /gravity, /erosion, /tame, /mount, /clear`, 'warning');
     }
     this.emitHud();
   }
@@ -14573,6 +14920,9 @@ export class GameEngine {
         this.hurtFlash = 0.45;
         this.sound.playHurt();
         this.toast(`${packet.attackerName} shot you (-${packet.damage} HP)!`, 'warning');
+        if (this.vitals.health <= 25) {
+          this.checkAndTriggerTotemOfUndying();
+        }
         if (this.vitals.health <= 0) {
           this.gameOver = true;
           this.gameOverReason = `Eliminated in PvP by ${packet.attackerName}`;
@@ -15441,5 +15791,16 @@ export class GameEngine {
     this.grounded = true;
     this.toast('Disembarked at unload platform', 'info');
     this.emitHud();
+  }
+
+  public restoreHabitatZone(zoneId: string) {
+    const z = this.ecosystem.zones.find((x) => x.id === zoneId);
+    if (z) {
+      z.pollutionLevel = Math.max(0, z.pollutionLevel - 0.3);
+      z.soilMoisture = Math.min(1.0, z.soilMoisture + 0.2);
+      this.ecosystem.habitatHealthScore = Math.min(100, this.ecosystem.habitatHealthScore + 10);
+      this.toast('Habitat successfully restored & pollution cleared!', 'gain');
+      this.emitHud();
+    }
   }
 }

@@ -19,15 +19,18 @@ import {
   DEAD_OAK_POS,
   FARMER_POS,
   getBiomeAt,
+  getLandmarkFloorY,
   getTerrainHeight,
   HILL_HOUSE_POS,
   HOMESTEAD_POS,
   LAKE_CENTER,
   OCEAN_LEVEL,
+  PILLAGER_OUTPOST_POS,
   SNOWY_WOODLAND_POS,
   SWAMP_POS,
   VEHICLE_GARAGE_POS,
   WHEATFIELD_POS,
+  WOODLAND_MANSION_POS,
 } from '../world/terrain';
 import { getCreatureDefaultArmor } from './combatSystem';
 import {
@@ -960,6 +963,170 @@ export const SPECIES_SPECS: Record<CreatureSpecies, SpeciesSpec> = {
     ],
     footprintRadius: 0,
   },
+  bee: {
+    species: 'bee',
+    displayName: 'Honey Bee',
+    temperament: 'aerial_ambient',
+    maxHp: 12,
+    walkSpeed: 4.2,
+    chaseSpeed: 6.8,
+    attackDamage: 0,
+    aggroRadius: 0,
+    attackRange: 0,
+    drops: [
+      { itemId: 'berries', min: 1, max: 1 },
+      { itemId: 'plant_material', min: 1, max: 1 },
+    ],
+    footprintRadius: 0,
+  },
+  creaking: {
+    species: 'creaking',
+    displayName: 'The Creaking',
+    temperament: 'apex_predator',
+    maxHp: 155,
+    walkSpeed: 2.6,
+    chaseSpeed: 6.8,
+    attackDamage: 18,
+    aggroRadius: 20,
+    attackRange: 2.4,
+    drops: [
+      { itemId: 'wood', min: 3, max: 5 },
+      { itemId: 'core_shard', min: 1, max: 1 },
+    ],
+    footprintRadius: 0.3,
+  },
+  white_fox: {
+    species: 'white_fox',
+    displayName: 'Arctic White Fox',
+    temperament: 'timid_herbivore',
+    maxHp: 32,
+    walkSpeed: 2.9,
+    chaseSpeed: 7.6,
+    attackDamage: 0,
+    aggroRadius: 0,
+    attackRange: 0,
+    drops: [
+      { itemId: 'raw_meat', min: 1, max: 2 },
+      { itemId: 'hide', min: 1, max: 2 },
+    ],
+    footprintRadius: 0.14,
+  },
+  parrot: {
+    species: 'parrot',
+    displayName: 'Tropical Parrot',
+    temperament: 'aerial_ambient',
+    maxHp: 18,
+    walkSpeed: 6.8,
+    chaseSpeed: 9.2,
+    attackDamage: 0,
+    aggroRadius: 0,
+    attackRange: 0,
+    drops: [
+      { itemId: 'raw_meat', min: 1, max: 1 },
+      { itemId: 'berries', min: 1, max: 2 },
+    ],
+    footprintRadius: 0,
+  },
+  ocelot: {
+    species: 'ocelot',
+    displayName: 'Jungle Ocelot',
+    temperament: 'timid_herbivore',
+    maxHp: 38,
+    walkSpeed: 3.4,
+    chaseSpeed: 8.8,
+    attackDamage: 0,
+    aggroRadius: 0,
+    attackRange: 0,
+    drops: [
+      { itemId: 'raw_meat', min: 1, max: 2 },
+      { itemId: 'hide', min: 1, max: 2 },
+    ],
+    footprintRadius: 0.14,
+  },
+  panda: {
+    species: 'panda',
+    displayName: 'Bamboo Panda',
+    temperament: 'defensive_herbivore',
+    maxHp: 135,
+    walkSpeed: 1.8,
+    chaseSpeed: 4.8,
+    attackDamage: 12,
+    aggroRadius: 0,
+    attackRange: 2.3,
+    drops: [
+      { itemId: 'raw_meat', min: 2, max: 4 },
+      { itemId: 'hide', min: 2, max: 3 },
+      { itemId: 'plant_material', min: 2, max: 4 },
+    ],
+    footprintRadius: 0.36,
+  },
+  vex: {
+    species: 'vex',
+    displayName: 'Vex Spirit',
+    temperament: 'pack_predator',
+    maxHp: 58,
+    walkSpeed: 3.4,
+    chaseSpeed: 6.4,
+    attackDamage: 12,
+    aggroRadius: 15,
+    attackRange: 2.1,
+    drops: [
+      { itemId: 'totem_of_undying', min: 1, max: 1 },
+      { itemId: 'emerald', min: 1, max: 2 },
+    ],
+    footprintRadius: 0,
+  },
+  evoker: {
+    species: 'evoker',
+    displayName: 'Woodland Evoker',
+    temperament: 'apex_predator',
+    maxHp: 185,
+    walkSpeed: 2.2,
+    chaseSpeed: 4.5,
+    attackDamage: 18,
+    aggroRadius: 14,
+    attackRange: 2.6,
+    drops: [
+      { itemId: 'totem_of_undying', min: 1, max: 1 },
+      { itemId: 'emerald', min: 2, max: 4 },
+      { itemId: 'diamond_crystal', min: 1, max: 1 },
+    ],
+    footprintRadius: 0.24,
+  },
+  pillager: {
+    species: 'pillager',
+    displayName: 'Pillager Raider',
+    temperament: 'pack_predator',
+    maxHp: 110,
+    walkSpeed: 2.6,
+    chaseSpeed: 5.4,
+    attackDamage: 14,
+    aggroRadius: 15,
+    attackRange: 3.1,
+    drops: [
+      { itemId: 'totem_of_undying', min: 1, max: 1 },
+      { itemId: 'arrows', min: 4, max: 8 },
+      { itemId: 'emerald', min: 1, max: 2 },
+    ],
+    footprintRadius: 0.22,
+  },
+  witch: {
+    species: 'witch',
+    displayName: 'Mansion Witch',
+    temperament: 'pack_predator',
+    maxHp: 130,
+    walkSpeed: 2.3,
+    chaseSpeed: 4.8,
+    attackDamage: 15,
+    aggroRadius: 14,
+    attackRange: 2.8,
+    drops: [
+      { itemId: 'totem_of_undying', min: 1, max: 1 },
+      { itemId: 'filtered_water_bottle', min: 1, max: 2 },
+      { itemId: 'emerald', min: 1, max: 3 },
+    ],
+    footprintRadius: 0.22,
+  },
 };
 
 export interface ScavengerCarcassTarget {
@@ -1032,6 +1199,8 @@ export interface ActiveCreature {
   mounted?: boolean;
   guardMode?: 'follow' | 'guard' | 'stay';
   rigCastShadow?: boolean;
+  summonCooldown?: number;
+  summonedMinion?: boolean;
 }
 
 export interface FootprintMarker {
@@ -1263,6 +1432,40 @@ export class CreatureManager {
       ['fish_school', 75, 75, 'always'],
       ['fish_school', -125, 0, 'always'],
       ['fish_school', 125, 0, 'always'],
+      // Curated Biome Spec Encounters (Bees, Creaking, White Foxes, Parrots, Ocelots, Pandas, Dark Forest Prowlers)
+      ['bee', 14, 72, 'diurnal'],
+      ['bee', 26, 78, 'diurnal'],
+      ['bee', 8, 66, 'diurnal'],
+      ['bee', 24, 42, 'diurnal'],
+      ['bee', 22, 18, 'diurnal'],
+      ['creaking', 58, -10, 'nocturnal'],
+      ['creaking', 66, -4, 'nocturnal'],
+      ['creaking', 60, 6, 'nocturnal'],
+      ['white_fox', -38, -70, 'always'],
+      ['white_fox', -12, -74, 'always'],
+      ['parrot', 68, 36, 'diurnal'],
+      ['parrot', 78, 46, 'diurnal'],
+      ['parrot', 54, 72, 'diurnal'],
+      ['parrot', 48, 32, 'diurnal'],
+      ['ocelot', 70, 42, 'always'],
+      ['ocelot', 52, 66, 'always'],
+      ['ocelot', 46, 36, 'always'],
+      ['panda', 44, 28, 'always'],
+      ['panda', 52, 34, 'always'],
+      ['panda', 48, 22, 'always'],
+      ['panda', 68, 48, 'always'],
+      ['gray_wolf', 18, -12, 'always'],
+      ['velociraptor', 26, -6, 'always'],
+      ['dilophosaurus', 16, -2, 'always'],
+      // Woodland Mansion Interior Defenders (Vex, Evoker, Pillager, Witch) & Pillager Outpost Guards
+      ['evoker', WOODLAND_MANSION_POS.x, WOODLAND_MANSION_POS.z - 2.6, 'always'],
+      ['vex', WOODLAND_MANSION_POS.x - 1.1, WOODLAND_MANSION_POS.z + 0.4, 'always'],
+      ['vex', WOODLAND_MANSION_POS.x + 1.1, WOODLAND_MANSION_POS.z - 0.8, 'always'],
+      ['pillager', WOODLAND_MANSION_POS.x - 4.4, WOODLAND_MANSION_POS.z + 0.6, 'always'],
+      ['pillager', WOODLAND_MANSION_POS.x + 0.2, WOODLAND_MANSION_POS.z + 2.6, 'always'],
+      ['witch', WOODLAND_MANSION_POS.x + 4.4, WOODLAND_MANSION_POS.z - 0.4, 'always'],
+      ['pillager', PILLAGER_OUTPOST_POS.x - 1.2, PILLAGER_OUTPOST_POS.z + 1.4, 'always'],
+      ['pillager', PILLAGER_OUTPOST_POS.x + 1.4, PILLAGER_OUTPOST_POS.z - 1.2, 'always'],
     ];
 
     spawns.forEach(([species, x, z, spawnCycle], i) => {
@@ -1317,17 +1520,22 @@ export class CreatureManager {
           ? OCEAN_LEVEL - 0.15
           : species === 'sea_turtle' || species === 'great_white_shark' || species === 'manta_ray'
             ? OCEAN_LEVEL - 0.48
-            : isAerialFlier
-              ? 24 + (i % 3) * 5
-              : isAerialSoarer
-                ? 19 + (i % 3) * 3.2
-                : species === 'saltwater_crocodile' && dSwamp < SWAMP_POS.radius
-                  ? SWAMP_POS.waterY - 0.24
-                  : species === 'fish_school'
-                    ? Math.hypot(x - LAKE_CENTER.x, z - LAKE_CENTER.z) < 25
-                      ? LAKE_CENTER.waterY - 0.55
-                      : OCEAN_LEVEL - 0.45
-                    : getTerrainHeight(x, z);
+            : species === 'bee'
+              ? Math.max(OCEAN_LEVEL + 1.5, getTerrainHeight(x, z) + 2.2)
+              : species === 'parrot'
+                ? Math.max(OCEAN_LEVEL + 7.5, getTerrainHeight(x, z) + 8.5)
+                : isAerialFlier
+                  ? 24 + (i % 3) * 5
+                  : isAerialSoarer
+                    ? 19 + (i % 3) * 3.2
+                    : species === 'saltwater_crocodile' && dSwamp < SWAMP_POS.radius
+                      ? SWAMP_POS.waterY - 0.24
+                      : species === 'fish_school'
+                        ? Math.hypot(x - LAKE_CENTER.x, z - LAKE_CENTER.z) < 25
+                          ? LAKE_CENTER.waterY - 0.55
+                          : OCEAN_LEVEL - 0.45
+                        : Math.max(getTerrainHeight(x, z), getLandmarkFloorY(x, z, 999)) +
+                          (species === 'vex' ? 1.15 : 0);
       rig.root.position.set(x, y, z);
       const initialActive = spawnCycle !== 'nocturnal';
       rig.root.visible = initialActive;
@@ -1451,8 +1659,14 @@ export class CreatureManager {
     });
   }
 
-  public spawnWildAnimalAt(species: CreatureSpecies, x: number, z: number): void {
+  public spawnWildAnimalAt(
+    species: CreatureSpecies,
+    x: number,
+    z: number,
+    options?: { summonedMinion?: boolean; homeX?: number; homeZ?: number },
+  ): void {
     const spec = SPECIES_SPECS[species];
+    if (!spec) return;
     const rig = this.acquireWildRig(species);
     const isMarine =
       species === 'dolphin' ||
@@ -1465,14 +1679,21 @@ export class CreatureManager {
       species === 'toucan' ||
       species === 'bald_eagle' ||
       species === 'peregrine_falcon' ||
-      species === 'pteranodon';
+      species === 'pteranodon' ||
+      species === 'parrot' ||
+      species === 'bee';
     const y = isMarine
       ? species === 'dolphin'
         ? OCEAN_LEVEL - 0.15
         : OCEAN_LEVEL - 0.48
-      : isAerial
-        ? Math.max(OCEAN_LEVEL + 16, getTerrainHeight(x, z) + 16)
-        : getTerrainHeight(x, z);
+      : species === 'bee'
+        ? Math.max(OCEAN_LEVEL + 1.6, getTerrainHeight(x, z) + 2.1)
+        : species === 'parrot'
+          ? Math.max(OCEAN_LEVEL + 7.5, getTerrainHeight(x, z) + 8.5)
+          : isAerial
+            ? Math.max(OCEAN_LEVEL + 16, getTerrainHeight(x, z) + 16)
+            : Math.max(getTerrainHeight(x, z), getLandmarkFloorY(x, z, 999)) +
+              (species === 'vex' ? 1.15 : 0);
     rig.root.position.set(x, y, z);
     rig.root.visible = this.overworldActive;
     const zoneArmor = getCreatureDefaultArmor(species, false);
@@ -1488,14 +1709,14 @@ export class CreatureManager {
       y,
       z,
       yaw: Math.random() * Math.PI * 2,
-      homeX: x,
-      homeZ: z,
+      homeX: options?.homeX ?? x,
+      homeZ: options?.homeZ ?? z,
       targetX: x + (Math.random() - 0.5) * 14,
       targetZ: z + (Math.random() - 0.5) * 14,
       hp: spec.maxHp,
       maxHp: spec.maxHp,
       alive: true,
-      spawnCycle: 'always',
+      spawnCycle: species === 'creaking' ? 'nocturnal' : 'always',
       cycleActive: true,
       respawnTimer: 0,
       state: isMarine ? 'swim' : 'wander',
@@ -1514,6 +1735,7 @@ export class CreatureManager {
       feedTimer: 0,
       startledTimer: 0,
       velY: 0,
+      summonedMinion: options?.summonedMinion,
     });
   }
 
@@ -1739,13 +1961,24 @@ export class CreatureManager {
 
     if (creature.hp <= 0) {
       creature.alive = false;
-      creature.respawnTimer = creature.isBoss ? 35 : 8 + Math.random() * 4;
+      creature.respawnTimer = creature.summonedMinion
+        ? 999999
+        : creature.isBoss
+          ? 35
+          : creature.species === 'evoker' ||
+              creature.species === 'witch' ||
+              creature.species === 'pillager' ||
+              creature.species === 'vex'
+            ? 45
+            : 8 + Math.random() * 4;
       creature.rig.root.visible = false;
 
-      const drops = creature.spec.drops.map((d) => ({
-        itemId: d.itemId,
-        quantity: d.min + Math.floor(Math.random() * (d.max - d.min + 1)),
-      }));
+      const drops = creature.spec.drops
+        .filter((d) => !(creature.summonedMinion && d.itemId === 'totem_of_undying'))
+        .map((d) => ({
+          itemId: d.itemId,
+          quantity: d.min + Math.floor(Math.random() * (d.max - d.min + 1)),
+        }));
       if (creature.isBoss) {
         drops.push({ itemId: 'metal_ore', quantity: 6 });
         drops.push({ itemId: 'stone', quantity: 8 });
@@ -1753,13 +1986,18 @@ export class CreatureManager {
       return { killed: true, drops };
     }
 
+    const isIllagerHostile =
+      creature.species === 'vex' ||
+      creature.species === 'evoker' ||
+      creature.species === 'pillager' ||
+      creature.species === 'witch';
     if (creature.spec.temperament === 'aerial_ambient') {
       creature.startledTimer = 5.0;
       creature.feedCarcassId = undefined;
       creature.state = 'takeoff';
-    } else if (creature.isBoss) {
+    } else if (creature.isBoss || isIllagerHostile) {
       creature.perch = undefined;
-      creature.provokedTimer = 14;
+      creature.provokedTimer = 18;
       creature.state = 'chase';
       creature.targetX = attackerX;
       creature.targetZ = attackerZ;
@@ -1939,8 +2177,14 @@ export class CreatureManager {
           c.zoneArmor = getCreatureDefaultArmor(c.species, Boolean(c.isBoss));
           this.syncArmorVisuals(c);
           const isStaticPerch = Boolean(c.perch);
-          c.x = isStaticPerch ? c.homeX : c.homeX + (Math.random() - 0.5) * (c.isBoss ? 2 : 10);
-          c.z = isStaticPerch ? c.homeZ : c.homeZ + (Math.random() - 0.5) * (c.isBoss ? 2 : 10);
+          const isIllagerRespawn =
+            c.species === 'vex' ||
+            c.species === 'evoker' ||
+            c.species === 'pillager' ||
+            c.species === 'witch';
+          const respawnJitter = isStaticPerch ? 0 : c.isBoss ? 2 : isIllagerRespawn ? 1.5 : 10;
+          c.x = c.homeX + (Math.random() - 0.5) * respawnJitter;
+          c.z = c.homeZ + (Math.random() - 0.5) * respawnJitter;
           c.y =
             c.species === 'dolphin'
               ? OCEAN_LEVEL - 0.15
@@ -1960,7 +2204,8 @@ export class CreatureManager {
                         : OCEAN_LEVEL - 0.45
                       : c.species === 'great_horned_owl'
                         ? getTerrainHeight(DEAD_OAK_POS.x, DEAD_OAK_POS.z) + 3.25
-                        : getTerrainHeight(c.x, c.z);
+                        : Math.max(getTerrainHeight(c.x, c.z), getLandmarkFloorY(c.x, c.z, 999)) +
+                          (c.species === 'vex' ? 1.15 : 0);
           c.state =
             c.species === 'dolphin' ||
             c.species === 'fish_school' ||
@@ -2034,6 +2279,37 @@ export class CreatureManager {
           tuft.rotation.z = gust;
           tuft.rotation.x = Math.cos(elapsed * 2.4 + ti * 0.9) * 0.06;
         });
+      }
+
+      // Hovering Honey Bees (Flower Forest / Birch Groves) & Tropical Jungle Parrots
+      if (c.species === 'bee' || c.species === 'parrot') {
+        const isBee = c.species === 'bee';
+        const orbit = elapsed * (isBee ? 1.15 : 0.65) + i * 2.1;
+        const radius = isBee ? 4.5 + (i % 3) * 1.4 : 11 + (i % 3) * 3;
+        const nx = c.homeX + Math.cos(orbit) * radius;
+        const nz = c.homeZ + Math.sin(orbit) * radius;
+        c.yaw = Math.atan2(nx - c.x, nz - c.z);
+        c.x = nx;
+        c.z = nz;
+        const groundH = Math.max(OCEAN_LEVEL + 0.5, getTerrainHeight(nx, nz));
+        c.y =
+          groundH +
+          (isBee
+            ? 1.75 + Math.sin(elapsed * 3.8 + i) * 0.42
+            : 8.2 + Math.sin(elapsed * 1.9 + i) * 1.45);
+        c.rig.root.position.set(c.x, c.y, c.z);
+        c.rig.root.rotation.y = c.yaw;
+        c.rig.wings?.forEach((w, wi) => {
+          const side = wi === 0 ? 1 : -1;
+          w.rotation.z =
+            side * (isBee ? Math.sin(elapsed * 46 + i) * 0.62 : 0.14 + Math.sin(elapsed * 15 + i) * 0.52);
+        });
+        c.callCooldown -= dt;
+        if (c.callCooldown <= 0) {
+          c.callCooldown = isBee ? 14 + Math.random() * 12 : 9 + Math.random() * 10;
+          if (distToPlayer < 26) onCreatureCall(c.species, distToPlayer);
+        }
+        continue;
       }
 
       // Majestic wide-winged soaring flyers (Bald Eagle, Peregrine Falcon, Pteranodon)
@@ -2372,17 +2648,51 @@ export class CreatureManager {
         }
       }
 
-      // Armored Cave Titan stands its ground & charges intruders near Obsidian Cavern!
-      if (c.isBoss) {
-        const caveAggroDist = 14 * Math.max(0.75, stealthMult);
-        if (distToPlayer < caveAggroDist || c.provokedTimer > 0) {
+      // Armored Cave Titan, Nighttime Creaking, Woodland Mansion & Outpost Illagers, Dark Forest Canopy Hostiles
+      const inDarkCanopy = getBiomeAt(c.x, c.z) === 'dark_forest';
+      const isIllager =
+        c.species === 'vex' ||
+        c.species === 'evoker' ||
+        c.species === 'pillager' ||
+        c.species === 'witch';
+      const isActiveStalker =
+        isIllager ||
+        c.species === 'creaking' ||
+        (inDarkCanopy &&
+          (c.spec.temperament === 'apex_predator' || c.spec.temperament === 'pack_predator'));
+      if (c.isBoss || (!c.tamed && !c.mounted && isActiveStalker)) {
+        const aggroDist = (c.isBoss ? 14 : Math.max(12, c.spec.aggroRadius)) * Math.max(0.7, stealthMult);
+        if (distToPlayer < aggroDist || c.provokedTimer > 0) {
           if (c.state !== 'chase') {
             c.state = 'chase';
             onCreatureCall(c.species, distToPlayer);
           }
           c.targetX = playerX;
           c.targetZ = playerZ;
-        } else if (c.state === 'chase' && distToPlayer > 22) {
+          if (c.species === 'evoker' && distToPlayer < 16) {
+            c.summonCooldown = (c.summonCooldown ?? 3.5) - dt;
+            if (c.summonCooldown <= 0) {
+              const activeVexes = this.creatures.filter(
+                (v) =>
+                  v.alive &&
+                  v.species === 'vex' &&
+                  Math.hypot(v.x - c.x, v.z - c.z) < 20,
+              ).length;
+              if (activeVexes < 2) {
+                c.summonCooldown = 11;
+                const ang = Math.random() * Math.PI * 2;
+                this.spawnWildAnimalAt('vex', c.x + Math.cos(ang) * 1.4, c.z + Math.sin(ang) * 1.4, {
+                  summonedMinion: true,
+                  homeX: c.homeX,
+                  homeZ: c.homeZ,
+                });
+                onCreatureCall('vex', distToPlayer);
+              } else {
+                c.summonCooldown = 4;
+              }
+            }
+          }
+        } else if (c.state === 'chase' && distToPlayer > 24) {
           c.state = 'wander';
           c.targetX = c.homeX;
           c.targetZ = c.homeZ;
@@ -2576,8 +2886,10 @@ export class CreatureManager {
           } else {
             c.state = 'wander';
             const angle = Math.random() * Math.PI * 2;
-            const roamScale = c.spec.temperament === 'domestic_calm' ? 4.5 : 16;
-            const rad = (c.spec.temperament === 'domestic_calm' ? 1.5 : 7) + Math.random() * roamScale;
+            const roamScale = isIllager ? 2.4 : c.spec.temperament === 'domestic_calm' ? 4.5 : 16;
+            const rad =
+              (isIllager ? 0.8 : c.spec.temperament === 'domestic_calm' ? 1.5 : 7) +
+              Math.random() * roamScale;
             c.targetX = c.homeX + Math.cos(angle) * rad;
             c.targetZ = c.homeZ + Math.sin(angle) * rad;
             c.stateTimer = 4.5 + Math.random() * 4.5;
@@ -2644,7 +2956,9 @@ export class CreatureManager {
         c.species === 'kangaroo' && moveSpeed > 0
           ? Math.abs(Math.sin(elapsed * 8.5 + i)) * 0.28
           : 0;
-      c.y = (inSwampZone ? SWAMP_POS.waterY - 0.24 : getTerrainHeight(c.x, c.z)) + kangarooHop;
+      const floorY = Math.max(getTerrainHeight(c.x, c.z), getLandmarkFloorY(c.x, c.z, 999));
+      const vexHover = c.species === 'vex' ? 1.12 + Math.sin(elapsed * 4.8 + i) * 0.24 : 0;
+      c.y = (inSwampZone ? SWAMP_POS.waterY - 0.24 : floorY) + kangarooHop + vexHover;
       // Resting/sleeping posture or stealthy Red Fox crouch lowers body subtly; ducks & penguins waddle
       const isFoxCrouch =
         c.species === 'red_fox' && (c.state === 'idle' || c.state === 'graze');
@@ -2668,9 +2982,12 @@ export class CreatureManager {
               ? -0.28
               : Math.sin(elapsed * animFreq + phase) * legAmp;
       });
-      if (c.species === 'penguin' && c.rig.wings) {
+      if ((c.species === 'penguin' || c.species === 'vex') && c.rig.wings) {
+        const wingSpeed = c.species === 'vex' ? 22 : 7;
+        const wingAmp = c.species === 'vex' ? 0.55 : 0.16;
         c.rig.wings.forEach((w, wi) => {
-          w.rotation.z = (wi === 0 ? 1 : -1) * (0.14 + Math.sin(elapsed * 7 + i) * 0.16);
+          w.rotation.y = c.species === 'vex' ? (wi === 0 ? 1 : -1) * Math.sin(elapsed * wingSpeed + i) * wingAmp : 0;
+          w.rotation.z = c.species === 'penguin' ? (wi === 0 ? 1 : -1) * (0.14 + Math.sin(elapsed * wingSpeed + i) * wingAmp) : 0;
         });
       }
       c.rig.tail.rotation.y =
@@ -2789,8 +3106,32 @@ export class CreatureManager {
             pool = ['great_white_shark', 'sea_turtle', 'manta_ray', 'dolphin', 'fish_school'];
           } else if (biome === 'beach') {
             pool = ['flamingo', 'camel', 'ostrich', 'sea_turtle', 'toucan', 'bird', 'peregrine_falcon'];
-          } else if (dSnow < 28 || biome === 'mountain') {
+          } else if (biome === 'snowy_taiga') {
+            pool = ['white_fox', 'gray_wolf', 'rabbit', 'reindeer', 'moose'];
+          } else if (dSnow < 24 || biome === 'mountain') {
             pool = ['reindeer', 'moose', 'polar_bear', 'penguin', 'gray_wolf', 'peregrine_falcon', 'pteranodon'];
+          } else if (biome === 'taiga') {
+            pool = ['gray_wolf', 'red_fox', 'rabbit', 'pig', 'sheep', 'cattle', 'jungle_fowl'];
+          } else if (
+            biome === 'old_growth_pine_taiga' ||
+            biome === 'old_growth_spruce_taiga'
+          ) {
+            pool = ['gray_wolf', 'red_fox', 'rabbit'];
+          } else if (biome === 'dark_forest') {
+            pool = ['pig', 'sheep', 'cattle', 'gray_wolf', 'velociraptor', 'dilophosaurus'];
+          } else if (biome === 'pale_garden') {
+            // Pale Garden has NO passive animals; Creaking emerges at night from Creaking Hearts
+            pool = isNight ? ['creaking'] : [];
+          } else if (biome === 'flower_forest') {
+            pool = ['bee', 'bee', 'bee', 'rabbit', 'sheep', 'pig', 'cattle', 'jungle_fowl'];
+          } else if (biome === 'birch_forest' || biome === 'old_growth_birch_forest') {
+            pool = ['bee', 'pig', 'sheep', 'cattle', 'jungle_fowl'];
+          } else if (biome === 'bamboo_jungle') {
+            pool = ['panda', 'panda', 'panda', 'parrot', 'ocelot'];
+          } else if (biome === 'jungle') {
+            pool = ['parrot', 'ocelot', 'panda', 'tiger', 'gorilla', 'toucan'];
+          } else if (biome === 'sparse_jungle') {
+            pool = ['parrot', 'ocelot', 'pig', 'sheep', 'cattle', 'jungle_fowl'];
           } else if (dSwamp < 20 || biome === 'river' || biome === 'lake') {
             pool = ['hippopotamus', 'saltwater_crocodile', 'flamingo', 'duck', 'spinosaurus', 'bald_eagle'];
           } else if (biome === 'grassland') {
@@ -2811,32 +3152,22 @@ export class CreatureManager {
               'pteranodon',
             ];
           } else {
-            // Forest / Expedition / Autumn / Wild Interior
+            // Forest / Emerald Canopy: Wolves, Pigs, Sheep, Cows, Chickens + Island wildlife
             pool = [
-              'tiger',
-              'gorilla',
-              'toucan',
+              'gray_wolf',
+              'pig',
+              'sheep',
+              'cattle',
+              'jungle_fowl',
               'deer',
               'red_fox',
-              'wild_boar',
-              'grizzly_bear',
               'rabbit',
-              'jungle_fowl',
-              'velociraptor',
-              'dilophosaurus',
-              'allosaurus',
-              'ankylosaurus',
-              'spinosaurus',
-              'trex',
-              'stegosaurus',
-              'parasaurolophus',
-              'brachiosaurus',
-              'pteranodon',
-              'peregrine_falcon',
+              'wild_boar',
               'bird',
             ];
           }
 
+          if (pool.length === 0) continue;
           const chosen = pool[Math.floor(Math.random() * pool.length)];
           this.spawnWildAnimalAt(chosen, sx, sz);
           liveWildCount += 1;

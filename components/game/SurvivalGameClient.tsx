@@ -27,6 +27,8 @@ import {
   FastForward,
   Flame,
   Footprints,
+  Gauge,
+  Globe2,
   Hammer,
   Hand,
   Heart,
@@ -48,6 +50,7 @@ import {
   Shield,
   ShieldAlert,
   ShieldOff,
+  ShieldPlus,
   Skull,
   Sparkles,
   Sun,
@@ -118,6 +121,8 @@ import { DimensionWheelModal } from './DimensionWheelModal';
 import { MusicStudioModal } from './MusicStudioModal';
 import { WorldSelectionMenu } from './WorldSelectionMenu';
 import { CoasterStudioModal } from './CoasterStudioModal';
+import { EcosystemJournalModal } from './EcosystemJournalModal';
+import { EcosystemSimulationData } from '@/game/systems/livingEcosystemSystem';
 
 function formatTimePhase(t: number): string {
   if (t < 0.2 || t >= 0.84) return 'Night';
@@ -150,6 +155,7 @@ export function SurvivalGameClient() {
   const [latestSave, setLatestSave] = useState<SaveSlotSummary | null>(null);
   const [isTouchDevice, setIsTouchDevice] = useState(false);
   const [hud, setHud] = useState<HUDStateSnapshot | null>(null);
+  const [ecosystemSnapshot, setEcosystemSnapshot] = useState<EcosystemSimulationData | null>(null);
   const [toasts, setToasts] = useState<ResourceToast[]>([]);
   const [telemetryExpanded, setTelemetryExpanded] = useState(false);
   const [hudWindowStart, setHudWindowStart] = useState(0);
@@ -675,6 +681,9 @@ export function SurvivalGameClient() {
       setTvPipDismissed(false);
       setTvViewMode('inline');
     }
+    if (modal === 'ecosystem_journal' && engineRef.current) {
+      setEcosystemSnapshot({ ...engineRef.current.ecosystem });
+    }
     setActiveStationStructureId(structureId);
     setActiveModal(modal);
     engineRef.current?.setMode('paused');
@@ -958,28 +967,39 @@ export function SurvivalGameClient() {
           {/* Top Bar: Compact Survival Vitals (Left), Slim Compass (Center), Menu/Exit (Right) */}
           <div className="flex flex-nowrap items-start justify-between gap-1.5 sm:gap-2">
             {/* Top-Left Vitals / Flat World Park Tools Panel */}
-            <div className="pointer-events-auto rounded-lg bg-stone-950/90 border border-stone-700/80 p-1.5 sm:p-2.5 w-[166px] sm:w-[228px] space-y-1.5 shadow-lg">
+            <div className="pointer-events-auto rounded-lg bg-stone-950/90 border border-stone-700/80 p-1.5 sm:p-2.5 w-[184px] sm:w-[244px] space-y-1.5 shadow-lg">
               <div className="flex items-center justify-between gap-1 text-[10px] sm:text-[11px] text-stone-300 pb-0.5 border-b border-stone-800">
                 <span className="font-semibold text-amber-300 truncate">
                   {hud.worldType === 'flat'
                     ? hud.worldName || 'Flat Park Grounds'
                     : hud.biomeName}
                 </span>
-                <span className="font-mono-tabular shrink-0 flex items-center gap-1">
-                  {hud.worldType === 'flat' ? (
-                    <Sun className="w-3 h-3 text-sky-400" />
-                  ) : hud.weather === 'storm' ? (
-                    <CloudLightning className="w-3 h-3 text-amber-300" />
-                  ) : hud.weather === 'rain' ? (
-                    <CloudRain className="w-3 h-3 text-sky-300" />
-                  ) : hud.weather === 'overcast' ? (
-                    <Cloud className="w-3 h-3 text-stone-300" />
-                  ) : hud.isNight ? (
-                    <Moon className="w-3 h-3 text-indigo-300" />
-                  ) : (
-                    <Sun className="w-3 h-3 text-amber-400" />
-                  )}
-                  D{hud.dayCount}
+                <span className="font-mono-tabular shrink-0 flex items-center gap-1.5">
+                  <span
+                    className={`flex items-center gap-0.5 font-bold ${
+                      (hud.fps ?? 60) >= 500 ? 'text-emerald-400' : 'text-sky-300'
+                    }`}
+                    title="Locked 500 FPS Engine"
+                  >
+                    <Gauge className="w-3 h-3" />
+                    {Math.max(60, Math.min(500, Math.round(hud.fps ?? 60)))} FPS
+                  </span>
+                  <span className="flex items-center gap-0.5">
+                    {hud.worldType === 'flat' ? (
+                      <Sun className="w-3 h-3 text-sky-400" />
+                    ) : hud.weather === 'storm' ? (
+                      <CloudLightning className="w-3 h-3 text-amber-300" />
+                    ) : hud.weather === 'rain' ? (
+                      <CloudRain className="w-3 h-3 text-sky-300" />
+                    ) : hud.weather === 'overcast' ? (
+                      <Cloud className="w-3 h-3 text-stone-300" />
+                    ) : hud.isNight ? (
+                      <Moon className="w-3 h-3 text-indigo-300" />
+                    ) : (
+                      <Sun className="w-3 h-3 text-amber-400" />
+                    )}
+                    D{hud.dayCount}
+                  </span>
                 </span>
               </div>
 
@@ -1041,6 +1061,17 @@ export function SurvivalGameClient() {
                     value={hud.vitals.health}
                     barColor="bg-red-500"
                   />
+                  {(hud.totemRegenSeconds ?? 0) > 0 && (
+                    <div className="flex items-center justify-between gap-1.5 rounded bg-emerald-950/95 border border-amber-400/75 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
+                      <span className="flex items-center gap-1">
+                        <ShieldPlus className="w-3 h-3 text-emerald-400" />
+                        <span>Totem Regen</span>
+                      </span>
+                      <span className="font-mono-tabular text-emerald-300">
+                        {hud.totemRegenSeconds?.toFixed(1)}s
+                      </span>
+                    </div>
+                  )}
                   <VitalBar
                     icon={<Utensils className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-400" />}
                     label="Hunger"
@@ -2543,6 +2574,19 @@ export function SurvivalGameClient() {
         />
       )}
 
+      {activeModal === 'ecosystem_journal' && ecosystemSnapshot && (
+        <EcosystemJournalModal
+          ecosystem={ecosystemSnapshot}
+          onClose={closeModal}
+          onRestoreHabitat={(zoneId) => {
+            engineRef.current?.restoreHabitatZone(zoneId);
+            if (engineRef.current) {
+              setEcosystemSnapshot({ ...engineRef.current.ecosystem });
+            }
+          }}
+        />
+      )}
+
       {activeModal === 'menu_drawer' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
           <div className="relative w-full max-w-md bg-stone-900 border border-amber-500/50 rounded-2xl shadow-2xl p-6 space-y-5 max-h-[90vh] overflow-y-auto survival-scroll">
@@ -2571,6 +2615,13 @@ export function SurvivalGameClient() {
               >
                 <RollerCoaster className="w-5 h-5 text-sky-300 shrink-0" />
                 <span>Coaster Studio</span>
+              </button>
+              <button
+                onClick={() => openModal('ecosystem_journal')}
+                className="p-3.5 rounded-xl bg-emerald-950/80 hover:bg-emerald-500 hover:text-stone-950 border border-emerald-500/40 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <Globe2 className="w-5 h-5 text-emerald-300 shrink-0" />
+                <span>Ecosystem Journal</span>
               </button>
               <button
                 onClick={() => setActiveModal('music_studio')}
@@ -2744,6 +2795,22 @@ export function SurvivalGameClient() {
             }
           }}
         />
+      )}
+
+      {screen === 'playing' && (hud?.totemFlashTimer ?? 0) > 0 && (
+        <div className="pointer-events-none fixed inset-0 z-30 border-8 border-amber-400/80 bg-amber-400/15 flex items-center justify-center">
+          <div className="rounded-xl bg-stone-950/90 border-2 border-amber-400 px-5 py-3 shadow-2xl flex items-center gap-3">
+            <ShieldPlus className="w-7 h-7 text-amber-300" />
+            <div>
+              <div className="text-sm font-bold text-amber-300">
+                Totem of Undying Activated!
+              </div>
+              <div className="text-xs text-emerald-300">
+                Regenerating Health Rapidly
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* GAME OVER OVERLAY */}

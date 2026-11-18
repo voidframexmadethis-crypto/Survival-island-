@@ -279,6 +279,53 @@ const SPECIES_HITBOXES: Partial<Record<CreatureSpecies, HitboxSphereSpec[]>> = {
     { zone: 'chest', localY: 0.0, localZ: 0.0, radius: 1.05 },
     { zone: 'limb', localY: 0.0, localZ: -0.8, radius: 0.52 },
   ],
+  bee: [
+    { zone: 'head', localY: 0.02, localZ: 0.24, radius: 0.16 },
+    { zone: 'chest', localY: 0.0, localZ: 0.0, radius: 0.24 },
+  ],
+  creaking: [
+    { zone: 'head', localY: 2.2, localZ: 0.04, radius: 0.34 },
+    { zone: 'chest', localY: 1.48, localZ: 0.0, radius: 0.52 },
+    { zone: 'limb', localY: 0.56, localZ: 0.0, radius: 0.42 },
+  ],
+  white_fox: [
+    { zone: 'head', localY: 0.52, localZ: 0.45, radius: 0.3 },
+    { zone: 'chest', localY: 0.44, localZ: 0.0, radius: 0.38 },
+    { zone: 'limb', localY: 0.2, localZ: -0.14, radius: 0.32 },
+  ],
+  parrot: [
+    { zone: 'head', localY: 0.12, localZ: 0.22, radius: 0.18 },
+    { zone: 'chest', localY: 0.0, localZ: 0.0, radius: 0.25 },
+  ],
+  ocelot: [
+    { zone: 'head', localY: 0.7, localZ: 0.52, radius: 0.28 },
+    { zone: 'chest', localY: 0.56, localZ: 0.0, radius: 0.42 },
+    { zone: 'limb', localY: 0.24, localZ: -0.14, radius: 0.34 },
+  ],
+  panda: [
+    { zone: 'head', localY: 1.02, localZ: 0.68, radius: 0.42 },
+    { zone: 'chest', localY: 0.82, localZ: 0.0, radius: 0.68 },
+    { zone: 'limb', localY: 0.35, localZ: -0.14, radius: 0.54 },
+  ],
+  vex: [
+    { zone: 'head', localY: 0.42, localZ: 0.02, radius: 0.24 },
+    { zone: 'chest', localY: 0.04, localZ: 0.0, radius: 0.28 },
+  ],
+  evoker: [
+    { zone: 'head', localY: 1.68, localZ: 0.02, radius: 0.3 },
+    { zone: 'chest', localY: 1.12, localZ: 0.0, radius: 0.42 },
+    { zone: 'limb', localY: 0.42, localZ: 0.0, radius: 0.36 },
+  ],
+  pillager: [
+    { zone: 'head', localY: 1.66, localZ: 0.02, radius: 0.3 },
+    { zone: 'chest', localY: 1.12, localZ: 0.0, radius: 0.42 },
+    { zone: 'limb', localY: 0.42, localZ: 0.0, radius: 0.36 },
+  ],
+  witch: [
+    { zone: 'head', localY: 1.72, localZ: 0.02, radius: 0.32 },
+    { zone: 'chest', localY: 1.1, localZ: 0.0, radius: 0.42 },
+    { zone: 'limb', localY: 0.42, localZ: 0.0, radius: 0.36 },
+  ],
 };
 
 export function getCreatureDefaultArmor(
