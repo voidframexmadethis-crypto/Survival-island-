@@ -13,6 +13,7 @@ import {
   DEAD_OAK_POS,
   DESERT_PYRAMID_POS,
   DESERT_VILLAGE_POS,
+  DRAGON_VALLEY_POS,
   EXPEDITION_POS,
   FARMER_POS,
   FROZEN_OCEAN_ICEBERG_POS,
@@ -28,11 +29,14 @@ import {
   OCEAN_MONUMENT_POS,
   PILLAGER_OUTPOST_POS,
   PLAINS_VILLAGE_POS,
+  RESORT_CORNER_POS,
+  RUINED_CASTLE_POS,
   RUINED_PORTAL_POS,
   SAVANNA_VILLAGE_POS,
   SNOWY_IGLOO_POS,
   SNOWY_SLOPES_IGLOO_POS,
   SNOWY_VILLAGE_POS,
+  VIKING_VILLAGE_POS,
   SNOWY_WOODLAND_POS,
   STONY_PEAKS_POS,
   SUNFLOWER_VILLAGE_POS,
@@ -65,7 +69,7 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
     if (!ctx) return;
 
     const size = 340;
-    const worldSpan = isFlat ? 640 : 1360; // Flat covers -320..+320, Mega-Island covers -680..+680
+    const worldSpan = isFlat ? 640 : 1760; // Flat covers -320..+320, Grand Finale Island covers -880..+880
     const fogGrid = 32;
     const exploredSet = new Set(hud.exploredCells || []);
     const isExploredWorld = (wx: number, wz: number) => {
@@ -367,6 +371,22 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
               r = 146;
               g = 114;
               b = 166;
+            } else if (biome === 'dragon_valley') {
+              r = 168;
+              g = 38;
+              b = 34;
+            } else if (biome === 'viking_village') {
+              r = 84;
+              g = 112;
+              b = 58;
+            } else if (biome === 'resort_corner') {
+              r = 45;
+              g = 212;
+              b = 191;
+            } else if (biome === 'ruined_castle') {
+              r = 102;
+              g = 72;
+              b = 168;
             } else {
               r = 46;
               g = 112;
@@ -385,6 +405,10 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
 
       // Discovered Landmarks only
       const landmarks = [
+        { label: 'Dragon Valley', pos: DRAGON_VALLEY_POS, color: '#ef4444' },
+        { label: 'Viking Village', pos: VIKING_VILLAGE_POS, color: '#84cc16' },
+        { label: 'Resort Corner', pos: RESORT_CORNER_POS, color: '#22d3ee' },
+        { label: 'Ruined Castle', pos: RUINED_CASTLE_POS, color: '#a855f7' },
         { label: 'Waterfall', pos: WATERFALL_POS, color: '#67e8f9' },
         { label: 'Obsidian Cave', pos: CAVE_POS, color: '#cbd5e1' },
         { label: 'Snowy Woodland', pos: SNOWY_WOODLAND_POS, color: '#e2e8f0' },

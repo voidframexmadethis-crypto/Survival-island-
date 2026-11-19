@@ -37,10 +37,12 @@ import {
   Map as MapIcon,
   Moon,
   Music,
+  Navigation,
   PackageOpen,
   PackagePlus,
   Pause,
   Pickaxe,
+  Plane,
   Play,
   Plus,
   RollerCoaster,
@@ -122,7 +124,9 @@ import { MusicStudioModal } from './MusicStudioModal';
 import { WorldSelectionMenu } from './WorldSelectionMenu';
 import { CoasterStudioModal } from './CoasterStudioModal';
 import { EcosystemJournalModal } from './EcosystemJournalModal';
+import { DragonSanctuaryModal } from './DragonSanctuaryModal';
 import { EcosystemSimulationData } from '@/game/systems/livingEcosystemSystem';
+import { DragonCompanion } from '@/game/systems/dragonValleySystem';
 
 function formatTimePhase(t: number): string {
   if (t < 0.2 || t >= 0.84) return 'Night';
@@ -156,6 +160,7 @@ export function SurvivalGameClient() {
   const [isTouchDevice, setIsTouchDevice] = useState(false);
   const [hud, setHud] = useState<HUDStateSnapshot | null>(null);
   const [ecosystemSnapshot, setEcosystemSnapshot] = useState<EcosystemSimulationData | null>(null);
+  const [dragonsSnapshot, setDragonsSnapshot] = useState<DragonCompanion[]>([]);
   const [toasts, setToasts] = useState<ResourceToast[]>([]);
   const [telemetryExpanded, setTelemetryExpanded] = useState(false);
   const [hudWindowStart, setHudWindowStart] = useState(0);
@@ -191,6 +196,8 @@ export function SurvivalGameClient() {
     },
     [],
   );
+
+  const [quickTpInput, setQuickTpInput] = useState('');
 
   const handleTvSyncYouTubeTime = useCallback((sec: number) => {
     engineRef.current?.syncTvYouTubeTime(sec);
@@ -687,6 +694,9 @@ export function SurvivalGameClient() {
     if (modal === 'ecosystem_journal' && engineRef.current) {
       setEcosystemSnapshot({ ...engineRef.current.ecosystem });
     }
+    if (modal === 'dragon_sanctuary' && engineRef.current) {
+      setDragonsSnapshot(engineRef.current.getDragons());
+    }
     setActiveStationStructureId(structureId);
     setActiveModal(modal);
     engineRef.current?.setMode('paused');
@@ -980,12 +990,12 @@ export function SurvivalGameClient() {
                 <span className="font-mono-tabular shrink-0 flex items-center gap-1.5">
                   <span
                     className={`flex items-center gap-0.5 font-bold ${
-                      (hud.fps ?? 60) >= 500 ? 'text-emerald-400' : 'text-sky-300'
+                      (hud.fps ?? 60) >= 1500 ? 'text-emerald-400' : 'text-sky-300'
                     }`}
-                    title="Locked 500 FPS Engine"
+                    title="Locked 1500 FPS Engine"
                   >
                     <Gauge className="w-3 h-3" />
-                    {Math.max(60, Math.min(500, Math.round(hud.fps ?? 60)))} FPS
+                    {Math.max(60, Math.min(1500, Math.round(hud.fps ?? 60)))} FPS
                   </span>
                   <span className="flex items-center gap-0.5">
                     {hud.worldType === 'flat' ? (
@@ -2195,40 +2205,166 @@ export function SurvivalGameClient() {
       )}
 
       {/* RESPONSIVE TOUCH CONTROLS & XBOX MIRRORED THUMBSTICK */}
-      {hud && (
-        <TouchControls
-          visible={
-            showTouchControls ||
-            (gamepadConnected &&
-              settings.touchControlsMode !== 'off' &&
+      {hud && (() => {
+        const touchVisible =
+          showTouchControls ||
+          (gamepadConnected &&
+            settings.touchControlsMode !== 'off' &&
+            screen === 'playing' &&
+            !activeModal &&
+            !hud.gameOver &&
+            !hud.cinematicActive);
+
+        return (
+          <>
+            <TouchControls
+              visible={touchVisible}
+              gamepadConnected={gamepadConnected}
+              mirroredJoystickOnly={!showTouchControls}
+              gamepadJoystickOffset={gamepadJoystickOffset}
+              actionLabel={hud.nearbyInteraction?.label || 'Action'}
+              actionCategory={hud.nearbyInteraction?.actionCategory}
+              isSprinting={hud.isSprinting}
+              isCrouching={hud.isCrouching}
+              isFlying={Boolean(hud.isFlying)}
+              onJoystickMove={(x, y) => engineRef.current?.setTouchJoystick(x, y)}
+              onCameraDrag={(dx, dy) => engineRef.current?.addCameraLookDelta(dx, dy)}
+              onAction={() => engineRef.current?.triggerPrimaryAction()}
+              showReload={Boolean(hud.equippedWeaponState)}
+              isReloading={Boolean(hud.equippedWeaponState?.isReloading)}
+              onReload={() => engineRef.current?.reloadEquippedWeapon()}
+              onJump={() => engineRef.current?.triggerJump()}
+              onKickDebris={() => engineRef.current?.triggerDebrisKick()}
+              kickCooldown={hud.momentumState?.kickCooldown ?? 0}
+              onSprintToggle={(active) => engineRef.current?.setTouchSprint(active)}
+              onCrouchToggle={(active) => engineRef.current?.setTouchCrouch(active)}
+              onFlightToggle={() => engineRef.current?.togglePlayerFlight()}
+              onFlyAscendChange={(active) => engineRef.current?.setTouchFlyAscend(active)}
+              onFlyDescendChange={(active) => engineRef.current?.setTouchFlyDescend(active)}
+              onTeleportBiome={(dest) => engineRef.current?.teleportToBiome(dest)}
+              onOpenBackpack={() => openModal('inventory')}
+              onOpenCraft={() => openModal('crafting')}
+              onOpenPlace={() => openModal('place')}
+            />
+
+            {!touchVisible &&
               screen === 'playing' &&
               !activeModal &&
               !hud.gameOver &&
-              !hud.cinematicActive)
-          }
-          gamepadConnected={gamepadConnected}
-          mirroredJoystickOnly={!showTouchControls}
-          gamepadJoystickOffset={gamepadJoystickOffset}
-          actionLabel={hud.nearbyInteraction?.label || 'Action'}
-          actionCategory={hud.nearbyInteraction?.actionCategory}
-          isSprinting={hud.isSprinting}
-          isCrouching={hud.isCrouching}
-          onJoystickMove={(x, y) => engineRef.current?.setTouchJoystick(x, y)}
-          onCameraDrag={(dx, dy) => engineRef.current?.addCameraLookDelta(dx, dy)}
-          onAction={() => engineRef.current?.triggerPrimaryAction()}
-          showReload={Boolean(hud.equippedWeaponState)}
-          isReloading={Boolean(hud.equippedWeaponState?.isReloading)}
-          onReload={() => engineRef.current?.reloadEquippedWeapon()}
-          onJump={() => engineRef.current?.triggerJump()}
-          onKickDebris={() => engineRef.current?.triggerDebrisKick()}
-          kickCooldown={hud.momentumState?.kickCooldown ?? 0}
-          onSprintToggle={(active) => engineRef.current?.setTouchSprint(active)}
-          onCrouchToggle={(active) => engineRef.current?.setTouchCrouch(active)}
-          onOpenBackpack={() => openModal('inventory')}
-          onOpenCraft={() => openModal('crafting')}
-          onOpenPlace={() => openModal('place')}
-        />
-      )}
+              !hud.cinematicActive && (
+                <div className="pointer-events-auto fixed bottom-[86px] left-5 z-20 flex items-center gap-2">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={Boolean(hud.isFlying)}
+                    aria-label="Toggle Flight"
+                    onClick={() => engineRef.current?.togglePlayerFlight()}
+                    className={`h-9 px-3 rounded-lg border-2 flex items-center gap-1.5 shadow-xl transition-colors ${
+                      hud.isFlying
+                        ? 'bg-sky-500 border-sky-200 text-stone-950'
+                        : 'bg-stone-950/85 border-stone-500/60 text-stone-100 hover:border-sky-400/70'
+                    }`}
+                  >
+                    <Plane className="w-4 h-4" />
+                    <span className="text-[11px] font-extrabold uppercase tracking-wider whitespace-nowrap">
+                      Fly {hud.isFlying ? 'ON' : 'OFF'}
+                    </span>
+                    <span
+                      className={`w-6 h-3.5 rounded-full p-0.5 flex items-center transition-colors ${
+                        hud.isFlying ? 'bg-stone-950/40 justify-end' : 'bg-stone-700 justify-start'
+                      }`}
+                    >
+                      <span
+                        className={`w-2.5 h-2.5 rounded-full ${
+                          hud.isFlying ? 'bg-white' : 'bg-stone-400'
+                        }`}
+                      />
+                    </span>
+                  </button>
+
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      aria-label="Fly Higher"
+                      title="Hold to Fly Higher"
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        engineRef.current?.setTouchFlyAscend(true);
+                      }}
+                      onPointerUp={(e) => {
+                        e.stopPropagation();
+                        engineRef.current?.setTouchFlyAscend(false);
+                      }}
+                      onPointerLeave={() => engineRef.current?.setTouchFlyAscend(false)}
+                      onPointerCancel={() => engineRef.current?.setTouchFlyAscend(false)}
+                      className={`w-9 h-9 rounded-lg border-2 flex items-center justify-center shadow-xl transition-colors ${
+                        hud.isFlying
+                          ? 'bg-sky-500/90 border-sky-200 text-stone-950 active:bg-sky-300'
+                          : 'bg-stone-950/85 border-stone-500/60 text-sky-300 hover:border-sky-400/70'
+                      }`}
+                    >
+                      <ArrowUp className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Fly Down"
+                      title="Hold to Fly Down"
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        engineRef.current?.setTouchFlyDescend(true);
+                      }}
+                      onPointerUp={(e) => {
+                        e.stopPropagation();
+                        engineRef.current?.setTouchFlyDescend(false);
+                      }}
+                      onPointerLeave={() => engineRef.current?.setTouchFlyDescend(false)}
+                      onPointerCancel={() => engineRef.current?.setTouchFlyDescend(false)}
+                      className={`w-9 h-9 rounded-lg border-2 flex items-center justify-center shadow-xl transition-colors ${
+                        hud.isFlying
+                          ? 'bg-sky-500/90 border-sky-200 text-stone-950 active:bg-sky-300'
+                          : 'bg-stone-950/85 border-stone-500/60 text-sky-300 hover:border-sky-400/70'
+                      }`}
+                    >
+                      <ArrowDown className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const dest = quickTpInput.trim();
+                      if (!dest) return;
+                      engineRef.current?.teleportToBiome(dest);
+                      setQuickTpInput('');
+                    }}
+                    onKeyDown={(e) => e.stopPropagation()}
+                    onKeyUp={(e) => e.stopPropagation()}
+                    className="flex items-center gap-1.5 h-9 bg-stone-950/85 border border-sky-500/50 rounded-lg px-2 shadow-xl backdrop-blur-sm"
+                  >
+                    <Navigation className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                    <input
+                      type="text"
+                      value={quickTpInput}
+                      onChange={(e) => setQuickTpInput(e.target.value)}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      onKeyUp={(e) => e.stopPropagation()}
+                      placeholder="Teleport biome..."
+                      aria-label="Teleport to biome"
+                      className="w-32 bg-transparent text-xs text-stone-100 placeholder:text-stone-400 focus:outline-none select-text"
+                    />
+                    <button
+                      type="submit"
+                      className="px-2 py-0.5 rounded bg-sky-500 hover:bg-sky-400 active:bg-sky-300 text-stone-950 text-[10px] font-extrabold uppercase tracking-wider shrink-0"
+                    >
+                      TP
+                    </button>
+                  </form>
+                </div>
+              )}
+          </>
+        );
+      })()}
 
       {/* MODALS */}
       {activeModal === 'inventory' && hud && (
@@ -2591,6 +2727,33 @@ export function SurvivalGameClient() {
         />
       )}
 
+      {activeModal === 'dragon_sanctuary' && (
+        <DragonSanctuaryModal
+          dragons={dragonsSnapshot}
+          onHatch={(el, name) => {
+            engineRef.current?.hatchDragonEgg(el, name);
+            if (engineRef.current) setDragonsSnapshot(engineRef.current.getDragons());
+          }}
+          onFeed={(id) => {
+            engineRef.current?.feedDragon(id);
+            if (engineRef.current) setDragonsSnapshot(engineRef.current.getDragons());
+          }}
+          onCombine={(idA, idB, hybridName) => {
+            engineRef.current?.combineDragons(idA, idB, hybridName);
+            if (engineRef.current) setDragonsSnapshot(engineRef.current.getDragons());
+          }}
+          onRename={(id, rawTag) => {
+            engineRef.current?.renameDragonWithAnvil(id, rawTag);
+            if (engineRef.current) setDragonsSnapshot(engineRef.current.getDragons());
+          }}
+          onToggleMount={(id) => {
+            engineRef.current?.toggleMountDragon(id);
+            if (engineRef.current) setDragonsSnapshot(engineRef.current.getDragons());
+          }}
+          onClose={closeModal}
+        />
+      )}
+
       {activeModal === 'menu_drawer' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
           <div className="relative w-full max-w-md bg-stone-900 border border-amber-500/50 rounded-2xl shadow-2xl p-6 space-y-5 max-h-[90vh] overflow-y-auto survival-scroll">
@@ -2619,6 +2782,13 @@ export function SurvivalGameClient() {
               >
                 <RollerCoaster className="w-5 h-5 text-sky-300 shrink-0" />
                 <span>Coaster Studio</span>
+              </button>
+              <button
+                onClick={() => openModal('dragon_sanctuary')}
+                className="p-3.5 rounded-xl bg-orange-950/80 hover:bg-orange-500 hover:text-stone-950 border border-orange-500/40 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <Flame className="w-5 h-5 text-orange-300 shrink-0" />
+                <span>Dragon Valley</span>
               </button>
               <button
                 onClick={() => openModal('ecosystem_journal')}

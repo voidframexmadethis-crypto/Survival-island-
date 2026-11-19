@@ -1543,6 +1543,39 @@ export class CreatureManager {
       ['sea_turtle', CORAL_REEF_POS.x - 12, CORAL_REEF_POS.z + 8, 'always'],
       ['fish_school', CORAL_REEF_POS.x, CORAL_REEF_POS.z - 6, 'always'],
       ['polar_bear', FROZEN_OCEAN_ICEBERG_POS.x, FROZEN_OCEAN_ICEBERG_POS.z + 35, 'always'],
+      // Spread-out Dead-Spot Wildlife Fill (Western/Southern/Eastern/Northern corridors & new Rapids Riverbanks)
+      ['deer', -195, 42, 'always'],
+      ['horse', -255, 95, 'always'],
+      ['zebra', -310, 145, 'always'],
+      ['giraffe', -340, 20, 'always'],
+      ['elephant', -365, -45, 'always'],
+      ['camel', -325, 255, 'always'],
+      ['ostrich', -270, 295, 'always'],
+      ['kangaroo', -145, 345, 'always'],
+      ['duck', -115, 290, 'always'],
+      ['flamingo', -158, 412, 'always'],
+      ['bison', -65, 320, 'always'],
+      ['horse', -35, 395, 'always'],
+      ['sheep', 48, 355, 'always'],
+      ['cattle', 95, 310, 'always'],
+      ['pig', 145, 245, 'always'],
+      ['wild_boar', 225, 215, 'always'],
+      ['goat', 295, 320, 'always'],
+      ['red_fox', 245, 115, 'always'],
+      ['duck', 310, -15, 'always'],
+      ['hippopotamus', 385, 28, 'always'],
+      ['flamingo', 425, 45, 'always'],
+      ['deer', 215, -65, 'always'],
+      ['bee', 185, -35, 'diurnal'],
+      ['reindeer', 145, -245, 'always'],
+      ['moose', 65, -310, 'always'],
+      ['polar_bear', -45, -345, 'always'],
+      ['white_fox', -165, -295, 'always'],
+      ['gray_wolf', -255, -215, 'always'],
+      ['triceratops', -225, 185, 'always'],
+      ['parasaurolophus', 165, 175, 'always'],
+      ['bald_eagle', -160, -15, 'always'],
+      ['bald_eagle', 260, -24, 'always'],
     ];
 
     spawns.forEach(([species, x, z, spawnCycle], i) => {
@@ -2307,21 +2340,25 @@ export class CreatureManager {
         nocturnalActiveCount += 1;
       }
 
-      const distToPlayer = Math.hypot(playerX - c.x, playerZ - c.z);
+      const dxP = playerX - c.x;
+      const dzP = playerZ - c.z;
+      const distSqP = dxP * dxP + dzP * dzP;
+      const maxDrawSq = this.maxDrawDistance * this.maxDrawDistance;
 
-      // Draw-distance frustum/distance culling & >120m AI/animation freeze
-      if (distToPlayer > this.maxDrawDistance) {
-        c.rig.root.visible = false;
+      // Draw-distance frustum/distance culling & >120m AI/animation freeze (zero-GC squared distance)
+      if (distSqP > maxDrawSq) {
+        if (c.rig.root.visible) c.rig.root.visible = false;
         this.setRigShadow(c, false);
         continue;
       }
-      c.rig.root.visible = true;
+      if (!c.rig.root.visible) c.rig.root.visible = true;
 
-      if (distToPlayer > 120 && !c.mounted && !c.tamed) {
+      if (distSqP > 14400 && !c.mounted && !c.tamed) {
         this.setRigShadow(c, false);
         c.rig.shadowDisc.visible = false;
         continue;
       }
+      const distToPlayer = Math.sqrt(distSqP);
 
       this.setRigShadow(c, this.shadowsEnabled && distToPlayer < 48);
       c.rig.shadowDisc.visible = distToPlayer < 80;
@@ -2337,8 +2374,8 @@ export class CreatureManager {
         }
       }
 
-      // Cold breath puffs (Timber Wolf, Polar Bear) & warm nostril steam (American Bison)
-      if (c.rig.breathWisps && c.rig.breathWisps.length > 0) {
+      // Cold breath puffs (Timber Wolf, Polar Bear) & warm nostril steam (American Bison) — LOD skip > 42m
+      if (distToPlayer < 42 && c.rig.breathWisps && c.rig.breathWisps.length > 0) {
         c.rig.breathWisps.forEach((wisp, wi) => {
           const cycle = (elapsed * 0.78 + wi * 0.34 + i * 0.19) % 1;
           const baseZ = c.species === 'bison' ? 1.48 : c.species === 'polar_bear' ? 1.38 : 0.88;
@@ -3127,13 +3164,13 @@ export class CreatureManager {
     // Infinite Biome-Aware Wildlife Ecosystem: cleanly recycles distant/dead dynamic spawns & endlessly populates herds, birds, marine life, and dinosaurs around the explorer!
     this.replenishTimer -= dt;
     if (this.replenishTimer <= 0) {
-      this.replenishTimer = 2.2;
+      this.replenishTimer = 1.6;
 
-      // 1. Prune distant (>112m) or expired dead untamed dynamic wildlife back into reusable rig pool
+      // 1. Prune distant (>135m) or expired dead untamed dynamic wildlife back into reusable rig pool (keeps FPS silky smooth!)
       for (let idx = this.creatures.length - 1; idx >= 0; idx--) {
         const dc = this.creatures[idx];
         if (!dc.id.startsWith('wild_') || dc.tamed || dc.mounted) continue;
-        const farAway = Math.hypot(dc.x - playerX, dc.z - playerZ) > 112;
+        const farAway = Math.hypot(dc.x - playerX, dc.z - playerZ) > 135;
         const deadExpired = !dc.alive && dc.respawnTimer <= 0;
         if (farAway || deadExpired) {
           this.releaseWildRig(dc.species, dc.rig);
@@ -3160,18 +3197,30 @@ export class CreatureManager {
         'dilophosaurus',
         'kangaroo',
         'ostrich',
+        'horse',
+        'sheep',
+        'cattle',
+        'pig',
+        'goat',
+        'camel',
+        'rabbit',
+        'bee',
+        'duck',
+        'gray_wolf',
+        'dolphin',
+        'sea_turtle',
       ]);
 
-      // Spawn up to 2 fresh encounters per tick until target active wild density is met
+      // Spawn up to 4 fresh spread-out encounters per tick until target active wild density near the player is met
       let spawnsThisTick = 0;
-      while (liveWildCount < 44 && this.creatures.length < 118 && spawnsThisTick < 2) {
+      while (liveWildCount < 68 && spawnsThisTick < 4) {
         spawnsThisTick += 1;
         let spawned = false;
-        for (let attempt = 0; attempt < 10; attempt++) {
+        for (let attempt = 0; attempt < 12; attempt++) {
           const angle = Math.random() * Math.PI * 2;
-          const rad = 24 + Math.random() * 68;
-          const sx = THREE.MathUtils.clamp(playerX + Math.cos(angle) * rad, -142, 142);
-          const sz = THREE.MathUtils.clamp(playerZ + Math.sin(angle) * rad, -142, 142);
+          const rad = 24 + Math.random() * 92;
+          const sx = THREE.MathUtils.clamp(playerX + Math.cos(angle) * rad, -735, 735);
+          const sz = THREE.MathUtils.clamp(playerZ + Math.sin(angle) * rad, -735, 735);
 
           // Keep safe homestead/garage clearings free of random wild spawns
           if (Math.hypot(sx - HILL_HOUSE_POS.x, sz - HILL_HOUSE_POS.z) < 16) continue;
@@ -3314,10 +3363,10 @@ export class CreatureManager {
           this.spawnWildAnimalAt(chosen, sx, sz);
           liveWildCount += 1;
 
-          // Spawn a companion herd/pack mate nearby for social wild species
-          if (herdSpecies.has(chosen) && this.creatures.length < 118 && Math.random() < 0.6) {
-            const mx = sx + (Math.random() - 0.5) * 7;
-            const mz = sz + (Math.random() - 0.5) * 7;
+          // Spawn a companion herd/pack mate nearby for social wild species (spread out by 6-12m)
+          if (herdSpecies.has(chosen) && liveWildCount < 68 && Math.random() < 0.65) {
+            const mx = sx + (Math.random() - 0.5) * 12;
+            const mz = sz + (Math.random() - 0.5) * 12;
             if (getTerrainHeight(mx, mz) > OCEAN_LEVEL + 0.3) {
               this.spawnWildAnimalAt(chosen, mx, mz);
               liveWildCount += 1;

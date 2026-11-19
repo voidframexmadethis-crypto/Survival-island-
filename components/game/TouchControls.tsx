@@ -12,9 +12,11 @@ import {
   Footprints,
   Hammer,
   Hand,
+  Navigation,
   PackageOpen,
   PackagePlus,
   Pickaxe,
+  Plane,
   RotateCw,
   Swords,
   Utensils,
@@ -29,6 +31,7 @@ interface TouchControlsProps {
   actionCategory?: NearbyInteraction['actionCategory'];
   isSprinting: boolean;
   isCrouching: boolean;
+  isFlying?: boolean;
   kickCooldown?: number;
   showReload?: boolean;
   isReloading?: boolean;
@@ -43,6 +46,10 @@ interface TouchControlsProps {
   onKickDebris?: () => void;
   onSprintToggle: (active: boolean) => void;
   onCrouchToggle: (active: boolean) => void;
+  onFlightToggle?: () => void;
+  onFlyAscendChange?: (active: boolean) => void;
+  onFlyDescendChange?: (active: boolean) => void;
+  onTeleportBiome?: (destination: string) => void;
   onOpenBackpack?: () => void;
   onOpenCraft?: () => void;
   onOpenPlace?: () => void;
@@ -54,6 +61,7 @@ export function TouchControls({
   actionCategory,
   isSprinting,
   isCrouching,
+  isFlying = false,
   kickCooldown = 0,
   showReload = false,
   isReloading = false,
@@ -67,10 +75,15 @@ export function TouchControls({
   onKickDebris,
   onSprintToggle,
   onCrouchToggle,
+  onFlightToggle,
+  onFlyAscendChange,
+  onFlyDescendChange,
+  onTeleportBiome,
   onOpenBackpack,
   onOpenCraft,
   onOpenPlace,
 }: TouchControlsProps) {
+  const [tpInput, setTpInput] = useState('');
   const joyPadRef = useRef<HTMLDivElement | null>(null);
   const activePointerId = useRef<number | null>(null);
   const joyCenter = useRef({ x: 0, y: 0 });
@@ -204,86 +217,211 @@ export function TouchControls({
 
   return (
     <div className="pointer-events-none fixed inset-0 z-20 touch-surface select-none overflow-hidden">
-      {/* LEFT ZONE: Sprint/Crouch stacked cleanly above Movement Joystick (Zero collision with hotbar or right controls) */}
+      {/* LEFT ZONE: Sprint/Crouch + Flight ON/OFF Switch stacked cleanly above Movement Joystick + Teleport Box */}
       <div className="pointer-events-auto absolute bottom-[74px] sm:bottom-[86px] left-2.5 sm:left-5 safe-bottom flex flex-col items-start gap-2">
-        {!mirroredJoystickOnly && (
-          <div className="flex items-center gap-1.5 pl-1">
+        <div className="flex items-center gap-1.5 pl-1">
+          {!mirroredJoystickOnly && (
+            <>
+              <button
+                type="button"
+                aria-label="Sprint"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSprintToggle(!isSprinting);
+                }}
+                className={`w-9 h-9 sm:w-11 sm:h-11 rounded-full border-2 flex items-center justify-center shadow-lg transition-colors ${
+                  isSprinting
+                    ? 'bg-amber-500 border-amber-200 text-stone-950'
+                    : 'bg-stone-950/80 border-stone-500/60 text-stone-100'
+                }`}
+              >
+                <Zap className="w-4 h-4 sm:w-5 sm:h-5" />
+              </button>
+
+              <button
+                type="button"
+                aria-label="Crouch"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCrouchToggle(!isCrouching);
+                }}
+                className={`w-9 h-9 sm:w-11 sm:h-11 rounded-full border-2 flex items-center justify-center shadow-lg transition-colors ${
+                  isCrouching
+                    ? 'bg-emerald-500 border-emerald-200 text-stone-950'
+                    : 'bg-stone-950/80 border-stone-500/60 text-stone-100'
+                }`}
+              >
+                <ArrowDown className="w-4 h-4 sm:w-5 sm:h-5" />
+              </button>
+            </>
+          )}
+
+          {onFlightToggle && (
             <button
               type="button"
-              aria-label="Sprint"
+              role="switch"
+              aria-checked={isFlying}
+              aria-label="Toggle Flight"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                onSprintToggle(!isSprinting);
+                onFlightToggle();
               }}
-              className={`w-9 h-9 sm:w-11 sm:h-11 rounded-full border-2 flex items-center justify-center shadow-lg transition-colors ${
-                isSprinting
-                  ? 'bg-amber-500 border-amber-200 text-stone-950'
-                  : 'bg-stone-950/80 border-stone-500/60 text-stone-100'
+              className={`h-9 sm:h-11 px-2.5 sm:px-3 rounded-lg border-2 flex items-center gap-1.5 shadow-lg transition-colors ${
+                isFlying
+                  ? 'bg-sky-500 border-sky-200 text-stone-950'
+                  : 'bg-stone-950/85 border-stone-500/60 text-stone-100 hover:border-sky-400/70'
               }`}
             >
-              <Zap className="w-4 h-4 sm:w-5 sm:h-5" />
-            </button>
-
-            <button
-              type="button"
-              aria-label="Crouch"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                onCrouchToggle(!isCrouching);
-              }}
-              className={`w-9 h-9 sm:w-11 sm:h-11 rounded-full border-2 flex items-center justify-center shadow-lg transition-colors ${
-                isCrouching
-                  ? 'bg-emerald-500 border-emerald-200 text-stone-950'
-                  : 'bg-stone-950/80 border-stone-500/60 text-stone-100'
-              }`}
-            >
-              <ArrowDown className="w-4 h-4 sm:w-5 sm:h-5" />
-            </button>
-          </div>
-        )}
-
-        <div
-          ref={joyPadRef}
-          className="relative w-26 h-26 sm:w-32 sm:h-32 rounded-full bg-stone-950/70 border-2 border-amber-500/40 flex items-center justify-center touch-surface shadow-2xl"
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerUp}
-          onLostPointerCapture={handlePointerUp}
-        >
-          {(() => {
-            const rawX =
-              knobOffset.x !== 0 ? knobOffset.x : (gamepadJoystickOffset?.x ?? 0);
-            const rawY =
-              knobOffset.y !== 0 ? knobOffset.y : (gamepadJoystickOffset?.y ?? 0);
-            const mag = Math.hypot(rawX, rawY);
-            const effectiveX = mag > maxRadius ? (rawX / mag) * maxRadius : rawX;
-            const effectiveY = mag > maxRadius ? (rawY / mag) * maxRadius : rawY;
-            const tiltX = (-effectiveY / maxRadius) * 16;
-            const tiltY = (effectiveX / maxRadius) * 16;
-            const isDeflected = mag > 2;
-            return (
-              <>
-                <div
-                  className={`w-11 h-11 sm:w-14 sm:h-14 rounded-full bg-amber-500 border-2 shadow-xl flex items-center justify-center pointer-events-none ${
-                    isDeflected ? 'border-emerald-300 ring-2 ring-emerald-400/50' : 'border-amber-200'
+              <Plane className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              <span className="text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider whitespace-nowrap">
+                Fly {isFlying ? 'ON' : 'OFF'}
+              </span>
+              <span
+                className={`w-6 h-3.5 rounded-full p-0.5 flex items-center transition-colors ${
+                  isFlying ? 'bg-stone-950/40 justify-end' : 'bg-stone-700 justify-start'
+                }`}
+              >
+                <span
+                  className={`w-2.5 h-2.5 rounded-full ${
+                    isFlying ? 'bg-white' : 'bg-stone-400'
                   }`}
-                  style={{
-                    transform: `perspective(180px) translate(${effectiveX.toFixed(1)}px, ${effectiveY.toFixed(1)}px) rotateX(${tiltX.toFixed(1)}deg) rotateY(${tiltY.toFixed(1)}deg)`,
+                />
+              </span>
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-end gap-2">
+          <div
+            ref={joyPadRef}
+            className="relative w-26 h-26 sm:w-32 sm:h-32 shrink-0 rounded-full bg-stone-950/70 border-2 border-amber-500/40 flex items-center justify-center touch-surface shadow-2xl"
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            onLostPointerCapture={handlePointerUp}
+          >
+            {(() => {
+              const rawX =
+                knobOffset.x !== 0 ? knobOffset.x : (gamepadJoystickOffset?.x ?? 0);
+              const rawY =
+                knobOffset.y !== 0 ? knobOffset.y : (gamepadJoystickOffset?.y ?? 0);
+              const mag = Math.hypot(rawX, rawY);
+              const effectiveX = mag > maxRadius ? (rawX / mag) * maxRadius : rawX;
+              const effectiveY = mag > maxRadius ? (rawY / mag) * maxRadius : rawY;
+              const tiltX = (-effectiveY / maxRadius) * 16;
+              const tiltY = (effectiveX / maxRadius) * 16;
+              const isDeflected = mag > 2;
+              return (
+                <>
+                  <div
+                    className={`w-11 h-11 sm:w-14 sm:h-14 rounded-full bg-amber-500 border-2 shadow-xl flex items-center justify-center pointer-events-none ${
+                      isDeflected ? 'border-emerald-300 ring-2 ring-emerald-400/50' : 'border-amber-200'
+                    }`}
+                    style={{
+                      transform: `perspective(180px) translate(${effectiveX.toFixed(1)}px, ${effectiveY.toFixed(1)}px) rotateX(${tiltX.toFixed(1)}deg) rotateY(${tiltY.toFixed(1)}deg)`,
+                    }}
+                  >
+                    <Footprints className="w-5 h-5 sm:w-6 sm:h-6 text-stone-950" />
+                  </div>
+                  {gamepadConnected && (
+                    <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded bg-stone-950/90 border border-emerald-500/60 text-[9px] font-bold tracking-wider text-emerald-300 uppercase whitespace-nowrap pointer-events-none">
+                      Xbox LS
+                    </span>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+
+          {(onFlyAscendChange || onFlyDescendChange) && (
+            <div className="flex flex-col gap-1.5 shrink-0">
+              {onFlyAscendChange && (
+                <button
+                  type="button"
+                  aria-label="Fly Higher"
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    onFlyAscendChange(true);
                   }}
+                  onPointerUp={(e) => {
+                    e.stopPropagation();
+                    onFlyAscendChange(false);
+                  }}
+                  onPointerLeave={() => onFlyAscendChange(false)}
+                  onPointerCancel={() => onFlyAscendChange(false)}
+                  className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border-2 flex items-center justify-center shadow-lg transition-colors touch-none ${
+                    isFlying
+                      ? 'bg-sky-500/90 border-sky-200 text-stone-950 active:bg-sky-300'
+                      : 'bg-stone-950/80 border-stone-500/60 text-sky-300 active:bg-sky-500 active:text-stone-950'
+                  }`}
                 >
-                  <Footprints className="w-5 h-5 sm:w-6 sm:h-6 text-stone-950" />
-                </div>
-                {gamepadConnected && (
-                  <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded bg-stone-950/90 border border-emerald-500/60 text-[9px] font-bold tracking-wider text-emerald-300 uppercase whitespace-nowrap pointer-events-none">
-                    Xbox LS
-                  </span>
-                )}
-              </>
-            );
-          })()}
+                  <ArrowUp className="w-5 h-5" />
+                </button>
+              )}
+              {onFlyDescendChange && (
+                <button
+                  type="button"
+                  aria-label="Fly Down"
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    onFlyDescendChange(true);
+                  }}
+                  onPointerUp={(e) => {
+                    e.stopPropagation();
+                    onFlyDescendChange(false);
+                  }}
+                  onPointerLeave={() => onFlyDescendChange(false)}
+                  onPointerCancel={() => onFlyDescendChange(false)}
+                  className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border-2 flex items-center justify-center shadow-lg transition-colors touch-none ${
+                    isFlying
+                      ? 'bg-sky-500/90 border-sky-200 text-stone-950 active:bg-sky-300'
+                      : 'bg-stone-950/80 border-stone-500/60 text-sky-300 active:bg-sky-500 active:text-stone-950'
+                  }`}
+                >
+                  <ArrowDown className="w-5 h-5" />
+                </button>
+              )}
+            </div>
+          )}
+
+          {onTeleportBiome && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const dest = tpInput.trim();
+                if (!dest) return;
+                onTeleportBiome(dest);
+                setTpInput('');
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+              onKeyUp={(e) => e.stopPropagation()}
+              className="flex items-center gap-1 bg-stone-950/85 border border-sky-500/50 rounded-lg px-1.5 py-1 shadow-xl backdrop-blur-sm"
+            >
+              <Navigation className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+              <input
+                type="text"
+                value={tpInput}
+                onChange={(e) => setTpInput(e.target.value)}
+                onKeyDown={(e) => e.stopPropagation()}
+                onKeyUp={(e) => e.stopPropagation()}
+                placeholder="TP biome..."
+                aria-label="Teleport to biome"
+                className="w-24 sm:w-32 bg-transparent text-[11px] sm:text-xs text-stone-100 placeholder:text-stone-400 focus:outline-none select-text"
+              />
+              <button
+                type="submit"
+                className="px-2 py-0.5 rounded bg-sky-500 hover:bg-sky-400 active:bg-sky-300 text-stone-950 text-[10px] font-extrabold uppercase tracking-wider shrink-0"
+              >
+                TP
+              </button>
+            </form>
+          )}
         </div>
       </div>
 

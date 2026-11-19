@@ -34,6 +34,14 @@ export const CommandConsoleModal: React.FC<CommandConsoleModalProps> = ({
   ]);
 
   const quickCommands = [
+    '/fly',
+    '/tp dragon valley',
+    '/tp viking village',
+    '/tp resort corner',
+    '/tp ruined castle',
+    '/tp desert',
+    '/tp cherry grove',
+    '/tp ice spikes',
     '/god',
     '/warp space',
     '/warp nether',

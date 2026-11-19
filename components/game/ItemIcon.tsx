@@ -133,6 +133,7 @@ export function ItemIcon({
     case 'jalapeno':
     case 'bell_pepper':
     case 'corn':
+    case 'beans':
       return <Sprout {...props} />;
     case 'carrot':
       return <Carrot {...props} />;

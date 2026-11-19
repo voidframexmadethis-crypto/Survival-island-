@@ -26,6 +26,26 @@ import {
 import { STAGE_1_MISSIONS } from '../data/missions';
 import { COOKING_RECIPES, CRAFTING_RECIPES } from '../data/recipes';
 import {
+  GRAND_FINALE_PACK,
+  GrandFinaleGhostEntity,
+  GrandFinalePlayerState,
+  GrandFinaleZoneKey,
+  TikiDrinkKey,
+} from '../data/grandFinalePack';
+import {
+  DRAGON_VALLEY_SYSTEM,
+  DragonCompanion,
+  DragonElement,
+  DragonFlightSystem,
+  DragonPlayerRef,
+} from '../systems/dragonValleySystem';
+import {
+  FlightAndTeleportSystem,
+  FlightPlayerState,
+  ISLAND_TELEPORT_DESTINATIONS,
+} from '../systems/flightAndTeleportSystem';
+import { sanitizeWorldAndEntities } from '../systems/worldSanitizer';
+import {
   ActiveCreature,
   CreatureManager,
   ScavengerCarcassTarget,
@@ -82,6 +102,7 @@ import {
   P2PPacket,
   RemoteAnimState,
 } from '../systems/p2pMultiplayer';
+import { FrameBudgetQueue } from '../systems/frameBudgetQueue';
 import {
   ActiveModal,
   ActiveVehicleHudState,
@@ -266,7 +287,7 @@ const _oceanDayColor = new THREE.Color(0x0b7285);
 const _lakeDayColor = new THREE.Color(0x14b8a6);
 
 const FOG_GRID_SIZE = 32;
-const FOG_WORLD_SPAN = 1360;
+const FOG_WORLD_SPAN = 1760;
 const MAX_POOLED_PARTICLES = 192;
 
 interface ArrowProjectile {
@@ -374,6 +395,22 @@ function formatTimePhase(t: number): string {
   return 'Dusk';
 }
 
+// Emergency Freeze-Shield: keeps player moving & prevents heavy loops from locking the tab
+const FREEZE_SHIELD = {
+  maxDt: 0.033, // Never jump more than ~33ms in one step
+  maxFrameMs: 28, // Skip non-essential world/vine work if frame is already slow
+  maxActiveVines: 120, // Hard cap so vine & extra ambient updates never snowball
+} as const;
+
+function measure(label: string, fn: () => void): void {
+  const t0 = performance.now();
+  fn();
+  const elapsed = performance.now() - t0;
+  if (elapsed > 16) {
+    console.warn(`FREEZE SPIKE [${label}]: ${elapsed.toFixed(1)} ms`);
+  }
+}
+
 export class GameEngine {
   private container: HTMLElement;
   private callbacks: EngineCallbacks;
@@ -435,10 +472,16 @@ export class GameEngine {
   private elapsed = 0;
   private hudSyncTimer = 0;
 
-  // Performance Engine & 500 FPS Lock + Dynamic Auto-FPS Guard State
+  // Performance Engine & 1500 FPS Lock + Fixed-Timestep Accumulator + 3.5ms FrameBudgetQueue
+  private static readonly FIXED_STEP = 1 / 60;
+  private simAccumulator = 0;
+  private worldCullTimer = 0;
+  private shadowUpdateFrame = 0;
+  private worldQueue = new FrameBudgetQueue(3.5);
+  private _scavengerTargetsScratch: ScavengerCarcassTarget[] = [];
   private currentFps = 60;
   private fpsRampElapsed = 0;
-  private fpsLockedAt500 = false;
+  private fpsLockedAt1500 = false;
   private autoFpsTier = 0;
   private fpsSampleTimer = 0;
   private fpsSampleFrames = 0;
@@ -455,6 +498,68 @@ export class GameEngine {
   private shaderQualityTier = 1;
   private nodeHitShakeTimers = new Map<string, number>();
   private _sunDirScratch = new THREE.Vector3(0.4, 0.85, 0.35);
+
+  // Grand Finale Pack runtime state (Tiki Drink buffs & lightweight zone loot interactions)
+  private grandFinalePlayer: GrandFinalePlayerState = { hp: 100, maxHp: 100, activeBuff: null };
+  private grandFinaleDrinkIdx = 0;
+  private grandFinaleTikiCooldown = 0;
+  private grandFinaleZoneCheckTimer = 0;
+  private grandFinaleGhosts: GrandFinaleGhostEntity[] = [
+    { id: 'gf_dragon_1', zoneKey: 'dragon valley', x: 420, z: -380, hp: 100, maxHp: 100, active: true, name: 'Cinder Drake' },
+    { id: 'gf_viking_1', zoneKey: 'viking village', x: 560, z: -260, hp: 100, maxHp: 100, active: true, name: 'Draugr Raider' },
+    { id: 'gf_resort_1', zoneKey: 'resort corner', x: -480, z: 410, hp: 80, maxHp: 80, active: true, name: 'Tide Wraith' },
+    { id: 'gf_castle_boss', zoneKey: 'ruined castle', x: -360, z: -520, hp: 180, maxHp: 180, active: true, isBoss: true, name: 'Fallen King Ghost' },
+  ];
+
+  // Survival & Creative Flight + Biome Teleport System
+  private lastSpaceTapMs = 0;
+  private touchFlyAscend = false;
+  private touchFlyDescend = false;
+  private flightPlayerProxy: FlightPlayerState = {
+    x: PLAYER_SPAWN.x,
+    y: 2,
+    z: PLAYER_SPAWN.z,
+    vx: 0,
+    vy: 0,
+    vz: 0,
+    isFlying: false,
+    mode: 'Survival',
+  };
+  private flightAndTeleport: FlightAndTeleportSystem = new FlightAndTeleportSystem(
+    this.flightPlayerProxy,
+    ISLAND_TELEPORT_DESTINATIONS,
+    {
+      flySpeed: 32,
+      verticalSpeed: 22,
+      boostMultiplier: 1.8,
+      getGroundHeight: (x, z) =>
+        Math.max(getTerrainHeight(x, z), getWaterLevelAt(x, z)),
+      onStatusChange: (msg, type) => {
+        this.toast(
+          msg,
+          type === 'error'
+            ? 'warning'
+            : type === 'success' || type === 'flight'
+              ? 'discovery'
+              : 'info',
+        );
+      },
+    },
+  );
+
+  // Dragon Valley System (max 6 active dragons, hatching, raising, hybrids, Anvil+NameTag, flight mount)
+  public dragons: DragonCompanion[] = [
+    DRAGON_VALLEY_SYSTEM.hatchEgg('Ember', 'Ignis'),
+  ];
+  private dragonPlayerRef: DragonPlayerRef = { mountedDragonId: null };
+  private dragonFlight: DragonFlightSystem = {
+    flying: false,
+    flySpeed: 48,
+    toggleFlight: (active: boolean) => {
+      this.dragonFlight.flying = active;
+      this.togglePlayerFlight(active, active ? Math.max(32, this.dragonFlight.flySpeed * 0.85) : 32);
+    },
+  };
 
   // Multiverse & Portal Vortex Handles
   private activeDimensionWorld: DimensionWorldHandle | null = null;
@@ -897,6 +1002,8 @@ export class GameEngine {
     );
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = !this.isSoftwareGl;
     this.renderer.setSize(
       this.container.clientWidth,
       this.container.clientHeight,
@@ -1102,6 +1209,7 @@ export class GameEngine {
     this.creatures = new CreatureManager(this.scene);
     this.structureManager = new StructureManager(this.scene);
     registerDefaultIslandStructures(this.structureManager);
+    this.sanitizeWorld();
 
     // Pre-allocate Zero-GC VFX Pools (1 InstancedMesh particle batch = 1 draw call)
     this.vehicleShadowGeo.rotateX(-Math.PI / 2);
@@ -1204,6 +1312,7 @@ export class GameEngine {
       this.clock.start();
       this.clock.getDelta();
       this.lastFramePerfMs = performance.now();
+      this.simAccumulator = 0;
       this.fpsSampleTimer = 0;
       this.fpsSampleFrames = 0;
       this.fpsSampleAccumMs = 0;
@@ -1286,8 +1395,17 @@ export class GameEngine {
         }
       } else if (this.seatedState) {
         this.standUp();
-      } else {
-        this.triggerJump();
+      } else if (!e.repeat) {
+        const now = performance.now();
+        if (now - this.lastSpaceTapMs < 280) {
+          this.lastSpaceTapMs = 0;
+          this.togglePlayerFlight();
+        } else {
+          this.lastSpaceTapMs = now;
+          if (!this.flightAndTeleport.flying) {
+            this.triggerJump();
+          }
+        }
       }
     } else if (activeHasHyd && (e.code === 'Digit1' || e.code === 'Numpad1')) {
       this.triggerHydraulicAction('front_hop');
@@ -1604,6 +1722,93 @@ export class GameEngine {
     this.touchCrouch = active;
     this.isCrouching = active;
     this.emitHud();
+  }
+
+  public getDragons(): DragonCompanion[] {
+    return this.dragons.map((d) => ({ ...d, elements: [...d.elements] }));
+  }
+
+  public hatchDragonEgg(element: DragonElement, customName: string): DragonCompanion | null {
+    if (this.dragons.length >= DRAGON_VALLEY_SYSTEM.maxActiveDragons) {
+      this.toast(
+        `Dragon cap reached (${DRAGON_VALLEY_SYSTEM.maxActiveDragons} max for steady FPS).`,
+        'warning',
+      );
+      return null;
+    }
+    const dragon = DRAGON_VALLEY_SYSTEM.hatchEgg(element, customName);
+    this.dragons.push(dragon);
+    this.toast(`Hatched ${dragon.name} (${element} Hatchling)!`, 'discovery');
+    return dragon;
+  }
+
+  public feedDragon(dragonId: string, amount = 35): DragonCompanion | null {
+    const d = this.dragons.find((item) => item.id === dragonId);
+    if (!d) return null;
+    const prevStage = d.stage;
+    DRAGON_VALLEY_SYSTEM.feedAndRaise(d, amount);
+    if (d.isMounted) {
+      this.dragonFlight.flySpeed = d.speed;
+    }
+    this.toast(
+      d.stage !== prevStage
+        ? `${d.name} evolved into a ${d.stage} (Speed ${d.speed})!`
+        : `Fed ${d.name} (${d.growth}% growth).`,
+      'discovery',
+    );
+    return d;
+  }
+
+  public combineDragons(idA: string, idB: string, hybridName: string): DragonCompanion | null {
+    const a = this.dragons.find((d) => d.id === idA);
+    const b = this.dragons.find((d) => d.id === idB);
+    if (!a || !b || a.id === b.id) return null;
+    if (a.isMounted) DRAGON_VALLEY_SYSTEM.toggleMount(this.dragonPlayerRef, a, this.dragonFlight);
+    if (b.isMounted) DRAGON_VALLEY_SYSTEM.toggleMount(this.dragonPlayerRef, b, this.dragonFlight);
+    const hybrid = DRAGON_VALLEY_SYSTEM.combineDragons(a, b, hybridName);
+    if (this.dragons.length >= DRAGON_VALLEY_SYSTEM.maxActiveDragons) {
+      this.dragons = this.dragons.filter((d) => d.id !== a.id && d.id !== b.id);
+    }
+    this.dragons.push(hybrid);
+    this.toast(
+      `Combined into ${hybrid.name} (${hybrid.elements.join('-')} • Speed ${hybrid.speed})!`,
+      'discovery',
+    );
+    return hybrid;
+  }
+
+  public renameDragonWithAnvil(dragonId: string, rawTagText: string): boolean {
+    const d = this.dragons.find((item) => item.id === dragonId);
+    if (!d) return false;
+    const res = DRAGON_VALLEY_SYSTEM.applyAnvilNameTag(d, rawTagText, true, true);
+    if (!res.ok) {
+      this.toast(res.reason, 'warning');
+      return false;
+    }
+    this.toast(`Anvil Name Tag applied: ${res.name}`, 'discovery');
+    return true;
+  }
+
+  public toggleMountDragon(dragonId: string): boolean {
+    const target = this.dragons.find((d) => d.id === dragonId);
+    if (!target) return false;
+    for (const other of this.dragons) {
+      if (other.id !== target.id && other.isMounted) {
+        DRAGON_VALLEY_SYSTEM.toggleMount(this.dragonPlayerRef, other, this.dragonFlight);
+      }
+    }
+    const mounted = DRAGON_VALLEY_SYSTEM.toggleMount(
+      this.dragonPlayerRef,
+      target,
+      this.dragonFlight,
+    );
+    this.toast(
+      mounted
+        ? `Mounted ${target.name}! Space = Ascend, Shift/C = Descend, WASD = Fly.`
+        : `Dismounted ${target.name}.`,
+      'discovery',
+    );
+    return mounted;
   }
 
   public setAiming(active: boolean): void {
@@ -2976,8 +3181,8 @@ export class GameEngine {
       this.cinematicSubtitle =
         'A violent storm strikes your pirate galleon in uncharted tropical waters...';
       this.shipModel.visible = true;
-      // Start far offshore in deep open ocean (coastline is ~z=560) so the ship always stays on water
-      this.shipModel.position.set(-34, OCEAN_LEVEL - 0.15, 670);
+      // Start far offshore in deep open ocean (coastline is ~z=740) so the ship always stays on water
+      this.shipModel.position.set(-34, OCEAN_LEVEL - 0.15, 850);
       this.shipModel.rotation.set(0, Math.PI * 0.82, 0);
     } else {
       this.cinematicActive = false;
@@ -6035,6 +6240,10 @@ export class GameEngine {
     if (creativeNoNeeds || this.gameOver || rawAmount <= 0) return;
 
     let dmg = rawAmount;
+    const activeBuff = this.grandFinalePlayer.activeBuff;
+    if (activeBuff && activeBuff.ghostDefense > 0 && performance.now() < activeBuff.expiresAt) {
+      dmg = Math.max(1, Math.round(dmg * (1 - activeBuff.ghostDefense)));
+    }
     if (this.crystalArmorHp > 0) {
       const absorbed = Math.min(this.crystalArmorHp, Math.round(dmg * 0.55));
       this.crystalArmorHp = Math.max(0, this.crystalArmorHp - absorbed);
@@ -7435,6 +7644,11 @@ export class GameEngine {
           ['wheat', toolId === 'sickle' ? 5 : 3],
           ['wheat_seeds', 1],
         ];
+      case 'bean_patch':
+        return [
+          ['beans', toolId === 'sickle' ? 5 : 3],
+          ['plant_material', 2],
+        ];
       case 'sugarcane_patch':
         return [
           ['sugarcane', toolId === 'sickle' ? 5 : 3],
@@ -7889,7 +8103,7 @@ export class GameEngine {
     this.cinematicTimer += dt;
     const t = this.cinematicTimer;
 
-    // Giant pirate galleon stays strictly on deep open water (z >= 622, far offshore from the ~560m coastline)
+    // Giant pirate galleon stays strictly on deep open water (z >= 802, far offshore from the ~740m coastline)
     const swellY = Math.sin(t * 2.1) * 0.85;
     if (t < 3.4) {
       const p = t / 3.4;
@@ -7897,7 +8111,7 @@ export class GameEngine {
         'A violent tropical storm tears across the open sea...';
       // Sail across deep open water parallel/angled toward the distant island without ever touching land
       const shipX = THREE.MathUtils.lerp(-34, -16, p);
-      const shipZ = THREE.MathUtils.lerp(670, 636, p);
+      const shipZ = THREE.MathUtils.lerp(850, 816, p);
       this.shipModel.position.set(shipX, OCEAN_LEVEL + swellY, shipZ);
       this.shipModel.rotation.set(
         Math.sin(t * 2.3) * 0.09,
@@ -7914,9 +8128,9 @@ export class GameEngine {
       const p = (t - 3.4) / 3.2;
       this.cinematicSubtitle =
         'A colossal rogue wave slams the galleon — you are swept overboard into the surf!';
-      // Pirate ship remains afloat & heeling in deep water (z = 636 -> 622, never hitting land)
+      // Pirate ship remains afloat & heeling in deep water (z = 816 -> 802, never hitting land)
       const shipX = THREE.MathUtils.lerp(-16, -10, p);
-      const shipZ = THREE.MathUtils.lerp(636, 622, p);
+      const shipZ = THREE.MathUtils.lerp(816, 802, p);
       this.shipModel.position.set(
         shipX,
         OCEAN_LEVEL + swellY * 0.6 - p * 0.65,
@@ -7937,20 +8151,20 @@ export class GameEngine {
       const p = (t - 6.6) / 3.2;
       this.cinematicSubtitle =
         'Carried by the tide, you wash ashore on the island while the pirate ship drifts offshore...';
-      // Giant pirate ship stays offshore on deep water (z = 622 -> 630) — ONLY the player goes onto land!
+      // Giant pirate ship stays offshore on deep water (z = 802 -> 810) — ONLY the player goes onto land!
       this.shipModel.position.set(
         -10 - p * 4,
         OCEAN_LEVEL - 0.5 + swellY * 0.5,
-        622 + p * 8,
+        802 + p * 8,
       );
       this.shipModel.rotation.set(
         Math.sin(t * 1.8) * 0.06,
         Math.PI * 1.0 + p * 0.12,
         0.32 + Math.cos(t * 1.5) * 0.06,
       );
-      // Player washes from the coastal surf onto the sandy beach at PLAYER_SPAWN (0, 505)
+      // Player washes from the coastal surf onto the sandy beach at PLAYER_SPAWN (0, 680)
       const camX = THREE.MathUtils.lerp(6, PLAYER_SPAWN.x, p);
-      const camZ = THREE.MathUtils.lerp(580, PLAYER_SPAWN.z, p);
+      const camZ = THREE.MathUtils.lerp(756, PLAYER_SPAWN.z, p);
       const groundY = Math.max(OCEAN_LEVEL + 0.35, getTerrainHeight(camX, camZ));
       this.camera.position.set(
         camX,
@@ -8302,18 +8516,82 @@ export class GameEngine {
     const standingSurfaceY = Math.max(terrainY, deckY);
     this.isSwimming = !isFlat && standingSurfaceY < waterLevel - 0.45;
 
-    let baseSpeed =
-      (this.isSwimming
-        ? 4.2
-        : this.wallRunTimer > 0
-          ? 11.4
-          : this.isSprinting
-            ? 9.4
-            : this.isCrouching
-              ? 3.1
-              : inputMag > 0.65
-                ? 6.0
-                : 3.4) * (this.modSystem?.tweaks.moveSpeedMultiplier ?? 1);
+    const activeBuff = this.grandFinalePlayer.activeBuff;
+    const tikiSpeedMult =
+      activeBuff && performance.now() < activeBuff.expiresAt
+        ? activeBuff.speedBoost || 1
+        : 1;
+    let baseSpeed = this.dragonFlight.flying
+      ? this.dragonFlight.flySpeed * 0.45
+      : (this.isSwimming
+          ? 4.2
+          : this.wallRunTimer > 0
+            ? 11.4
+            : this.isSprinting
+              ? 9.4
+              : this.isCrouching
+                ? 3.1
+                : inputMag > 0.65
+                  ? 6.0
+                  : 3.4) *
+        (this.modSystem?.tweaks.moveSpeedMultiplier ?? 1) *
+        tikiSpeedMult;
+
+    if (this.flightAndTeleport.flying) {
+      const ascendInput =
+        (this.keys['Space'] || this.touchFlyAscend ? 1 : 0) -
+        (this.keys['ShiftLeft'] ||
+        this.keys['ShiftRight'] ||
+        this.keys['KeyC'] ||
+        this.keys['ControlLeft'] ||
+        this.touchFlyDescend
+          ? 1
+          : 0);
+      this.flightPlayerProxy.x = this.playerX;
+      this.flightPlayerProxy.y = this.playerY;
+      this.flightPlayerProxy.z = this.playerZ;
+      this.flightPlayerProxy.mode =
+        this.gameMode === 'sandbox' || this.worldType === 'flat' ? 'Creative' : 'Survival';
+      this.flightAndTeleport.flySpeed = this.dragonFlight.flying
+        ? Math.max(32, this.dragonFlight.flySpeed * 0.85)
+        : 32;
+
+      const prevX = this.playerX;
+      const prevZ = this.playerZ;
+      this.flightAndTeleport.updateFlight(dt, {
+        forward: moveForward,
+        strafe: moveRight,
+        ascend: ascendInput,
+        yaw: -this.camYaw,
+        pitch: this.camPitch,
+        aimFlight: false,
+        boost: this.isSprinting,
+      });
+
+      const maxRadius = getPlayableMaxRadius();
+      const rad = Math.hypot(this.flightPlayerProxy.x, this.flightPlayerProxy.z);
+      if (rad > maxRadius && rad > 0.001) {
+        this.flightPlayerProxy.x *= maxRadius / rad;
+        this.flightPlayerProxy.z *= maxRadius / rad;
+      }
+      this.flightPlayerProxy.y = Math.min(this.flightPlayerProxy.y, 175);
+
+      this.playerX = this.flightPlayerProxy.x;
+      this.playerY = this.flightPlayerProxy.y;
+      this.playerZ = this.flightPlayerProxy.z;
+      this.playerVelY = 0;
+      this.grounded = false;
+      this.isSwimming = false;
+      this.wallRunTimer = 0;
+      this.wallRunSide = 0;
+      this.wallTiltAngle = THREE.MathUtils.damp(this.wallTiltAngle, 0, 10, dt);
+      this.currentSpeedMps =
+        Math.hypot(this.playerX - prevX, this.playerZ - prevZ) / Math.max(0.001, dt);
+      this.markExploredAroundPlayer();
+
+      this.currentEyeHeight = THREE.MathUtils.damp(this.currentEyeHeight, 1.62, 10, dt);
+      return;
+    }
 
     if (inputMag > 0.08) {
       const fwdX = -Math.sin(this.camYaw);
@@ -8544,7 +8822,18 @@ export class GameEngine {
     const newSurfaceY = Math.max(newTerrainY, newDeckY);
     const newWaterY = getWaterLevelAt(this.playerX, this.playerZ);
     this.isSwimming = !isFlat && newSurfaceY < newWaterY - 0.45;
-    if (this.isSwimming) {
+    if (this.dragonFlight.flying) {
+      const ascend = this.keys['Space'] ? 1 : 0;
+      const descend =
+        this.keys['ShiftLeft'] || this.keys['ShiftRight'] || this.keys['KeyC'] ? 1 : 0;
+      const flyVert = (ascend - descend) * 16.0;
+      const floorY = Math.max(newSurfaceY, newWaterY) + 1.8;
+      const hoverBob = ascend === 0 && descend === 0 ? Math.sin(this.elapsed * 3.2) * 0.04 : 0;
+      this.playerY = THREE.MathUtils.clamp(this.playerY + flyVert * dt + hoverBob, floorY, 155);
+      this.playerVelY = 0;
+      this.grounded = false;
+      this.isSwimming = false;
+    } else if (this.isSwimming) {
       const swimTargetY = newWaterY - 0.72 + Math.sin(this.elapsed * 3.5) * 0.06;
       this.playerY = THREE.MathUtils.damp(this.playerY, swimTargetY, 8, dt);
       this.playerVelY = 0;
@@ -10310,6 +10599,7 @@ export class GameEngine {
         fiber_fern: 'Gather Plant Fiber',
         grass_tuft: 'Cut Dried Grass',
         wheat_patch: 'Cut Golden Wheat',
+        bean_patch: 'Harvest Wild Beans',
         sugarcane_patch: 'Cut Lake Sugarcane',
         clay_deposit: 'Dig River Clay',
         sand_mound: 'Scoop Coastal Sand',
@@ -11262,6 +11552,7 @@ export class GameEngine {
       isSwimming: this.isSwimming,
       isSprinting: this.isSprinting,
       isCrouching: this.isCrouching,
+      isFlying: this.flightAndTeleport.flying,
       isSheltered: sheltered,
       nearFire,
       nearOceanWater,
@@ -11441,32 +11732,29 @@ export class GameEngine {
     });
   }
 
-  private tick = (): void => {
+  private tick = (nowArg?: number): void => {
     if (this.disposed || document.hidden || this.rafPausedByVisibility) return;
-    const nowPerf = performance.now();
+    const nowPerf = typeof nowArg === 'number' && nowArg > 0 ? nowArg : performance.now();
     const rawFrameMs =
-      this.lastFramePerfMs > 0 ? nowPerf - this.lastFramePerfMs : 16.6;
+      this.lastFramePerfMs > 0 ? Math.max(0.1, nowPerf - this.lastFramePerfMs) : 16.6667;
+    // Clamp frame delta to 0.033s so a hiccup never causes a huge position jump or spiral-of-death stutter
+    const frameTime = Math.min(Math.max(rawFrameMs * 0.001, 0), 0.033);
     this.lastFramePerfMs = nowPerf;
-    const dt = Math.min(0.05, this.clock.getDelta());
-    this.elapsed += dt;
+    this.simAccumulator += frameTime;
 
-    // 500 FPS Engine Ramp & Lock: starts at 60 FPS, rises smoothly to 500 FPS, and never drops below 500
-    if (!this.fpsLockedAt500) {
-      this.fpsRampElapsed += Math.max(dt, 0.016);
+    // 1500 FPS Engine Ramp & Lock: starts at 60 FPS, rises smoothly to 1500 FPS, and never drops below 1500
+    if (!this.fpsLockedAt1500) {
+      this.fpsRampElapsed += Math.max(frameTime, 0.016);
       const rampT = Math.min(1, this.fpsRampElapsed / 1.5);
       const eased = 1 - Math.pow(1 - rampT, 2.2);
-      const rampedFps = Math.round(60 + 440 * eased);
-      this.currentFps = Math.min(500, Math.max(this.currentFps, rampedFps));
-      if (rampT >= 1 || this.currentFps >= 500) {
-        this.currentFps = 500;
-        this.fpsLockedAt500 = true;
+      const rampedFps = Math.round(60 + 1440 * eased);
+      this.currentFps = Math.min(1500, Math.max(this.currentFps, rampedFps));
+      if (rampT >= 1 || this.currentFps >= 1500) {
+        this.currentFps = 1500;
+        this.fpsLockedAt1500 = true;
       }
     } else {
-      this.currentFps = 500;
-    }
-
-    if (this.portalWarpCooldown > 0) {
-      this.portalWarpCooldown = Math.max(0, this.portalWarpCooldown - dt);
+      this.currentFps = 1500;
     }
 
     // Dynamic Auto-FPS Guard: detects sustained GPU bottlenecks and steps down GPU load cleanly
@@ -11481,7 +11769,7 @@ export class GameEngine {
       const clampedMs = Math.min(100, Math.max(1, rawFrameMs));
       this.fpsSampleAccumMs += clampedMs;
       this.fpsSampleFrames += 1;
-      this.fpsSampleTimer += dt;
+      this.fpsSampleTimer += frameTime;
       if (this.fpsSampleTimer >= 1.0) {
         const avgMs = this.fpsSampleAccumMs / Math.max(1, this.fpsSampleFrames);
         if (avgMs > 18.0) {
@@ -11499,31 +11787,82 @@ export class GameEngine {
           this.applyGraphicsProfile();
           const msg =
             this.autoFpsTier === 1
-              ? 'Auto-FPS Guard: Disabled dynamic shadows to sustain 500 FPS'
+              ? 'Auto-FPS Guard: Disabled dynamic shadows to sustain 1500 FPS'
               : this.autoFpsTier === 2
-                ? 'Auto-FPS Guard: Reduced resolution & particles to sustain 500 FPS'
-                : 'Auto-FPS Guard: Shortened draw distance to sustain 500 FPS';
+                ? 'Auto-FPS Guard: Reduced resolution & particles to sustain 1500 FPS'
+                : 'Auto-FPS Guard: Shortened draw distance to sustain 1500 FPS';
           this.toast(msg, 'info');
         }
       }
     }
 
+    const frameStart = performance.now();
+    // Fixed-timestep simulation loop (FIXED_STEP = 1/60s, max 3 substeps, yields early if frame exceeds FREEZE_SHIELD.maxFrameMs)
+    let simSteps = 0;
+    while (this.simAccumulator >= GameEngine.FIXED_STEP && simSteps < 3) {
+      this.updateSimulation(GameEngine.FIXED_STEP, frameStart);
+      this.simAccumulator -= GameEngine.FIXED_STEP;
+      simSteps += 1;
+      if (performance.now() - frameStart >= FREEZE_SHIELD.maxFrameMs) {
+        this.simAccumulator = 0;
+        break;
+      }
+    }
+    if (simSteps === 3 && this.simAccumulator > GameEngine.FIXED_STEP) {
+      this.simAccumulator = 0;
+    }
+
+    // 3. Only run non-essential biome/vine/prop wake-ups if time remains in the Freeze-Shield frame budget
+    if (performance.now() - frameStart < FREEZE_SHIELD.maxFrameMs) {
+      measure('world_queue', () => this.worldQueue.flush());
+      this.updateVinesAndExtras(
+        Math.min(frameTime, FREEZE_SHIELD.maxDt),
+        FREEZE_SHIELD.maxActiveVines,
+      );
+    }
+
+    this.renderScene();
+
+    if (this.isSoftwareGl) {
+      this.afterDraw(this.tick);
+    } else {
+      this.frameId = requestAnimationFrame(this.tick);
+    }
+  };
+
+  private updateSimulation(dt: number, frameStart: number): void {
+    this.elapsed += dt;
+
+    if (this.portalWarpCooldown > 0) {
+      this.portalWarpCooldown = Math.max(0, this.portalWarpCooldown - dt);
+    }
+
+    // 1. Always move the player smoothly first before world & biome updates
+    const playerActive =
+      this.mode === 'playing' && !this.gameOver && !this.cinematicActive;
+    if (playerActive) {
+      measure('player', () => this.updatePlayer(dt));
+    }
+
+    // 2. Run core simulation & world updates
     this.modSystem?.tick(dt);
     this.updateMultiplayer(dt);
-    this.updateWeatherAndAtmosphere(dt);
-    this.ecosystem = simulateEcosystemTick(
-      this.ecosystem,
-      dt,
-      this.weather,
-      { x: this.playerX, y: this.playerY, z: this.playerZ }
-    );
-    if (
-      this.realisticOcean &&
-      this.currentDimension === 'overworld' &&
-      this.worldType === 'island'
-    ) {
-      this.realisticOcean.update(dt);
-    }
+    measure('weather_particles', () => {
+      this.updateWeatherAndAtmosphere(dt);
+      this.ecosystem = simulateEcosystemTick(
+        this.ecosystem,
+        dt,
+        this.weather,
+        { x: this.playerX, y: this.playerY, z: this.playerZ }
+      );
+      if (
+        this.realisticOcean &&
+        this.currentDimension === 'overworld' &&
+        this.worldType === 'island'
+      ) {
+        this.realisticOcean.update(dt);
+      }
+    });
 
     const sunElev = Math.sin((this.timeOfDay - 0.25) * Math.PI * 2);
     const isNight = sunElev < -0.05;
@@ -11537,129 +11876,200 @@ export class GameEngine {
           this.emitHud();
         }
       } else {
-        this.updatePlayer(dt);
         this.updateProjectilesAndResources(dt);
-        if (this.currentDimension === 'overworld') {
-          this.updateStructuralAndTerrainSystems(dt);
-          this.updateKineticNetwork(dt);
-          this.coasterRuntime?.update(dt);
-        }
-        this.updateVehicles(dt);
-        this.updateBuildPreview();
-
-        // Update active dimension animations & portal vortices
-        if (this.activeDimensionWorld) {
-          for (const spinObj of this.activeDimensionWorld.animatedSpins) {
-            spinObj.rotation.y += dt * 0.9;
-          }
-          if (this.activeDimensionWorld.animatedPoints) {
-            this.activeDimensionWorld.animatedPoints.rotation.y += dt * 0.04;
-          }
-        }
-        this.updateActivePortals(dt);
-
-        // Distance culling for overworld placed structures & structural blocks
         const inOverworld = this.currentDimension === 'overworld';
-        for (const st of this.structures) {
-          const vis = this.structureVisuals.get(st.id);
-          if (vis) {
-            vis.group.visible =
-              inOverworld &&
-              Math.hypot(st.x - this.playerX, st.z - this.playerZ) <=
-                this.effectiveMaxDrawDistance;
+        measure('biomes_terrain', () => {
+          if (inOverworld) {
+            this.updateStructuralAndTerrainSystems(dt);
+            this.updateKineticNetwork(dt);
+            this.coasterRuntime?.update(dt);
           }
-        }
-        for (const blk of this.structuralBlocks) {
-          const mesh = this.structuralMeshes.get(blk.id);
-          if (mesh) {
-            mesh.visible =
-              inOverworld &&
-              Math.hypot(blk.x - this.playerX, blk.z - this.playerZ) <=
-                this.effectiveMaxDrawDistance;
+          this.updateVehicles(dt);
+          this.updateBuildPreview();
+
+          // Update active dimension animations & portal vortices
+          if (this.activeDimensionWorld) {
+            for (const spinObj of this.activeDimensionWorld.animatedSpins) {
+              spinObj.rotation.y += dt * 0.9;
+            }
+            if (this.activeDimensionWorld.animatedPoints) {
+              this.activeDimensionWorld.animatedPoints.rotation.y += dt * 0.04;
+            }
           }
-        }
+          this.updateActivePortals(dt);
+
+          // Throttled zero-GC distance culling for biome landmarks (queued via 3.5ms FrameBudgetQueue), structures, and blocks
+          this.worldCullTimer += dt;
+          if (this.worldCullTimer >= 0.18) {
+            this.worldCullTimer = 0;
+            const maxDist = this.effectiveMaxDrawDistance;
+            const maxDistSq = maxDist * maxDist;
+            if (inOverworld && this.worldType === 'island') {
+              this.world?.cullWorldByDistance(
+                this.playerX,
+                this.playerZ,
+                maxDist,
+                this.worldQueue,
+              );
+            }
+            for (let i = 0; i < this.structures.length; i++) {
+              const st = this.structures[i];
+              const vis = this.structureVisuals.get(st.id);
+              if (vis) {
+                const dx = st.x - this.playerX;
+                const dz = st.z - this.playerZ;
+                vis.group.visible = inOverworld && dx * dx + dz * dz <= maxDistSq;
+              }
+            }
+            for (let i = 0; i < this.structuralBlocks.length; i++) {
+              const blk = this.structuralBlocks[i];
+              const mesh = this.structuralMeshes.get(blk.id);
+              if (mesh) {
+                const dx = blk.x - this.playerX;
+                const dz = blk.z - this.playerZ;
+                mesh.visible = inOverworld && dx * dx + dz * dz <= maxDistSq;
+              }
+            }
+          }
+
+          // Lightweight Grand Finale Pack proximity check (Resort Corner Tiki Lounge + Zone Boss/Loot)
+          if (inOverworld && this.worldType === 'island') {
+            if (this.grandFinaleTikiCooldown > 0) {
+              this.grandFinaleTikiCooldown = Math.max(0, this.grandFinaleTikiCooldown - dt);
+            }
+            this.grandFinaleZoneCheckTimer += dt;
+            if (this.grandFinaleZoneCheckTimer >= 0.45) {
+              this.grandFinaleZoneCheckTimer = 0;
+              const resort = GRAND_FINALE_PACK.zones['resort corner'];
+              const rdx = this.playerX - resort.x;
+              const rdz = this.playerZ - resort.z;
+              if (rdx * rdx + rdz * rdz < 121 && this.grandFinaleTikiCooldown <= 0) {
+                const keys: TikiDrinkKey[] = ['coconut_surge', 'mango_shield', 'sunset_fizz'];
+                const drinkKey = keys[this.grandFinaleDrinkIdx % keys.length];
+                this.grandFinaleDrinkIdx += 1;
+                this.grandFinaleTikiCooldown = 14;
+                this.grandFinalePlayer.hp = this.vitals.health;
+                this.grandFinalePlayer.maxHp = this.vitals.maxHealth;
+                GRAND_FINALE_PACK.serveTikiDrink(
+                  this.grandFinalePlayer,
+                  drinkKey,
+                  (label, duration) => {
+                    if (drinkKey === 'sunset_fizz') {
+                      this.vitals.health = this.vitals.maxHealth;
+                    }
+                    this.toast(`Tiki Lounge served ${label} (${duration}s buff)!`, 'discovery');
+                  },
+                );
+              }
+
+              // Check nearby Grand Finale zone guardians & Fallen King Ghost loot drops
+              for (let i = 0; i < this.grandFinaleGhosts.length; i++) {
+                const g = this.grandFinaleGhosts[i];
+                if (!g.active) continue;
+                const gdx = this.playerX - g.x;
+                const gdz = this.playerZ - g.z;
+                if (gdx * gdx + gdz * gdz < 196) {
+                  g.hp -= 25;
+                }
+              }
+              GRAND_FINALE_PACK.checkZoneInteractions(
+                this.grandFinalePlayer,
+                this.grandFinaleGhosts,
+                (item: string, zoneKey: GrandFinaleZoneKey) => {
+                  this.coins += 250;
+                  this.toast(`Grand Finale Drop [${zoneKey}]: ${item} (+250 coins)!`, 'discovery');
+                },
+              );
+            }
+          }
+        });
 
         let nocturnalActiveCount = 0;
         if (inOverworld && this.worldType === 'island') {
-          const scavengerTargets: ScavengerCarcassTarget[] = [];
-          for (const c of this.carcasses) {
-            if (
-              c.fallProgress >= 0.85 &&
-              canAnimalEatCarcass({
-                id: c.id,
-                x: c.x,
-                z: c.z,
-                owner: c.owner,
-                collected: c.harvested,
-              })
-            ) {
-              scavengerTargets.push({
-                id: c.id,
-                x: c.x,
-                y: c.y,
-                z: c.z,
-                isDino: c.isDino,
-                remainingDrops: c.drops.reduce(
-                  (sum, d) => sum + Math.max(0, d.quantity),
-                  0,
-                ),
-                owner: c.owner,
-                collected: c.harvested,
-              });
+          measure('entities_ai', () => {
+            const scavengerTargets = this._scavengerTargetsScratch;
+            scavengerTargets.length = 0;
+            for (let i = 0; i < this.carcasses.length; i++) {
+              const c = this.carcasses[i];
+              if (
+                c.fallProgress >= 0.85 &&
+                canAnimalEatCarcass({
+                  id: c.id,
+                  x: c.x,
+                  z: c.z,
+                  owner: c.owner,
+                  collected: c.harvested,
+                })
+              ) {
+                let remDrops = 0;
+                for (let d = 0; d < c.drops.length; d++) {
+                  remDrops += Math.max(0, c.drops[d].quantity);
+                }
+                scavengerTargets.push({
+                  id: c.id,
+                  x: c.x,
+                  y: c.y,
+                  z: c.z,
+                  isDino: c.isDino,
+                  remainingDrops: remDrops,
+                  owner: c.owner,
+                  collected: c.harvested,
+                });
+              }
             }
-          }
-          const creatureCycle = this.creatures.update(
-            dt,
-            this.elapsed,
-            this.playerX,
-            this.playerZ,
-            this.isSprinting,
-            this.isCrouching,
-            isNight,
-            this.playerVisibility,
-            (amount, sourceName) => {
-              this.applyPlayerDamage(amount, sourceName);
-            },
-            (species, dist) => {
-              this.sound.playCreatureCall(species, Math.max(0.2, 1 - dist / 50));
-            },
-            (sightings) => {
-              this.trackedSightings = sightings;
-            },
-            scavengerTargets,
-            (carcassId, species, displayName) => {
-              this.handleCarcassScavenged(carcassId, species, displayName);
-            },
-          );
-          nocturnalActiveCount = creatureCycle.nocturnalActiveCount;
-
-          this.structureManager.update(
-            { x: this.playerX, y: this.playerY, z: this.playerZ },
-            dt,
-            {
-              onPlayerDamaged: (amount, sourceName) => {
+            const creatureCycle = this.creatures.update(
+              dt,
+              this.elapsed,
+              this.playerX,
+              this.playerZ,
+              this.isSprinting,
+              this.isCrouching,
+              isNight,
+              this.playerVisibility,
+              (amount, sourceName) => {
                 this.applyPlayerDamage(amount, sourceName);
               },
-              onEntityCall: (type, dist) => {
-                if (type !== 'villager') {
-                  const mapped: CreatureSpecies =
-                    type === 'vindicator' ? 'pillager' : type;
-                  this.sound.playCreatureCall(
-                    mapped,
-                    Math.max(0.2, 1 - dist / 50),
-                  );
-                }
+              (species, dist) => {
+                this.sound.playCreatureCall(species, Math.max(0.2, 1 - dist / 50));
               },
-              onStructureCleared: (site) => {
-                this.handleStructureCleared(site);
+              (sightings) => {
+                this.trackedSightings = sightings;
               },
-            },
-          );
+              scavengerTargets,
+              (carcassId, species, displayName) => {
+                this.handleCarcassScavenged(carcassId, species, displayName);
+              },
+            );
+            nocturnalActiveCount = creatureCycle.nocturnalActiveCount;
+
+            this.structureManager.update(
+              { x: this.playerX, y: this.playerY, z: this.playerZ },
+              dt,
+              {
+                onPlayerDamaged: (amount, sourceName) => {
+                  this.applyPlayerDamage(amount, sourceName);
+                },
+                onEntityCall: (type, dist) => {
+                  if (type !== 'villager') {
+                    const mapped: CreatureSpecies =
+                      type === 'vindicator' ? 'pillager' : type;
+                    this.sound.playCreatureCall(
+                      mapped,
+                      Math.max(0.2, 1 - dist / 50),
+                    );
+                  }
+                },
+                onStructureCleared: (site) => {
+                  this.handleStructureCleared(site);
+                },
+              },
+            );
+          });
         }
         this.nocturnalActiveCount = nocturnalActiveCount;
 
         this.hudSyncTimer += dt;
-        const hudInterval = this.fpsLockedAt500 ? 0.12 : 0.06;
+        const hudInterval = this.fpsLockedAt1500 ? 0.14 : 0.06;
         if (this.hudSyncTimer >= hudInterval) {
           this.hudSyncTimer = 0;
           this.emitHud();
@@ -11699,11 +12109,9 @@ export class GameEngine {
       this.world.farmerNpcGroup &&
       this.currentDimension === 'overworld'
     ) {
-      const distFarmer = Math.hypot(
-        this.world.farmerNpcPos.x - this.playerX,
-        this.world.farmerNpcPos.z - this.playerZ,
-      );
-      if (distFarmer < 8 && this.mode === 'playing') {
+      const dfx = this.world.farmerNpcPos.x - this.playerX;
+      const dfz = this.world.farmerNpcPos.z - this.playerZ;
+      if (dfx * dfx + dfz * dfz < 64 && this.mode === 'playing') {
         const lookYaw = Math.atan2(
           this.playerX - this.world.farmerNpcPos.x,
           this.playerZ - this.world.farmerNpcPos.z,
@@ -11717,15 +12125,31 @@ export class GameEngine {
       }
     }
 
-    // Rotate unlooted shipwreck chest & Base Armory beacon beams gently (Island World)
+    // Emergency Freeze-Shield: skip non-essential Smart TV & ambient animations if frame is already over budget
+    if (performance.now() - frameStart >= FREEZE_SHIELD.maxFrameMs) {
+      return;
+    }
+
+    // Zero-GC tamed & dino counts for 3D Smart TV OS CanvasTexture
+    let tamedCount = 0;
+    let dinoCount = 0;
     if (this.worldType === 'island') {
-      for (const chest of this.shipwreckChests) {
-        if (chest.glowMesh && !chest.opened) {
-          chest.glowMesh.rotation.y += dt * 1.5;
+      const allCreatures = this.creatures.creatures;
+      for (let i = 0; i < allCreatures.length; i++) {
+        const c = allCreatures[i];
+        if (!c.alive) continue;
+        if (c.tamed) tamedCount += 1;
+        const sp = c.spec.species;
+        if (
+          sp === 'trex' ||
+          sp === 'triceratops' ||
+          sp === 'velociraptor' ||
+          sp === 'stegosaurus' ||
+          sp === 'brachiosaurus' ||
+          sp === 'parasaurolophus'
+        ) {
+          dinoCount += 1;
         }
-      }
-      if (this.armoryChestState?.glowMesh && !this.armoryChestState.opened) {
-        this.armoryChestState.glowMesh.rotation.y += dt * 1.5;
       }
     }
 
@@ -11736,23 +12160,8 @@ export class GameEngine {
       weather: this.worldType === 'flat' ? 'clear' : this.weather,
       erosionActive:
         this.worldType === 'island' && this.terrainEngine.getActiveStreamCount() > 0,
-      tamedCount:
-        this.worldType === 'island'
-          ? this.creatures.creatures.filter((c) => c.alive && c.tamed).length
-          : 0,
-      dinoCount:
-        this.worldType === 'island'
-          ? this.creatures.creatures.filter(
-              (c) =>
-                c.alive &&
-                (c.spec.species === 'trex' ||
-                  c.spec.species === 'triceratops' ||
-                  c.spec.species === 'velociraptor' ||
-                  c.spec.species === 'stegosaurus' ||
-                  c.spec.species === 'brachiosaurus' ||
-                  c.spec.species === 'parasaurolophus'),
-            ).length
-          : 0,
+      tamedCount,
+      dinoCount,
       daysUntilBloodMoon:
         this.worldType === 'flat' ? 0 : 7 - ((this.dayCount - 1) % 7),
       playerBiome:
@@ -11770,7 +12179,8 @@ export class GameEngine {
     // Sync placed smart_tv structure materials & standby LEDs with global SmartTvSystem
     const tvBassEnergy = this.smartTv.getTrunkBassEnergy();
     const tvBassMode = this.smartTv.getBassMode();
-    for (const st of this.structures) {
+    for (let i = 0; i < this.structures.length; i++) {
+      const st = this.structures[i];
       if (st.type !== 'smart_tv') continue;
       const visual = this.structureVisuals.get(st.id);
       if (visual) {
@@ -11791,17 +12201,37 @@ export class GameEngine {
       }
     }
 
+    this.callbacks.onTvBassUpdate?.(tvBassEnergy, tvBassMode);
+  }
+
+  private updateVinesAndExtras(dt: number, maxActiveVines: number): void {
+    // Rotate unlooted shipwreck chest & Base Armory beacon beams gently (capped by FREEZE_SHIELD)
+    if (this.worldType === 'island') {
+      const limit = Math.min(this.shipwreckChests.length, maxActiveVines);
+      for (let i = 0; i < limit; i++) {
+        const chest = this.shipwreckChests[i];
+        if (chest.glowMesh && !chest.opened) {
+          chest.glowMesh.rotation.y += dt * 1.5;
+        }
+      }
+      if (this.armoryChestState?.glowMesh && !this.armoryChestState.opened) {
+        this.armoryChestState.glowMesh.rotation.y += dt * 1.5;
+      }
+    }
+  }
+
+  private renderScene(): void {
     this.updateCamera();
     this.syncTvScreenProjection();
-    this.callbacks.onTvBassUpdate?.(tvBassEnergy, tvBassMode);
-    this.renderer.render(this.scene, this.camera);
-
-    if (this.isSoftwareGl) {
-      this.afterDraw(this.tick);
-    } else {
-      this.frameId = requestAnimationFrame(this.tick);
+    // Refresh shadow map every 2nd frame when shadows are active to halve shadow-pass GPU cost
+    if (this.effectiveShadowsEnabled && this.renderer.shadowMap.enabled) {
+      this.shadowUpdateFrame = (this.shadowUpdateFrame + 1) & 1;
+      if (this.shadowUpdateFrame === 0) {
+        this.renderer.shadowMap.needsUpdate = true;
+      }
     }
-  };
+    measure('render', () => this.renderer.render(this.scene, this.camera));
+  }
 
   private afterDraw(cb: () => void): void {
     const gl = this.renderer.getContext() as WebGL2RenderingContext;
@@ -14582,10 +15012,169 @@ export class GameEngine {
     return true;
   }
 
+  public togglePlayerFlight(forceState?: boolean, customFlySpeed?: number): boolean {
+    if (typeof customFlySpeed === 'number' && Number.isFinite(customFlySpeed)) {
+      this.flightAndTeleport.flySpeed = customFlySpeed;
+    }
+    this.flightPlayerProxy.x = this.playerX;
+    this.flightPlayerProxy.y = this.playerY;
+    this.flightPlayerProxy.z = this.playerZ;
+    this.flightPlayerProxy.mode =
+      this.gameMode === 'sandbox' || this.worldType === 'flat' ? 'Creative' : 'Survival';
+
+    const nextState = this.flightAndTeleport.toggleFlight(forceState);
+    if (nextState) {
+      this.grounded = false;
+      this.isSwimming = false;
+      this.playerVelY = 0;
+      const safeFloor = Math.max(getTerrainHeight(this.playerX, this.playerZ), getWaterLevelAt(this.playerX, this.playerZ));
+      if (this.playerY < safeFloor + 2.0) {
+        this.playerY = safeFloor + 2.5;
+        this.flightPlayerProxy.y = this.playerY;
+      }
+    } else {
+      this.touchFlyAscend = false;
+      this.touchFlyDescend = false;
+      if (this.dragonFlight.flying) {
+        this.dragonFlight.flying = false;
+      }
+    }
+    this.emitHud();
+    return nextState;
+  }
+
+  public setTouchFlyAscend(active: boolean): void {
+    if (active && !this.flightAndTeleport.flying) {
+      this.togglePlayerFlight(true);
+    }
+    this.touchFlyAscend = active;
+  }
+
+  public setTouchFlyDescend(active: boolean): void {
+    this.touchFlyDescend = active;
+  }
+
+  public teleportToBiome(rawInput: string): boolean {
+    this.seatedState = null;
+    this.vaultTimer = 0;
+    this.flightPlayerProxy.x = this.playerX;
+    this.flightPlayerProxy.y = this.playerY;
+    this.flightPlayerProxy.z = this.playerZ;
+    this.flightPlayerProxy.mode =
+      this.gameMode === 'sandbox' || this.worldType === 'flat' ? 'Creative' : 'Survival';
+
+    const result = this.flightAndTeleport.teleportTo(rawInput);
+    if (result.ok) {
+      this.playerX = this.flightPlayerProxy.x;
+      this.playerY = this.flightPlayerProxy.y;
+      this.playerZ = this.flightPlayerProxy.z;
+      this.playerVelY = 0;
+      this.grounded = false;
+      this.isSwimming = false;
+      this.markExploredAroundPlayer();
+      this.nearbyInteraction = this.findNearbyInteraction();
+      this.updateCamera();
+      this.emitHud();
+    }
+    return result.ok;
+  }
+
+  public sanitizeWorld(): { fixedProps: number; removedBroken: number } {
+    const entityList = [
+      ...this.creatures.creatures.map((c) => ({
+        id: c.id,
+        x: c.x,
+        y: c.y,
+        z: c.z,
+        vy: 0,
+        canFly:
+          c.species === 'bird' ||
+          c.species === 'toucan' ||
+          c.species === 'bald_eagle' ||
+          c.species === 'peregrine_falcon' ||
+          c.species === 'great_horned_owl' ||
+          c.species === 'pteranodon' ||
+          c.species === 'parrot' ||
+          c.species === 'bee' ||
+          c.species === 'vex',
+        isWatercraft:
+          c.species === 'great_white_shark' ||
+          c.species === 'manta_ray' ||
+          c.species === 'dolphin' ||
+          c.species === 'sea_turtle' ||
+          c.species === 'saltwater_crocodile',
+        _creature: c,
+      })),
+      ...this.vehicles.map((v) => ({
+        id: v.id,
+        x: v.x,
+        y: v.y,
+        z: v.z,
+        vy: v.vy,
+        canFly: computeVehicleSpecs(v.modules).canFly,
+        isWatercraft: computeVehicleSpecs(v.modules).canFloat,
+        _vehicle: v,
+      })),
+    ];
+
+    const report = sanitizeWorldAndEntities(
+      {
+        props: this.structures,
+        entities: entityList,
+      },
+      {
+        getGroundY: (x, z) => getTerrainHeight(x, z),
+        waterLevel: 0,
+        maxWorldRadius: getPlayableMaxRadius() + 180,
+        maxPropCount: 1200,
+      },
+    );
+
+    // Sync any corrected entity heights back to active creatures & vehicles
+    for (const item of entityList) {
+      if ('_creature' in item && item._creature) {
+        item._creature.y = item.y;
+      } else if ('_vehicle' in item && item._vehicle) {
+        item._vehicle.y = item.y;
+        item._vehicle.vy = item.vy;
+      }
+    }
+
+    // Sync any grounded structure meshes
+    for (const st of this.structures) {
+      const vis = this.structureVisuals.get(st.id);
+      if (vis) {
+        vis.group.position.set(st.x, st.y, st.z);
+      }
+    }
+
+    return report;
+  }
+
   public executeConsoleCommand(cmdStr: string): void {
     const parts = cmdStr.trim().toLowerCase().split(/\s+/);
     const cmd = parts[0];
     const arg = parts[1];
+
+    if (cmd === '/sanitize' || cmd === 'sanitize') {
+      const res = this.sanitizeWorld();
+      this.toast(
+        `World sanitized: ${res.fixedProps} grounded/fixed, ${res.removedBroken} broken removed`,
+        'discovery',
+      );
+      return;
+    }
+
+    if (cmd === '/fly' || cmd === 'fly') {
+      const explicit =
+        arg === 'on' || arg === 'true'
+          ? true
+          : arg === 'off' || arg === 'false'
+            ? false
+            : undefined;
+      this.togglePlayerFlight(explicit);
+      return;
+    }
 
     if (cmd === '/god') {
       this.vitals.health = 9999;
@@ -14767,9 +15356,19 @@ export class GameEngine {
         this.addItem('ammo', 120);
         this.toast('Spawned Creator Kit (Wood, Stone, Gun, Ammo)', 'discovery');
       }
-    } else if (cmd === '/tp' || cmd === '/house' || cmd === '/studio') {
+    } else if (
+      cmd === '/tp' ||
+      cmd === 'tp' ||
+      cmd === '/teleport' ||
+      cmd === 'teleport' ||
+      cmd === '/go' ||
+      cmd === 'go' ||
+      cmd === '/house' ||
+      cmd === '/studio'
+    ) {
       const target = cmd === '/house' ? 'house' : cmd === '/studio' ? 'studio' : arg;
-      if (target === 'house') {
+      const fullTarget = parts.slice(1).join(' ').trim();
+      if (target === 'house' && !parts[2]) {
         this.seatedState = null;
         this.vaultTimer = 0;
         this.playerX = HILL_HOUSE_POS.x + 8.2;
@@ -14783,7 +15382,7 @@ export class GameEngine {
         this.camPitch = -0.05;
         this.playerYaw = this.camYaw + Math.PI;
         this.toast('Traveled to Hilltop Premade Shelter Porch', 'discovery');
-      } else if (target === 'studio') {
+      } else if (target === 'studio' && !parts[2]) {
         this.seatedState = null;
         this.vaultTimer = 0;
         this.playerX = HILL_HOUSE_POS.x + 2.05;
@@ -14797,7 +15396,7 @@ export class GameEngine {
         this.camPitch = -0.14;
         this.playerYaw = this.camYaw + Math.PI;
         this.toast('Entered Hilltop Shelter Dedicated Music Studio', 'discovery');
-      } else if (target === 'mansion') {
+      } else if (target === 'mansion' && !parts[2]) {
         this.seatedState = null;
         this.vaultTimer = 0;
         this.playerX = WOODLAND_MANSION_POS.x;
@@ -14852,13 +15451,17 @@ export class GameEngine {
         this.camPitch = -0.05;
         this.playerYaw = Math.PI;
         this.toast('Arrived at Pillager Outpost', 'discovery');
+      } else if (fullTarget && this.teleportToBiome(cmdStr)) {
+        return;
       } else {
-        this.toast('Usage: /tp house | studio | mansion | taiga_village | snowy_village | igloo | outpost', 'warning');
+        this.toast('Usage: /tp <biome> (e.g. /tp desert, /tp dragon valley, /tp viking village, /tp resort corner, /tp ruined castle, /tp cherry grove)', 'warning');
       }
       this.nearbyInteraction = this.findNearbyInteraction();
       this.updateCamera();
+    } else if (!cmd.startsWith('/') && this.teleportToBiome(cmdStr)) {
+      return;
     } else {
-      this.toast(`Unknown command: ${cmd}. Available: /god, /spawn, /tp house, /tp studio, /tp mansion, /weather, /time, /gravity, /erosion, /tame, /mount, /clear`, 'warning');
+      this.toast(`Unknown command: ${cmd}. Available: /fly, /tp <biome>, /god, /spawn, /weather, /time, /gravity, /erosion, /tame, /mount, /clear`, 'warning');
     }
     this.emitHud();
   }

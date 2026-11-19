@@ -28,8 +28,8 @@ export const TRAIL_RUINS_POS = { x: -82, z: -58 };
 export const SNOWY_VILLAGE_POS = { x: -62, z: -142 };
 export const SNOWY_IGLOO_POS = { x: -92, z: -110 };
 export const JUNGLE_TEMPLE_POS = { x: 126, z: 64 };
-export const PLAYER_SPAWN = { x: 0, z: 505 };
-export const SHIPWRECK_POS = { x: -8, z: 568 };
+export const PLAYER_SPAWN = { x: 0, z: 680 };
+export const SHIPWRECK_POS = { x: -8, z: 748 };
 
 // New Expanded Biome Landmarks
 export const PLAINS_VILLAGE_POS = { x: -128, z: 74 };
@@ -61,14 +61,20 @@ export const ERODED_BADLANDS_POS = { x: 255, z: 365 };
 export const SWAMP_HUT_POS = { x: 345, z: 45 };
 export const SWAMP_FOSSIL_POS = { x: 395, z: 82 };
 export const MANGROVE_SWAMP_POS = { x: 360, z: -55 };
-export const MUSHROOM_FIELDS_POS = { x: 355, z: -295 };
-export const OCEAN_MONUMENT_POS = { x: -225, z: 565 };
-export const CORAL_REEF_POS = { x: 155, z: 575 };
-export const FROZEN_OCEAN_ICEBERG_POS = { x: -165, z: -565 };
-export const BURIED_TREASURE_POS = { x: 65, z: 525 };
+export const MUSHROOM_FIELDS_POS = { x: 325, z: -265 };
+export const OCEAN_MONUMENT_POS = { x: -245, z: 745 };
+export const CORAL_REEF_POS = { x: 175, z: 755 };
+export const FROZEN_OCEAN_ICEBERG_POS = { x: -175, z: -755 };
+export const BURIED_TREASURE_POS = { x: 72, z: 702 };
 
-export const WORLD_RADIUS = 700;
-export const PLAYABLE_MAX_RADIUS = 640;
+// Grand Finale Pack Expanded Outer Biomes (740m Grand Island Expansion)
+export const DRAGON_VALLEY_POS = { x: 420, z: -380 };
+export const VIKING_VILLAGE_POS = { x: 560, z: -260 };
+export const RESORT_CORNER_POS = { x: -480, z: 410 };
+export const RUINED_CASTLE_POS = { x: -360, z: -520 };
+
+export const WORLD_RADIUS = 880;
+export const PLAYABLE_MAX_RADIUS = 820;
 
 let activeTerrainWorldType: WorldType = 'island';
 
@@ -86,10 +92,10 @@ export function getPlayableMaxRadius(): number {
     : PLAYABLE_MAX_RADIUS;
 }
 
-export const TERRAIN_SIZE = 1480;
-export const TERRAIN_SEGS = 240;
+export const TERRAIN_SIZE = 1920;
+export const TERRAIN_SEGS = 256;
 export const TERRAIN_VERTS = TERRAIN_SEGS + 1;
-export const TERRAIN_STEP = TERRAIN_SIZE / TERRAIN_SEGS; // ~6.16m per vertex
+export const TERRAIN_STEP = TERRAIN_SIZE / TERRAIN_SEGS; // 7.5m per vertex
 export const TERRAIN_HALF = TERRAIN_SIZE * 0.5;
 
 export const terrainDeltaGrid = new Float32Array(TERRAIN_VERTS * TERRAIN_VERTS);
@@ -563,6 +569,26 @@ export const BIOME_INFO: Record<
     color: '#b45309',
     description: 'Remnants of an earlier survey camp left behind in the jungle.',
   },
+  dragon_valley: {
+    name: 'Dragon Valley',
+    color: '#991b1b',
+    description: 'Volcanic obsidian canyon of glowing magma fissures, ancient dragon roosts, and rare Dragon Scale & Portal Core drops.',
+  },
+  viking_village: {
+    name: 'Viking Village',
+    color: '#3f6212',
+    description: 'Nordic coastal fjord stronghold with timber longhouses, rune stones, shield racks, and a moored dragon-prow longship.',
+  },
+  resort_corner: {
+    name: 'Resort Corner',
+    color: '#06b6d4',
+    description: 'Sun-drenched tropical beach resort featuring a Tiki Lounge serving buff drinks and docked coastal Jet Skis.',
+  },
+  ruined_castle: {
+    name: 'Ruined Castle',
+    color: '#4c1d95',
+    description: 'Mist-shrouded gothic citadel ruins haunted by the Fallen King Ghost and guarding Crown Portal Cores & Golden V8 Blocks.',
+  },
 };
 
 // Deterministic 2D value noise + FBM (fast, zero external deps)
@@ -636,6 +662,42 @@ export const RIVER_POINTS: [number, number, number][] = [
   [210, 520, -0.8],
 ];
 
+// Western Rapids River: cascades from Windswept Hills -> Meadow -> Plains -> Savanna -> Desert Oasis -> SW Coast
+export const WEST_RIVER_POINTS: [number, number, number][] = [
+  [-185, -75, 11.2],
+  [-160, -15, 7.6],
+  [-215, 65, 4.4],
+  [-295, 125, 2.8],
+  [-355, 235, 1.5],
+  [-415, 345, 0.4],
+  [-465, 435, -0.8],
+];
+
+// Eastern Mountain Rapids & Swamp River: rushes from Stony Peaks -> Cherry Grove -> Mangrove Swamp -> Swamp -> East Coast
+export const EAST_RIVER_POINTS: [number, number, number][] = [
+  [168, -98, 12.0],
+  [195, -45, 7.2],
+  [260, -24, 3.8],
+  [335, -8, 1.9],
+  [415, 32, 0.9],
+  [525, 68, -0.8],
+];
+
+// Southern Rapids Brook: winds through South Flower Forest & Sunflower Plains -> Southern Coast
+export const SOUTH_RIVER_POINTS: [number, number, number][] = [
+  [-42, 205, 5.2],
+  [-108, 295, 3.0],
+  [-155, 405, 1.2],
+  [-185, 535, -0.8],
+];
+
+export const ALL_FLOWING_RIVERS: [number, number, number][][] = [
+  RIVER_POINTS,
+  WEST_RIVER_POINTS,
+  EAST_RIVER_POINTS,
+  SOUTH_RIVER_POINTS,
+];
+
 // Northern Frozen River channel winding from Snowy Slopes to the Frozen Ocean
 export const FROZEN_RIVER_POINTS: [number, number, number][] = [
   [-115, -210, 4.5],
@@ -672,17 +734,22 @@ export function getFrozenRiverSample(
 export function getRiverSample(
   x: number,
   z: number,
-): { dist: number; waterY: number; inRiver: boolean } {
+): { dist: number; waterY: number; inRiver: boolean; isRapids: boolean } {
   let minDist = 9999;
   let bestWaterY = OCEAN_LEVEL;
+  let bestRapids = false;
 
-  for (let i = 0; i < RIVER_POINTS.length - 1; i++) {
-    const [ax, az, ay] = RIVER_POINTS[i];
-    const [bx, bz, by] = RIVER_POINTS[i + 1];
-    const seg = distToSegment(x, z, ax, az, bx, bz);
-    if (seg.dist < minDist) {
-      minDist = seg.dist;
-      bestWaterY = ay + (by - ay) * seg.t;
+  for (let rIdx = 0; rIdx < ALL_FLOWING_RIVERS.length; rIdx++) {
+    const pts = ALL_FLOWING_RIVERS[rIdx];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [ax, az, ay] = pts[i];
+      const [bx, bz, by] = pts[i + 1];
+      const seg = distToSegment(x, z, ax, az, bx, bz);
+      if (seg.dist < minDist) {
+        minDist = seg.dist;
+        bestWaterY = ay + (by - ay) * seg.t;
+        bestRapids = Math.abs(by - ay) > 1.75;
+      }
     }
   }
 
@@ -690,6 +757,7 @@ export function getRiverSample(
     dist: minDist,
     waterY: bestWaterY,
     inRiver: minDist < 6.5,
+    isRapids: bestRapids,
   };
 }
 
@@ -732,10 +800,10 @@ export function getBaseTerrainHeight(x: number, z: number): number {
   const r = Math.hypot(x, z);
   const angle = Math.atan2(z, x);
 
-  // Organic coastline radius variation (mega 560m radius island — 2x expanded for 52 biomes)
+  // Organic coastline radius variation (740m Grand Finale Island expanded once for each Grand Finale biome)
   const coastWarp =
     56 * (fbm(Math.cos(angle) * 1.4 + 3.1, Math.sin(angle) * 1.4 + 7.4, 3) - 0.5);
-  const islandRadius = 560 + coastWarp;
+  const islandRadius = 740 + coastWarp;
 
   // Base radial island profile
   const normR = r / islandRadius;
@@ -901,9 +969,9 @@ export function getBaseTerrainHeight(x: number, z: number): number {
     h = h * (1 - lakeDepth) + targetBed * lakeDepth;
   }
 
-  // Carve Crystal River channel
+  // Carve Crystal River + Western/Eastern/Southern Rapids River channels
   const river = getRiverSample(x, z);
-  if (river.dist < 10.5 && z > WATERFALL_POS.z + 2) {
+  if (river.dist < 10.5 && (z > WATERFALL_POS.z + 2 || Math.abs(x) > 120)) {
     const channelBlend = 1 - smoothstep(3.4, 10.5, river.dist);
     const targetBed = river.waterY - 1.25;
     h = h * (1 - channelBlend) + targetBed * channelBlend;
@@ -1074,6 +1142,11 @@ export function getBaseTerrainHeight(x: number, z: number): number {
   flattenPad(SAVANNA_OUTPOST_POS.x, SAVANNA_OUTPOST_POS.z, 7.5, 14.0, 5.6);
   flattenPad(BADLANDS_MINESHAFT_POS.x, BADLANDS_MINESHAFT_POS.z, 9.0, 16.0, 6.4);
   flattenPad(SWAMP_HUT_POS.x, SWAMP_HUT_POS.z, 8.0, 14.0, 2.35);
+  // Grand Finale Pack Biome Terraces (with yClearance matching GRAND_FINALE_PACK)
+  flattenPad(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 36.0, 72.0, 10.0);
+  flattenPad(VIKING_VILLAGE_POS.x, VIKING_VILLAGE_POS.z, 34.0, 66.0, 6.0);
+  flattenPad(RESORT_CORNER_POS.x, RESORT_CORNER_POS.z, 32.0, 64.0, 4.0);
+  flattenPad(RUINED_CASTLE_POS.x, RUINED_CASTLE_POS.z, 34.0, 68.0, 6.0);
 
   return h;
 }
@@ -1096,20 +1169,26 @@ export function getBiomeAt(x: number, z: number): BiomeId {
   const frozenRiver = getFrozenRiverSample(x, z);
   if (frozenRiver.dist < 8.5) return 'frozen_river';
 
-  // 5 Distinct Ocean Zones around the 560m coastline
+  // 5 Distinct Ocean Zones around the 740m coastline
   if (h < OCEAN_LEVEL - 0.15) {
     const rDist = Math.hypot(x, z);
-    if (z < -260) return 'frozen_ocean';
-    if (z < -40) return 'cold_ocean';
-    if (z >= 220 && x > -160 && rDist < 650) return 'warm_ocean';
-    if (z >= -40 && z < 220 && rDist < 650) return 'lukewarm_ocean';
+    if (z < -340) return 'frozen_ocean';
+    if (z < -60) return 'cold_ocean';
+    if (z >= 260 && x > -200 && rDist < 840) return 'warm_ocean';
+    if (z >= -60 && z < 260 && rDist < 840) return 'lukewarm_ocean';
     return 'ocean';
   }
 
+  // Grand Finale Pack Outer Biomes (spacious, distinct zones on the 740m expanded island)
+  if (Math.hypot(x - DRAGON_VALLEY_POS.x, z - DRAGON_VALLEY_POS.z) < 92.0) return 'dragon_valley';
+  if (Math.hypot(x - VIKING_VILLAGE_POS.x, z - VIKING_VILLAGE_POS.z) < 88.0) return 'viking_village';
+  if (Math.hypot(x - RESORT_CORNER_POS.x, z - RESORT_CORNER_POS.z) < 94.0) return 'resort_corner';
+  if (Math.hypot(x - RUINED_CASTLE_POS.x, z - RUINED_CASTLE_POS.z) < 96.0) return 'ruined_castle';
+
   // 3 Coastal Shore Biomes (Snowy Beach, Stony Shore, Sandy Beach)
   if (h < 2.25) {
-    if (z < -160) return 'snowy_beach';
-    if (Math.abs(x) > 370 && z >= -160 && z < 80) return 'stony_shore';
+    if (z < -200) return 'snowy_beach';
+    if (Math.abs(x) > 520 && z >= -200 && z < 110) return 'stony_shore';
     return 'beach';
   }
 
@@ -1136,7 +1215,7 @@ export function getBiomeAt(x: number, z: number): BiomeId {
   if (Math.hypot(x - STONY_PEAKS_POS.x, z - STONY_PEAKS_POS.z) < 26.0) return 'stony_peaks';
 
   // Anchor Mega-Island (2x) biome landmarks
-  if (Math.hypot(x - MUSHROOM_FIELDS_POS.x, z - MUSHROOM_FIELDS_POS.z) < 88.0) return 'mushroom_fields';
+  if (Math.hypot(x - MUSHROOM_FIELDS_POS.x, z - MUSHROOM_FIELDS_POS.z) < 68.0) return 'mushroom_fields';
   if (Math.hypot(x - DESERT_PYRAMID_POS.x, z - DESERT_PYRAMID_POS.z) < 30.0) return 'desert';
   if (Math.hypot(x - DESERT_VILLAGE_POS.x, z - DESERT_VILLAGE_POS.z) < 30.0) return 'desert';
   if (Math.hypot(x - DESERT_WELL_POS.x, z - DESERT_WELL_POS.z) < 18.0) return 'desert';

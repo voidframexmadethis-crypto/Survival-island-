@@ -52,7 +52,11 @@ export type BiomeId =
   | 'lake'
   | 'mountain'
   | 'cave'
-  | 'expedition';
+  | 'expedition'
+  | 'dragon_valley'
+  | 'viking_village'
+  | 'resort_corner'
+  | 'ruined_castle';
 
 export type DimensionId =
   | 'overworld'
@@ -144,6 +148,7 @@ export type ItemId =
   | 'potato'
   | 'onion'
   | 'corn'
+  | 'beans'
   | 'bell_pepper'
   | 'pumpkin'
   | 'garlic'
@@ -774,6 +779,7 @@ export type ResourceNodeKind =
   | 'fiber_fern'
   | 'grass_tuft'
   | 'wheat_patch'
+  | 'bean_patch'
   | 'sugarcane_patch'
   | 'clay_deposit'
   | 'sand_mound'
@@ -1111,7 +1117,8 @@ export type ActiveModal =
   | 'menu_drawer'
   | 'music_studio'
   | 'coaster'
-  | 'ecosystem_journal';
+  | 'ecosystem_journal'
+  | 'dragon_sanctuary';
 
 export interface NearbyInteraction {
   id: string;
@@ -1318,6 +1325,7 @@ export interface HUDStateSnapshot {
   bossesDefeatedCount?: number;
   objectiveText?: string;
   hitMarkerActive?: boolean;
+  isFlying?: boolean;
   fps: number;
   totemFlashTimer?: number;
   totemRegenSeconds?: number;

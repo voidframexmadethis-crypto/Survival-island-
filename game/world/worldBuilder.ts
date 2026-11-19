@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { ResourceNodeKind, ResourceNodeState } from '../types';
+import { FrameBudgetQueue } from '../systems/frameBudgetQueue';
 import {
+  ALL_FLOWING_RIVERS,
   AUTUMN_GROVE_POS,
   BADLANDS_MINESHAFT_POS,
   BIOME_CABIN_DEFS,
@@ -14,6 +16,7 @@ import {
   DESERT_PYRAMID_POS,
   DESERT_VILLAGE_POS,
   DESERT_WELL_POS,
+  DRAGON_VALLEY_POS,
   ERODED_BADLANDS_POS,
   EXPEDITION_POS,
   FARMER_POS,
@@ -36,6 +39,9 @@ import {
   PILLAGER_OUTPOST_POS,
   PLAINS_VILLAGE_POS,
   PLAYER_SPAWN,
+  RESORT_CORNER_POS,
+  RUINED_CASTLE_POS,
+  VIKING_VILLAGE_POS,
   RIVER_POINTS,
   RUINED_PORTAL_POS,
   SAVANNA_OUTPOST_POS,
@@ -159,6 +165,12 @@ export interface WorldHandles {
   restoreBatchedNode: (nodeId: string) => void;
   setBatchedNodeVisible: (nodeId: string, visible: boolean) => void;
   setWorldShadowCasting: (enabled: boolean) => void;
+  cullWorldByDistance: (
+    px: number,
+    pz: number,
+    maxDist: number,
+    budgetQueue?: FrameBudgetQueue,
+  ) => void;
   dispose: () => void;
 }
 
@@ -291,6 +303,14 @@ export function buildIslandWorld(
       c.setHex(rand() < 0.55 ? 0x3b3533 : 0x3e5932); // Rich dark mud & moss carpets
     } else if (biome === 'mushroom_fields') {
       c.setHex(rand() < 0.22 ? 0x8b739c : 0x74627e); // Iconic purple-grey mycelium
+    } else if (biome === 'dragon_valley') {
+      c.setHex(rand() < 0.14 ? 0xdc2626 : rand() < 0.5 ? 0x262124 : 0x3b2f2f); // Charred obsidian basalt & magma veins
+    } else if (biome === 'viking_village') {
+      c.setHex(rand() < 0.3 ? 0x576348 : 0x4b5d3f); // Rugged Nordic highland turf & fjord slate
+    } else if (biome === 'resort_corner') {
+      c.setHex(rand() < 0.68 ? 0xfef3c7 : 0x5eead4); // Sun-drenched resort sand & lagoon edge
+    } else if (biome === 'ruined_castle') {
+      c.setHex(rand() < 0.35 ? 0x3f3a4d : 0x4b5563); // Haunted gothic stone & dark moor grass
     } else if (slope > 0.72 || y > 14.5 || biome === 'mountain' || biome === 'cave') {
       c.setHex(y > 16 ? 0x57534e : 0x6b645c);
     } else if (onBeachPath || onExpPath) {
@@ -413,25 +433,60 @@ export function buildIslandWorld(
   lakeMesh.userData.preserveEnvMapIntensity = true;
   overworldGroup.add(lakeMesh);
 
-  const riverSegs: [number, number, number][] = RIVER_POINTS.slice(0, -1).map(([rx, rz, ry]) => [
-    rx,
-    rz,
-    Math.max(0.02, ry - 0.02),
-  ]);
-  for (let i = 0; i < riverSegs.length - 1; i++) {
-    const [ax, az, ay] = riverSegs[i];
-    const [bx, bz, by] = riverSegs[i + 1];
-    const len = Math.hypot(bx - ax, bz - az) + 2.0;
-    const ribGeo = new THREE.PlaneGeometry(8.5, len);
-    ribGeo.rotateX(-Math.PI / 2);
-    const rib = new THREE.Mesh(ribGeo, freshwaterMat);
-    rib.position.set((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2);
-    rib.rotation.y = Math.atan2(bx - ax, bz - az);
-    rib.rotation.x = Math.atan2(by - ay, len);
-    rib.userData.noShadowCast = true;
-    rib.userData.preserveEnvMapIntensity = true;
-    overworldGroup.add(rib);
-  }
+  // Build animated freshwater ribbons + whitewater rapids streaks for ALL flowing rivers across the island
+  const rapidsFoamMat = new THREE.MeshBasicMaterial({
+    color: 0xf0f9ff,
+    transparent: true,
+    opacity: 0.72,
+    side: THREE.DoubleSide,
+  });
+  const riverRockMat = new THREE.MeshStandardMaterial({
+    color: 0x64748b,
+    roughness: 0.78,
+  });
+  ALL_FLOWING_RIVERS.forEach((riverPts) => {
+    const riverSegs: [number, number, number][] = riverPts
+      .slice(0, -1)
+      .map(([rx, rz, ry]) => [rx, rz, Math.max(0.02, ry - 0.02)]);
+    for (let i = 0; i < riverSegs.length - 1; i++) {
+      const [ax, az, ay] = riverSegs[i];
+      const [bx, bz, by] = riverSegs[i + 1];
+      const len = Math.hypot(bx - ax, bz - az) + 2.4;
+      const ribGeo = new THREE.PlaneGeometry(8.8, len);
+      ribGeo.rotateX(-Math.PI / 2);
+      const rib = new THREE.Mesh(ribGeo, freshwaterMat);
+      rib.position.set((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2);
+      rib.rotation.y = Math.atan2(bx - ax, bz - az);
+      rib.rotation.x = Math.atan2(by - ay, len);
+      rib.userData.noShadowCast = true;
+      rib.userData.preserveEnvMapIntensity = true;
+      overworldGroup.add(rib);
+
+      // Foaming whitewater rapids streaks & river boulders on steep rapids segments
+      if (Math.abs(by - ay) > 1.75) {
+        for (let rStep = 0; rStep < 4; rStep++) {
+          const t = (rStep + 0.5) / 4;
+          const rx = ax + (bx - ax) * t + (rand() - 0.5) * 4.2;
+          const rz = az + (bz - az) * t + (rand() - 0.5) * 4.2;
+          const ry = ay + (by - ay) * t + 0.08;
+          const foam = new THREE.Mesh(
+            new THREE.PlaneGeometry(1.5 + rand() * 1.4, 3.8 + rand() * 2.4),
+            rapidsFoamMat,
+          );
+          foam.rotation.x = -Math.PI / 2;
+          foam.rotation.z = -Math.atan2(bx - ax, bz - az);
+          foam.position.set(rx, ry, rz);
+          foam.userData.noShadowCast = true;
+          overworldGroup.add(foam);
+
+          const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.55 + rand() * 0.45, 0), riverRockMat);
+          rock.scale.set(1.2, 0.7, 1.1);
+          rock.position.set(rx + (rand() - 0.5) * 2.2, ry - 0.15, rz + (rand() - 0.5) * 2.2);
+          overworldGroup.add(rock);
+        }
+      }
+    }
+  });
 
   // 4. Waterfall at Northern Mountain Shelf
   const waterfallStreams: THREE.Mesh[] = [];
@@ -2710,6 +2765,25 @@ export function buildIslandWorld(
         branch.position.set(Math.cos(ang) * radC, 0.45, Math.sin(ang) * radC);
         root.add(branch);
       }
+    } else if (kind === 'bean_patch') {
+      // Climbing Wild Island Bean poles with lush vines & green/golden bean pods
+      for (let p = 0; p < 3; p++) {
+        const ang = (p / 3) * Math.PI * 2;
+        const px = Math.cos(ang) * 0.42;
+        const pz = Math.sin(ang) * 0.42;
+        const pole = new THREE.Mesh(gCylStraight5, oakTrunkMat);
+        pole.scale.set(0.055, 1.55, 0.055);
+        pole.position.set(px, 0.78, pz);
+        pole.rotation.z = -Math.cos(ang) * 0.14;
+        pole.rotation.x = Math.sin(ang) * 0.14;
+        const foliage = new THREE.Mesh(gDodec1, sugarcaneMat);
+        foliage.scale.set(0.38, 0.62, 0.38);
+        foliage.position.set(px * 0.75, 0.95, pz * 0.75);
+        const pod = new THREE.Mesh(gOct0, p % 2 === 0 ? wheatMat : berryBushMat);
+        pod.scale.set(0.11, 0.24, 0.11);
+        pod.position.set(px * 0.9 + 0.12, 0.85, pz * 0.9);
+        root.add(pole, foliage, pod);
+      }
     } else if (kind === 'sand_mound') {
       const mound = new THREE.Mesh(gCone10, sandMoundMat);
       mound.scale.set(0.95, 0.55, 0.95);
@@ -4119,16 +4193,239 @@ export function buildIslandWorld(
     overworldGroup.add(chest);
   }
 
-  // Cleanly zoned biome resource scatter (spread out across the 560m 2x mega-island)
+  // ===== GRAND FINALE PACK BIOME LANDMARKS (Auto-culled by distance + 3.5ms FrameBudgetQueue) =====
+  {
+    const obsidianMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.55, metalness: 0.25 });
+    const magmaGlowMat = new THREE.MeshStandardMaterial({ color: 0xf97316, emissive: 0xea580c, emissiveIntensity: 1.4, roughness: 0.3 });
+    const dragonScaleMat = new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.42, metalness: 0.28 });
+    const dragonWingMat = new THREE.MeshStandardMaterial({ color: 0x450a0a, roughness: 0.65, side: THREE.DoubleSide });
+    const goldMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.82, roughness: 0.22 });
+    const spectralGhostMat = new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      emissive: 0x0ea5e9,
+      emissiveIntensity: 1.15,
+      transparent: true,
+      opacity: 0.74,
+      roughness: 0.2,
+    });
+    const gothicStoneMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.88 });
+    const vikingTimberMat = new THREE.MeshStandardMaterial({ color: 0x5c3a21, roughness: 0.82 });
+    const vikingSailMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.7, side: THREE.DoubleSide });
+    const tikiThatchMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.9 });
+    const jetSkiMat = new THREE.MeshStandardMaterial({ color: 0x06b6d4, metalness: 0.45, roughness: 0.22 });
+    const jetSkiAccentMat = new THREE.MeshStandardMaterial({ color: 0xf43f5e, metalness: 0.35, roughness: 0.25 });
+    disposableMats.push(
+      obsidianMat,
+      magmaGlowMat,
+      dragonScaleMat,
+      dragonWingMat,
+      goldMat,
+      spectralGhostMat,
+      gothicStoneMat,
+      vikingTimberMat,
+      vikingSailMat,
+      tikiThatchMat,
+      jetSkiMat,
+      jetSkiAccentMat,
+    );
+
+    // 1. DRAGON VALLEY (420, -380) — Obsidian canyon spires, magma pool & perched Winged Dragon
+    const dvGroup = new THREE.Group();
+    const dvY = getTerrainHeight(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z);
+    dvGroup.position.set(DRAGON_VALLEY_POS.x, dvY, DRAGON_VALLEY_POS.z);
+    const lavaPool = new THREE.Mesh(new THREE.CylinderGeometry(11, 12, 0.3, 18), magmaGlowMat);
+    lavaPool.position.y = 0.16;
+    dvGroup.add(lavaPool);
+    for (let i = 0; i < 8; i++) {
+      const ang = (i / 8) * Math.PI * 2;
+      const dist = 16 + (i % 2) * 5;
+      const h = 9 + (i % 3) * 4.5;
+      const spire = new THREE.Mesh(new THREE.ConeGeometry(2.6, h, 6), obsidianMat);
+      spire.position.set(Math.cos(ang) * dist, h * 0.45, Math.sin(ang) * dist);
+      spire.rotation.z = (i % 2 === 0 ? 1 : -1) * 0.12;
+      dvGroup.add(spire);
+    }
+    // Perched Procedural Winged Dragon Mount on central obsidian plinth
+    const dragonPlinth = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 5.4, 2.4, 7), obsidianMat);
+    dragonPlinth.position.y = 1.2;
+    dvGroup.add(dragonPlinth);
+    const dragonBody = new THREE.Mesh(new THREE.CapsuleGeometry(1.5, 4.2, 6, 10), dragonScaleMat);
+    dragonBody.rotation.x = Math.PI * 0.44;
+    dragonBody.position.set(0, 4.0, 0);
+    const dragonNeck = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.95, 3.2, 8), dragonScaleMat);
+    dragonNeck.position.set(0, 6.2, 2.2);
+    dragonNeck.rotation.x = 0.45;
+    const dragonHead = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.1, 2.2), dragonScaleMat);
+    dragonHead.position.set(0, 7.6, 3.2);
+    const dragonEyeL = new THREE.Mesh(new THREE.SphereGeometry(0.18, 6, 6), magmaGlowMat);
+    dragonEyeL.position.set(-0.52, 7.75, 4.1);
+    const dragonEyeR = dragonEyeL.clone();
+    dragonEyeR.position.x = 0.52;
+    const wingL = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.14, 3.4), dragonWingMat);
+    wingL.position.set(-4.0, 5.2, -0.3);
+    wingL.rotation.z = 0.34;
+    const wingR = wingL.clone();
+    wingR.position.x = 4.0;
+    wingR.rotation.z = -0.34;
+    const dragonTail = new THREE.Mesh(new THREE.ConeGeometry(0.7, 5.2, 6), dragonScaleMat);
+    dragonTail.rotation.x = -Math.PI * 0.42;
+    dragonTail.position.set(0, 3.2, -4.5);
+    dvGroup.add(dragonBody, dragonNeck, dragonHead, dragonEyeL, dragonEyeR, wingL, wingR, dragonTail);
+    overworldGroup.add(dvGroup);
+
+    // 2. VIKING VILLAGE (560, -260) — Nordic Longhouse, Shield Racks, Rune Stones & Moored Viking Longship
+    const vvGroup = new THREE.Group();
+    const vvY = getTerrainHeight(VIKING_VILLAGE_POS.x, VIKING_VILLAGE_POS.z);
+    vvGroup.position.set(VIKING_VILLAGE_POS.x, vvY, VIKING_VILLAGE_POS.z);
+    // Main Nordic Mead Hall Longhouse
+    const hallWalls = new THREE.Mesh(new THREE.BoxGeometry(14, 4.2, 8.5), vikingTimberMat);
+    hallWalls.position.set(0, 2.1, 0);
+    const hallRoof = new THREE.Mesh(new THREE.ConeGeometry(10.6, 4.4, 4), obsidianMat);
+    hallRoof.rotation.y = Math.PI * 0.25;
+    hallRoof.scale.set(1.2, 1, 0.78);
+    hallRoof.position.set(0, 6.2, 0);
+    const hearthFire = new THREE.Mesh(new THREE.ConeGeometry(1.1, 1.8, 6), magmaGlowMat);
+    hearthFire.position.set(0, 0.9, 7.2);
+    vvGroup.add(hallWalls, hallRoof, hearthFire);
+    // Secondary Viking Hut + Shield Racks & Rune Stones
+    const hut = new THREE.Mesh(new THREE.BoxGeometry(7.2, 3.2, 6.0), vikingTimberMat);
+    hut.position.set(-14, 1.6, -5);
+    const hutRoof = new THREE.Mesh(new THREE.ConeGeometry(5.6, 3.0, 4), obsidianMat);
+    hutRoof.rotation.y = Math.PI * 0.25;
+    hutRoof.position.set(-14, 4.7, -5);
+    vvGroup.add(hut, hutRoof);
+    for (let i = 0; i < 6; i++) {
+      const shield = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.75, 0.14, 10), i % 2 === 0 ? vikingSailMat : goldMat);
+      shield.rotation.x = Math.PI * 0.5;
+      shield.position.set(-5 + i * 2.0, 2.0, 4.35);
+      vvGroup.add(shield);
+    }
+    // Moored Viking Longship
+    const longship = new THREE.Group();
+    longship.position.set(16, 0.4, 8);
+    longship.rotation.y = -0.45;
+    const hull = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.5, 13.5), vikingTimberMat);
+    hull.position.y = 0.75;
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 8.5, 6), vikingTimberMat);
+    mast.position.y = 4.6;
+    const sail = new THREE.Mesh(new THREE.PlaneGeometry(5.8, 4.6), vikingSailMat);
+    sail.position.set(0, 5.4, 0.2);
+    longship.add(hull, mast, sail);
+    vvGroup.add(longship);
+    overworldGroup.add(vvGroup);
+
+    // 3. RESORT CORNER (-480, 410) — Thatched Tiki Lounge Bar, Torches, Beach Umbrellas & 2 Jet Skis
+    const rcGroup = new THREE.Group();
+    const rcY = getTerrainHeight(RESORT_CORNER_POS.x, RESORT_CORNER_POS.z);
+    rcGroup.position.set(RESORT_CORNER_POS.x, rcY, RESORT_CORNER_POS.z);
+    // Tiki Lounge Deck, Bar Counter & Thatched Roof
+    const tikiDeck = new THREE.Mesh(new THREE.BoxGeometry(11.5, 0.6, 8.5), vikingTimberMat);
+    tikiDeck.position.y = 0.3;
+    const barCounter = new THREE.Mesh(new THREE.BoxGeometry(7.2, 1.35, 1.5), tikiThatchMat);
+    barCounter.position.set(0, 1.25, -1.2);
+    const tikiRoof = new THREE.Mesh(new THREE.ConeGeometry(8.2, 3.2, 6), tikiThatchMat);
+    tikiRoof.position.set(0, 5.4, 0);
+    rcGroup.add(tikiDeck, barCounter, tikiRoof);
+    for (const [px, pz] of [[-4.8, -3.4], [4.8, -3.4], [-4.8, 3.4], [4.8, 3.4]]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.24, 4.2, 6), vikingTimberMat);
+      post.position.set(px, 2.4, pz);
+      const torch = new THREE.Mesh(new THREE.SphereGeometry(0.28, 6, 6), magmaGlowMat);
+      torch.position.set(px, 4.1, pz + (pz > 0 ? 0.5 : -0.5));
+      rcGroup.add(post, torch);
+    }
+    // Glowing Tiki Drink Bottles on the Bar (Coconut Surge, Mango Shield, Sunset Fizz)
+    const drinkColors = [0x38bdf8, 0xfacc15, 0xf43f5e];
+    for (let i = 0; i < 3; i++) {
+      const bottleMat = new THREE.MeshStandardMaterial({
+        color: drinkColors[i],
+        emissive: drinkColors[i],
+        emissiveIntensity: 0.75,
+        roughness: 0.2,
+      });
+      disposableMats.push(bottleMat);
+      const bottle = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 0.65, 8), bottleMat);
+      bottle.position.set(-1.6 + i * 1.6, 2.25, -1.2);
+      rcGroup.add(bottle);
+    }
+    // 2 Docked Coastal Jet Skis
+    for (let i = 0; i < 2; i++) {
+      const ski = new THREE.Group();
+      ski.position.set(-10 + i * 4.8, 0.45, 11.5);
+      ski.rotation.y = 0.35 - i * 0.25;
+      const body = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.55, 2.9), i === 0 ? jetSkiMat : jetSkiAccentMat);
+      const cowl = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.42, 0.95), obsidianMat);
+      cowl.position.set(0, 0.42, 0.45);
+      const seat = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.28, 1.3), obsidianMat);
+      seat.position.set(0, 0.38, -0.45);
+      ski.add(body, cowl, seat);
+      rcGroup.add(ski);
+    }
+    overworldGroup.add(rcGroup);
+
+    // 4. RUINED CASTLE (-360, -520) — Gothic Citadel Ruins, Throne Dais & Fallen King Ghost Boss
+    const castleGroup = new THREE.Group();
+    const castleY = getTerrainHeight(RUINED_CASTLE_POS.x, RUINED_CASTLE_POS.z);
+    castleGroup.position.set(RUINED_CASTLE_POS.x, castleY, RUINED_CASTLE_POS.z);
+    // 4 Broken Corner Towers + Battlement Walls
+    for (const [tx, tz, th] of [
+      [-13, -13, 13.5],
+      [13, -13, 11.0],
+      [-13, 13, 9.5],
+      [13, 13, 12.0],
+    ]) {
+      const tower = new THREE.Mesh(new THREE.CylinderGeometry(2.8, 3.2, th, 8), gothicStoneMat);
+      tower.position.set(tx, th * 0.5, tz);
+      castleGroup.add(tower);
+    }
+    const northWall = new THREE.Mesh(new THREE.BoxGeometry(24, 6.2, 2.2), gothicStoneMat);
+    northWall.position.set(0, 3.1, -13);
+    const westWall = new THREE.Mesh(new THREE.BoxGeometry(2.2, 5.0, 24), gothicStoneMat);
+    westWall.position.set(-13, 2.5, 0);
+    const eastWall = new THREE.Mesh(new THREE.BoxGeometry(2.2, 5.4, 24), gothicStoneMat);
+    eastWall.position.set(13, 2.7, 0);
+    const throneDais = new THREE.Mesh(new THREE.BoxGeometry(6.5, 1.2, 5.5), obsidianMat);
+    throneDais.position.set(0, 0.6, -6.5);
+    const throneBack = new THREE.Mesh(new THREE.BoxGeometry(2.2, 3.8, 0.7), gothicStoneMat);
+    throneBack.position.set(0, 3.0, -8.2);
+    castleGroup.add(northWall, westWall, eastWall, throneDais, throneBack);
+    // Spectral Braziers flanking the Throne
+    for (const bx of [-4.2, 4.2]) {
+      const brazier = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.45, 1.4, 6), obsidianMat);
+      brazier.position.set(bx, 0.7, -3.5);
+      const flame = new THREE.Mesh(new THREE.ConeGeometry(0.55, 1.3, 6), spectralGhostMat);
+      flame.position.set(bx, 1.9, -3.5);
+      castleGroup.add(brazier, flame);
+    }
+    // Hovering "Fallen King Ghost" Boss Statue/Avatar above the Throne
+    const fallenKing = new THREE.Group();
+    fallenKing.position.set(0, 3.4, -5.8);
+    const kingCloak = new THREE.Mesh(new THREE.ConeGeometry(1.15, 3.2, 8), spectralGhostMat);
+    const kingHead = new THREE.Mesh(new THREE.SphereGeometry(0.58, 10, 8), spectralGhostMat);
+    kingHead.position.y = 1.95;
+    const kingCrown = new THREE.Mesh(new THREE.CylinderGeometry(0.56, 0.48, 0.42, 6), goldMat);
+    kingCrown.position.y = 2.55;
+    const kingBlade = new THREE.Mesh(new THREE.BoxGeometry(0.18, 2.8, 0.32), spectralGhostMat);
+    kingBlade.position.set(1.25, 0.9, 0.5);
+    kingBlade.rotation.z = -0.28;
+    fallenKing.add(kingCloak, kingHead, kingCrown, kingBlade);
+    castleGroup.add(fallenKing);
+    overworldGroup.add(castleGroup);
+  }
+
+  // Cleanly zoned biome resource scatter (filling dead spots across the 740m Grand Island, well spread out & instanced)
   let count = 0;
-  for (let attempt = 0; attempt < 9600 && count < 1450; attempt++) {
+  for (let attempt = 0; attempt < 15500 && count < 2250; attempt++) {
     const angle = rand() * Math.PI * 2;
-    const rad = 24 + Math.sqrt(rand()) * 535;
+    const rad = 24 + Math.sqrt(rand()) * 705;
     const x = Math.cos(angle) * rad;
     const z = Math.sin(angle) * rad;
 
     if (Math.hypot(x - PLAYER_SPAWN.x, z - PLAYER_SPAWN.z) < 20) continue;
     if (z >= PLAYER_SPAWN.z + 2 && Math.abs(x - SHIPWRECK_POS.x) < 34) continue; // Keep shipwreck shoreline corridor clean
+    if (Math.hypot(x - DRAGON_VALLEY_POS.x, z - DRAGON_VALLEY_POS.z) < 28) continue;
+    if (Math.hypot(x - VIKING_VILLAGE_POS.x, z - VIKING_VILLAGE_POS.z) < 28) continue;
+    if (Math.hypot(x - RESORT_CORNER_POS.x, z - RESORT_CORNER_POS.z) < 26) continue;
+    if (Math.hypot(x - RUINED_CASTLE_POS.x, z - RUINED_CASTLE_POS.z) < 28) continue;
     if (Math.hypot(x - DESERT_PYRAMID_POS.x, z - DESERT_PYRAMID_POS.z) < 16) continue;
     if (Math.hypot(x - DESERT_VILLAGE_POS.x, z - DESERT_VILLAGE_POS.z) < 16) continue;
     if (Math.hypot(x - DESERT_WELL_POS.x, z - DESERT_WELL_POS.z) < 8) continue;
@@ -4214,9 +4511,16 @@ export function buildIslandWorld(
     if (biome === 'beach') {
       const r = rand();
       kind = r < 0.65 ? 'palm_tree' : r < 0.88 ? 'sand_mound' : 'small_stone';
-    } else if (biome === 'river' || (river.dist < 10.5 && river.dist > 5.5)) {
+    } else if (biome === 'river' || (river.dist < 12.5 && river.dist > 5.5)) {
       const r = rand();
-      kind = r < 0.52 ? 'clay_deposit' : r < 0.85 ? 'plant_cluster' : 'small_stone';
+      kind =
+        r < 0.3
+          ? 'bean_patch'
+          : r < 0.6
+            ? 'clay_deposit'
+            : r < 0.85
+              ? 'sugarcane_patch'
+              : 'small_stone';
     } else if (biome === 'mountain') {
       const r = rand();
       kind =
@@ -4232,13 +4536,15 @@ export function buildIslandWorld(
     } else if (biome === 'grassland') {
       const r = rand();
       kind =
-        r < 0.42
+        r < 0.34
           ? 'wheat_patch'
-          : r < 0.74
-            ? 'grass_tuft'
-            : r < 0.88
-              ? 'berry_bush'
-              : 'palm_tree';
+          : r < 0.52
+            ? 'bean_patch'
+            : r < 0.78
+              ? 'grass_tuft'
+              : r < 0.9
+                ? 'berry_bush'
+                : 'palm_tree';
     } else if (biome === 'flower_forest') {
       // Oak & Birch trees + dense all-flowers glade (Dandelions, Poppies, Lilacs, Rose Bushes, Peonies, Lily of the Valley)
       const r = rand();
@@ -4380,23 +4686,27 @@ export function buildIslandWorld(
               ? 'jungle_bush'
               : 'melon_patch';
     } else if (biome === 'plains') {
-      // Sparse Oak + Tall Grass + Dandelions, Poppies, Azure Bluets, Oxeye Daisies, Cornflowers, Tulips
+      // Sparse Oak + Tall Grass + Wild Beans + Dandelions, Poppies, Azure Bluets, Oxeye Daisies, Cornflowers, Tulips
       const r = rand();
       kind =
         r < 0.14
           ? 'oak_tree'
-          : r < 0.62
-            ? 'flower_patch'
-            : 'grass_tuft';
+          : r < 0.34
+            ? 'bean_patch'
+            : r < 0.68
+              ? 'flower_patch'
+              : 'grass_tuft';
     } else if (biome === 'sunflower_plains') {
-      // Sparse Oak + Sunflowers + Plains flowers
+      // Sparse Oak + Sunflowers + Wild Beans + Plains flowers
       const r = rand();
       kind =
         r < 0.1
           ? 'oak_tree'
-          : r < 0.72
-            ? 'sunflower_patch'
-            : 'flower_patch';
+          : r < 0.24
+            ? 'bean_patch'
+            : r < 0.74
+              ? 'sunflower_patch'
+              : 'flower_patch';
     } else if (biome === 'snowy_plains') {
       // Sparse Snowy Spruce + snow-covered tufts
       const r = rand();
@@ -4470,9 +4780,9 @@ export function buildIslandWorld(
       const r = rand();
       kind = r < 0.45 ? 'cactus_plant' : r < 0.78 ? 'dead_bush' : 'sand_mound';
     } else if (biome === 'savanna' || biome === 'savanna_plateau') {
-      // Acacia trees + Tall Grass
+      // Acacia trees + Wild Beans + Tall Grass
       const r = rand();
-      kind = r < 0.44 ? 'acacia_tree' : 'grass_tuft';
+      kind = r < 0.42 ? 'acacia_tree' : r < 0.62 ? 'bean_patch' : 'grass_tuft';
     } else if (biome === 'windswept_savanna') {
       // Sparse Acacia + Shattered Stone peaks
       const r = rand();
@@ -4761,6 +5071,99 @@ export function buildIslandWorld(
     }
   });
 
+  // Freeze static matrices on terrain and instanced foliage/resources to skip per-frame matrix recomputation
+  terrainMesh.updateMatrix();
+  terrainMesh.matrixAutoUpdate = false;
+  grassInstanced.updateMatrix();
+  grassInstanced.matrixAutoUpdate = false;
+  pebbleInstanced.updateMatrix();
+  pebbleInstanced.matrixAutoUpdate = false;
+  for (const im of builtBatchMeshes.values()) {
+    im.updateMatrix();
+    im.matrixAutoUpdate = false;
+  }
+
+  // Register every biome landmark and static feature child of overworldGroup for fast squared-distance culling
+  const skipCullSet = new Set<THREE.Object3D>([
+    terrainMesh,
+    oceanMesh,
+    lakeMesh,
+    cloudsGroup,
+    farmerNpcGroup,
+    waterfallFoam,
+    grassInstanced,
+    pebbleInstanced,
+    ...waterfallStreams,
+    ...builtBatchMeshes.values(),
+  ]);
+  const cullableLandmarks: {
+    obj: THREE.Object3D;
+    cx: number;
+    cz: number;
+    radius: number;
+    desiredVisible: boolean;
+    wakeQueued: boolean;
+  }[] = [];
+  const tmpCullBox = new THREE.Box3();
+  const tmpCullCenter = new THREE.Vector3();
+  const tmpCullSize = new THREE.Vector3();
+  overworldGroup.updateMatrixWorld(true);
+  for (let i = 0; i < overworldGroup.children.length; i++) {
+    const child = overworldGroup.children[i];
+    if (skipCullSet.has(child)) continue;
+    tmpCullBox.setFromObject(child);
+    if (tmpCullBox.isEmpty()) continue;
+    tmpCullBox.getCenter(tmpCullCenter);
+    tmpCullBox.getSize(tmpCullSize);
+    const radius = Math.hypot(tmpCullSize.x * 0.5, tmpCullSize.z * 0.5);
+    // Only distance-cull localized biome landmarks & feature clusters (skip world-spanning shells)
+    if (radius > 0.1 && radius < 260) {
+      cullableLandmarks.push({
+        obj: child,
+        cx: tmpCullCenter.x,
+        cz: tmpCullCenter.z,
+        radius,
+        desiredVisible: child.visible,
+        wakeQueued: false,
+      });
+    }
+  }
+
+  const cullWorldByDistance = (
+    px: number,
+    pz: number,
+    maxDist: number,
+    budgetQueue?: FrameBudgetQueue,
+  ): void => {
+    for (let i = 0; i < cullableLandmarks.length; i++) {
+      const entry = cullableLandmarks[i];
+      const dx = entry.cx - px;
+      const dz = entry.cz - pz;
+      const limit = maxDist + entry.radius + 36;
+      const shouldShow = dx * dx + dz * dz <= limit * limit;
+      entry.desiredVisible = shouldShow;
+      if (!shouldShow) {
+        if (entry.obj.visible) {
+          entry.obj.visible = false;
+        }
+      } else if (!entry.obj.visible) {
+        if (budgetQueue) {
+          if (!entry.wakeQueued) {
+            entry.wakeQueued = true;
+            budgetQueue.enqueue(() => {
+              entry.wakeQueued = false;
+              if (entry.desiredVisible) {
+                entry.obj.visible = true;
+              }
+            });
+          }
+        } else {
+          entry.obj.visible = true;
+        }
+      }
+    }
+  };
+
   const zeroMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
 
   const setBatchedNodeVisible = (nodeId: string, visible: boolean): void => {
@@ -4887,6 +5290,7 @@ export function buildIslandWorld(
     restoreBatchedNode,
     setBatchedNodeVisible,
     setWorldShadowCasting,
+    cullWorldByDistance,
     dispose,
   };
 }
