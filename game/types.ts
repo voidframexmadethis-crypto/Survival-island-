@@ -453,6 +453,10 @@ export interface ActiveVehicleHudState {
   interiorView: boolean;
   hasTrunkBass: boolean;
   trunkBassOn: boolean;
+  isOldSchool?: boolean;
+  radioMode?: 'OLD_SCHOOL_TRUNK_AND_CHEST_BASS' | 'STANDARD_RADIO';
+  trunkPumpLevel?: number;
+  chestThumpLevel?: number;
   highClearance: boolean;
   cargoUsed: number;
   cargoCapacity: number;
@@ -1140,7 +1144,8 @@ export type ActiveModal =
   | 'dragon_sanctuary'
   | 'exchange'
   | 'saturn_rocket'
-  | 'underground_elevator';
+  | 'underground_elevator'
+  | 'car_radio';
 
 export interface NearbyInteraction {
   id: string;

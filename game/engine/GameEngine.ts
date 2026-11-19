@@ -250,9 +250,16 @@ import {
 } from '../world/saturnRocketModel';
 import {
   ELEVATOR_EXOTIC_LIFT,
+  ELEVATOR_VOICE_COMPUTER,
   ExoticElevatorCar,
   VAULT_COMPUTER_VOICE,
 } from '../systems/undergroundElevator';
+import {
+  CABIN_BASS_AND_FIRST_PERSON,
+  CAR_RADIO_TRUNK_SYSTEM,
+  DrivingCameraMode,
+  RadioCarDescriptor,
+} from '../systems/carRadioSystem';
 import {
   buildIslandWorld,
   CaveCeilingCluster,
@@ -409,6 +416,7 @@ export interface EngineCallbacks {
       | 'coaster'
       | 'saturn_rocket'
       | 'underground_elevator'
+      | 'car_radio'
     >,
     structureId?: string,
   ) => void;
@@ -624,6 +632,7 @@ export class GameEngine {
   private elevatorSummonedVehicleId: string | null = null;
   private elevatorTargetCar: ExoticElevatorCar | null = null;
   private elevatorSteamAccum = 0;
+  private elevatorTerminalGreeted = false;
   private portalHandles = new Map<string, PortalVortexHandle>();
   private portalWarpCooldown = 0;
 
@@ -947,6 +956,7 @@ export class GameEngine {
   private readonly _tapNdc = new THREE.Vector2();
   private hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
   private trunkBassPulse = 0;
+  private chestThumpPulse = 0;
 
   // Creature Taming & Mounting & Sandbox
   private mountedCreatureId: string | null = null;
@@ -1494,10 +1504,7 @@ export class GameEngine {
       ? this.vehicles.find((v) => v.id === this.activeVehicleId)
       : undefined;
     const activeHasHyd = this.vehicleHasHydraulics(activeVehicle);
-    const activeHasBass = Boolean(
-      activeVehicle &&
-        (activeVehicle.preset === 'slab' || activeVehicle.trunkBassEnabled !== undefined),
-    );
+    const activeHasBass = this.isOldSchoolVehicle(activeVehicle);
 
     if (e.code === 'Space') {
       if (this.activeVehicleId) {
@@ -1538,6 +1545,8 @@ export class GameEngine {
       this.toggleConvertibleTop(activeVehicle.id);
     } else if (activeHasBass && (e.code === 'KeyT' || e.code === 'KeyG')) {
       this.toggleTrunkBass();
+    } else if (e.code === 'KeyB' && this.activeVehicleId) {
+      this.openCarRadio();
     } else if (e.code === 'KeyV') {
       if (this.activeVehicleId) {
         this.toggleVehicleInteriorCamera();
@@ -2060,7 +2069,7 @@ export class GameEngine {
     if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
     if (this.activeVehicleId) {
       const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
-      if (av && (av.preset === 'slab' || av.trunkBassEnabled !== undefined)) {
+      if (this.isOldSchoolVehicle(av)) {
         this.toggleTrunkBass();
       } else {
         this.toggleSmartRadio();
@@ -2069,7 +2078,7 @@ export class GameEngine {
     }
     const nearBassVeh = this.vehicles.find(
       (v) =>
-        (v.preset === 'slab' || v.trunkBassEnabled !== undefined) &&
+        this.isOldSchoolVehicle(v) &&
         Math.hypot(v.x - this.playerX, v.z - this.playerZ) < 8,
     );
     if (nearBassVeh) {
@@ -10465,6 +10474,12 @@ export class GameEngine {
           UNDERGROUND_ELEVATOR_POS.z - this.playerZ,
         );
         if (dElev < 9.5 && dElev < bestDist) {
+          if (!this.elevatorTerminalGreeted) {
+            this.elevatorTerminalGreeted = true;
+            ELEVATOR_VOICE_COMPUTER.onApproachTerminal((line) => {
+              this.toast(line, 'discovery');
+            });
+          }
           bestDist = dElev;
           best = {
             id: 'underground_elevator',
@@ -10477,6 +10492,8 @@ export class GameEngine {
             targetY: this.playerY,
             targetZ: UNDERGROUND_ELEVATOR_POS.z,
           };
+        } else if (dElev > 13.5) {
+          this.elevatorTerminalGreeted = false;
         }
       }
 
@@ -11537,9 +11554,12 @@ export class GameEngine {
         this.handsRig.root.visible = false;
         const handles = this.vehicleMeshes.get(activeV.id);
         if (this.vehicleInteriorCamera && handles) {
-          // Real First-Person Driver Seat Interior View (see steering wheel, gauges, 3D droptop button & roof!)
+          // Real First-Person Driver Seat Interior View + old-school chest-thump bass pulse
           handles.root.updateMatrixWorld(true);
-          _vec3A.set(-0.42, 1.04, -0.02);
+          const isOldSchool = this.isOldSchoolVehicle(activeV);
+          const thumpZ = isOldSchool ? -this.chestThumpPulse * 0.025 : 0;
+          const thumpY = isOldSchool ? this.chestThumpPulse * 0.018 : 0;
+          _vec3A.set(-0.42, 1.04 + thumpY, -0.02 + thumpZ);
           handles.chassisGroup.localToWorld(_vec3A);
           this.camera.position.copy(_vec3A);
           const lookYaw = this.camYaw;
@@ -11817,8 +11837,14 @@ export class GameEngine {
           convertibleTopDown: Boolean(av.convertibleTopDown),
           convertibleTopProgress: this.convertibleTopProgressMap.get(av.id) ?? (av.convertibleTopDown ? 1 : 0),
           interiorView: this.vehicleInteriorCamera,
-          hasTrunkBass: av.preset === 'slab' || av.trunkBassEnabled !== undefined,
+          hasTrunkBass: this.isOldSchoolVehicle(av),
           trunkBassOn: Boolean(av.trunkBassEnabled),
+          isOldSchool: this.isOldSchoolVehicle(av),
+          radioMode: this.isOldSchoolVehicle(av)
+            ? 'OLD_SCHOOL_TRUNK_AND_CHEST_BASS'
+            : 'STANDARD_RADIO',
+          trunkPumpLevel: this.trunkBassPulse,
+          chestThumpLevel: this.chestThumpPulse,
           highClearance:
             av.preset === 'donk' ||
             ((av.suspensionOffset ?? 0) >= 0.32 && (av.wheelScale ?? 1) >= 1.3),
@@ -14276,6 +14302,12 @@ export class GameEngine {
     this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.trunkBassPulse = 0;
+    this.chestThumpPulse = 0;
+    this.vehicleInteriorCamera = false;
+    CABIN_BASS_AND_FIRST_PERSON.setCameraMode('CHASE');
+    const radioDesc = this.toRadioCarDescriptor(v);
+    CAR_RADIO_TRUNK_SYSTEM.configureForCar(radioDesc);
+    CABIN_BASS_AND_FIRST_PERSON.applyVehicleRadioProfile(radioDesc);
     this.isCrouching = false;
     this.touchCrouch = false;
     this.camYaw = v.yaw - Math.PI;
@@ -14287,15 +14319,36 @@ export class GameEngine {
         ? ' · [Space/Z/Q/R] Hydraulics (Up / Down / Side-to-Side)'
         : this.vehicleHasHydraulics(v)
           ? ' · [Space/Z/Q/R/X] High-Bounce 2-Wheel Hydraulics'
-          : v.preset === 'slab' || v.trunkBassEnabled !== undefined
-            ? ' · [T] Trunk Bass System'
-            : '';
+          : this.isOldSchoolVehicle(v)
+            ? ' · [T] Trunk Bass · [B] Car Radio'
+            : ' · [B] Car Radio';
     this.toast(
-      `Piloting ${v.name} (${specs.craftClass}) · WASD Drive${extraHint} · [E] Exit · [F] Cargo`,
+      `Piloting ${v.name} (${specs.craftClass}) · WASD Drive${extraHint} · [V] 1st-Person · [E] Exit · [F] Cargo`,
       'discovery',
     );
     this.emitHud();
     return true;
+  }
+
+  private toRadioCarDescriptor(v?: ModularVehicleData | null): RadioCarDescriptor {
+    if (!v) return {};
+    return {
+      id: v.id,
+      name: v.name,
+      preset: v.preset,
+      class: v.preset === 'sports_car' ? 'Modern Exotic' : v.preset,
+      style: v.preset,
+      hasTrunkBass:
+        v.preset === 'slab' ||
+        v.preset === 'lowrider' ||
+        v.preset === 'donk' ||
+        v.preset === 'cadillac_coupe_deville',
+    };
+  }
+
+  private isOldSchoolVehicle(v?: ModularVehicleData | null): boolean {
+    if (!v) return false;
+    return CAR_RADIO_TRUNK_SYSTEM.isOldSchoolCar(this.toRadioCarDescriptor(v));
   }
 
   private isDonkHydraulicVehicle(v?: ModularVehicleData | null): boolean {
@@ -14361,6 +14414,7 @@ export class GameEngine {
     const exitSpeed = this.vehicleForwardSpeed;
     this.activeVehicleId = null;
     this.vehicleInteriorCamera = false;
+    CABIN_BASS_AND_FIRST_PERSON.setCameraMode('CHASE');
     this.vehicleForwardSpeed = 0;
     this.vehicleAltitudeVel = 0;
     this.vehicleAscendHold = false;
@@ -14374,6 +14428,7 @@ export class GameEngine {
     this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.trunkBassPulse = 0;
+    this.chestThumpPulse = 0;
     this.sound.stopTrunkBass();
     try {
       if (typeof document !== 'undefined' && document.pointerLockElement) {
@@ -14697,13 +14752,33 @@ export class GameEngine {
 
   public toggleVehicleInteriorCamera(): void {
     if (!this.activeVehicleId) return;
-    this.vehicleInteriorCamera = !this.vehicleInteriorCamera;
+    const mode = CABIN_BASS_AND_FIRST_PERSON.toggleCameraMode();
+    this.vehicleInteriorCamera = mode === 'FIRST_PERSON';
     this.toast(
       this.vehicleInteriorCamera
-        ? 'Interior Cabin View ON — Look at console & click the TOP button!'
+        ? '1st-Person Driver View ON — Interior Cabin & Steering Active'
         : 'Outside Chase Camera ON',
       'info',
     );
+    this.emitHud();
+  }
+
+  public setVehicleCameraMode(mode: DrivingCameraMode): void {
+    if (!this.activeVehicleId) return;
+    const next = CABIN_BASS_AND_FIRST_PERSON.setCameraMode(mode);
+    this.vehicleInteriorCamera = next === 'FIRST_PERSON';
+    this.emitHud();
+  }
+
+  public openCarRadio(): void {
+    if (!this.activeVehicleId) return;
+    const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
+    if (av) {
+      const desc = this.toRadioCarDescriptor(av);
+      CAR_RADIO_TRUNK_SYSTEM.configureForCar(desc);
+      CABIN_BASS_AND_FIRST_PERSON.applyVehicleRadioProfile(desc);
+    }
+    this.callbacks.onOpenStation('car_radio', this.activeVehicleId);
     this.emitHud();
   }
 
@@ -14754,19 +14829,19 @@ export class GameEngine {
   public toggleTrunkBass(): void {
     if (!this.activeVehicleId) return;
     const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
-    if (!av) return;
-    if (av.preset !== 'slab' && av.trunkBassEnabled === undefined) return;
+    if (!av || !this.isOldSchoolVehicle(av)) return;
     this.sound.unlock();
     av.trunkBassEnabled = !av.trunkBassEnabled;
     if (!av.trunkBassEnabled) {
       this.sound.stopTrunkBass();
       this.trunkBassPulse = 0;
+      this.chestThumpPulse = 0;
     } else {
       this.sound.playPickup();
     }
     this.toast(
       av.trunkBassEnabled
-        ? 'Trunk Bass ON — Swang & Bang Subwoofers Active!'
+        ? 'Trunk Bass ON — Old-School 808 Subwoofers Active!'
         : 'Trunk Bass OFF',
       av.trunkBassEnabled ? 'discovery' : 'info',
     );
@@ -15109,13 +15184,26 @@ export class GameEngine {
     const activeV = this.activeVehicleId
       ? this.vehicles.find((x) => x.id === this.activeVehicleId)
       : null;
+    const activeIsOldSchool = this.isOldSchoolVehicle(activeV);
     const bassActive = Boolean(
       activeV &&
+        activeIsOldSchool &&
         activeV.trunkBassEnabled &&
         this.mode === 'playing' &&
         !this.gameOver,
     );
-    this.trunkBassPulse = this.sound.updateTrunkBass(bassActive, dt);
+    const synthPulse = this.sound.updateTrunkBass(bassActive, dt);
+    const radioSample =
+      activeV && activeIsOldSchool
+        ? CABIN_BASS_AND_FIRST_PERSON.sampleBassAndChestThump(
+            this.toRadioCarDescriptor(activeV),
+          )
+        : { bassLevel: 0, chestThump: 0, trunkPump: 0 };
+    this.trunkBassPulse = Math.max(synthPulse, radioSample.trunkPump);
+    this.chestThumpPulse = Math.max(
+      bassActive && synthPulse > 0.48 ? Math.min(1, (synthPulse - 0.48) * 1.8) : 0,
+      radioSample.chestThump,
+    );
 
     // Solve 4-corner hydraulic & airbag/coil-over spring-damper physics for active vehicle
     const activeHasHyd = this.vehicleHasHydraulics(activeV);
@@ -15255,10 +15343,11 @@ export class GameEngine {
       const baseBodyY = isCustomShowCar
         ? Math.max(0.26, 0.38 + (v.suspensionOffset ?? 0))
         : (v.suspensionOffset ?? 0);
+      const vIsOldSchool = this.isOldSchoolVehicle(v);
       const showBassPulse =
-        isActive && v.trunkBassEnabled
+        vIsOldSchool && isActive
           ? this.trunkBassPulse
-          : !isActive && v.trunkBassEnabled
+          : vIsOldSchool && !isActive && v.trunkBassEnabled
             ? 0.25 + 0.2 * Math.max(0, Math.sin(this.elapsed * 6.5))
             : 0;
 
@@ -15312,13 +15401,21 @@ export class GameEngine {
         );
       }
 
-      // Popping Trunk Lid Animation + SLAB Trunk Bass Vibration
+      // Popping Trunk Lid Animation + Real-Time Old-School Trunk Bass Lift & Vibration
       if (handles.trunkLid) {
-        const targetTrunk = (v.trunkOpen ? 0.96 : 0) + (showBassPulse > 0.01 ? -0.055 * showBassPulse : 0);
+        if (handles.trunkLid.userData.baseY === undefined) {
+          handles.trunkLid.userData.baseY = handles.trunkLid.position.y;
+        }
+        const baseTrunkY = handles.trunkLid.userData.baseY as number;
+        const targetTrunk =
+          (v.trunkOpen ? 0.96 : 0) +
+          (showBassPulse > 0.01 ? -0.045 * showBassPulse : 0);
+        handles.trunkLid.position.y =
+          showBassPulse > 0.01 ? baseTrunkY + showBassPulse * 0.045 : baseTrunkY;
         handles.trunkLid.rotation.x = THREE.MathUtils.damp(
           handles.trunkLid.rotation.x,
           targetTrunk,
-          7,
+          10,
           dt,
         );
       }

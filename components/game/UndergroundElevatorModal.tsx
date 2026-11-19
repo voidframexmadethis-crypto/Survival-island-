@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import {
   ELEVATOR_EXOTIC_LIFT,
+  ELEVATOR_VOICE_COMPUTER,
   ExoticCarClass,
   ExoticElevatorCar,
   PlayerHonorific,
@@ -33,7 +34,7 @@ const CLASS_FILTERS: Array<'All' | ExoticCarClass> = [
   'Ultra Rare',
 ];
 
-const HONORIFIC_OPTIONS: PlayerHonorific[] = ['Sir', "Ma'am", 'Boss'];
+const HONORIFIC_OPTIONS: PlayerHonorific[] = ['Sir', "Ma'am", 'Friend'];
 
 export function UndergroundElevatorModal({
   onClose,
@@ -51,12 +52,12 @@ export function UndergroundElevatorModal({
     VAULT_COMPUTER_VOICE.isEnabled(),
   );
   const [aiMessage, setAiMessage] = useState<string>(
-    `Welcome to the Underground Garage Computer, ${VAULT_COMPUTER_VOICE.getHonorific()}. What kind of car would you like me to bring up to the surface?`,
+    `What kind of car do you want? Would you like me to bring it up today, ${VAULT_COMPUTER_VOICE.getHonorific()}?`,
   );
 
   // Greet the player out loud with the AI Computer Voice as soon as the computer opens!
   useEffect(() => {
-    VAULT_COMPUTER_VOICE.speakGreeting();
+    ELEVATOR_VOICE_COMPUTER.onApproachTerminal((line) => setAiMessage(line));
   }, []);
 
   const filteredCars = useMemo(() => {
@@ -81,34 +82,31 @@ export function UndergroundElevatorModal({
 
   const handleChangeHonorific = (nextTitle: PlayerHonorific) => {
     setHonorific(nextTitle);
-    VAULT_COMPUTER_VOICE.setHonorific(nextTitle);
-    const line = `Understood, ${nextTitle}. What kind of car would you like me to bring up to the surface?`;
-    setAiMessage(line);
-    VAULT_COMPUTER_VOICE.speak(line);
+    ELEVATOR_VOICE_COMPUTER.setHonorific(nextTitle);
+    ELEVATOR_VOICE_COMPUTER.onApproachTerminal((line) => setAiMessage(line));
   };
 
   const handleToggleVoice = () => {
     const next = !voiceEnabled;
     setVoiceEnabled(next);
-    VAULT_COMPUTER_VOICE.setEnabled(next);
+    ELEVATOR_VOICE_COMPUTER.setEnabled(next);
     if (next) {
       const line = `Vault Computer voice online, ${honorific}.`;
       setAiMessage(line);
-      VAULT_COMPUTER_VOICE.speak(line);
+      ELEVATOR_VOICE_COMPUTER.speak(line);
     }
   };
 
   const handleSelectPreview = (car: ExoticElevatorCar) => {
     ELEVATOR_EXOTIC_LIFT.selectForPreview(car.id);
     setSelectedId(car.id);
-    setAiMessage(
-      `Previewing ${car.name} (${car.horsepower} HP), ${honorific}. Tap "Bring Car to Surface" whenever you're ready.`,
-    );
+    ELEVATOR_VOICE_COMPUTER.onPreviewCar(car.name, (line) => setAiMessage(line));
   };
 
   const handleSummon = () => {
-    const line = VAULT_COMPUTER_VOICE.speakConfirmSummon(selectedCar.name);
-    setAiMessage(line);
+    ELEVATOR_VOICE_COMPUTER.onConfirmBringUp(selectedCar.name, (line) =>
+      setAiMessage(line),
+    );
     onBringCarToSurface(selectedCar.id);
     onClose();
   };
@@ -196,8 +194,9 @@ export function UndergroundElevatorModal({
           <button
             type="button"
             onClick={() => {
-              const line = VAULT_COMPUTER_VOICE.speakGreeting();
-              setAiMessage(line);
+              ELEVATOR_VOICE_COMPUTER.onApproachTerminal((line) =>
+                setAiMessage(line),
+              );
             }}
             className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-[11px] font-bold text-cyan-200 shrink-0 transition"
           >
@@ -331,7 +330,7 @@ export function UndergroundElevatorModal({
               className="w-full min-h-[50px] rounded-xl bg-gradient-to-r from-cyan-400 via-sky-400 to-emerald-400 hover:from-cyan-300 hover:to-emerald-300 text-slate-950 font-black text-sm sm:text-base tracking-wide shadow-xl flex items-center justify-center gap-2 transition"
             >
               <ArrowUpFromLine className="w-5 h-5" />
-              Bring {selectedCar.name} to Surface (“Okay {honorific}!”)
+              Bring {selectedCar.name} to Surface (“OK {honorific}!”)
             </button>
           </div>
 

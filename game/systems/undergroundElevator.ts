@@ -306,46 +306,64 @@ export const ELEVATOR_EXOTIC_LIFT = {
   },
 };
 
-export type PlayerHonorific = 'Sir' | "Ma'am" | 'Boss';
+export type PlayerHonorific = 'Sir' | "Ma'am" | 'Friend';
 
 const HONORIFIC_STORAGE_KEY = 'survival_island_vault_honorific';
 const VOICE_ENABLED_STORAGE_KEY = 'survival_island_vault_voice_enabled';
 
-export const VAULT_COMPUTER_VOICE = {
-  getHonorific(): PlayerHonorific {
-    if (typeof window === 'undefined') return 'Sir';
-    try {
-      const saved = window.localStorage.getItem(HONORIFIC_STORAGE_KEY);
-      if (saved === 'Sir' || saved === "Ma'am" || saved === 'Boss') {
-        return saved;
+function loadSavedHonorific(): PlayerHonorific {
+  if (typeof window === 'undefined') return 'Sir';
+  try {
+    const saved = window.localStorage.getItem(HONORIFIC_STORAGE_KEY);
+    if (saved === 'Sir' || saved === "Ma'am" || saved === 'Friend') {
+      return saved;
+    }
+    if (saved === 'Boss') {
+      return 'Friend';
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return 'Sir';
+}
+
+function loadSavedVoiceEnabled(): boolean {
+  if (typeof window === 'undefined') return true;
+  try {
+    const saved = window.localStorage.getItem(VOICE_ENABLED_STORAGE_KEY);
+    if (saved === 'false') return false;
+  } catch {
+    // ignore storage errors
+  }
+  return true;
+}
+
+export const ELEVATOR_VOICE_COMPUTER = {
+  honorific: 'Sir' as PlayerHonorific,
+  selectedCarName: null as string | null,
+  voiceEnabled: true,
+
+  syncFromStorage(): void {
+    this.honorific = loadSavedHonorific();
+    this.voiceEnabled = loadSavedVoiceEnabled();
+  },
+
+  setHonorific(title: PlayerHonorific | string): PlayerHonorific {
+    if (title === 'Sir' || title === "Ma'am" || title === 'Friend') {
+      this.honorific = title;
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(HONORIFIC_STORAGE_KEY, title);
+        } catch {
+          // ignore storage errors
+        }
       }
-    } catch {
-      // ignore storage errors
     }
-    return 'Sir';
-  },
-
-  setHonorific(title: PlayerHonorific): void {
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(HONORIFIC_STORAGE_KEY, title);
-    } catch {
-      // ignore storage errors
-    }
-  },
-
-  isEnabled(): boolean {
-    if (typeof window === 'undefined') return true;
-    try {
-      const saved = window.localStorage.getItem(VOICE_ENABLED_STORAGE_KEY);
-      if (saved === 'false') return false;
-    } catch {
-      // ignore storage errors
-    }
-    return true;
+    return this.honorific;
   },
 
   setEnabled(enabled: boolean): void {
+    this.voiceEnabled = enabled;
     if (typeof window === 'undefined') return;
     try {
       window.localStorage.setItem(VOICE_ENABLED_STORAGE_KEY, String(enabled));
@@ -357,40 +375,108 @@ export const VAULT_COMPUTER_VOICE = {
     }
   },
 
-  speak(text: string): void {
-    if (typeof window === 'undefined' || !this.isEnabled()) return;
-    if (!('speechSynthesis' in window)) return;
+  speak(line: string, onTextFallback: ((text: string) => void) | null = null): void {
+    if (typeof onTextFallback === 'function') {
+      onTextFallback(line);
+    }
+
+    if (
+      !this.voiceEnabled ||
+      typeof window === 'undefined' ||
+      !('speechSynthesis' in window)
+    ) {
+      return;
+    }
+
     try {
       window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.rate = 1.02;
-      utter.pitch = 0.96;
-      utter.volume = 0.95;
+      const utterance = new SpeechSynthesisUtterance(line);
+      utterance.rate = 1.0;
+      utterance.pitch = 0.95;
+      utterance.volume = 0.95;
       const voices = window.speechSynthesis.getVoices();
       const preferred =
-        voices.find((v) => /en-US|en-GB/i.test(v.lang) && /Google|Samantha|Daniel|Alex|Natural/i.test(v.name)) ??
-        voices.find((v) => /^en/i.test(v.lang));
+        voices.find(
+          (v) =>
+            /en-US|en-GB/i.test(v.lang) &&
+            /Google|Samantha|Daniel|Alex|Natural/i.test(v.name),
+        ) ?? voices.find((v) => /^en/i.test(v.lang));
       if (preferred) {
-        utter.voice = preferred;
+        utterance.voice = preferred;
       }
-      window.speechSynthesis.speak(utter);
+      window.speechSynthesis.speak(utterance);
     } catch {
-      // ignore browser speech errors
+      // Ignore speech errors on restricted devices; text fallback still shows
     }
   },
 
-  speakGreeting(): string {
-    const title = this.getHonorific();
-    const line = `Welcome to the Underground Garage Computer, ${title}. What kind of car would you like me to bring up to the surface?`;
-    this.speak(line);
+  // 1. Player walks up to the surface computer terminal by the elevator
+  onApproachTerminal(onSubtitle: ((text: string) => void) | null = null): string {
+    this.syncFromStorage();
+    const line = `What kind of car do you want? Would you like me to bring it up today, ${this.honorific}?`;
+    this.speak(line, onSubtitle);
     return line;
   },
 
-  speakConfirmSummon(carName: string): string {
-    const title = this.getHonorific();
-    const line = `Okay ${title}, bringing your ${carName} up to the surface right now.`;
-    this.speak(line);
+  // 2. Player picks a car in the preview menu
+  onPreviewCar(
+    carName: string,
+    onSubtitle: ((text: string) => void) | null = null,
+  ): string {
+    this.syncFromStorage();
+    this.selectedCarName = carName;
+    const line = `${carName} selected on preview. Shall I bring it up to the surface today, ${this.honorific}?`;
+    this.speak(line, onSubtitle);
     return line;
+  },
+
+  // 3. Player confirms and sends the car up on the elevator
+  onConfirmBringUp(
+    carName?: string | null,
+    onSubtitle: ((text: string) => void) | null = null,
+  ): string {
+    this.syncFromStorage();
+    const label = carName || this.selectedCarName || 'your ride';
+    const line = `OK ${this.honorific}, bringing ${label} up to the surface now.`;
+    this.speak(line, onSubtitle);
+    return line;
+  },
+};
+
+export const VAULT_COMPUTER_VOICE = {
+  getHonorific(): PlayerHonorific {
+    ELEVATOR_VOICE_COMPUTER.syncFromStorage();
+    return ELEVATOR_VOICE_COMPUTER.honorific;
+  },
+
+  setHonorific(title: PlayerHonorific): void {
+    ELEVATOR_VOICE_COMPUTER.setHonorific(title);
+  },
+
+  isEnabled(): boolean {
+    ELEVATOR_VOICE_COMPUTER.syncFromStorage();
+    return ELEVATOR_VOICE_COMPUTER.voiceEnabled;
+  },
+
+  setEnabled(enabled: boolean): void {
+    ELEVATOR_VOICE_COMPUTER.setEnabled(enabled);
+  },
+
+  speak(text: string): void {
+    ELEVATOR_VOICE_COMPUTER.syncFromStorage();
+    ELEVATOR_VOICE_COMPUTER.speak(text);
+  },
+
+  speakGreeting(): string {
+    return ELEVATOR_VOICE_COMPUTER.onApproachTerminal();
+  },
+
+  speakPreview(carName: string): string {
+    return ELEVATOR_VOICE_COMPUTER.onPreviewCar(carName);
+  },
+
+  speakConfirmSummon(carName: string): string {
+    return ELEVATOR_VOICE_COMPUTER.onConfirmBringUp(carName);
   },
 
   speakCarArrived(carName: string): string {

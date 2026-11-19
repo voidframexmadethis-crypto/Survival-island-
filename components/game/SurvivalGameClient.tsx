@@ -45,6 +45,7 @@ import {
   Plane,
   Play,
   Plus,
+  Radio,
   RollerCoaster,
   RotateCcw,
   RotateCw,
@@ -117,6 +118,7 @@ import { PlayerControlsMinimizer } from '@/game/systems/playerControlsMinimizer'
 import { MOBILE_HUD_ROCKET_CONTROLS } from '@/game/systems/multiverseSpace';
 import { SaturnRocketModal } from './SaturnRocketModal';
 import { UndergroundElevatorModal } from './UndergroundElevatorModal';
+import { CarRadioModal } from './CarRadioModal';
 import { TvPlayerModal, YouTubeStreamSelection } from './TvPlayerModal';
 import {
   PersistentYouTubeOverlay,
@@ -1810,6 +1812,18 @@ export function SurvivalGameClient() {
                   >
                     {hud.activeVehicle.trunkOpen ? 'Close Trunk' : 'Pop Trunk'}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => engineRef.current?.openCarRadio()}
+                    className={`min-h-[30px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
+                      hud.activeVehicle.isOldSchool
+                        ? 'bg-pink-950/90 hover:bg-pink-900 border-pink-400/60 text-pink-200'
+                        : 'bg-sky-950/90 hover:bg-sky-900 border-sky-400/60 text-sky-200'
+                    }`}
+                  >
+                    <Radio className="w-3 h-3" />
+                    <span>Car Radio / Pandora [B]</span>
+                  </button>
                   {hud.activeVehicle.hasConvertibleTop && (
                     <button
                       type="button"
@@ -3081,6 +3095,29 @@ export function SurvivalGameClient() {
           onBringCarToSurface={(carId) => {
             engineRef.current?.summonCarFromUndergroundElevator(carId);
           }}
+        />
+      )}
+
+      {activeModal === 'car_radio' && hud?.activeVehicle && (
+        <CarRadioModal
+          car={{
+            id: hud.activeVehicle.id,
+            name: hud.activeVehicle.name,
+            preset: hud.activeVehicle.preset,
+            class:
+              hud.activeVehicle.preset === 'sports_car'
+                ? 'Modern Exotic'
+                : hud.activeVehicle.preset,
+            style: hud.activeVehicle.preset,
+            hasTrunkBass: hud.activeVehicle.hasTrunkBass,
+          }}
+          interiorView={hud.activeVehicle.interiorView}
+          trunkBassOn={hud.activeVehicle.trunkBassOn}
+          onToggleInteriorView={() =>
+            engineRef.current?.toggleVehicleInteriorCamera()
+          }
+          onToggleTrunkBass={() => engineRef.current?.toggleTrunkBass()}
+          onClose={closeModal}
         />
       )}
 
