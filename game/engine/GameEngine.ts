@@ -398,15 +398,17 @@ function formatTimePhase(t: number): string {
 // Emergency Freeze-Shield: keeps player moving & prevents heavy loops from locking the tab
 const FREEZE_SHIELD = {
   maxDt: 0.033, // Never jump more than ~33ms in one step
-  maxFrameMs: 28, // Skip non-essential world/vine work if frame is already slow
+  maxFrameMs: 14, // Leave GPU render headroom inside 16.6ms frame budget
   maxActiveVines: 120, // Hard cap so vine & extra ambient updates never snowball
 } as const;
 
+let _lastSpikeWarnMs = 0;
 function measure(label: string, fn: () => void): void {
   const t0 = performance.now();
   fn();
   const elapsed = performance.now() - t0;
-  if (elapsed > 16) {
+  if (elapsed > 22 && t0 - _lastSpikeWarnMs > 2000) {
+    _lastSpikeWarnMs = t0;
     console.warn(`FREEZE SPIKE [${label}]: ${elapsed.toFixed(1)} ms`);
   }
 }
@@ -510,6 +512,14 @@ export class GameEngine {
     { id: 'gf_resort_1', zoneKey: 'resort corner', x: -480, z: 410, hp: 80, maxHp: 80, active: true, name: 'Tide Wraith' },
     { id: 'gf_castle_boss', zoneKey: 'ruined castle', x: -360, z: -520, hp: 180, maxHp: 180, active: true, isBoss: true, name: 'Fallen King Ghost' },
   ];
+
+  // Spatial Hash Grid (16m cells) for O(1) zero-GC world collider lookups
+  private colliderGrid = new Map<number, { x: number; z: number; radius: number; nodeId?: string }[]>();
+  private interactionProbeTimer = 0;
+  private smartTvUpdateTimer = 0;
+  private tvBassReportTimer = 0;
+  private lastReportedTvBass = -1;
+  private lastReportedTvBassMode = '';
 
   // Survival & Creative Flight + Biome Teleport System
   private lastSpaceTapMs = 0;
@@ -1085,6 +1095,7 @@ export class GameEngine {
     this.realisticOcean = new RealisticOcean(this.scene);
     this.world.oceanMesh.visible = false;
     this.world.resourceNodes.forEach((n) => this.nodeById.set(n.id, n));
+    this.buildColliderSpatialGrid();
     this.terrainEngine = new VolumetricTerrainEngine(this.scene);
 
     const chestLootMap: Record<string, [ItemId, number][]> = {
@@ -8648,25 +8659,34 @@ export class GameEngine {
         nextZ *= maxRadius / rad;
       }
 
-      // Collision detection (skip Island colliders in Flat World)
+      // O(1) Spatial Hash Grid collision detection (skip Island colliders in Flat World)
       if (!isFlat) {
-        for (const col of this.world.colliders) {
-          if (Math.hypot(col.x - SHIPWRECK_POS.x, col.z - SHIPWRECK_POS.z) < 14) continue;
-          let activeRadius = col.radius;
-          if (col.nodeId) {
-            const node = this.nodeById.get(col.nodeId);
-            if (node && node.hp <= 0) {
-              if (!node.felled) continue;
-              activeRadius *= 0.65;
+        const cx = Math.floor(nextX / 16);
+        const cz = Math.floor(nextZ / 16);
+        for (let ox = -1; ox <= 1; ox++) {
+          for (let oz = -1; oz <= 1; oz++) {
+            const cell = this.colliderGrid.get((cx + ox + 2048) * 4096 + (cz + oz + 2048));
+            if (!cell) continue;
+            for (let ci = 0; ci < cell.length; ci++) {
+              const col = cell[ci];
+              let activeRadius = col.radius;
+              if (col.nodeId) {
+                const node = this.nodeById.get(col.nodeId);
+                if (node && node.hp <= 0) {
+                  if (!node.felled) continue;
+                  activeRadius *= 0.65;
+                }
+              }
+              const cdx = nextX - col.x;
+              const cdz = nextZ - col.z;
+              const minD = activeRadius + 0.42;
+              const distSq = cdx * cdx + cdz * cdz;
+              if (distSq < minD * minD && distSq > 0.000001) {
+                const dist = Math.sqrt(distSq);
+                nextX = col.x + (cdx / dist) * minD;
+                nextZ = col.z + (cdz / dist) * minD;
+              }
             }
-          }
-          const cdx = nextX - col.x;
-          const cdz = nextZ - col.z;
-          const dist = Math.hypot(cdx, cdz);
-          const minD = activeRadius + 0.42;
-          if (dist < minD && dist > 0.001) {
-            nextX = col.x + (cdx / dist) * minD;
-            nextZ = col.z + (cdz / dist) * minD;
           }
         }
       }
@@ -8757,18 +8777,28 @@ export class GameEngine {
             detectedNormZ = -rightZ * side;
             return true;
           }
-          // 2. Large cliff / cavern rock / house wall collider
-          for (const col of this.world.colliders) {
-            if (Math.hypot(col.x - SHIPWRECK_POS.x, col.z - SHIPWRECK_POS.z) < 14) continue;
-            if (col.radius < 1.1) continue;
-            const d = Math.hypot(px - col.x, pz - col.z);
-            if (d <= col.radius + 0.45) {
-              const nx = this.playerX - col.x;
-              const nz = this.playerZ - col.z;
-              const nl = Math.hypot(nx, nz) || 1;
-              detectedNormX = nx / nl;
-              detectedNormZ = nz / nl;
-              return true;
+          // 2. Large cliff / cavern rock / house wall collider (O(1) Spatial Hash lookup)
+          const wcx = Math.floor(px / 16);
+          const wcz = Math.floor(pz / 16);
+          for (let ox = -1; ox <= 1; ox++) {
+            for (let oz = -1; oz <= 1; oz++) {
+              const cell = this.colliderGrid.get((wcx + ox + 2048) * 4096 + (wcz + oz + 2048));
+              if (!cell) continue;
+              for (let ci = 0; ci < cell.length; ci++) {
+                const col = cell[ci];
+                if (col.radius < 1.1) continue;
+                const ddx = px - col.x;
+                const ddz = pz - col.z;
+                const lim = col.radius + 0.45;
+                if (ddx * ddx + ddz * ddz <= lim * lim) {
+                  const nx = this.playerX - col.x;
+                  const nz = this.playerZ - col.z;
+                  const nl = Math.hypot(nx, nz) || 1;
+                  detectedNormX = nx / nl;
+                  detectedNormZ = nz / nl;
+                  return true;
+                }
+              }
             }
           }
         }
@@ -8927,13 +8957,17 @@ export class GameEngine {
       }
     }
 
-    // Update crosshair target hitbox & nearby contextual interaction
-    if (!isFlat) {
-      this.probeTargetHitbox();
-    } else {
-      this.targetHitbox = null;
+    // Throttled crosshair target hitbox & nearby contextual interaction (12Hz — eliminates 80%+ raycast/scan spikes)
+    this.interactionProbeTimer += dt;
+    if (this.interactionProbeTimer >= 0.083) {
+      this.interactionProbeTimer = 0;
+      if (!isFlat) {
+        this.probeTargetHitbox();
+      } else {
+        this.targetHitbox = null;
+      }
+      this.nearbyInteraction = this.findNearbyInteraction();
     }
-    this.nearbyInteraction = this.findNearbyInteraction();
 
     // Update environment audio & Player Visibility (daylight, weather, campfire glow, stealth crouch, sprint)
     const shoreDist = Math.abs(Math.hypot(this.playerX, this.playerZ) - 125);
@@ -11797,9 +11831,9 @@ export class GameEngine {
     }
 
     const frameStart = performance.now();
-    // Fixed-timestep simulation loop (FIXED_STEP = 1/60s, max 3 substeps, yields early if frame exceeds FREEZE_SHIELD.maxFrameMs)
+    // Fixed-timestep simulation loop (FIXED_STEP = 1/60s, max 2 substeps, yields early if frame exceeds FREEZE_SHIELD.maxFrameMs)
     let simSteps = 0;
-    while (this.simAccumulator >= GameEngine.FIXED_STEP && simSteps < 3) {
+    while (this.simAccumulator >= GameEngine.FIXED_STEP && simSteps < 2) {
       this.updateSimulation(GameEngine.FIXED_STEP, frameStart);
       this.simAccumulator -= GameEngine.FIXED_STEP;
       simSteps += 1;
@@ -11808,7 +11842,7 @@ export class GameEngine {
         break;
       }
     }
-    if (simSteps === 3 && this.simAccumulator > GameEngine.FIXED_STEP) {
+    if (simSteps === 2 && this.simAccumulator > GameEngine.FIXED_STEP) {
       this.simAccumulator = 0;
     }
 
@@ -12069,7 +12103,7 @@ export class GameEngine {
         this.nocturnalActiveCount = nocturnalActiveCount;
 
         this.hudSyncTimer += dt;
-        const hudInterval = this.fpsLockedAt1500 ? 0.14 : 0.06;
+        const hudInterval = this.fpsLockedAt1500 ? 0.22 : 0.08;
         if (this.hudSyncTimer >= hudInterval) {
           this.hudSyncTimer = 0;
           this.emitHud();
@@ -12130,66 +12164,87 @@ export class GameEngine {
       return;
     }
 
-    // Zero-GC tamed & dino counts for 3D Smart TV OS CanvasTexture
-    let tamedCount = 0;
-    let dinoCount = 0;
-    if (this.worldType === 'island') {
-      const allCreatures = this.creatures.creatures;
-      for (let i = 0; i < allCreatures.length; i++) {
-        const c = allCreatures[i];
-        if (!c.alive) continue;
-        if (c.tamed) tamedCount += 1;
-        const sp = c.spec.species;
-        if (
-          sp === 'trex' ||
-          sp === 'triceratops' ||
-          sp === 'velociraptor' ||
-          sp === 'stegosaurus' ||
-          sp === 'brachiosaurus' ||
-          sp === 'parasaurolophus'
-        ) {
-          dinoCount += 1;
+    // Throttle Smart TV CanvasTexture & audio updates to 10Hz and skip when far from any TV
+    this.smartTvUpdateTimer += dt;
+    const hdx = this.playerX - HILL_HOUSE_POS.x;
+    const hdz = this.playerZ - HILL_HOUSE_POS.z;
+    const nearHillTv = hdx * hdx + hdz * hdz < 2304; // 48m
+    if (this.smartTvUpdateTimer >= 0.1 && (nearHillTv || this.tvModalOpen || this.smartTv.power)) {
+      const tvDt = this.smartTvUpdateTimer;
+      this.smartTvUpdateTimer = 0;
+
+      // Zero-GC tamed & dino counts for 3D Smart TV OS CanvasTexture
+      let tamedCount = 0;
+      let dinoCount = 0;
+      if (this.worldType === 'island') {
+        const allCreatures = this.creatures.creatures;
+        for (let i = 0; i < allCreatures.length; i++) {
+          const c = allCreatures[i];
+          if (!c.alive) continue;
+          if (c.tamed) tamedCount += 1;
+          const sp = c.spec.species;
+          if (
+            sp === 'trex' ||
+            sp === 'triceratops' ||
+            sp === 'velociraptor' ||
+            sp === 'stegosaurus' ||
+            sp === 'brachiosaurus' ||
+            sp === 'parasaurolophus'
+          ) {
+            dinoCount += 1;
+          }
         }
       }
-    }
 
-    // Update 3D Smart TV OS CanvasTexture & Sync CSS3DRenderer YouTube Frame onto the physical 3D TV screen
-    this.smartTv.update(dt, {
-      dayCount: this.dayCount,
-      timeOfDay: this.timeOfDay,
-      weather: this.worldType === 'flat' ? 'clear' : this.weather,
-      erosionActive:
-        this.worldType === 'island' && this.terrainEngine.getActiveStreamCount() > 0,
-      tamedCount,
-      dinoCount,
-      daysUntilBloodMoon:
-        this.worldType === 'flat' ? 0 : 7 - ((this.dayCount - 1) % 7),
-      playerBiome:
-        this.worldType === 'flat'
-          ? 'Flat Park Grounds'
-          : BIOME_INFO[getBiomeAt(this.playerX, this.playerZ)].name,
-    });
-    if (this.mode !== 'menu' && !this.cinematicActive) {
-      const audioX = this.tvModalOpen ? this.camera.position.x : this.playerX;
-      const audioY = this.tvModalOpen ? this.camera.position.y : this.playerY;
-      const audioZ = this.tvModalOpen ? this.camera.position.z : this.playerZ;
-      this.smartTv.updateSpatialAudio(audioX, audioY, audioZ);
-    }
+      this.smartTv.update(tvDt, {
+        dayCount: this.dayCount,
+        timeOfDay: this.timeOfDay,
+        weather: this.worldType === 'flat' ? 'clear' : this.weather,
+        erosionActive:
+          this.worldType === 'island' && this.terrainEngine.getActiveStreamCount() > 0,
+        tamedCount,
+        dinoCount,
+        daysUntilBloodMoon:
+          this.worldType === 'flat' ? 0 : 7 - ((this.dayCount - 1) % 7),
+        playerBiome:
+          this.worldType === 'flat'
+            ? 'Flat Park Grounds'
+            : BIOME_INFO[getBiomeAt(this.playerX, this.playerZ)].name,
+      });
+      if (this.mode !== 'menu' && !this.cinematicActive) {
+        const audioX = this.tvModalOpen ? this.camera.position.x : this.playerX;
+        const audioY = this.tvModalOpen ? this.camera.position.y : this.playerY;
+        const audioZ = this.tvModalOpen ? this.camera.position.z : this.playerZ;
+        this.smartTv.updateSpatialAudio(audioX, audioY, audioZ);
+      }
 
-    // Sync placed smart_tv structure materials & standby LEDs with global SmartTvSystem
-    const tvBassEnergy = this.smartTv.getTrunkBassEnergy();
-    const tvBassMode = this.smartTv.getBassMode();
-    for (let i = 0; i < this.structures.length; i++) {
-      const st = this.structures[i];
-      if (st.type !== 'smart_tv') continue;
-      const visual = this.structureVisuals.get(st.id);
-      if (visual) {
-        this.smartTv.syncPlacedTvVisual(visual.group);
-        if (visual.fireLight) {
-          visual.fireLight.intensity = this.smartTv.power
-            ? 1.65 + tvBassEnergy * (tvBassMode === 'extreme' ? 2.4 : 1.55)
-            : 0;
+      const tvBassEnergy = this.smartTv.getTrunkBassEnergy();
+      const tvBassMode = this.smartTv.getBassMode();
+      for (let i = 0; i < this.structures.length; i++) {
+        const st = this.structures[i];
+        if (st.type !== 'smart_tv') continue;
+        const visual = this.structureVisuals.get(st.id);
+        if (visual) {
+          this.smartTv.syncPlacedTvVisual(visual.group);
+          if (visual.fireLight) {
+            visual.fireLight.intensity = this.smartTv.power
+              ? 1.65 + tvBassEnergy * (tvBassMode === 'extreme' ? 2.4 : 1.55)
+              : 0;
+          }
         }
+      }
+
+      // Only notify React when bass energy or mode meaningfully changed (prevents 60Hz React re-renders)
+      this.tvBassReportTimer += tvDt;
+      if (
+        this.tvBassReportTimer >= 0.08 &&
+        (Math.abs(tvBassEnergy - this.lastReportedTvBass) > 0.025 ||
+          tvBassMode !== this.lastReportedTvBassMode)
+      ) {
+        this.tvBassReportTimer = 0;
+        this.lastReportedTvBass = tvBassEnergy;
+        this.lastReportedTvBassMode = tvBassMode;
+        this.callbacks.onTvBassUpdate?.(tvBassEnergy, tvBassMode);
       }
     }
 
@@ -12200,8 +12255,27 @@ export class GameEngine {
         this.emitHud();
       }
     }
+  }
 
-    this.callbacks.onTvBassUpdate?.(tvBassEnergy, tvBassMode);
+  private buildColliderSpatialGrid(): void {
+    this.colliderGrid.clear();
+    const cols = this.world.colliders;
+    for (let i = 0; i < cols.length; i++) {
+      const col = cols[i];
+      // Pre-exclude shipwreck zone colliders so hot loop never computes shipwreck distance
+      const sdx = col.x - SHIPWRECK_POS.x;
+      const sdz = col.z - SHIPWRECK_POS.z;
+      if (sdx * sdx + sdz * sdz < 196) continue;
+      const cx = Math.floor(col.x / 16);
+      const cz = Math.floor(col.z / 16);
+      const key = (cx + 2048) * 4096 + (cz + 2048);
+      let bucket = this.colliderGrid.get(key);
+      if (!bucket) {
+        bucket = [];
+        this.colliderGrid.set(key, bucket);
+      }
+      bucket.push(col);
+    }
   }
 
   private updateVinesAndExtras(dt: number, maxActiveVines: number): void {
