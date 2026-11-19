@@ -194,19 +194,19 @@ export function WorldSelectionMenu({
                 className="min-h-[52px] px-5 py-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-sm flex items-center gap-3 shadow-xl whitespace-nowrap shrink-0 transition"
               >
                 <Play className="w-5 h-5 shrink-0" />
-                <div className="text-left">
-                  <div className="leading-tight">
+                <span className="block text-left">
+                  <span className="block leading-tight">
                     Continue: {latestSave.worldName || 'Saved World'}
-                  </div>
-                  <div className="text-[11px] font-semibold opacity-90">
+                  </span>
+                  <span className="block text-[11px] font-semibold opacity-90">
                     {latestSave.worldType === 'flat' ? 'Flat World' : 'Island World'} ·{' '}
                     {MODE_LABELS[resolveAllowedGameMode(latestSave.worldType === 'flat' ? 'flat' : 'island', latestSave.gameMode)]}{' '}
                     · Day {latestSave.dayCount}
                     {(latestSave.coastersCount ?? 0) > 0
                       ? ` · ${latestSave.coastersCount} Coaster${latestSave.coastersCount === 1 ? '' : 's'}`
                       : ''}
-                  </div>
-                </div>
+                  </span>
+                </span>
               </button>
             )}
             <button
@@ -215,14 +215,14 @@ export function WorldSelectionMenu({
               className="min-h-[52px] px-5 py-3 rounded-xl bg-stone-950/95 hover:bg-stone-900 border border-amber-500/70 text-amber-200 font-bold text-sm flex items-center gap-3 shadow-xl whitespace-nowrap shrink-0 transition"
             >
               <Store className="w-5 h-5 text-amber-400 shrink-0" />
-              <div className="text-left">
-                <div className="leading-tight tracking-wide uppercase">
+              <span className="block text-left">
+                <span className="block leading-tight tracking-wide uppercase">
                   SURVIVAL ISLAND EXCHANGE
-                </div>
-                <div className="text-[11px] font-medium text-stone-400">
+                </span>
+                <span className="block text-[11px] font-medium text-stone-400">
                   Gun Skins &amp; Tactical Backpack Skins · Cosmetic Only
-                </div>
-              </div>
+                </span>
+              </span>
             </button>
           </div>
         </div>
@@ -259,21 +259,21 @@ export function WorldSelectionMenu({
                   : 'bg-stone-900/90 hover:bg-stone-900 border-stone-700 hover:border-emerald-500/60'
               }`}
             >
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center text-emerald-300 shrink-0">
+              <span className="block space-y-2 w-full">
+                <span className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2">
+                    <span className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center text-emerald-300 shrink-0">
                       <Trees className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h3 className="font-display text-base font-bold text-stone-100">
+                    </span>
+                    <span className="block">
+                      <span className="block font-display text-base font-bold text-stone-100">
                         ISLAND WORLD
-                      </h3>
-                      <div className="text-[11px] font-semibold text-emerald-300">
+                      </span>
+                      <span className="block text-[11px] font-semibold text-emerald-300">
                         Survival · Boss Hunt · Creative
-                      </div>
-                    </div>
-                  </div>
+                      </span>
+                    </span>
+                  </span>
                   <span
                     className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase whitespace-nowrap shrink-0 ${
                       selectedWorldType === 'island'
@@ -283,12 +283,12 @@ export function WorldSelectionMenu({
                   >
                     {selectedWorldType === 'island' ? 'Selected' : 'Choose'}
                   </span>
-                </div>
-                <p className="text-xs text-stone-300 leading-relaxed">
+                </span>
+                <span className="block text-xs text-stone-300 leading-relaxed">
                   Full prehistoric island biomes, dynamic ocean, wildlife, villages, hilltop shelter, Music Pro, vehicles, and realistic Roller Coaster Creator.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-1.5 text-[10px] font-semibold text-stone-300">
+                </span>
+              </span>
+              <span className="flex flex-wrap gap-1.5 text-[10px] font-semibold text-stone-300">
                 <span className="px-2 py-0.5 rounded bg-stone-950 border border-stone-800">
                   Biomes &amp; Wildlife
                 </span>
@@ -298,7 +298,7 @@ export function WorldSelectionMenu({
                 <span className="px-2 py-0.5 rounded bg-stone-950 border border-stone-800">
                   Coaster Creator
                 </span>
-              </div>
+              </span>
             </button>
 
             {/* Flat World Card */}
@@ -312,21 +312,21 @@ export function WorldSelectionMenu({
                   : 'bg-stone-900/90 hover:bg-stone-900 border-stone-700 hover:border-sky-500/60'
               }`}
             >
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <div className="w-9 h-9 rounded-xl bg-sky-500/15 border border-sky-500/40 flex items-center justify-center text-sky-300 shrink-0">
+              <span className="block space-y-2 w-full">
+                <span className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2">
+                    <span className="w-9 h-9 rounded-xl bg-sky-500/15 border border-sky-500/40 flex items-center justify-center text-sky-300 shrink-0">
                       <RollerCoaster className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h3 className="font-display text-base font-bold text-stone-100">
+                    </span>
+                    <span className="block">
+                      <span className="block font-display text-base font-bold text-stone-100">
                         FLAT WORLD
-                      </h3>
-                      <div className="text-[11px] font-semibold text-sky-300">
+                      </span>
+                      <span className="block text-[11px] font-semibold text-sky-300">
                         Creative Only — Survival Disabled
-                      </div>
-                    </div>
-                  </div>
+                      </span>
+                    </span>
+                  </span>
                   <span
                     className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase whitespace-nowrap shrink-0 ${
                       selectedWorldType === 'flat'
@@ -336,12 +336,12 @@ export function WorldSelectionMenu({
                   >
                     {selectedWorldType === 'flat' ? 'Selected' : 'Choose'}
                   </span>
-                </div>
-                <p className="text-xs text-stone-300 leading-relaxed">
+                </span>
+                <span className="block text-xs text-stone-300 leading-relaxed">
                   Massive level buildable park grounds (310m radius) with zero hunger, thirst, or wildlife threats. Ideal for enormous amusement parks, custom inversions, and Music Pro.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-1.5 text-[10px] font-semibold text-stone-300">
+                </span>
+              </span>
+              <span className="flex flex-wrap gap-1.5 text-[10px] font-semibold text-stone-300">
                 <span className="px-2 py-0.5 rounded bg-stone-950 border border-stone-800">
                   No Survival Threats
                 </span>
@@ -351,7 +351,7 @@ export function WorldSelectionMenu({
                 <span className="px-2 py-0.5 rounded bg-stone-950 border border-stone-800">
                   Music Pro Pavilion
                 </span>
-              </div>
+              </span>
             </button>
           </div>
 

@@ -158,123 +158,103 @@ export function simulateEcosystemTick(
   if (weather === 'rain') targetMoisture = 0.95;
   if (weather === 'storm') targetMoisture = 1.0;
   if (weather === 'overcast') targetMoisture = 0.7;
-  
+
   ecosystem.soilMoisture += (targetMoisture - ecosystem.soilMoisture) * 0.05 * dt;
   ecosystem.soilMoisture = Math.max(0.1, Math.min(1.0, ecosystem.soilMoisture));
 
-  // 2. Update wildlife agents (efficient simulation near player vs distant)
-  const updatedWildlife = ecosystem.wildlifeAgents.map((agent) => {
-    const distToPlayer = Math.hypot(agent.x - playerPos.x, agent.z - playerPos.z);
-    const isNearPlayer = distToPlayer < 60;
+  // 2. Update wildlife agents in place (zero per-tick object/array allocation)
+  const wildlife = ecosystem.wildlifeAgents;
+  for (let i = 0; i < wildlife.length; i++) {
+    const agent = wildlife[i];
+    const dx = agent.x - playerPos.x;
+    const dz = agent.z - playerPos.z;
+    const distSq = dx * dx + dz * dz;
+    const isNearPlayer = distSq < 3600;
 
-    let nextState = agent.state;
-    let nx = agent.x;
-    let nz = agent.z;
     let nEnergy = agent.energy - 0.1 * dt;
     let nHydration = agent.hydration - 0.15 * dt;
 
     if (isNearPlayer) {
-      // Detailed behavior near player
-      if (distToPlayer < 12 && agent.species !== 'deer' && agent.species !== 'rabbit') {
-        nextState = 'fleeing';
-        const angle = Math.atan2(agent.z - playerPos.z, agent.x - playerPos.x);
-        nx += Math.cos(angle) * 3 * dt;
-        nz += Math.sin(angle) * 3 * dt;
+      if (distSq < 144 && agent.species !== 'deer' && agent.species !== 'rabbit') {
+        agent.state = 'fleeing';
+        const angle = Math.atan2(dz, dx);
+        agent.x += Math.cos(angle) * 3 * dt;
+        agent.z += Math.sin(angle) * 3 * dt;
       } else if (nHydration < 30) {
-        nextState = 'drinking';
+        agent.state = 'drinking';
         nHydration = Math.min(100, nHydration + 5 * dt);
       } else if (nEnergy < 35) {
-        nextState = 'resting';
+        agent.state = 'resting';
         nEnergy = Math.min(100, nEnergy + 4 * dt);
       } else {
-        nextState = 'grazing';
-        // Gentle roam around territory
-        nx += (agent.territoryCenter.x - nx) * 0.02 * dt + (Math.random() - 0.5) * 1.5;
-        nz += (agent.territoryCenter.z - nz) * 0.02 * dt + (Math.random() - 0.5) * 1.5;
+        agent.state = 'grazing';
+        agent.x += (agent.territoryCenter.x - agent.x) * 0.02 * dt + (Math.random() - 0.5) * 1.5;
+        agent.z += (agent.territoryCenter.z - agent.z) * 0.02 * dt + (Math.random() - 0.5) * 1.5;
       }
-    } else {
-      // Distant aggregate simulation (cheaper)
-      if (Math.random() < 0.1) {
-        nx += (Math.random() - 0.5) * 4;
-        nz += (Math.random() - 0.5) * 4;
-      }
+    } else if (Math.random() < 0.1) {
+      agent.x += (Math.random() - 0.5) * 4;
+      agent.z += (Math.random() - 0.5) * 4;
     }
 
-    return {
-      ...agent,
-      x: nx,
-      z: nz,
-      state: nextState,
-      energy: Math.max(0, Math.min(100, nEnergy)),
-      hydration: Math.max(0, Math.min(100, nHydration))
-    };
-  });
+    agent.energy = Math.max(0, Math.min(100, nEnergy));
+    agent.hydration = Math.max(0, Math.min(100, nHydration));
+  }
 
-  // 3. Update forest trees growth & decay
-  const updatedTrees = ecosystem.forestTrees.map((tree) => {
-    let nProgress = tree.growthProgress;
-    let nStage = tree.stage;
-    let nHealth = tree.health;
-    let nDecay = tree.decayTimer;
-
+  // 3. Update forest trees growth & decay in place
+  const trees = ecosystem.forestTrees;
+  for (let i = trees.length - 1; i >= 0; i--) {
+    const tree = trees[i];
     if (tree.stage !== 'fallen') {
       const growthRate = 0.008 * ecosystem.soilMoisture * dt;
-      nProgress += growthRate;
-      if (nProgress >= 1.0) {
-        if (tree.stage === 'sapling') nStage = 'young';
-        else if (tree.stage === 'young') nStage = 'mature';
-        else if (tree.stage === 'mature' && Math.random() < 0.001) nStage = 'elder';
-        nProgress = 0;
+      tree.growthProgress += growthRate;
+      if (tree.growthProgress >= 1.0) {
+        if (tree.stage === 'sapling') tree.stage = 'young';
+        else if (tree.stage === 'young') tree.stage = 'mature';
+        else if (tree.stage === 'mature' && Math.random() < 0.001) tree.stage = 'elder';
+        tree.growthProgress = 0;
+      } else if (tree.growthProgress > 1.0) {
+        tree.growthProgress = 1.0;
       }
     } else {
-      nDecay += dt;
-      if (nDecay > 120) {
-        // Fallen tree decays fully into soil nutrients
-        nHealth = 0;
+      tree.decayTimer += dt;
+      if (tree.decayTimer > 120) {
+        trees.splice(i, 1);
       }
     }
+  }
 
-    return {
-      ...tree,
-      stage: nStage,
-      growthProgress: Math.min(1.0, nProgress),
-      health: nHealth,
-      decayTimer: nDecay
-    };
-  }).filter((t) => t.health > 0);
-
-  // 4. Update NPC daily schedules
-  const currentHour = (Date.now() / 1000) % 24; // simplified time cycle
-  const updatedNpcs = ecosystem.npcs.map((npc) => {
-    let act = npc.currentActivity;
+  // 4. Update NPC daily schedules in place
+  const nowMs = Date.now();
+  const currentHour = (nowMs / 1000) % 24;
+  const npcs = ecosystem.npcs;
+  for (let i = 0; i < npcs.length; i++) {
+    const npc = npcs[i];
     if (currentHour < 6 || currentHour > 21) {
-      act = 'sleeping';
+      npc.currentActivity = 'sleeping';
     } else if (currentHour >= 8 && currentHour < 12) {
-      act = npc.role === 'farmer' ? 'farming' : 'working';
+      npc.currentActivity = npc.role === 'farmer' ? 'farming' : 'working';
     } else if (currentHour >= 12 && currentHour < 14) {
-      act = 'socializing';
+      npc.currentActivity = 'socializing';
     } else if (currentHour >= 14 && currentHour < 18) {
-      act = npc.role === 'merchant' ? 'trading' : 'working';
+      npc.currentActivity = npc.role === 'merchant' ? 'trading' : 'working';
     } else {
-      act = 'socializing';
+      npc.currentActivity = 'socializing';
     }
-    return { ...npc, currentActivity: act };
-  });
+  }
 
   // 5. Calculate overall habitat health score
   const avgMoisture = ecosystem.soilMoisture;
-  const avgPollution = ecosystem.zones.reduce((acc, z) => acc + z.pollutionLevel, 0) / ecosystem.zones.length;
-  const healthScore = Math.round(Math.max(10, Math.min(100, (avgMoisture * 60) + ((1 - avgPollution) * 40))));
+  let totalPollution = 0;
+  for (let i = 0; i < ecosystem.zones.length; i++) {
+    totalPollution += ecosystem.zones[i].pollutionLevel;
+  }
+  const avgPollution = ecosystem.zones.length > 0 ? totalPollution / ecosystem.zones.length : 0;
+  ecosystem.habitatHealthScore = Math.round(
+    Math.max(10, Math.min(100, avgMoisture * 60 + (1 - avgPollution) * 40)),
+  );
+  ecosystem.lastTickTimestamp = nowMs;
 
-  return {
-    ...ecosystem,
-    soilMoisture: ecosystem.soilMoisture,
-    habitatHealthScore: healthScore,
-    wildlifeAgents: updatedWildlife,
-    forestTrees: updatedTrees,
-    npcs: updatedNpcs,
-    lastTickTimestamp: Date.now()
-  };
+  return ecosystem;
 }
 
 export function recordSpeciesDiscovery(

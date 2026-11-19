@@ -23,6 +23,8 @@ export class SoundEngine {
   private trunkBassTimer = 0;
   private trunkBassStep = 0;
   private trunkBassPulse = 0;
+  private whiteNoiseBuf: AudioBuffer | null = null;
+  private brownNoiseBuf: AudioBuffer | null = null;
 
   public configure(opts: {
     masterVolume: number;
@@ -70,29 +72,61 @@ export class SoundEngine {
       this.ctx.resume().catch(() => {});
     }
 
+    if (!this.whiteNoiseBuf || !this.brownNoiseBuf) {
+      this.ensureNoiseBuffers();
+    }
+
     if (!this.ambienceStarted && this.ctx && this.ambienceGain) {
       this.startAmbience();
     }
   }
 
+  private ensureNoiseBuffers(): void {
+    if (!this.ctx) return;
+    const sr = this.ctx.sampleRate;
+    const len = sr * 3;
+    if (!this.whiteNoiseBuf) {
+      const wBuf = this.ctx.createBuffer(1, len, sr);
+      const wData = wBuf.getChannelData(0);
+      for (let i = 0; i < len; i++) {
+        wData[i] = Math.random() * 2 - 1;
+      }
+      this.whiteNoiseBuf = wBuf;
+    }
+    if (!this.brownNoiseBuf) {
+      const bBuf = this.ctx.createBuffer(1, len, sr);
+      const bData = bBuf.getChannelData(0);
+      let lastOut = 0;
+      for (let i = 0; i < len; i++) {
+        const white = Math.random() * 2 - 1;
+        lastOut = (lastOut + 0.03 * white) / 1.03;
+        bData[i] = Math.max(-1, Math.min(1, lastOut * 3.4));
+      }
+      this.brownNoiseBuf = bBuf;
+    }
+  }
+
+  private createNoiseSource(kind: 'white' | 'brown' = 'white'): AudioBufferSourceNode | null {
+    if (!this.ctx) return null;
+    if (!this.whiteNoiseBuf || !this.brownNoiseBuf) {
+      this.ensureNoiseBuffers();
+    }
+    const buf = kind === 'brown' ? this.brownNoiseBuf : this.whiteNoiseBuf;
+    if (!buf) return null;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    return src;
+  }
+
   private startAmbience(): void {
     if (!this.ctx || !this.ambienceGain) return;
     this.ambienceStarted = true;
+    this.ensureNoiseBuffers();
 
-    // Ocean surf + wind noise loop
-    const bufferSize = this.ctx.sampleRate * 3;
-    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    let lastOut = 0;
-    for (let i = 0; i < bufferSize; i++) {
-      const white = Math.random() * 2 - 1;
-      data[i] = (lastOut + 0.02 * white) / 1.02;
-      lastOut = data[i];
-      data[i] *= 3.2;
-    }
-
+    // Ocean surf + wind noise loop (reusing pre-baked brown noise buffer)
     const noise = this.ctx.createBufferSource();
-    noise.buffer = buffer;
+    noise.buffer = this.brownNoiseBuf;
     noise.loop = true;
 
     this.surfFilter = this.ctx.createBiquadFilter();
@@ -107,14 +141,9 @@ export class SoundEngine {
     this.surfGain.connect(this.ambienceGain);
     noise.start();
 
-    // Rain hiss layer (white noise bandpass)
-    const rainBuf = this.ctx.createBuffer(1, this.ctx.sampleRate * 2, this.ctx.sampleRate);
-    const rData = rainBuf.getChannelData(0);
-    for (let i = 0; i < rData.length; i++) {
-      rData[i] = Math.random() * 2 - 1;
-    }
+    // Rain hiss layer (reusing pre-baked white noise buffer)
     const rainSrc = this.ctx.createBufferSource();
-    rainSrc.buffer = rainBuf;
+    rainSrc.buffer = this.whiteNoiseBuf;
     rainSrc.loop = true;
 
     this.rainFilter = this.ctx.createBiquadFilter();
@@ -209,11 +238,8 @@ export class SoundEngine {
   private playFireCrackle(): void {
     if (!this.ctx || !this.ambienceGain) return;
     const now = this.ctx.currentTime;
-    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * 0.04), this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
+    const src = this.createNoiseSource('white');
+    if (!src) return;
     const hp = this.ctx.createBiquadFilter();
     hp.type = 'highpass';
     hp.frequency.value = 1800;
@@ -223,45 +249,33 @@ export class SoundEngine {
     src.connect(hp);
     hp.connect(g);
     g.connect(this.ambienceGain);
-    src.start(now);
+    src.start(now, Math.random() * 2.5, 0.05);
   }
 
   public playThunder(): void {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
     const dur = 1.6;
-    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    let last = 0;
-    for (let i = 0; i < d.length; i++) {
-      last = (last + 0.04 * (Math.random() * 2 - 1)) / 1.04;
-      d[i] = last * 5.0 * Math.exp(-i / (d.length * 0.45));
-    }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
+    const src = this.createNoiseSource('brown');
+    if (!src) return;
     const lp = this.ctx.createBiquadFilter();
     lp.type = 'lowpass';
     lp.frequency.value = 160;
     const g = this.ctx.createGain();
-    g.gain.setValueAtTime(0.45, now);
+    g.gain.setValueAtTime(0.55, now);
     g.gain.exponentialRampToValueAtTime(0.001, now + dur);
     src.connect(lp);
     lp.connect(g);
     g.connect(this.masterGain);
-    src.start(now);
+    src.start(now, Math.random() * 1.2, dur + 0.02);
   }
 
   public playFootstep(surface: 'sand' | 'grass' | 'rock' | 'water'): void {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
     const dur = surface === 'water' ? 0.14 : 0.075;
-    const buf = this.ctx.createBuffer(1, this.ctx.sampleRate * dur, this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) {
-      d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (d.length * 0.35));
-    }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
+    const src = this.createNoiseSource('white');
+    if (!src) return;
 
     const filter = this.ctx.createBiquadFilter();
     filter.type = surface === 'water' ? 'bandpass' : 'lowpass';
@@ -275,7 +289,7 @@ export class SoundEngine {
     src.connect(filter);
     filter.connect(g);
     g.connect(this.masterGain);
-    src.start(now);
+    src.start(now, Math.random() * 2.5, dur + 0.01);
   }
 
   public playGather(kind: 'wood' | 'stone' | 'plant', progress = 0): void {
@@ -313,21 +327,19 @@ export class SoundEngine {
       osc.stop(now + 0.15);
 
       // Crisp bark crack
-      const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * 0.055), this.ctx.sampleRate);
-      const d = buf.getChannelData(0);
-      for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (d.length * 0.3));
-      const src = this.ctx.createBufferSource();
-      src.buffer = buf;
-      const bp = this.ctx.createBiquadFilter();
-      bp.type = 'bandpass';
-      bp.frequency.value = 1400;
-      const ng = this.ctx.createGain();
-      ng.gain.setValueAtTime(0.18, now);
-      ng.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
-      src.connect(bp);
-      bp.connect(ng);
-      ng.connect(this.masterGain);
-      src.start(now);
+      const src = this.createNoiseSource('white');
+      if (src) {
+        const bp = this.ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.value = 1400;
+        const ng = this.ctx.createGain();
+        ng.gain.setValueAtTime(0.18, now);
+        ng.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
+        src.connect(bp);
+        bp.connect(ng);
+        ng.connect(this.masterGain);
+        src.start(now, Math.random() * 2.5, 0.065);
+      }
       return;
     }
 
@@ -344,21 +356,19 @@ export class SoundEngine {
     osc.start(now);
     osc.stop(now + 0.11);
 
-    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * 0.07), this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (d.length * 0.35));
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    const hp = this.ctx.createBiquadFilter();
-    hp.type = 'highpass';
-    hp.frequency.value = 950;
-    const ng = this.ctx.createGain();
-    ng.gain.setValueAtTime(0.15, now);
-    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
-    src.connect(hp);
-    hp.connect(ng);
-    ng.connect(this.masterGain);
-    src.start(now);
+    const src = this.createNoiseSource('white');
+    if (src) {
+      const hp = this.ctx.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = 950;
+      const ng = this.ctx.createGain();
+      ng.gain.setValueAtTime(0.15, now);
+      ng.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+      src.connect(hp);
+      hp.connect(ng);
+      ng.connect(this.masterGain);
+      src.start(now, Math.random() * 2.5, 0.08);
+    }
   }
 
   public playTreeFall(): void {
@@ -379,36 +389,27 @@ export class SoundEngine {
 
     // Ground impact crash after 0.72s
     const dur = 0.42;
-    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) {
-      d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (d.length * 0.32));
+    const src = this.createNoiseSource('white');
+    if (src) {
+      const lp = this.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 340;
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.32, now + 0.72);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.72 + dur);
+      src.connect(lp);
+      lp.connect(g);
+      g.connect(this.masterGain);
+      src.start(now + 0.72, Math.random() * 2.0, dur + 0.02);
     }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    const lp = this.ctx.createBiquadFilter();
-    lp.type = 'lowpass';
-    lp.frequency.value = 340;
-    const g = this.ctx.createGain();
-    g.gain.setValueAtTime(0.32, now + 0.72);
-    g.gain.exponentialRampToValueAtTime(0.001, now + 0.72 + dur);
-    src.connect(lp);
-    lp.connect(g);
-    g.connect(this.masterGain);
-    src.start(now + 0.72);
   }
 
   public playRockBreak(): void {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
     const dur = 0.35;
-    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) {
-      d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (d.length * 0.35));
-    }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
+    const src = this.createNoiseSource('white');
+    if (!src) return;
     const bp = this.ctx.createBiquadFilter();
     bp.type = 'bandpass';
     bp.frequency.value = 520;
@@ -418,7 +419,7 @@ export class SoundEngine {
     src.connect(bp);
     bp.connect(g);
     g.connect(this.masterGain);
-    src.start(now);
+    src.start(now, Math.random() * 2.2, dur + 0.02);
   }
 
   public playPickup(): void {
@@ -568,29 +569,20 @@ export class SoundEngine {
     const isHeavy = profile === 'shotgun' || profile === 'sniper' || profile === 'musket';
     const isRapid = profile === 'smg';
     const noiseDur = isHeavy ? 0.34 : isRapid ? 0.16 : 0.24;
-    const noiseBuf = this.ctx.createBuffer(
-      1,
-      Math.floor(this.ctx.sampleRate * noiseDur),
-      this.ctx.sampleRate,
-    );
-    const data = noiseBuf.getChannelData(0);
-    const decay = isHeavy ? 0.085 : isRapid ? 0.028 : 0.045;
-    for (let i = 0; i < data.length; i++) {
-      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (this.ctx.sampleRate * decay));
+    const noiseSource = this.createNoiseSource('white');
+    if (noiseSource) {
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(isHeavy ? 2600 : isRapid ? 4200 : 3400, now);
+      filter.frequency.exponentialRampToValueAtTime(isHeavy ? 240 : 420, now + noiseDur * 0.9);
+      const noiseGain = this.ctx.createGain();
+      noiseGain.gain.setValueAtTime(isHeavy ? 0.65 : isRapid ? 0.42 : 0.55, now);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, now + noiseDur);
+      noiseSource.connect(filter);
+      filter.connect(noiseGain);
+      noiseGain.connect(this.masterGain);
+      noiseSource.start(now, Math.random() * 2.2, noiseDur + 0.02);
     }
-    const noiseSource = this.ctx.createBufferSource();
-    noiseSource.buffer = noiseBuf;
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(isHeavy ? 2600 : isRapid ? 4200 : 3400, now);
-    filter.frequency.exponentialRampToValueAtTime(isHeavy ? 240 : 420, now + noiseDur * 0.9);
-    const noiseGain = this.ctx.createGain();
-    noiseGain.gain.setValueAtTime(isHeavy ? 0.65 : isRapid ? 0.42 : 0.55, now);
-    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + noiseDur);
-    noiseSource.connect(filter);
-    filter.connect(noiseGain);
-    noiseGain.connect(this.masterGain);
-    noiseSource.start(now);
 
     const crackOsc = this.ctx.createOscillator();
     const crackGain = this.ctx.createGain();
@@ -684,13 +676,8 @@ export class SoundEngine {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
     const dur = 0.45;
-    const buf = this.ctx.createBuffer(1, this.ctx.sampleRate * dur, this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) {
-      d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
-    }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
+    const src = this.createNoiseSource('white');
+    if (!src) return;
     const filter = this.ctx.createBiquadFilter();
     filter.type = 'highpass';
     filter.frequency.value = 2800;
@@ -700,7 +687,7 @@ export class SoundEngine {
     src.connect(filter);
     filter.connect(g);
     g.connect(this.masterGain);
-    src.start(now);
+    src.start(now, Math.random() * 2.0, dur + 0.02);
   }
 
   public playPrepareCarcass(): void {
@@ -708,28 +695,21 @@ export class SoundEngine {
     const now = this.ctx.currentTime;
     // 1. Blade slicing butcher carve noise burst
     const dur = 0.22;
-    const buf = this.ctx.createBuffer(
-      1,
-      Math.floor(this.ctx.sampleRate * dur),
-      this.ctx.sampleRate,
-    );
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) {
-      d[i] = (Math.random() * 2 - 1) * Math.sin((i / d.length) * Math.PI);
+    const src = this.createNoiseSource('white');
+    if (src) {
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(3200, now);
+      filter.frequency.exponentialRampToValueAtTime(1200, now + dur);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.001, now);
+      g.gain.linearRampToValueAtTime(0.18, now + dur * 0.35);
+      g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+      src.connect(filter);
+      filter.connect(g);
+      g.connect(this.masterGain);
+      src.start(now, Math.random() * 2.2, dur + 0.02);
     }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.setValueAtTime(3200, now);
-    filter.frequency.exponentialRampToValueAtTime(1200, now + dur);
-    const g = this.ctx.createGain();
-    g.gain.setValueAtTime(0.18, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
-    src.connect(filter);
-    filter.connect(g);
-    g.connect(this.masterGain);
-    src.start(now);
 
     // 2. Meat harvest chime tone
     const osc = this.ctx.createOscillator();
@@ -771,17 +751,8 @@ export class SoundEngine {
     [0, 0.13].forEach((offset) => {
       if (!this.ctx || !this.masterGain) return;
       const dur = 0.08;
-      const buf = this.ctx.createBuffer(
-        1,
-        Math.floor(this.ctx.sampleRate * dur),
-        this.ctx.sampleRate,
-      );
-      const d = buf.getChannelData(0);
-      for (let i = 0; i < d.length; i++) {
-        d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
-      }
-      const src = this.ctx.createBufferSource();
-      src.buffer = buf;
+      const src = this.createNoiseSource('white');
+      if (!src) return;
       const filter = this.ctx.createBiquadFilter();
       filter.type = 'bandpass';
       filter.frequency.value = 1100;
@@ -791,7 +762,7 @@ export class SoundEngine {
       src.connect(filter);
       filter.connect(g);
       g.connect(this.masterGain);
-      src.start(now + offset);
+      src.start(now + offset, Math.random() * 2.5, dur + 0.01);
     });
   }
 
@@ -802,31 +773,20 @@ export class SoundEngine {
     [0, 0.24].forEach((offset) => {
       if (!this.ctx || !this.masterGain) return;
       const dur = 0.22;
-      const buf = this.ctx.createBuffer(
-        1,
-        Math.floor(this.ctx.sampleRate * dur),
-        this.ctx.sampleRate,
-      );
-      const d = buf.getChannelData(0);
-      for (let i = 0; i < d.length; i++) {
-        d[i] =
-          (Math.random() * 2 - 1) *
-          Math.sin((i / d.length) * Math.PI) *
-          0.9;
-      }
-      const src = this.ctx.createBufferSource();
-      src.buffer = buf;
+      const src = this.createNoiseSource('white');
+      if (!src) return;
       const bp = this.ctx.createBiquadFilter();
       bp.type = 'bandpass';
       bp.frequency.setValueAtTime(680 + offset * 900, now + offset);
       bp.frequency.exponentialRampToValueAtTime(1650, now + offset + dur);
       const g = this.ctx.createGain();
-      g.gain.setValueAtTime(0.2, now + offset);
+      g.gain.setValueAtTime(0.001, now + offset);
+      g.gain.linearRampToValueAtTime(0.18, now + offset + dur * 0.4);
       g.gain.exponentialRampToValueAtTime(0.001, now + offset + dur);
       src.connect(bp);
       bp.connect(g);
       g.connect(this.masterGain);
-      src.start(now + offset);
+      src.start(now + offset, Math.random() * 2.2, dur + 0.02);
     });
     // Clean filtered water chime
     [523.25, 659.25, 783.99].forEach((freq, i) => {
@@ -851,56 +811,37 @@ export class SoundEngine {
     [0, 0.24, 0.48, 0.72, 0.96].forEach((offset, idx) => {
       if (!this.ctx || !this.masterGain) return;
       const dur = 0.16;
-      const buf = this.ctx.createBuffer(
-        1,
-        Math.floor(this.ctx.sampleRate * dur),
-        this.ctx.sampleRate,
-      );
-      const d = buf.getChannelData(0);
-      for (let i = 0; i < d.length; i++) {
-        d[i] =
-          (Math.random() * 2 - 1) *
-          Math.sin((i / d.length) * Math.PI) *
-          0.95;
-      }
-      const src = this.ctx.createBufferSource();
-      src.buffer = buf;
+      const src = this.createNoiseSource('white');
+      if (!src) return;
       const bp = this.ctx.createBiquadFilter();
       bp.type = 'bandpass';
       const baseFreq = idx % 2 === 0 ? 1150 : 1550;
       bp.frequency.setValueAtTime(baseFreq, now + offset);
       bp.frequency.exponentialRampToValueAtTime(baseFreq * 1.45, now + offset + dur);
       const g = this.ctx.createGain();
-      g.gain.setValueAtTime(0.22, now + offset);
+      g.gain.setValueAtTime(0.001, now + offset);
+      g.gain.linearRampToValueAtTime(0.21, now + offset + dur * 0.4);
       g.gain.exponentialRampToValueAtTime(0.001, now + offset + dur);
       src.connect(bp);
       bp.connect(g);
       g.connect(this.masterGain);
-      src.start(now + offset);
+      src.start(now + offset, Math.random() * 2.2, dur + 0.02);
     });
     // Final lake rinse splash + fresh chime
     const splashDur = 0.32;
-    const sBuf = this.ctx.createBuffer(
-      1,
-      Math.floor(this.ctx.sampleRate * splashDur),
-      this.ctx.sampleRate,
-    );
-    const sd = sBuf.getChannelData(0);
-    for (let i = 0; i < sd.length; i++) {
-      sd[i] = (Math.random() * 2 - 1) * (1 - i / sd.length) * 0.85;
+    const sSrc = this.createNoiseSource('white');
+    if (sSrc) {
+      const sBp = this.ctx.createBiquadFilter();
+      sBp.type = 'lowpass';
+      sBp.frequency.setValueAtTime(1400, now + 1.28);
+      const sg = this.ctx.createGain();
+      sg.gain.setValueAtTime(0.2, now + 1.28);
+      sg.gain.exponentialRampToValueAtTime(0.001, now + 1.28 + splashDur);
+      sSrc.connect(sBp);
+      sBp.connect(sg);
+      sg.connect(this.masterGain);
+      sSrc.start(now + 1.28, Math.random() * 2.2, splashDur + 0.02);
     }
-    const sSrc = this.ctx.createBufferSource();
-    sSrc.buffer = sBuf;
-    const sBp = this.ctx.createBiquadFilter();
-    sBp.type = 'lowpass';
-    sBp.frequency.setValueAtTime(1400, now + 1.28);
-    const sg = this.ctx.createGain();
-    sg.gain.setValueAtTime(0.22, now + 1.28);
-    sg.gain.exponentialRampToValueAtTime(0.001, now + 1.28 + splashDur);
-    sSrc.connect(sBp);
-    sBp.connect(sg);
-    sg.connect(this.masterGain);
-    sSrc.start(now + 1.28);
 
     [587.33, 739.99, 880].forEach((freq, i) => {
       if (!this.ctx || !this.masterGain) return;
@@ -924,28 +865,20 @@ export class SoundEngine {
     [0.14, 0.56, 0.98].forEach((offset) => {
       if (!this.ctx || !this.masterGain) return;
       const dur = 0.14;
-      const buf = this.ctx.createBuffer(
-        1,
-        Math.floor(this.ctx.sampleRate * dur),
-        this.ctx.sampleRate,
-      );
-      const d = buf.getChannelData(0);
-      for (let i = 0; i < d.length; i++) {
-        d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+      const src = this.createNoiseSource('white');
+      if (src) {
+        const hp = this.ctx.createBiquadFilter();
+        hp.type = 'bandpass';
+        hp.frequency.setValueAtTime(2600, now + offset);
+        hp.frequency.exponentialRampToValueAtTime(900, now + offset + dur);
+        const g = this.ctx.createGain();
+        g.gain.setValueAtTime(0.24, now + offset);
+        g.gain.exponentialRampToValueAtTime(0.001, now + offset + dur);
+        src.connect(hp);
+        hp.connect(g);
+        g.connect(this.masterGain);
+        src.start(now + offset, Math.random() * 2.2, dur + 0.02);
       }
-      const src = this.ctx.createBufferSource();
-      src.buffer = buf;
-      const hp = this.ctx.createBiquadFilter();
-      hp.type = 'bandpass';
-      hp.frequency.setValueAtTime(2600, now + offset);
-      hp.frequency.exponentialRampToValueAtTime(900, now + offset + dur);
-      const g = this.ctx.createGain();
-      g.gain.setValueAtTime(0.24, now + offset);
-      g.gain.exponentialRampToValueAtTime(0.001, now + offset + dur);
-      src.connect(hp);
-      hp.connect(g);
-      g.connect(this.masterGain);
-      src.start(now + offset);
 
       // Subtle knife-to-board tap at end of slice
       const tap = this.ctx.createOscillator();
@@ -967,17 +900,8 @@ export class SoundEngine {
     const volScale = Math.max(0.12, 1 - dist / 38);
     const now = this.ctx.currentTime;
     const dur = isBird ? 0.055 : 0.14;
-    const buf = this.ctx.createBuffer(
-      1,
-      Math.floor(this.ctx.sampleRate * dur),
-      this.ctx.sampleRate,
-    );
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) {
-      d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
-    }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
+    const src = this.createNoiseSource('white');
+    if (!src) return;
     const bp = this.ctx.createBiquadFilter();
     bp.type = 'bandpass';
     bp.frequency.value = isBird ? 2100 : 620;
@@ -987,7 +911,7 @@ export class SoundEngine {
     src.connect(bp);
     bp.connect(g);
     g.connect(this.masterGain);
-    src.start(now);
+    src.start(now, Math.random() * 2.5, dur + 0.01);
   }
 
   public playCreatureCall(species: CreatureSpecies, volumeScale = 1): void {
@@ -1356,27 +1280,20 @@ export class SoundEngine {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
     const dur = 1.2;
-    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    let lp = 0;
-    for (let i = 0; i < d.length; i++) {
-      lp = (lp + 0.08 * (Math.random() * 2 - 1)) / 1.08;
-      const env = Math.exp(-i / (d.length * 0.28));
-      d[i] = lp * 4.5 * env;
+    const src = this.createNoiseSource('brown');
+    if (src) {
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(520, now);
+      filter.frequency.exponentialRampToValueAtTime(90, now + dur);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.65, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+      src.connect(filter);
+      filter.connect(g);
+      g.connect(this.masterGain);
+      src.start(now, Math.random() * 1.5, dur + 0.02);
     }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(520, now);
-    filter.frequency.exponentialRampToValueAtTime(90, now + dur);
-    const g = this.ctx.createGain();
-    g.gain.setValueAtTime(0.65, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
-    src.connect(filter);
-    filter.connect(g);
-    g.connect(this.masterGain);
-    src.start(now);
 
     // Sub-bass punch
     const osc = this.ctx.createOscillator();
@@ -1416,14 +1333,8 @@ export class SoundEngine {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
     const dur = 0.72;
-    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) {
-      const env = Math.exp(-i / (d.length * 0.35));
-      d[i] = (Math.random() * 2 - 1) * env;
-    }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
+    const src = this.createNoiseSource('white');
+    if (!src) return;
     const lp = this.ctx.createBiquadFilter();
     lp.type = 'lowpass';
     lp.frequency.setValueAtTime(750, now);
@@ -1434,20 +1345,15 @@ export class SoundEngine {
     src.connect(lp);
     lp.connect(g);
     g.connect(this.masterGain);
-    src.start(now);
+    src.start(now, Math.random() * 2.0, dur + 0.02);
   }
 
   public playDigSoil(): void {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
     const dur = 0.16;
-    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) {
-      d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
-    }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
+    const src = this.createNoiseSource('white');
+    if (!src) return;
     const bp = this.ctx.createBiquadFilter();
     bp.type = 'bandpass';
     bp.frequency.value = 460;
@@ -1457,56 +1363,47 @@ export class SoundEngine {
     src.connect(bp);
     bp.connect(g);
     g.connect(this.masterGain);
-    src.start(now);
+    src.start(now, Math.random() * 2.4, dur + 0.02);
   }
 
   public playWaterRush(): void {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
     const dur = 0.85;
-    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) {
-      d[i] = (Math.random() * 2 - 1) * Math.sin((i / d.length) * Math.PI);
-    }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
+    const src = this.createNoiseSource('white');
+    if (!src) return;
     const bp = this.ctx.createBiquadFilter();
     bp.type = 'bandpass';
     bp.frequency.setValueAtTime(980, now);
     bp.frequency.linearRampToValueAtTime(620, now + dur);
     const g = this.ctx.createGain();
-    g.gain.setValueAtTime(0.25, now);
+    g.gain.setValueAtTime(0.001, now);
+    g.gain.linearRampToValueAtTime(0.25, now + dur * 0.4);
     g.gain.exponentialRampToValueAtTime(0.001, now + dur);
     src.connect(bp);
     bp.connect(g);
     g.connect(this.masterGain);
-    src.start(now);
+    src.start(now, Math.random() * 1.8, dur + 0.02);
   }
 
   public playArmorShatter(): void {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
     const dur = 0.42;
-    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) {
-      const env = Math.exp(-i / (d.length * 0.25));
-      d[i] = (Math.random() * 2 - 1) * env;
+    const src = this.createNoiseSource('white');
+    if (src) {
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(1450, now);
+      bp.frequency.exponentialRampToValueAtTime(320, now + dur);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.42, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+      src.connect(bp);
+      bp.connect(g);
+      g.connect(this.masterGain);
+      src.start(now, Math.random() * 2.2, dur + 0.02);
     }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    const bp = this.ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.frequency.setValueAtTime(1450, now);
-    bp.frequency.exponentialRampToValueAtTime(320, now + dur);
-    const g = this.ctx.createGain();
-    g.gain.setValueAtTime(0.42, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
-    src.connect(bp);
-    bp.connect(g);
-    g.connect(this.masterGain);
-    src.start(now);
 
     const osc = this.ctx.createOscillator();
     const og = this.ctx.createGain();
@@ -1562,24 +1459,20 @@ export class SoundEngine {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
     const dur = 0.22;
-    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) {
-      d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (d.length * 0.4));
+    const src = this.createNoiseSource('white');
+    if (src) {
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(780, now);
+      bp.frequency.exponentialRampToValueAtTime(1600, now + dur);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.32, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+      src.connect(bp);
+      bp.connect(g);
+      g.connect(this.masterGain);
+      src.start(now, Math.random() * 2.2, dur + 0.02);
     }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    const bp = this.ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.frequency.setValueAtTime(780, now);
-    bp.frequency.exponentialRampToValueAtTime(1600, now + dur);
-    const g = this.ctx.createGain();
-    g.gain.setValueAtTime(0.32, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
-    src.connect(bp);
-    bp.connect(g);
-    g.connect(this.masterGain);
-    src.start(now);
 
     const osc = this.ctx.createOscillator();
     const og = this.ctx.createGain();
@@ -1614,27 +1507,20 @@ export class SoundEngine {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
     const dur = 1.45;
-    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    let lp = 0;
-    for (let i = 0; i < d.length; i++) {
-      lp = (lp + 0.1 * (Math.random() * 2 - 1)) / 1.1;
-      const env = Math.exp(-i / (d.length * 0.42));
-      d[i] = lp * 5.2 * env;
+    const src = this.createNoiseSource('brown');
+    if (src) {
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(640, now);
+      filter.frequency.exponentialRampToValueAtTime(110, now + dur);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.62, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+      src.connect(filter);
+      filter.connect(g);
+      g.connect(this.masterGain);
+      src.start(now, Math.random() * 1.4, dur + 0.02);
     }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(640, now);
-    filter.frequency.exponentialRampToValueAtTime(110, now + dur);
-    const g = this.ctx.createGain();
-    g.gain.setValueAtTime(0.62, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
-    src.connect(filter);
-    filter.connect(g);
-    g.connect(this.masterGain);
-    src.start(now);
 
     const osc = this.ctx.createOscillator();
     const og = this.ctx.createGain();
@@ -1665,23 +1551,19 @@ export class SoundEngine {
     clank.stop(now + 0.12);
 
     const dur = 0.12;
-    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) {
-      d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (d.length * 0.4));
+    const src = this.createNoiseSource('white');
+    if (src) {
+      const hp = this.ctx.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = 1800;
+      const hg = this.ctx.createGain();
+      hg.gain.setValueAtTime(0.16, now);
+      hg.gain.exponentialRampToValueAtTime(0.001, now + dur);
+      src.connect(hp);
+      hp.connect(hg);
+      hg.connect(this.masterGain);
+      src.start(now, Math.random() * 2.5, dur + 0.02);
     }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    const hp = this.ctx.createBiquadFilter();
-    hp.type = 'highpass';
-    hp.frequency.value = 1800;
-    const hg = this.ctx.createGain();
-    hg.gain.setValueAtTime(0.16, now);
-    hg.gain.exponentialRampToValueAtTime(0.001, now + dur);
-    src.connect(hp);
-    hp.connect(hg);
-    hg.connect(this.masterGain);
-    src.start(now);
   }
 
   public playKineticGearTick(): void {
@@ -1704,13 +1586,8 @@ export class SoundEngine {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
     const dur = 0.32;
-    const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) {
-      d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (d.length * 0.55));
-    }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
+    const src = this.createNoiseSource('white');
+    if (!src) return;
     const bp = this.ctx.createBiquadFilter();
     bp.type = 'bandpass';
     bp.frequency.value = 2600;
@@ -1720,7 +1597,7 @@ export class SoundEngine {
     src.connect(bp);
     bp.connect(g);
     g.connect(this.masterGain);
-    src.start(now);
+    src.start(now, Math.random() * 2.2, dur + 0.02);
   }
 
   public playHydraulicHop(kind: 'hop' | 'tilt' | 'lock'): void {
@@ -1823,23 +1700,19 @@ export class SoundEngine {
       if (step === 2 || step === 6) {
         // Subtle crisp hi-hat tick
         const dur = 0.04;
-        const buf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * dur), this.ctx.sampleRate);
-        const d = buf.getChannelData(0);
-        for (let i = 0; i < d.length; i++) {
-          d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (d.length * 0.25));
+        const src = this.createNoiseSource('white');
+        if (src) {
+          const hp = this.ctx.createBiquadFilter();
+          hp.type = 'highpass';
+          hp.frequency.value = 6200;
+          const hg = this.ctx.createGain();
+          hg.gain.setValueAtTime(0.06, now);
+          hg.gain.exponentialRampToValueAtTime(0.001, now + dur);
+          src.connect(hp);
+          hp.connect(hg);
+          hg.connect(this.masterGain);
+          src.start(now, Math.random() * 2.5, dur + 0.01);
         }
-        const src = this.ctx.createBufferSource();
-        src.buffer = buf;
-        const hp = this.ctx.createBiquadFilter();
-        hp.type = 'highpass';
-        hp.frequency.value = 6200;
-        const hg = this.ctx.createGain();
-        hg.gain.setValueAtTime(0.06, now);
-        hg.gain.exponentialRampToValueAtTime(0.001, now + dur);
-        src.connect(hp);
-        hp.connect(hg);
-        hg.connect(this.masterGain);
-        src.start(now);
       }
     }
 
@@ -1878,38 +1751,27 @@ export class SoundEngine {
     const clampedSpd = Math.max(0.25, Math.min(2.0, speed));
     // Inverse mapping: slower speed => longer hiss duration
     const dur = Math.max(0.18, Math.min(1.45, 0.55 / clampedSpd + (clampedSpd < 0.7 ? 0.35 : 0)));
-    const sampleCount = Math.max(1024, Math.floor(this.ctx.sampleRate * dur));
-    const buf = this.ctx.createBuffer(1, sampleCount, this.ctx.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < sampleCount; i++) {
-      const t = i / sampleCount;
-      // Fast attack, smooth exponential air-valve tail
-      const env = Math.min(1, t * 18) * Math.pow(1 - t, clampedSpd >= 1.2 ? 1.8 : 1.15);
-      data[i] = (Math.random() * 2 - 1) * env;
+    const src = this.createNoiseSource('white');
+    if (src) {
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.Q.value = clampedSpd >= 1.2 ? 1.6 : 2.2;
+      const startFreq = clampedSpd >= 1.2 ? 4200 : 2600;
+      const endFreq = clampedSpd >= 1.2 ? 1750 : 1050;
+      bp.frequency.setValueAtTime(startFreq, now);
+      bp.frequency.exponentialRampToValueAtTime(endFreq, now + dur);
+
+      const gain = this.ctx.createGain();
+      const peakGain = clampedSpd >= 1.2 ? 0.44 : 0.32;
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(peakGain, now + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+
+      src.connect(bp);
+      bp.connect(gain);
+      gain.connect(this.masterGain);
+      src.start(now, Math.random() * 1.4, dur + 0.02);
     }
-
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-
-    const bp = this.ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.Q.value = clampedSpd >= 1.2 ? 1.6 : 2.2;
-    const startFreq = clampedSpd >= 1.2 ? 4200 : 2600;
-    const endFreq = clampedSpd >= 1.2 ? 1750 : 1050;
-    bp.frequency.setValueAtTime(startFreq, now);
-    bp.frequency.exponentialRampToValueAtTime(endFreq, now + dur);
-
-    const gain = this.ctx.createGain();
-    const peakGain = clampedSpd >= 1.2 ? 0.44 : 0.32;
-    gain.gain.setValueAtTime(0.001, now);
-    gain.gain.linearRampToValueAtTime(peakGain, now + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
-
-    src.connect(bp);
-    bp.connect(gain);
-    gain.connect(this.masterGain);
-    src.start(now);
-    src.stop(now + dur + 0.02);
 
     // Solenoid valve click at start
     const click = this.ctx.createOscillator();

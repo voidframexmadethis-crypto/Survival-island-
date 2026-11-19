@@ -113,6 +113,8 @@ export class RollerCoasterRuntime {
   private coasters = new Map<string, ActiveCoasterEntry>();
   private inversionDesigner = new InversionDesigner();
   private seq = 0;
+  private cachedHudSummaries: CoasterHudSummaryItem[] | null = null;
+  private hudCacheDirty = true;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -125,6 +127,7 @@ export class RollerCoasterRuntime {
       this.disposeEntryMesh(entry);
     }
     this.coasters.clear();
+    this.hudCacheDirty = true;
   }
 
   private disposeEntryMesh(entry: ActiveCoasterEntry): void {
@@ -212,6 +215,7 @@ export class RollerCoasterRuntime {
     if (!entry) return false;
     this.disposeEntryMesh(entry);
     this.coasters.delete(coasterId);
+    this.hudCacheDirty = true;
     return true;
   }
 
@@ -219,7 +223,10 @@ export class RollerCoasterRuntime {
     const entry = this.coasters.get(coasterId);
     if (!entry) return false;
     const clean = nextName.trim();
-    if (clean) entry.name = clean;
+    if (clean) {
+      entry.name = clean;
+      this.hudCacheDirty = true;
+    }
     return true;
   }
 
@@ -594,6 +601,7 @@ export class RollerCoasterRuntime {
     if (entry.running && entry.train.speed < 5.5) {
       entry.train.speed = 6.5;
     }
+    this.hudCacheDirty = true;
     return true;
   }
 
@@ -606,10 +614,12 @@ export class RollerCoasterRuntime {
     entry.train.verticalG = 1;
     entry.train.lateralG = 0;
     this.syncTrainCarsTransform(entry);
+    this.hudCacheDirty = true;
     return true;
   }
 
   private rebuildEntryGeometry(entry: ActiveCoasterEntry): void {
+    this.hudCacheDirty = true;
     this.disposeEntryMesh(entry);
     entry.meshGroup = new THREE.Group();
     entry.meshGroup.name = `Coaster_${entry.id}`;
@@ -700,8 +710,8 @@ export class RollerCoasterRuntime {
         ? new THREE.Mesh(new THREE.TubeGeometry(spineCurve, segCount, 0.45, 10, false), new THREE.MeshStandardMaterial({ color: '#0ea5e9', roughness: 0.15, metalness: 0.3, transparent: true, opacity: 0.85 }))
         : new THREE.Mesh(new THREE.TubeGeometry(spineCurve, segCount, isWooden ? 0.16 : 0.125, 10, false), spineMat);
 
-      leftRail.castShadow = true;
-      rightRail.castShadow = true;
+      leftRail.castShadow = false;
+      rightRail.castShadow = false;
       spineTube.castShadow = !isLogFlume;
       entry.meshGroup.add(leftRail, rightRail, spineTube);
 
@@ -864,6 +874,7 @@ export class RollerCoasterRuntime {
   }
 
   public update(dt: number): void {
+    let anyMoved = false;
     for (const entry of this.coasters.values()) {
       if (!entry.running || entry.samples.length < 2) continue;
       const total = entry.samples[entry.samples.length - 1].distance;
@@ -884,6 +895,10 @@ export class RollerCoasterRuntime {
       }
 
       this.syncTrainCarsTransform(entry);
+      anyMoved = true;
+    }
+    if (anyMoved) {
+      this.hudCacheDirty = true;
     }
   }
 
@@ -942,6 +957,9 @@ export class RollerCoasterRuntime {
   }
 
   public getHudSummaries(): CoasterHudSummaryItem[] {
+    if (!this.hudCacheDirty && this.cachedHudSummaries) {
+      return this.cachedHudSummaries;
+    }
     const out: CoasterHudSummaryItem[] = [];
     for (const entry of this.coasters.values()) {
       const val = validateTrack(entry.editor.nodes);
@@ -972,6 +990,8 @@ export class RollerCoasterRuntime {
         nodes: entry.editor.nodes.map(cloneNode),
       });
     }
+    this.cachedHudSummaries = out;
+    this.hudCacheDirty = false;
     return out;
   }
 

@@ -146,9 +146,40 @@ export class StructureManager {
   private scene: THREE.Scene | null;
   private visible = true;
   private entitySeq = 0;
+  private rigPool = new Map<StructureEntityKind, StructureEntityRig[]>();
 
   constructor(scene?: THREE.Scene | null) {
     this.scene = scene ?? null;
+  }
+
+  private acquireRig(type: StructureEntityKind): StructureEntityRig {
+    const bucket = this.rigPool.get(type);
+    if (bucket && bucket.length > 0) {
+      const rig = bucket.pop()!;
+      rig.root.rotation.set(0, 0, 0);
+      rig.leftArm.rotation.set(0, 0, 0);
+      rig.rightArm.rotation.set(0, 0, 0);
+      rig.leftLeg.rotation.set(0, 0, 0);
+      rig.rightLeg.rotation.set(0, 0, 0);
+      return rig;
+    }
+    return createStructureEntityRig(type);
+  }
+
+  private releaseRig(entity: ActiveStructureEntity): void {
+    if (entity.mesh) {
+      entity.mesh.visible = false;
+      entity.mesh.removeFromParent();
+    }
+    if (!entity.rig) return;
+    let bucket = this.rigPool.get(entity.type);
+    if (!bucket) {
+      bucket = [];
+      this.rigPool.set(entity.type, bucket);
+    }
+    if (bucket.length < 8) {
+      bucket.push(entity.rig);
+    }
   }
 
   public setScene(scene: THREE.Scene | null): void {
@@ -219,7 +250,7 @@ export class StructureManager {
       let rig: StructureEntityRig | undefined;
       let mesh: THREE.Group | undefined;
       if (this.scene && typeof document !== 'undefined') {
-        rig = createStructureEntityRig(pt.enemyType);
+        rig = this.acquireRig(pt.enemyType);
         mesh = rig.root;
         mesh.position.set(pt.x, baseY, pt.z);
         mesh.visible = this.visible;
@@ -251,8 +282,9 @@ export class StructureManager {
 
   public hibernateStructure(site: StructureSite): void {
     site.isAwake = false;
-    // Remove meshes from scene and clear array to free memory
-    site.activeEntities.forEach((e) => e.mesh?.removeFromParent());
+    for (let i = 0; i < site.activeEntities.length; i++) {
+      this.releaseRig(site.activeEntities[i]);
+    }
     site.activeEntities = [];
   }
 
@@ -265,11 +297,13 @@ export class StructureManager {
     for (let i = site.activeEntities.length - 1; i >= 0; i--) {
       const entity = site.activeEntities[i];
       if (entity.hp <= 0) {
-        entity.mesh?.removeFromParent();
+        this.releaseRig(entity);
         site.activeEntities.splice(i, 1);
         continue;
       }
 
+      const prevX = entity.x;
+      const prevZ = entity.z;
       const distToPlayer = Math.hypot(playerPos.x - entity.x, playerPos.z - entity.z);
       const stats = ENTITY_ATTACK_STATS[entity.type];
 
@@ -305,10 +339,12 @@ export class StructureManager {
             }
           }
         }
-        entity.y = Math.max(
-          getTerrainHeight(entity.x, entity.z),
-          getLandmarkFloorY(entity.x, entity.z, entity.y + 0.5),
-        );
+        if (entity.x !== prevX || entity.z !== prevZ) {
+          entity.y = Math.max(
+            getTerrainHeight(entity.x, entity.z),
+            getLandmarkFloorY(entity.x, entity.z, entity.y + 0.5),
+          );
+        }
       } else {
         // Hostile AI state transitions
         const prevState = entity.state;
@@ -366,14 +402,16 @@ export class StructureManager {
           }
         }
 
-        const groundY = Math.max(
-          getTerrainHeight(entity.x, entity.z),
-          getLandmarkFloorY(entity.x, entity.z, entity.y + 0.6),
-        );
-        entity.y =
-          entity.type === 'vex'
-            ? groundY + 0.9 + Math.sin(entity.walkPhase * 1.9) * 0.22
-            : groundY;
+        if (entity.x !== prevX || entity.z !== prevZ || entity.type === 'vex') {
+          const groundY = Math.max(
+            getTerrainHeight(entity.x, entity.z),
+            getLandmarkFloorY(entity.x, entity.z, entity.y + 0.6),
+          );
+          entity.y =
+            entity.type === 'vex'
+              ? groundY + 0.9 + Math.sin(entity.walkPhase * 1.9) * 0.22
+              : groundY;
+        }
 
         if (entity.rig?.leftWing && entity.rig.rightWing) {
           const flap = Math.sin(entity.walkPhase * 4.5 + i) * 0.55;
@@ -470,7 +508,7 @@ export class StructureManager {
     const site = this.structures.find((s) => s.id === entity.siteId);
     if (entity.hp <= 0) {
       const drops = getDropsForEntity(entity.type);
-      entity.mesh?.removeFromParent();
+      this.releaseRig(entity);
       if (site) {
         const idx = site.activeEntities.indexOf(entity);
         if (idx !== -1) site.activeEntities.splice(idx, 1);

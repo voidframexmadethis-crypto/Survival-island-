@@ -113,7 +113,7 @@ export function UndergroundElevatorModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-2 sm:p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-2 sm:p-4"
       onPointerDown={(e) => e.stopPropagation()}
     >
       <div className="relative w-full max-w-5xl max-h-[92vh] overflow-hidden rounded-2xl bg-slate-950 border border-cyan-500/50 shadow-2xl flex flex-col">

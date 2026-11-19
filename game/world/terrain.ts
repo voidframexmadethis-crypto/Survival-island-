@@ -107,7 +107,14 @@ export const terrainScorchGrid = new Float32Array(TERRAIN_VERTS * TERRAIN_VERTS)
 export const terrainLoosenessGrid = new Float32Array(TERRAIN_VERTS * TERRAIN_VERTS);
 export const terrainPuddleGrid = new Float32Array(TERRAIN_VERTS * TERRAIN_VERTS);
 
+let hasTerrainDeformation = false;
+
+export function markTerrainDeformed(): void {
+  hasTerrainDeformation = true;
+}
+
 export function resetTerrainDeformation(): void {
+  hasTerrainDeformation = false;
   terrainDeltaGrid.fill(0);
   terrainWetnessGrid.fill(0);
   terrainScorchGrid.fill(0);
@@ -119,7 +126,7 @@ export function isTerrainProtectedAt(x: number, z: number): boolean {
   const hdx = x - HILL_HOUSE_POS.x;
   const hdz = z - HILL_HOUSE_POS.z;
   if (
-    Math.hypot(hdx, hdz) < 12.2 ||
+    hdx * hdx + hdz * hdz < 148.84 ||
     (hdx >= -8.2 && hdx <= 8.8 && hdz >= -7.2 && hdz <= 11.2)
   ) {
     return true;
@@ -130,7 +137,9 @@ export function isTerrainProtectedAt(x: number, z: number): boolean {
   ) {
     return true;
   }
-  if (Math.hypot(x - FARMER_POS.x, z - FARMER_POS.z) < 4.5) return true;
+  const fdx = x - FARMER_POS.x;
+  const fdz = z - FARMER_POS.z;
+  if (fdx * fdx + fdz * fdz < 20.25) return true;
   return false;
 }
 
@@ -253,7 +262,7 @@ export function getLandmarkFloorY(
   // 4. Snowy Igloo packed floor
   const igdx = x - SNOWY_IGLOO_POS.x;
   const igdz = z - SNOWY_IGLOO_POS.z;
-  if (Math.hypot(igdx, igdz) <= 2.95 || (Math.abs(igdx) <= 0.9 && igdz >= 2.2 && igdz <= 4.1)) {
+  if (igdx * igdx + igdz * igdz <= 8.7025 || (Math.abs(igdx) <= 0.9 && igdz >= 2.2 && igdz <= 4.1)) {
     const igFloorTop = 9.0 + 0.05;
     if (footY >= igFloorTop - 1.5 && igFloorTop > bestY) {
       bestY = igFloorTop;
@@ -282,6 +291,7 @@ export function sampleGridBilinear(grid: Float32Array, x: number, z: number): nu
 }
 
 export function exportSparseTerrainDeltas(): [number, number][] {
+  if (!hasTerrainDeformation) return [];
   const out: [number, number][] = [];
   for (let i = 0; i < terrainDeltaGrid.length; i++) {
     const v = terrainDeltaGrid[i];
@@ -289,18 +299,22 @@ export function exportSparseTerrainDeltas(): [number, number][] {
       out.push([i, Math.round(v * 1000) / 1000]);
     }
   }
+  if (out.length === 0) hasTerrainDeformation = false;
   return out;
 }
 
 export function importSparseTerrainDeltas(entries?: [number, number][]): void {
   resetTerrainDeformation();
-  if (!Array.isArray(entries)) return;
+  if (!Array.isArray(entries) || entries.length === 0) return;
   for (const pair of entries) {
     if (!Array.isArray(pair) || pair.length < 2) continue;
     const idx = pair[0];
     const val = pair[1];
     if (idx >= 0 && idx < terrainDeltaGrid.length && Number.isFinite(val)) {
       terrainDeltaGrid[idx] = val;
+      if (Math.abs(val) > 0.03) {
+        hasTerrainDeformation = true;
+      }
       if (val < -0.25) {
         terrainLoosenessGrid[idx] = Math.min(1, Math.abs(val) * 0.25);
       }
@@ -633,22 +647,26 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
-function distToSegment(
+function distSqToSegment(
   px: number,
   pz: number,
   ax: number,
   az: number,
   bx: number,
   bz: number,
-): { dist: number; t: number } {
+): { distSq: number; t: number } {
   const dx = bx - ax;
   const dz = bz - az;
   const lenSq = dx * dx + dz * dz;
-  if (lenSq === 0) return { dist: Math.hypot(px - ax, pz - az), t: 0 };
+  if (lenSq === 0) {
+    const ex = px - ax;
+    const ez = pz - az;
+    return { distSq: ex * ex + ez * ez, t: 0 };
+  }
   const t = Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / lenSq));
-  const projX = ax + t * dx;
-  const projZ = az + t * dz;
-  return { dist: Math.hypot(px - projX, pz - projZ), t };
+  const ex = px - (ax + t * dx);
+  const ez = pz - (az + t * dz);
+  return { distSq: ex * ex + ez * ez, t };
 }
 
 // River path from waterfall plunge pool -> lake -> coastal estuary (560m coastline)
@@ -701,6 +719,24 @@ export const ALL_FLOWING_RIVERS: [number, number, number][][] = [
   SOUTH_RIVER_POINTS,
 ];
 
+function computePolylineBounds(pts: [number, number, number][], pad: number): [number, number, number, number] {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    const px = pts[i][0];
+    const pz = pts[i][1];
+    if (px < minX) minX = px;
+    if (px > maxX) maxX = px;
+    if (pz < minZ) minZ = pz;
+    if (pz > maxZ) maxZ = pz;
+  }
+  return [minX - pad, maxX + pad, minZ - pad, maxZ + pad];
+}
+
+const FLOWING_RIVER_BOUNDS = ALL_FLOWING_RIVERS.map((pts) => computePolylineBounds(pts, 13));
+
 // Northern Frozen River channel winding from Snowy Slopes to the Frozen Ocean
 export const FROZEN_RIVER_POINTS: [number, number, number][] = [
   [-115, -210, 4.5],
@@ -710,23 +746,41 @@ export const FROZEN_RIVER_POINTS: [number, number, number][] = [
   [-285, -545, -0.6],
 ];
 
+const FROZEN_RIVER_BOUNDS = computePolylineBounds(FROZEN_RIVER_POINTS, 13);
+
 export function getFrozenRiverSample(
   x: number,
   z: number,
 ): { dist: number; waterY: number; inRiver: boolean } {
-  let minDist = 9999;
+  if (
+    x < FROZEN_RIVER_BOUNDS[0] ||
+    x > FROZEN_RIVER_BOUNDS[1] ||
+    z < FROZEN_RIVER_BOUNDS[2] ||
+    z > FROZEN_RIVER_BOUNDS[3]
+  ) {
+    return { dist: 9999, waterY: OCEAN_LEVEL, inRiver: false };
+  }
+
+  let minDistSq = 9999 * 9999;
   let bestWaterY = OCEAN_LEVEL;
 
   for (let i = 0; i < FROZEN_RIVER_POINTS.length - 1; i++) {
-    const [ax, az, ay] = FROZEN_RIVER_POINTS[i];
-    const [bx, bz, by] = FROZEN_RIVER_POINTS[i + 1];
-    const seg = distToSegment(x, z, ax, az, bx, bz);
-    if (seg.dist < minDist) {
-      minDist = seg.dist;
-      bestWaterY = ay + (by - ay) * seg.t;
+    const a = FROZEN_RIVER_POINTS[i];
+    const b = FROZEN_RIVER_POINTS[i + 1];
+    const dx = b[0] - a[0];
+    const dz = b[1] - a[1];
+    const lenSq = dx * dx + dz * dz;
+    const t = lenSq === 0 ? 0 : Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / lenSq));
+    const ex = x - (a[0] + t * dx);
+    const ez = z - (a[1] + t * dz);
+    const dSq = ex * ex + ez * ez;
+    if (dSq < minDistSq) {
+      minDistSq = dSq;
+      bestWaterY = a[2] + (b[2] - a[2]) * t;
     }
   }
 
+  const minDist = minDistSq < 169 ? Math.sqrt(minDistSq) : 9999;
   return {
     dist: minDist,
     waterY: bestWaterY,
@@ -738,24 +792,35 @@ export function getRiverSample(
   x: number,
   z: number,
 ): { dist: number; waterY: number; inRiver: boolean; isRapids: boolean } {
-  let minDist = 9999;
+  let minDistSq = 9999 * 9999;
   let bestWaterY = OCEAN_LEVEL;
   let bestRapids = false;
 
   for (let rIdx = 0; rIdx < ALL_FLOWING_RIVERS.length; rIdx++) {
+    const bounds = FLOWING_RIVER_BOUNDS[rIdx];
+    if (x < bounds[0] || x > bounds[1] || z < bounds[2] || z > bounds[3]) {
+      continue;
+    }
     const pts = ALL_FLOWING_RIVERS[rIdx];
     for (let i = 0; i < pts.length - 1; i++) {
-      const [ax, az, ay] = pts[i];
-      const [bx, bz, by] = pts[i + 1];
-      const seg = distToSegment(x, z, ax, az, bx, bz);
-      if (seg.dist < minDist) {
-        minDist = seg.dist;
-        bestWaterY = ay + (by - ay) * seg.t;
-        bestRapids = Math.abs(by - ay) > 1.75;
+      const a = pts[i];
+      const b = pts[i + 1];
+      const dx = b[0] - a[0];
+      const dz = b[1] - a[1];
+      const lenSq = dx * dx + dz * dz;
+      const t = lenSq === 0 ? 0 : Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / lenSq));
+      const ex = x - (a[0] + t * dx);
+      const ez = z - (a[1] + t * dz);
+      const dSq = ex * ex + ez * ez;
+      if (dSq < minDistSq) {
+        minDistSq = dSq;
+        bestWaterY = a[2] + (b[2] - a[2]) * t;
+        bestRapids = Math.abs(b[2] - a[2]) > 1.75;
       }
     }
   }
 
+  const minDist = minDistSq < 169 ? Math.sqrt(minDistSq) : 9999;
   return {
     dist: minDist,
     waterY: bestWaterY,
@@ -766,12 +831,16 @@ export function getRiverSample(
 
 export function getWaterLevelAt(x: number, z: number): number {
   if (activeTerrainWorldType === 'flat') return -999;
-  const dLake = Math.hypot(x - LAKE_CENTER.x, z - LAKE_CENTER.z);
-  if (dLake < LAKE_CENTER.radius + 3) {
+  const ldx = x - LAKE_CENTER.x;
+  const ldz = z - LAKE_CENTER.z;
+  const lakeLim = LAKE_CENTER.radius + 3;
+  if (ldx * ldx + ldz * ldz < lakeLim * lakeLim) {
     return LAKE_CENTER.waterY;
   }
-  const dSwamp = Math.hypot(x - SWAMP_POS.x, z - SWAMP_POS.z);
-  if (dSwamp < SWAMP_POS.radius + 1.5) {
+  const sdx = x - SWAMP_POS.x;
+  const sdz = z - SWAMP_POS.z;
+  const swampLim = SWAMP_POS.radius + 1.5;
+  if (sdx * sdx + sdz * sdz < swampLim * swampLim) {
     return SWAMP_POS.waterY;
   }
   const river = getRiverSample(x, z);
@@ -784,8 +853,9 @@ export function getWaterLevelAt(x: number, z: number): number {
 export function isFreshwaterAt(x: number, z: number): boolean {
   if (activeTerrainWorldType === 'flat') return false;
   const h = getTerrainHeight(x, z);
-  const dLake = Math.hypot(x - LAKE_CENTER.x, z - LAKE_CENTER.z);
-  if (dLake < LAKE_CENTER.radius && h < LAKE_CENTER.waterY + 0.35) return true;
+  const ldx = x - LAKE_CENTER.x;
+  const ldz = z - LAKE_CENTER.z;
+  if (ldx * ldx + ldz * ldz < LAKE_CENTER.radius * LAKE_CENTER.radius && h < LAKE_CENTER.waterY + 0.35) return true;
   const river = getRiverSample(x, z);
   if (river.dist < 7.0 && river.waterY > 0.25 && h < river.waterY + 0.35) {
     return true;
@@ -797,6 +867,76 @@ export function getTerrainHeight(x: number, z: number): number {
   if (activeTerrainWorldType === 'flat') return FLAT_GROUND_Y;
   return getBaseTerrainHeight(x, z) + sampleGridBilinear(terrainDeltaGrid, x, z);
 }
+
+const FLAT_PADS: readonly [number, number, number, number, number, number][] = [
+  [TRIAL_CHAMBERS_POS.x, TRIAL_CHAMBERS_POS.z, 6.5, 13.5, 13.5 * 13.5, 3.6],
+  [WOODLAND_MANSION_POS.x, WOODLAND_MANSION_POS.z, 10.5, 17.5, 17.5 * 17.5, 4.1],
+  [TAIGA_VILLAGE_POS.x, TAIGA_VILLAGE_POS.z, 11.5, 18.0, 18.0 * 18.0, 5.2],
+  [PILLAGER_OUTPOST_POS.x, PILLAGER_OUTPOST_POS.z, 6.2, 12.5, 12.5 * 12.5, 5.0],
+  [TRAIL_RUINS_POS.x, TRAIL_RUINS_POS.z, 6.5, 13.0, 13.0 * 13.0, 4.5],
+  [SNOWY_VILLAGE_POS.x, SNOWY_VILLAGE_POS.z, 11.5, 18.0, 18.0 * 18.0, 9.4],
+  [SNOWY_IGLOO_POS.x, SNOWY_IGLOO_POS.z, 5.8, 11.5, 11.5 * 11.5, 9.0],
+  [JUNGLE_TEMPLE_POS.x, JUNGLE_TEMPLE_POS.z, 7.5, 14.5, 14.5 * 14.5, 4.2],
+  [PLAINS_VILLAGE_POS.x, PLAINS_VILLAGE_POS.z, 13.0, 21.0, 21.0 * 21.0, 4.4],
+  [SUNFLOWER_VILLAGE_POS.x, SUNFLOWER_VILLAGE_POS.z, 12.0, 19.0, 19.0 * 19.0, 4.2],
+  [RUINED_PORTAL_POS.x, RUINED_PORTAL_POS.z, 6.5, 13.5, 13.5 * 13.5, 4.6],
+  [MEADOW_OUTPOST_POS.x, MEADOW_OUTPOST_POS.z, 7.0, 13.5, 13.5 * 13.5, 8.8],
+  [GROVE_OUTPOST_POS.x, GROVE_OUTPOST_POS.z, 7.0, 13.5, 13.5 * 13.5, 11.2],
+  [SNOWY_PLAINS_OUTPOST_POS.x, SNOWY_PLAINS_OUTPOST_POS.z, 7.0, 13.5, 13.5 * 13.5, 6.8],
+  [SNOWY_SLOPES_IGLOO_POS.x, SNOWY_SLOPES_IGLOO_POS.z, 6.2, 12.5, 12.5 * 12.5, 13.5],
+  [JAGGED_PEAKS_POS.x, JAGGED_PEAKS_POS.z, 7.5, 14.5, 14.5 * 14.5, 22.0],
+  [FROZEN_PEAKS_POS.x, FROZEN_PEAKS_POS.z, 7.5, 14.5, 14.5 * 14.5, 20.5],
+  [STONY_PEAKS_POS.x, STONY_PEAKS_POS.z, 7.5, 14.5, 14.5 * 14.5, 16.5],
+  [DESERT_PYRAMID_POS.x, DESERT_PYRAMID_POS.z, 14.0, 22.0, 22.0 * 22.0, 5.2],
+  [DESERT_VILLAGE_POS.x, DESERT_VILLAGE_POS.z, 15.0, 23.0, 23.0 * 23.0, 4.6],
+  [DESERT_WELL_POS.x, DESERT_WELL_POS.z, 6.0, 12.0, 12.0 * 12.0, 4.8],
+  [DESERT_OUTPOST_POS.x, DESERT_OUTPOST_POS.z, 7.5, 14.0, 14.0 * 14.0, 5.4],
+  [SAVANNA_VILLAGE_POS.x, SAVANNA_VILLAGE_POS.z, 15.0, 23.0, 23.0 * 23.0, 5.2],
+  [SAVANNA_OUTPOST_POS.x, SAVANNA_OUTPOST_POS.z, 7.5, 14.0, 14.0 * 14.0, 5.6],
+  [BADLANDS_MINESHAFT_POS.x, BADLANDS_MINESHAFT_POS.z, 9.0, 16.0, 16.0 * 16.0, 6.4],
+  [SWAMP_HUT_POS.x, SWAMP_HUT_POS.z, 8.0, 14.0, 14.0 * 14.0, 2.35],
+  [DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 36.0, 72.0, 72.0 * 72.0, 10.0],
+  [VIKING_VILLAGE_POS.x, VIKING_VILLAGE_POS.z, 34.0, 66.0, 66.0 * 66.0, 6.0],
+  [RESORT_CORNER_POS.x, RESORT_CORNER_POS.z, 32.0, 64.0, 64.0 * 64.0, 4.0],
+  [RUINED_CASTLE_POS.x, RUINED_CASTLE_POS.z, 34.0, 68.0, 68.0 * 68.0, 6.0],
+];
+
+const BIOME_ANCHOR_CIRCLES: readonly [number, number, number, BiomeId][] = [
+  [TRIAL_CHAMBERS_POS.x, TRIAL_CHAMBERS_POS.z, 9.5 * 9.5, 'forest'],
+  [WOODLAND_MANSION_POS.x, WOODLAND_MANSION_POS.z, 13.5 * 13.5, 'dark_forest'],
+  [TAIGA_VILLAGE_POS.x, TAIGA_VILLAGE_POS.z, 12.5 * 12.5, 'taiga'],
+  [PILLAGER_OUTPOST_POS.x, PILLAGER_OUTPOST_POS.z, 9.5 * 9.5, 'taiga'],
+  [TRAIL_RUINS_POS.x, TRAIL_RUINS_POS.z, 10.5 * 10.5, 'old_growth_pine_taiga'],
+  [SNOWY_VILLAGE_POS.x, SNOWY_VILLAGE_POS.z, 12.5 * 12.5, 'snowy_taiga'],
+  [SNOWY_IGLOO_POS.x, SNOWY_IGLOO_POS.z, 9.5 * 9.5, 'snowy_taiga'],
+  [JUNGLE_TEMPLE_POS.x, JUNGLE_TEMPLE_POS.z, 12.0 * 12.0, 'jungle'],
+  [PLAINS_VILLAGE_POS.x, PLAINS_VILLAGE_POS.z, 16.0 * 16.0, 'plains'],
+  [RUINED_PORTAL_POS.x, RUINED_PORTAL_POS.z, 12.0 * 12.0, 'plains'],
+  [SUNFLOWER_VILLAGE_POS.x, SUNFLOWER_VILLAGE_POS.z, 16.0 * 16.0, 'sunflower_plains'],
+  [MEADOW_OUTPOST_POS.x, MEADOW_OUTPOST_POS.z, 14.0 * 14.0, 'meadow'],
+  [CHERRY_GROVE_POS.x, CHERRY_GROVE_POS.z, 28.0 * 28.0, 'cherry_grove'],
+  [ICE_SPIKES_POS.x, ICE_SPIKES_POS.z, 34.0 * 34.0, 'ice_spikes'],
+  [GROVE_OUTPOST_POS.x, GROVE_OUTPOST_POS.z, 15.0 * 15.0, 'grove'],
+  [SNOWY_PLAINS_OUTPOST_POS.x, SNOWY_PLAINS_OUTPOST_POS.z, 15.0 * 15.0, 'snowy_plains'],
+  [SNOWY_SLOPES_IGLOO_POS.x, SNOWY_SLOPES_IGLOO_POS.z, 15.0 * 15.0, 'snowy_slopes'],
+  [JAGGED_PEAKS_POS.x, JAGGED_PEAKS_POS.z, 26.0 * 26.0, 'jagged_peaks'],
+  [FROZEN_PEAKS_POS.x, FROZEN_PEAKS_POS.z, 26.0 * 26.0, 'frozen_peaks'],
+  [STONY_PEAKS_POS.x, STONY_PEAKS_POS.z, 26.0 * 26.0, 'stony_peaks'],
+  [MUSHROOM_FIELDS_POS.x, MUSHROOM_FIELDS_POS.z, 68.0 * 68.0, 'mushroom_fields'],
+  [DESERT_PYRAMID_POS.x, DESERT_PYRAMID_POS.z, 30.0 * 30.0, 'desert'],
+  [DESERT_VILLAGE_POS.x, DESERT_VILLAGE_POS.z, 30.0 * 30.0, 'desert'],
+  [DESERT_WELL_POS.x, DESERT_WELL_POS.z, 18.0 * 18.0, 'desert'],
+  [DESERT_OUTPOST_POS.x, DESERT_OUTPOST_POS.z, 20.0 * 20.0, 'desert'],
+  [SAVANNA_VILLAGE_POS.x, SAVANNA_VILLAGE_POS.z, 26.0 * 26.0, 'savanna'],
+  [SAVANNA_OUTPOST_POS.x, SAVANNA_OUTPOST_POS.z, 20.0 * 20.0, 'savanna'],
+  [SAVANNA_PLATEAU_POS.x, SAVANNA_PLATEAU_POS.z, 62.0 * 62.0, 'savanna_plateau'],
+  [WINDSWEPT_SAVANNA_POS.x, WINDSWEPT_SAVANNA_POS.z, 64.0 * 64.0, 'windswept_savanna'],
+  [WOODED_BADLANDS_POS.x, WOODED_BADLANDS_POS.z, 64.0 * 64.0, 'wooded_badlands'],
+  [ERODED_BADLANDS_POS.x, ERODED_BADLANDS_POS.z, 66.0 * 66.0, 'eroded_badlands'],
+  [BADLANDS_MINESHAFT_POS.x, BADLANDS_MINESHAFT_POS.z, 28.0 * 28.0, 'badlands'],
+  [SWAMP_HUT_POS.x, SWAMP_HUT_POS.z, 26.0 * 26.0, 'swamp'],
+  [MANGROVE_SWAMP_POS.x, MANGROVE_SWAMP_POS.z, 76.0 * 76.0, 'mangrove_swamp'],
+];
 
 export function getBaseTerrainHeight(x: number, z: number): number {
   if (activeTerrainWorldType === 'flat') return FLAT_GROUND_Y;
@@ -831,20 +971,26 @@ export function getBaseTerrainHeight(x: number, z: number): number {
   h += mountainFactor * (14.5 + ridgeDetail * 18.0);
 
   // Towering Jagged Peaks & Frozen Peaks summit crags
-  const dJagged = Math.hypot(x - JAGGED_PEAKS_POS.x, z - JAGGED_PEAKS_POS.z);
-  if (dJagged < 55) {
-    const jp = 1 - smoothstep(12, 55, dJagged);
+  let dx = x - JAGGED_PEAKS_POS.x;
+  let dz = z - JAGGED_PEAKS_POS.z;
+  let dSq = dx * dx + dz * dz;
+  if (dSq < 3025) {
+    const jp = 1 - smoothstep(12, 55, Math.sqrt(dSq));
     h += jp * (11.0 + Math.abs(Math.sin(x * 0.09) * Math.cos(z * 0.09)) * 7.0);
   }
-  const dFrozen = Math.hypot(x - FROZEN_PEAKS_POS.x, z - FROZEN_PEAKS_POS.z);
-  if (dFrozen < 52) {
-    const fp = 1 - smoothstep(12, 52, dFrozen);
+  dx = x - FROZEN_PEAKS_POS.x;
+  dz = z - FROZEN_PEAKS_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 2704) {
+    const fp = 1 - smoothstep(12, 52, Math.sqrt(dSq));
     h += fp * (9.5 + ridgeDetail * 6.5);
   }
   // Eastern Stony Peaks Calcite Ridge
-  const dStony = Math.hypot(x - STONY_PEAKS_POS.x, z - STONY_PEAKS_POS.z);
-  if (dStony < 54) {
-    const sp = 1 - smoothstep(12, 54, dStony);
+  dx = x - STONY_PEAKS_POS.x;
+  dz = z - STONY_PEAKS_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 2916) {
+    const sp = 1 - smoothstep(12, 54, Math.sqrt(dSq));
     h += sp * (11.5 + ridgeDetail * 6.0);
   }
   // Western Windswept Hills & Windswept Gravelly Hills dramatic cliffs
@@ -860,21 +1006,27 @@ export function getBaseTerrainHeight(x: number, z: number): number {
     h += wfMask * (6.5 + wfNoise * 8.5);
   }
   // Elevated Meadow plateau (central-west)
-  const dMeadow = Math.hypot(x - MEADOW_OUTPOST_POS.x, z - MEADOW_OUTPOST_POS.z);
-  if (dMeadow < 42) {
-    const mp = 1 - smoothstep(18, 42, dMeadow);
+  dx = x - MEADOW_OUTPOST_POS.x;
+  dz = z - MEADOW_OUTPOST_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 1764) {
+    const mp = 1 - smoothstep(18, 42, Math.sqrt(dSq));
     h = h * (1 - mp * 0.55) + 8.8 * (mp * 0.55);
   }
   // Scenic Cherry Grove highland terrace
-  const dCherry = Math.hypot(x - CHERRY_GROVE_POS.x, z - CHERRY_GROVE_POS.z);
-  if (dCherry < 42) {
-    const cp = 1 - smoothstep(18, 42, dCherry);
+  dx = x - CHERRY_GROVE_POS.x;
+  dz = z - CHERRY_GROVE_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 1764) {
+    const cp = 1 - smoothstep(18, 42, Math.sqrt(dSq));
     h = h * (1 - cp * 0.6) + 7.6 * (cp * 0.6);
   }
   // Flatten Arctic Snowy Plains & Ice Spikes basin in far NW
-  const dIce = Math.hypot(x - ICE_SPIKES_POS.x, z - ICE_SPIKES_POS.z);
-  if (dIce < 48) {
-    const ip = 1 - smoothstep(18, 48, dIce);
+  dx = x - ICE_SPIKES_POS.x;
+  dz = z - ICE_SPIKES_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 2304) {
+    const ip = 1 - smoothstep(18, 48, Math.sqrt(dSq));
     h = h * (1 - ip * 0.72) + 5.8 * (ip * 0.72);
   }
 
@@ -886,15 +1038,19 @@ export function getBaseTerrainHeight(x: number, z: number): number {
     h += dMask * dune;
   }
   // 2. Savanna Plateau elevated flat-top mesa
-  const dSavPlat = Math.hypot(x - SAVANNA_PLATEAU_POS.x, z - SAVANNA_PLATEAU_POS.z);
-  if (dSavPlat < 72) {
-    const sp = 1 - smoothstep(38, 72, dSavPlat);
+  dx = x - SAVANNA_PLATEAU_POS.x;
+  dz = z - SAVANNA_PLATEAU_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 5184) {
+    const sp = 1 - smoothstep(38, 72, Math.sqrt(dSq));
     h = h * (1 - sp * 0.8) + 12.6 * (sp * 0.8);
   }
   // 3. Windswept Savanna shattered stone crags
-  const dWindSav = Math.hypot(x - WINDSWEPT_SAVANNA_POS.x, z - WINDSWEPT_SAVANNA_POS.z);
-  if (dWindSav < 68) {
-    const ws = 1 - smoothstep(18, 68, dWindSav);
+  dx = x - WINDSWEPT_SAVANNA_POS.x;
+  dz = z - WINDSWEPT_SAVANNA_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 4624) {
+    const ws = 1 - smoothstep(18, 68, Math.sqrt(dSq));
     const crag = Math.abs(Math.sin(x * 0.075) * Math.cos(z * 0.085)) * 13.5;
     h += ws * (5.5 + crag);
   }
@@ -905,26 +1061,34 @@ export function getBaseTerrainHeight(x: number, z: number): number {
     const mesaStep = Math.floor(mesaRaw * 5.0) * 2.2;
     h += bMask * mesaStep;
   }
-  const dWoodedBad = Math.hypot(x - WOODED_BADLANDS_POS.x, z - WOODED_BADLANDS_POS.z);
-  if (dWoodedBad < 68) {
-    const wb = 1 - smoothstep(34, 68, dWoodedBad);
+  dx = x - WOODED_BADLANDS_POS.x;
+  dz = z - WOODED_BADLANDS_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 4624) {
+    const wb = 1 - smoothstep(34, 68, Math.sqrt(dSq));
     h = h * (1 - wb * 0.78) + 13.5 * (wb * 0.78);
   }
   // 5. Swamp & Mangrove Swamp low misty wetland basins (East outer ring)
-  const dEastSwamp = Math.hypot(x - SWAMP_HUT_POS.x, z - SWAMP_HUT_POS.z);
-  if (dEastSwamp < 82) {
-    const sw = 1 - smoothstep(45, 82, dEastSwamp);
+  dx = x - SWAMP_HUT_POS.x;
+  dz = z - SWAMP_HUT_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 6724) {
+    const sw = 1 - smoothstep(45, 82, Math.sqrt(dSq));
     h = h * (1 - sw * 0.72) + 2.15 * (sw * 0.72);
   }
-  const dMangrove = Math.hypot(x - MANGROVE_SWAMP_POS.x, z - MANGROVE_SWAMP_POS.z);
-  if (dMangrove < 82) {
-    const mg = 1 - smoothstep(45, 82, dMangrove);
+  dx = x - MANGROVE_SWAMP_POS.x;
+  dz = z - MANGROVE_SWAMP_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 6724) {
+    const mg = 1 - smoothstep(45, 82, Math.sqrt(dSq));
     h = h * (1 - mg * 0.72) + 2.05 * (mg * 0.72);
   }
   // 6. Mushroom Fields scenic elevated mycelium peninsula (Far NE)
-  const dMush = Math.hypot(x - MUSHROOM_FIELDS_POS.x, z - MUSHROOM_FIELDS_POS.z);
-  if (dMush < 85) {
-    const mf = 1 - smoothstep(48, 85, dMush);
+  dx = x - MUSHROOM_FIELDS_POS.x;
+  dz = z - MUSHROOM_FIELDS_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 7225) {
+    const mf = 1 - smoothstep(48, 85, Math.sqrt(dSq));
     h = h * (1 - mf * 0.72) + 6.8 * (mf * 0.72);
   }
   // 7. Carve Frozen River channel in far NW
@@ -935,154 +1099,180 @@ export function getBaseTerrainHeight(x: number, z: number): number {
   }
 
   // Waterfall cliff shelf around WATERFALL_POS
-  const dWaterfall = Math.hypot(x - WATERFALL_POS.x, z - WATERFALL_POS.z);
-  if (dWaterfall < 18) {
+  dx = x - WATERFALL_POS.x;
+  dz = z - WATERFALL_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 324) {
     const northSlope = smoothstep(WATERFALL_POS.z + 3, WATERFALL_POS.z - 6, z);
     const shelf = 2.6 + northSlope * 11.5;
-    const blend = 1 - smoothstep(9, 18, dWaterfall);
+    const blend = 1 - smoothstep(9, 18, Math.sqrt(dSq));
     h = h * (1 - blend) + shelf * blend;
   }
 
   // Flatten Mountain Cavern Entrance terrace around CAVE_POS
-  const dCave = Math.hypot(x - CAVE_POS.x, z - CAVE_POS.z);
-  if (dCave < 16) {
-    const blend = 1 - smoothstep(8, 16, dCave);
+  dx = x - CAVE_POS.x;
+  dz = z - CAVE_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 256) {
+    const blend = 1 - smoothstep(8, 16, Math.sqrt(dSq));
     h = h * (1 - blend) + 7.4 * blend;
   }
 
   // Flatten Abandoned Expedition clearing around EXPEDITION_POS
-  const dExp = Math.hypot(x - EXPEDITION_POS.x, z - EXPEDITION_POS.z);
-  if (dExp < 18) {
-    const blend = 1 - smoothstep(9, 18, dExp);
+  dx = x - EXPEDITION_POS.x;
+  dz = z - EXPEDITION_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 324) {
+    const blend = 1 - smoothstep(9, 18, Math.sqrt(dSq));
     h = h * (1 - blend) + 4.3 * blend;
   }
 
-  // Flatten gentle landing beach around spawn (0, 184)
-  const dSpawn = Math.hypot(x - PLAYER_SPAWN.x, z - PLAYER_SPAWN.z);
-  if (dSpawn < 18) {
-    const blend = 1 - smoothstep(8, 18, dSpawn);
+  // Flatten gentle landing beach around spawn
+  dx = x - PLAYER_SPAWN.x;
+  dz = z - PLAYER_SPAWN.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 324) {
+    const blend = 1 - smoothstep(8, 18, Math.sqrt(dSq));
     h = h * (1 - blend) + 1.45 * blend;
   }
 
   // Carve Azure Lake basin at LAKE_CENTER
-  const dLake = Math.hypot(x - LAKE_CENTER.x, z - LAKE_CENTER.z);
-  if (dLake < LAKE_CENTER.radius + 7) {
-    const lakeDepth = 1 - smoothstep(LAKE_CENTER.radius - 3, LAKE_CENTER.radius + 7, dLake);
-    const targetBed = 1.1;
-    h = h * (1 - lakeDepth) + targetBed * lakeDepth;
+  dx = x - LAKE_CENTER.x;
+  dz = z - LAKE_CENTER.z;
+  dSq = dx * dx + dz * dz;
+  const lakeOuter = LAKE_CENTER.radius + 7;
+  if (dSq < lakeOuter * lakeOuter) {
+    const lakeDepth = 1 - smoothstep(LAKE_CENTER.radius - 3, lakeOuter, Math.sqrt(dSq));
+    h = h * (1 - lakeDepth) + 1.1 * lakeDepth;
   }
 
   // Carve Crystal River + Western/Eastern/Southern Rapids River channels
-  const river = getRiverSample(x, z);
-  if (river.dist < 10.5 && (z > WATERFALL_POS.z + 2 || Math.abs(x) > 120)) {
-    const channelBlend = 1 - smoothstep(3.4, 10.5, river.dist);
-    const targetBed = river.waterY - 1.25;
-    h = h * (1 - channelBlend) + targetBed * channelBlend;
+  if (z > WATERFALL_POS.z + 2 || Math.abs(x) > 120) {
+    const river = getRiverSample(x, z);
+    if (river.dist < 10.5) {
+      const channelBlend = 1 - smoothstep(3.4, 10.5, river.dist);
+      const targetBed = river.waterY - 1.25;
+      h = h * (1 - channelBlend) + targetBed * channelBlend;
+    }
   }
 
   // Smooth Homestead Barnyard, Sunlit Grassy Pasture & Dusty Paddock terrace
-  const dHomestead = Math.hypot(x - HOMESTEAD_POS.x, z - HOMESTEAD_POS.z);
-  if (dHomestead < 24) {
-    const blend = 1 - smoothstep(13, 24, dHomestead);
+  dx = x - HOMESTEAD_POS.x;
+  dz = z - HOMESTEAD_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 576) {
+    const blend = 1 - smoothstep(13, 24, Math.sqrt(dSq));
     h = h * (1 - blend) + 3.15 * blend;
   }
 
   // Carve shallow muddy farm pond beside the homestead barnyard
-  const dPond = Math.hypot(x - FARM_POND_POS.x, z - FARM_POND_POS.z);
-  if (dPond < FARM_POND_POS.radius + 2.4) {
-    const pondDepth = 1 - smoothstep(FARM_POND_POS.radius - 1.8, FARM_POND_POS.radius + 2.4, dPond);
+  dx = x - FARM_POND_POS.x;
+  dz = z - FARM_POND_POS.z;
+  dSq = dx * dx + dz * dz;
+  const pondOuter = FARM_POND_POS.radius + 2.4;
+  if (dSq < pondOuter * pondOuter) {
+    const pondDepth = 1 - smoothstep(FARM_POND_POS.radius - 1.8, pondOuter, Math.sqrt(dSq));
     h = h * (1 - pondDepth) + 2.35 * pondDepth;
   }
 
   // Smooth Snowy Highland Woodland plateau for Timber Wolves
-  const dSnow = Math.hypot(x - SNOWY_WOODLAND_POS.x, z - SNOWY_WOODLAND_POS.z);
-  if (dSnow < 18) {
-    const snowBlend = 1 - smoothstep(9, 18, dSnow);
+  dx = x - SNOWY_WOODLAND_POS.x;
+  dz = z - SNOWY_WOODLAND_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 324) {
+    const snowBlend = 1 - smoothstep(9, 18, Math.sqrt(dSq));
     h = h * (1 - snowBlend) + 12.2 * snowBlend;
   }
 
   // Smooth Autumn Forest clearing for Red Fox undergrowth
-  const dAutumn = Math.hypot(x - AUTUMN_GROVE_POS.x, z - AUTUMN_GROVE_POS.z);
-  if (dAutumn < 14) {
-    const autumnBlend = 1 - smoothstep(7, 14, dAutumn);
+  dx = x - AUTUMN_GROVE_POS.x;
+  dz = z - AUTUMN_GROVE_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 196) {
+    const autumnBlend = 1 - smoothstep(7, 14, Math.sqrt(dSq));
     h = h * (1 - autumnBlend) + 3.25 * autumnBlend;
   }
 
   // Carve shallow Murky Jungle Swamp lagoon for Saltwater Crocodile
-  const dSwamp = Math.hypot(x - SWAMP_POS.x, z - SWAMP_POS.z);
-  if (dSwamp < SWAMP_POS.radius + 4.0) {
-    const swampBlend = 1 - smoothstep(SWAMP_POS.radius - 2.5, SWAMP_POS.radius + 4.0, dSwamp);
+  dx = x - SWAMP_POS.x;
+  dz = z - SWAMP_POS.z;
+  dSq = dx * dx + dz * dz;
+  const swampOuter = SWAMP_POS.radius + 4.0;
+  if (dSq < swampOuter * swampOuter) {
+    const swampBlend = 1 - smoothstep(SWAMP_POS.radius - 2.5, swampOuter, Math.sqrt(dSq));
     h = h * (1 - swampBlend) + 0.85 * swampBlend;
   }
 
   // Smooth flat meadow terrace for Golden Wheatfield & Farmer Garden Market
-  const dWheat = Math.hypot(x - WHEATFIELD_POS.x, z - WHEATFIELD_POS.z);
-  if (dWheat < 14.5) {
-    const wBlend = 1 - smoothstep(8.5, 14.5, dWheat);
+  dx = x - WHEATFIELD_POS.x;
+  dz = z - WHEATFIELD_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 210.25) {
+    const wBlend = 1 - smoothstep(8.5, 14.5, Math.sqrt(dSq));
     h = h * (1 - wBlend) + 3.15 * wBlend;
   }
-  const dFarmer = Math.hypot(x - FARMER_POS.x, z - FARMER_POS.z);
-  if (dFarmer < 13.5) {
-    const fBlend = 1 - smoothstep(7.5, 13.5, dFarmer);
+  dx = x - FARMER_POS.x;
+  dz = z - FARMER_POS.z;
+  dSq = dx * dx + dz * dz;
+  if (dSq < 182.25) {
+    const fBlend = 1 - smoothstep(7.5, 13.5, Math.sqrt(dSq));
     h = h * (1 - fBlend) + 3.15 * fBlend;
   }
 
-  // Expanded 3-Bay Custom Vehicle Garage clearing & wide driveways to island trails & beaches
-  const gdx = Math.max(0, Math.abs(x - VEHICLE_GARAGE_POS.x) - 11.2);
-  const gdz = Math.max(0, Math.abs(z - VEHICLE_GARAGE_POS.z) - 6.8);
-  const dGarageBox = Math.hypot(gdx, gdz);
-  if (dGarageBox < 5.5) {
-    const garageBlend = 1 - smoothstep(1.2, 5.5, dGarageBox);
-    h = h * (1 - garageBlend) + VEHICLE_GARAGE_Y * garageBlend;
+  // Expanded 3-Bay Custom Vehicle Garage clearing & wide driveways (skip when outside garage zone)
+  if (x >= -90 && x <= 10 && z >= 128 && z <= 200) {
+    const gdx = Math.max(0, Math.abs(x - VEHICLE_GARAGE_POS.x) - 11.2);
+    const gdz = Math.max(0, Math.abs(z - VEHICLE_GARAGE_POS.z) - 6.8);
+    const gDistSq = gdx * gdx + gdz * gdz;
+    if (gDistSq < 30.25) {
+      const garageBlend = 1 - smoothstep(1.2, 5.5, Math.sqrt(gDistSq));
+      h = h * (1 - garageBlend) + VEHICLE_GARAGE_Y * garageBlend;
+    }
+
+    const mainDrive = distSqToSegment(
+      x,
+      z,
+      VEHICLE_GARAGE_POS.x + 2,
+      VEHICLE_GARAGE_POS.z + 6.5,
+      -4,
+      174,
+    );
+    if (mainDrive.distSq < 40.96) {
+      const dBlend = 1 - smoothstep(3.0, 6.4, Math.sqrt(mainDrive.distSq));
+      const targetDriveH = VEHICLE_GARAGE_Y * (1 - mainDrive.t) + 1.85 * mainDrive.t;
+      h = h * (1 - dBlend * 0.85) + targetDriveH * (dBlend * 0.85);
+    }
+
+    const westDrive = distSqToSegment(
+      x,
+      z,
+      VEHICLE_GARAGE_POS.x - 6,
+      VEHICLE_GARAGE_POS.z + 6.5,
+      -78,
+      184,
+    );
+    if (westDrive.distSq < 33.64) {
+      const wBlend = 1 - smoothstep(2.6, 5.8, Math.sqrt(westDrive.distSq));
+      const targetWestH = VEHICLE_GARAGE_Y * (1 - westDrive.t) + 1.55 * westDrive.t;
+      h = h * (1 - wBlend * 0.82) + targetWestH * (wBlend * 0.82);
+    }
+
+    const eastDrive = distSqToSegment(
+      x,
+      z,
+      VEHICLE_GARAGE_POS.x + 10.5,
+      VEHICLE_GARAGE_POS.z + 1.5,
+      -6,
+      138,
+    );
+    if (eastDrive.distSq < 29.16) {
+      const eBlend = 1 - smoothstep(2.4, 5.4, Math.sqrt(eastDrive.distSq));
+      const targetEastH = VEHICLE_GARAGE_Y * (1 - eastDrive.t) + 2.85 * eastDrive.t;
+      h = h * (1 - eBlend * 0.8) + targetEastH * (eBlend * 0.8);
+    }
   }
 
-  // Wide South-East main driveway apron -> Southern Beach & Spawn Trail
-  const mainDrive = distToSegment(
-    x,
-    z,
-    VEHICLE_GARAGE_POS.x + 2,
-    VEHICLE_GARAGE_POS.z + 6.5,
-    -4,
-    174,
-  );
-  if (mainDrive.dist < 6.4) {
-    const dBlend = 1 - smoothstep(3.0, 6.4, mainDrive.dist);
-    const targetDriveH = VEHICLE_GARAGE_Y * (1 - mainDrive.t) + 1.85 * mainDrive.t;
-    h = h * (1 - dBlend * 0.85) + targetDriveH * (dBlend * 0.85);
-  }
-
-  // Wide South-West driveway ramp -> Western Beach Shore
-  const westDrive = distToSegment(
-    x,
-    z,
-    VEHICLE_GARAGE_POS.x - 6,
-    VEHICLE_GARAGE_POS.z + 6.5,
-    -78,
-    184,
-  );
-  if (westDrive.dist < 5.8) {
-    const wBlend = 1 - smoothstep(2.6, 5.8, westDrive.dist);
-    const targetWestH = VEHICLE_GARAGE_Y * (1 - westDrive.t) + 1.55 * westDrive.t;
-    h = h * (1 - wBlend * 0.82) + targetWestH * (wBlend * 0.82);
-  }
-
-  // Wide East connector -> Central Island Trail
-  const eastDrive = distToSegment(
-    x,
-    z,
-    VEHICLE_GARAGE_POS.x + 10.5,
-    VEHICLE_GARAGE_POS.z + 1.5,
-    -6,
-    138,
-  );
-  if (eastDrive.dist < 5.4) {
-    const eBlend = 1 - smoothstep(2.4, 5.4, eastDrive.dist);
-    const targetEastH = VEHICLE_GARAGE_Y * (1 - eastDrive.t) + 2.85 * eastDrive.t;
-    h = h * (1 - eBlend * 0.8) + targetEastH * (eBlend * 0.8);
-  }
-
-  // Scenic Hilltop Plateau (covering Main House, Porch, and South Music Studio Wing) + gentle East Access Ramp
-  // Applied after lower garage clearing so the studio wing never dips toward the lower garage elevation.
+  // Scenic Hilltop Plateau + gentle East Access Ramp
   const hdxBox = Math.max(
     0,
     Math.max(HILL_HOUSE_POS.x - 6.6 - x, x - (HILL_HOUSE_POS.x + 7.4)),
@@ -1091,12 +1281,11 @@ export function getBaseTerrainHeight(x: number, z: number): number {
     0,
     Math.max(HILL_HOUSE_POS.z - 5.6 - z, z - (HILL_HOUSE_POS.z + 9.8)),
   );
-  const dHouseBox = Math.hypot(hdxBox, hdzBox);
-  if (dHouseBox < 5.4) {
-    const houseBlend = 1 - smoothstep(0.6, 5.4, dHouseBox);
+  const houseDistSq = hdxBox * hdxBox + hdzBox * hdzBox;
+  if (houseDistSq < 29.16) {
+    const houseBlend = 1 - smoothstep(0.6, 5.4, Math.sqrt(houseDistSq));
     h = h * (1 - houseBlend) + HILL_HOUSE_Y * houseBlend;
   }
-  // Gentle walkable ramp along +X (east) side from hilltop porch (x=-37.5) down to farm path (x=-23.5)
   const dzRamp = Math.abs(z - HILL_HOUSE_POS.z);
   if (
     x >= HILL_HOUSE_POS.x + 6.4 &&
@@ -1109,62 +1298,36 @@ export function getBaseTerrainHeight(x: number, z: number): number {
     h = h * (1 - sideBlend) + rampH * sideBlend;
   }
 
-  // Flatten foundation terraces for new biome landmarks (Mansions, Villages, Outposts, Ruins, Igloos, Temples)
-  const flattenPad = (px: number, pz: number, innerR: number, outerR: number, targetH: number) => {
-    const d = Math.hypot(x - px, z - pz);
-    if (d < outerR) {
-      const blend = 1 - smoothstep(innerR, outerR, d);
-      h = h * (1 - blend) + targetH * blend;
+  // Flatten foundation terraces using zero-allocation static lookup table
+  for (let i = 0; i < FLAT_PADS.length; i++) {
+    const p = FLAT_PADS[i];
+    const pdx = x - p[0];
+    const pdz = z - p[1];
+    const pdSq = pdx * pdx + pdz * pdz;
+    if (pdSq < p[4]) {
+      const blend = 1 - smoothstep(p[2], p[3], Math.sqrt(pdSq));
+      h = h * (1 - blend) + p[5] * blend;
     }
-  };
-  flattenPad(TRIAL_CHAMBERS_POS.x, TRIAL_CHAMBERS_POS.z, 6.5, 13.5, 3.6);
-  flattenPad(WOODLAND_MANSION_POS.x, WOODLAND_MANSION_POS.z, 10.5, 17.5, 4.1);
-  flattenPad(TAIGA_VILLAGE_POS.x, TAIGA_VILLAGE_POS.z, 11.5, 18.0, 5.2);
-  flattenPad(PILLAGER_OUTPOST_POS.x, PILLAGER_OUTPOST_POS.z, 6.2, 12.5, 5.0);
-  flattenPad(TRAIL_RUINS_POS.x, TRAIL_RUINS_POS.z, 6.5, 13.0, 4.5);
-  flattenPad(SNOWY_VILLAGE_POS.x, SNOWY_VILLAGE_POS.z, 11.5, 18.0, 9.4);
-  flattenPad(SNOWY_IGLOO_POS.x, SNOWY_IGLOO_POS.z, 5.8, 11.5, 9.0);
-  flattenPad(JUNGLE_TEMPLE_POS.x, JUNGLE_TEMPLE_POS.z, 7.5, 14.5, 4.2);
-  // New biome landmark pads (Plains Villages, Ruined Portal, Peak Outposts & Slopes Igloo)
-  flattenPad(PLAINS_VILLAGE_POS.x, PLAINS_VILLAGE_POS.z, 13.0, 21.0, 4.4);
-  flattenPad(SUNFLOWER_VILLAGE_POS.x, SUNFLOWER_VILLAGE_POS.z, 12.0, 19.0, 4.2);
-  flattenPad(RUINED_PORTAL_POS.x, RUINED_PORTAL_POS.z, 6.5, 13.5, 4.6);
-  flattenPad(MEADOW_OUTPOST_POS.x, MEADOW_OUTPOST_POS.z, 7.0, 13.5, 8.8);
-  flattenPad(GROVE_OUTPOST_POS.x, GROVE_OUTPOST_POS.z, 7.0, 13.5, 11.2);
-  flattenPad(SNOWY_PLAINS_OUTPOST_POS.x, SNOWY_PLAINS_OUTPOST_POS.z, 7.0, 13.5, 6.8);
-  flattenPad(SNOWY_SLOPES_IGLOO_POS.x, SNOWY_SLOPES_IGLOO_POS.z, 6.2, 12.5, 13.5);
-  flattenPad(JAGGED_PEAKS_POS.x, JAGGED_PEAKS_POS.z, 7.5, 14.5, 22.0);
-  flattenPad(FROZEN_PEAKS_POS.x, FROZEN_PEAKS_POS.z, 7.5, 14.5, 20.5);
-  flattenPad(STONY_PEAKS_POS.x, STONY_PEAKS_POS.z, 7.5, 14.5, 16.5);
-  // Mega-Island (2x) landmark pads
-  flattenPad(DESERT_PYRAMID_POS.x, DESERT_PYRAMID_POS.z, 14.0, 22.0, 5.2);
-  flattenPad(DESERT_VILLAGE_POS.x, DESERT_VILLAGE_POS.z, 15.0, 23.0, 4.6);
-  flattenPad(DESERT_WELL_POS.x, DESERT_WELL_POS.z, 6.0, 12.0, 4.8);
-  flattenPad(DESERT_OUTPOST_POS.x, DESERT_OUTPOST_POS.z, 7.5, 14.0, 5.4);
-  flattenPad(SAVANNA_VILLAGE_POS.x, SAVANNA_VILLAGE_POS.z, 15.0, 23.0, 5.2);
-  flattenPad(SAVANNA_OUTPOST_POS.x, SAVANNA_OUTPOST_POS.z, 7.5, 14.0, 5.6);
-  flattenPad(BADLANDS_MINESHAFT_POS.x, BADLANDS_MINESHAFT_POS.z, 9.0, 16.0, 6.4);
-  flattenPad(SWAMP_HUT_POS.x, SWAMP_HUT_POS.z, 8.0, 14.0, 2.35);
-  // Grand Finale Pack Biome Terraces (with yClearance matching GRAND_FINALE_PACK)
-  flattenPad(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 36.0, 72.0, 10.0);
-  flattenPad(VIKING_VILLAGE_POS.x, VIKING_VILLAGE_POS.z, 34.0, 66.0, 6.0);
-  flattenPad(RESORT_CORNER_POS.x, RESORT_CORNER_POS.z, 32.0, 64.0, 4.0);
-  flattenPad(RUINED_CASTLE_POS.x, RUINED_CASTLE_POS.z, 34.0, 68.0, 6.0);
+  }
 
   return h;
 }
 
 export function getBiomeAt(x: number, z: number): BiomeId {
   if (activeTerrainWorldType === 'flat') return 'grassland';
-  const dExp = Math.hypot(x - EXPEDITION_POS.x, z - EXPEDITION_POS.z);
-  if (dExp < 14) return 'expedition';
+  const edx = x - EXPEDITION_POS.x;
+  const edz = z - EXPEDITION_POS.z;
+  if (edx * edx + edz * edz < 196) return 'expedition';
 
-  const dCave = Math.hypot(x - CAVE_POS.x, z - CAVE_POS.z);
-  if (dCave < 11) return 'cave';
+  const cdx = x - CAVE_POS.x;
+  const cdz = z - CAVE_POS.z;
+  if (cdx * cdx + cdz * cdz < 121) return 'cave';
 
   const h = getTerrainHeight(x, z);
-  const dLake = Math.hypot(x - LAKE_CENTER.x, z - LAKE_CENTER.z);
-  if (dLake < LAKE_CENTER.radius + 2.5) return 'lake';
+  const ldx = x - LAKE_CENTER.x;
+  const ldz = z - LAKE_CENTER.z;
+  const lakeLim = LAKE_CENTER.radius + 2.5;
+  if (ldx * ldx + ldz * ldz < lakeLim * lakeLim) return 'lake';
 
   const river = getRiverSample(x, z);
   if (river.dist < 7.5 && river.waterY > 0.15) return 'river';
@@ -1174,19 +1337,27 @@ export function getBiomeAt(x: number, z: number): BiomeId {
 
   // 5 Distinct Ocean Zones around the 740m coastline
   if (h < OCEAN_LEVEL - 0.15) {
-    const rDist = Math.hypot(x, z);
     if (z < -340) return 'frozen_ocean';
     if (z < -60) return 'cold_ocean';
-    if (z >= 260 && x > -200 && rDist < 840) return 'warm_ocean';
-    if (z >= -60 && z < 260 && rDist < 840) return 'lukewarm_ocean';
+    const rDistSq = x * x + z * z;
+    if (z >= 260 && x > -200 && rDistSq < 705600) return 'warm_ocean';
+    if (z >= -60 && z < 260 && rDistSq < 705600) return 'lukewarm_ocean';
     return 'ocean';
   }
 
-  // Grand Finale Pack Outer Biomes (spacious, distinct zones on the 740m expanded island)
-  if (Math.hypot(x - DRAGON_VALLEY_POS.x, z - DRAGON_VALLEY_POS.z) < 92.0) return 'dragon_valley';
-  if (Math.hypot(x - VIKING_VILLAGE_POS.x, z - VIKING_VILLAGE_POS.z) < 88.0) return 'viking_village';
-  if (Math.hypot(x - RESORT_CORNER_POS.x, z - RESORT_CORNER_POS.z) < 94.0) return 'resort_corner';
-  if (Math.hypot(x - RUINED_CASTLE_POS.x, z - RUINED_CASTLE_POS.z) < 96.0) return 'ruined_castle';
+  // Grand Finale Pack Outer Biomes
+  let bdx = x - DRAGON_VALLEY_POS.x;
+  let bdz = z - DRAGON_VALLEY_POS.z;
+  if (bdx * bdx + bdz * bdz < 8464) return 'dragon_valley';
+  bdx = x - VIKING_VILLAGE_POS.x;
+  bdz = z - VIKING_VILLAGE_POS.z;
+  if (bdx * bdx + bdz * bdz < 7744) return 'viking_village';
+  bdx = x - RESORT_CORNER_POS.x;
+  bdz = z - RESORT_CORNER_POS.z;
+  if (bdx * bdx + bdz * bdz < 8836) return 'resort_corner';
+  bdx = x - RUINED_CASTLE_POS.x;
+  bdz = z - RUINED_CASTLE_POS.z;
+  if (bdx * bdx + bdz * bdz < 9216) return 'ruined_castle';
 
   // 3 Coastal Shore Biomes (Snowy Beach, Stony Shore, Sandy Beach)
   if (h < 2.25) {
@@ -1196,42 +1367,14 @@ export function getBiomeAt(x: number, z: number): BiomeId {
   }
 
   // Anchor biome structure zones cleanly inside their home biome
-  if (Math.hypot(x - TRIAL_CHAMBERS_POS.x, z - TRIAL_CHAMBERS_POS.z) < 9.5) return 'forest';
-  if (Math.hypot(x - WOODLAND_MANSION_POS.x, z - WOODLAND_MANSION_POS.z) < 13.5) return 'dark_forest';
-  if (Math.hypot(x - TAIGA_VILLAGE_POS.x, z - TAIGA_VILLAGE_POS.z) < 12.5) return 'taiga';
-  if (Math.hypot(x - PILLAGER_OUTPOST_POS.x, z - PILLAGER_OUTPOST_POS.z) < 9.5) return 'taiga';
-  if (Math.hypot(x - TRAIL_RUINS_POS.x, z - TRAIL_RUINS_POS.z) < 10.5) return 'old_growth_pine_taiga';
-  if (Math.hypot(x - SNOWY_VILLAGE_POS.x, z - SNOWY_VILLAGE_POS.z) < 12.5) return 'snowy_taiga';
-  if (Math.hypot(x - SNOWY_IGLOO_POS.x, z - SNOWY_IGLOO_POS.z) < 9.5) return 'snowy_taiga';
-  if (Math.hypot(x - JUNGLE_TEMPLE_POS.x, z - JUNGLE_TEMPLE_POS.z) < 12.0) return 'jungle';
-  if (Math.hypot(x - PLAINS_VILLAGE_POS.x, z - PLAINS_VILLAGE_POS.z) < 16.0) return 'plains';
-  if (Math.hypot(x - RUINED_PORTAL_POS.x, z - RUINED_PORTAL_POS.z) < 12.0) return 'plains';
-  if (Math.hypot(x - SUNFLOWER_VILLAGE_POS.x, z - SUNFLOWER_VILLAGE_POS.z) < 16.0) return 'sunflower_plains';
-  if (Math.hypot(x - MEADOW_OUTPOST_POS.x, z - MEADOW_OUTPOST_POS.z) < 14.0) return 'meadow';
-  if (Math.hypot(x - CHERRY_GROVE_POS.x, z - CHERRY_GROVE_POS.z) < 28.0) return 'cherry_grove';
-  if (Math.hypot(x - ICE_SPIKES_POS.x, z - ICE_SPIKES_POS.z) < 34.0) return 'ice_spikes';
-  if (Math.hypot(x - GROVE_OUTPOST_POS.x, z - GROVE_OUTPOST_POS.z) < 15.0) return 'grove';
-  if (Math.hypot(x - SNOWY_PLAINS_OUTPOST_POS.x, z - SNOWY_PLAINS_OUTPOST_POS.z) < 15.0) return 'snowy_plains';
-  if (Math.hypot(x - SNOWY_SLOPES_IGLOO_POS.x, z - SNOWY_SLOPES_IGLOO_POS.z) < 15.0) return 'snowy_slopes';
-  if (Math.hypot(x - JAGGED_PEAKS_POS.x, z - JAGGED_PEAKS_POS.z) < 26.0) return 'jagged_peaks';
-  if (Math.hypot(x - FROZEN_PEAKS_POS.x, z - FROZEN_PEAKS_POS.z) < 26.0) return 'frozen_peaks';
-  if (Math.hypot(x - STONY_PEAKS_POS.x, z - STONY_PEAKS_POS.z) < 26.0) return 'stony_peaks';
-
-  // Anchor Mega-Island (2x) biome landmarks
-  if (Math.hypot(x - MUSHROOM_FIELDS_POS.x, z - MUSHROOM_FIELDS_POS.z) < 68.0) return 'mushroom_fields';
-  if (Math.hypot(x - DESERT_PYRAMID_POS.x, z - DESERT_PYRAMID_POS.z) < 30.0) return 'desert';
-  if (Math.hypot(x - DESERT_VILLAGE_POS.x, z - DESERT_VILLAGE_POS.z) < 30.0) return 'desert';
-  if (Math.hypot(x - DESERT_WELL_POS.x, z - DESERT_WELL_POS.z) < 18.0) return 'desert';
-  if (Math.hypot(x - DESERT_OUTPOST_POS.x, z - DESERT_OUTPOST_POS.z) < 20.0) return 'desert';
-  if (Math.hypot(x - SAVANNA_VILLAGE_POS.x, z - SAVANNA_VILLAGE_POS.z) < 26.0) return 'savanna';
-  if (Math.hypot(x - SAVANNA_OUTPOST_POS.x, z - SAVANNA_OUTPOST_POS.z) < 20.0) return 'savanna';
-  if (Math.hypot(x - SAVANNA_PLATEAU_POS.x, z - SAVANNA_PLATEAU_POS.z) < 62.0) return 'savanna_plateau';
-  if (Math.hypot(x - WINDSWEPT_SAVANNA_POS.x, z - WINDSWEPT_SAVANNA_POS.z) < 64.0) return 'windswept_savanna';
-  if (Math.hypot(x - WOODED_BADLANDS_POS.x, z - WOODED_BADLANDS_POS.z) < 64.0) return 'wooded_badlands';
-  if (Math.hypot(x - ERODED_BADLANDS_POS.x, z - ERODED_BADLANDS_POS.z) < 66.0) return 'eroded_badlands';
-  if (Math.hypot(x - BADLANDS_MINESHAFT_POS.x, z - BADLANDS_MINESHAFT_POS.z) < 28.0) return 'badlands';
-  if (Math.hypot(x - SWAMP_HUT_POS.x, z - SWAMP_HUT_POS.z) < 26.0) return 'swamp';
-  if (Math.hypot(x - MANGROVE_SWAMP_POS.x, z - MANGROVE_SWAMP_POS.z) < 76.0) return 'mangrove_swamp';
+  for (let i = 0; i < BIOME_ANCHOR_CIRCLES.length; i++) {
+    const c = BIOME_ANCHOR_CIRCLES[i];
+    const adx = x - c[0];
+    const adz = z - c[1];
+    if (adx * adx + adz * adz < c[2]) {
+      return c[3];
+    }
+  }
 
   // Keep homestead pasture, farmer market, wheatfield, hilltop house & garage cleanly in Amber Savanna
   if (x >= -96 && x < -14 && z >= 76 && z <= 178) return 'grassland';

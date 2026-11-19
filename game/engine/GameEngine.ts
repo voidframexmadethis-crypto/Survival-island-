@@ -483,6 +483,12 @@ export class GameEngine {
   private _tvToCam = new THREE.Vector3();
   private _tvToTarget = new THREE.Vector3();
   private _camForward = new THREE.Vector3();
+  private _tvRayDirScratch = new THREE.Vector3();
+  private tvLastRayElapsed = -10;
+  private tvLastRayResult = false;
+  private tvLastRayCamX = 0;
+  private tvLastRayCamY = 0;
+  private tvLastRayCamZ = 0;
   private sunLight!: THREE.DirectionalLight;
   private moonLight!: THREE.DirectionalLight;
   private skyFillLight!: THREE.DirectionalLight;
@@ -513,11 +519,15 @@ export class GameEngine {
   private elapsed = 0;
   private hudSyncTimer = 0;
 
-  // Performance Engine & 1500 FPS Lock + Fixed-Timestep Accumulator + 3.5ms FrameBudgetQueue
-  private static readonly FIXED_STEP = 1 / 60;
-  private simAccumulator = 0;
+  // Performance Engine & 1500 FPS Lock + Smooth Clamped Substepping + 3.5ms FrameBudgetQueue
+  private ecosystemTickAccum = 0;
   private worldCullTimer = 0;
   private shadowUpdateFrame = 0;
+  private shadowLastCamX = NaN;
+  private shadowLastCamY = NaN;
+  private shadowLastCamZ = NaN;
+  private shadowLastYaw = NaN;
+  private shadowLastPitch = NaN;
   private worldQueue = new FrameBudgetQueue(3.5);
   private _scavengerTargetsScratch: ScavengerCarcassTarget[] = [];
   private currentFps = 60;
@@ -552,8 +562,11 @@ export class GameEngine {
     { id: 'gf_castle_boss', zoneKey: 'ruined castle', x: -360, z: -520, hp: 180, maxHp: 180, active: true, isBoss: true, name: 'Fallen King Ghost' },
   ];
 
-  // Spatial Hash Grid (16m cells) for O(1) zero-GC world collider lookups
+  // Spatial Hash Grids (16m cells) for O(1) zero-GC world collider and resource node lookups
   private colliderGrid = new Map<number, { x: number; z: number; radius: number; nodeId?: string }[]>();
+  private resourceNodeGrid = new Map<number, ResourceNodeState[]>();
+  private activeFellingNodeIds = new Set<string>();
+  private respawningNodeIds = new Set<string>();
   private interactionProbeTimer = 0;
   private smartTvUpdateTimer = 0;
   private tvBassReportTimer = 0;
@@ -770,9 +783,39 @@ export class GameEngine {
     { group: THREE.Group; fireLight?: THREE.PointLight; flameGroup?: THREE.Group }
   >();
   private visitedBiomes: Set<BiomeId> = new Set(['beach']);
+  private cachedVisitedBiomes: BiomeId[] = ['beach'];
   private exploredCells: Set<number> = new Set();
+  private cachedExploredCells: number[] = [];
+  private exploredCellsDirty = true;
+  private lastExploredCx = -9999;
+  private lastExploredCz = -9999;
   private discoveredLocations: Set<string> = new Set();
   private completedMissionIds: Set<string> = new Set();
+  private cachedCompletedMissionIds: string[] = [];
+  private cachedVisitedDimensions: DimensionId[] = ['overworld'];
+  private cachedHudInventory: InventorySlot[] = [];
+  private cachedHudBackpack: BackpackCompartmentEntry[] = [];
+  private cachedHudStructures: PlacedStructure[] = [];
+  private cachedHudCrops: PlantedCrop[] = [];
+  private cachedHudFridge: InventorySlot[] = [];
+  private cachedHudVehicles: ModularVehicleData[] = [];
+  private vehicleSpecsCache = new WeakMap<
+    VehicleModulePlacement[],
+    ReturnType<typeof computeVehicleSpecs>
+  >();
+  private vehicleRestCache = new Map<
+    string,
+    {
+      x: number;
+      z: number;
+      structVer: number;
+      restY: number;
+      groundSurf: number;
+      nextRefreshAt: number;
+    }
+  >();
+  private lastBuildPreviewKey = '';
+  private structuralVersion = 0;
   private trackedSightings: TrackedSighting[] = [];
   private stats: GameStats = this.createEmptyStats();
   private gameOver = false;
@@ -825,6 +868,7 @@ export class GameEngine {
   private particleInstanced!: THREE.InstancedMesh;
   private particlePool: PooledParticle[] = [];
   private particleWriteIdx = 0;
+  private hasActiveParticles = false;
   private particleGeo = new THREE.BoxGeometry(0.14, 0.14, 0.14);
   private particleMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
   private shellCasingGeo = new THREE.CylinderGeometry(0.014, 0.014, 0.048, 6);
@@ -879,6 +923,8 @@ export class GameEngine {
   private terrainEngine!: VolumetricTerrainEngine;
   private structuralBlocks: StructuralBlock[] = [];
   private structuralMeshes = new Map<string, THREE.Group>();
+  private cachedStructuralMeshList: THREE.Object3D[] = [];
+  private structuralMeshListDirty = true;
   private collapsingBlocks: {
     mesh: THREE.Group;
     kind: StructuralBlockKind;
@@ -1163,6 +1209,7 @@ export class GameEngine {
     this.realisticOcean = new RealisticOcean(this.scene);
     this.world.oceanMesh.visible = false;
     this.world.resourceNodes.forEach((n) => this.nodeById.set(n.id, n));
+    this.buildResourceNodeSpatialGrid();
     this.buildColliderSpatialGrid();
     this.terrainEngine = new VolumetricTerrainEngine(this.scene);
 
@@ -1361,7 +1408,14 @@ export class GameEngine {
     this.applyGraphicsProfile();
 
     if (!this.isSoftwareGl) {
+      // Temporarily mark hidden worlds/ship visible during boot compilation so shaders pre-warm
+      const prevFlatVis = this.flatWorld.flatGroup.visible;
+      const prevShipVis = this.shipModel.visible;
+      this.flatWorld.setVisible(true);
+      this.shipModel.visible = true;
       this.renderer.compile(this.scene, this.camera);
+      this.flatWorld.setVisible(prevFlatVis);
+      this.shipModel.visible = prevShipVis;
     }
   }
 
@@ -1435,7 +1489,6 @@ export class GameEngine {
       this.clock.start();
       this.clock.getDelta();
       this.lastFramePerfMs = performance.now();
-      this.simAccumulator = 0;
       this.fpsSampleTimer = 0;
       this.fpsSampleFrames = 0;
       this.fpsSampleAccumMs = 0;
@@ -1555,7 +1608,7 @@ export class GameEngine {
       }
     } else if (e.code === 'KeyC' || e.code === 'ControlLeft') {
       if (this.activeVehicleId) {
-        if (activeHasHyd && !computeVehicleSpecs(activeVehicle!.modules).canFly) {
+        if (activeHasHyd && !this.getVehicleSpecs(activeVehicle!).canFly) {
           this.triggerHydraulicAction('drop');
         } else {
           this.vehicleDescendHold = true;
@@ -1691,9 +1744,7 @@ export class GameEngine {
 
     const shadowMapSize =
       preset === 'ultra'
-        ? this.isTouchDevice
-          ? 2048
-          : 4096
+        ? 2048
         : preset === 'high'
           ? this.isTouchDevice
             ? 1024
@@ -1706,10 +1757,12 @@ export class GameEngine {
         ? 120
         : preset === 'high'
           ? this.isTouchDevice
-            ? 72
+            ? 56
             : 100
           : preset === 'medium'
-            ? 64
+            ? this.isTouchDevice
+              ? 52
+              : 64
             : 44;
     const shadowFar =
       preset === 'ultra'
@@ -1721,8 +1774,15 @@ export class GameEngine {
           : preset === 'medium'
             ? 220
             : 170;
-    const shadowRadius =
-      preset === 'ultra' ? 5 : preset === 'high' ? 4 : preset === 'medium' ? 3 : 2;
+    const shadowRadius = this.isTouchDevice
+      ? Math.min(2, preset === 'low' ? 1 : 2)
+      : preset === 'ultra'
+        ? 5
+        : preset === 'high'
+          ? 4
+          : preset === 'medium'
+            ? 3
+            : 2;
     let dpr = 1;
     if (!this.isSoftwareGl) {
       const nativeDpr = window.devicePixelRatio || 1;
@@ -1730,8 +1790,6 @@ export class GameEngine {
         dpr = 1;
       } else if (this.isTouchDevice || preset === 'medium') {
         dpr = Math.min(nativeDpr, 1.5);
-      } else if (preset === 'ultra') {
-        dpr = Math.min(nativeDpr, 2.5);
       } else {
         dpr = Math.min(nativeDpr, 2);
       }
@@ -2611,7 +2669,7 @@ export class GameEngine {
     const camDist = this._tvToTarget.length();
     const inFrontOfCam =
       camDist > 0.05 &&
-      this._tvToTarget.clone().divideScalar(camDist).dot(this._camForward) > 0.12;
+      (this._tvToTarget.dot(this._camForward) / camDist) > 0.12;
 
     if (facingDot <= 0.06 || !inFrontOfCam || camDist > 22) {
       this.emitTvProjection(null);
@@ -2619,12 +2677,23 @@ export class GameEngine {
     }
 
     if (tvTarget.isHouseTv && this.tvOccluderMeshes.length > 0 && camDist > 0.4) {
-      const dir = this._tvToTarget.clone().normalize();
-      this.tvRaycaster.set(this.camera.position, dir);
-      this.tvRaycaster.near = 0.05;
-      this.tvRaycaster.far = camDist - 0.2;
-      const hits = this.tvRaycaster.intersectObjects(this.tvOccluderMeshes, false);
-      if (hits.length > 0) {
+      const rdx = this.camera.position.x - this.tvLastRayCamX;
+      const rdy = this.camera.position.y - this.tvLastRayCamY;
+      const rdz = this.camera.position.z - this.tvLastRayCamZ;
+      const camMovedSq = rdx * rdx + rdy * rdy + rdz * rdz;
+      if (this.elapsed - this.tvLastRayElapsed >= 0.1 || camMovedSq > 0.0144) {
+        this._tvRayDirScratch.copy(this._tvToTarget).divideScalar(camDist);
+        this.tvRaycaster.set(this.camera.position, this._tvRayDirScratch);
+        this.tvRaycaster.near = 0.05;
+        this.tvRaycaster.far = camDist - 0.2;
+        const hits = this.tvRaycaster.intersectObjects(this.tvOccluderMeshes, false);
+        this.tvLastRayResult = hits.length > 0;
+        this.tvLastRayElapsed = this.elapsed;
+        this.tvLastRayCamX = this.camera.position.x;
+        this.tvLastRayCamY = this.camera.position.y;
+        this.tvLastRayCamZ = this.camera.position.z;
+      }
+      if (this.tvLastRayResult) {
         this.emitTvProjection(null);
         return;
       }
@@ -2636,15 +2705,10 @@ export class GameEngine {
     const halfH = tvTarget.halfH ?? (tvTarget.isHouseTv ? 0.43 : 0.465);
     this._tvUp.set(0, 1, 0).applyQuaternion(tvTarget.worldQuat);
 
-    const corners: [number, number][] = [];
-    const signs: [number, number][] = [
-      [-1, 1], // Top-Left
-      [1, 1],  // Top-Right
-      [-1, -1], // Bottom-Left
-      [1, -1],  // Bottom-Right
-    ];
-
-    for (const [sx, sy] of signs) {
+    let x0 = 0, y0 = 0, x1 = 0, y1 = 0, x2 = 0, y2 = 0, x3 = 0, y3 = 0;
+    for (let cIdx = 0; cIdx < 4; cIdx++) {
+      const sx = (cIdx & 1) === 0 ? -1 : 1;
+      const sy = cIdx < 2 ? 1 : -1;
       this._tvCorner
         .copy(tvTarget.worldPos)
         .addScaledVector(tvTarget.right, sx * halfW)
@@ -2661,13 +2725,11 @@ export class GameEngine {
       this._tvCorner.project(this.camera);
       const px = (this._tvCorner.x * 0.5 + 0.5) * vw;
       const py = (-this._tvCorner.y * 0.5 + 0.5) * vh;
-      corners.push([px, py]);
+      if (cIdx === 0) { x0 = px; y0 = py; }
+      else if (cIdx === 1) { x1 = px; y1 = py; }
+      else if (cIdx === 2) { x2 = px; y2 = py; }
+      else { x3 = px; y3 = py; }
     }
-
-    const [x0, y0] = corners[0];
-    const [x1, y1] = corners[1];
-    const [x2, y2] = corners[2];
-    const [x3, y3] = corners[3];
 
     const minX = Math.min(x0, x1, x2, x3);
     const maxX = Math.max(x0, x1, x2, x3);
@@ -3068,6 +3130,10 @@ export class GameEngine {
       this.clearCarcasses();
       this.visitedBiomes = new Set(['grassland']);
       this.exploredCells = new Set();
+      this.exploredCellsDirty = true;
+      this.lastExploredCx = -9999;
+      this.lastExploredCz = -9999;
+      this.vehicleRestCache.clear();
       this.markExploredAroundPlayer();
       this.discoveredLocations = new Set();
       this.completedMissionIds = new Set();
@@ -3259,6 +3325,10 @@ export class GameEngine {
 
     this.visitedBiomes = new Set(['beach']);
     this.exploredCells = new Set();
+    this.exploredCellsDirty = true;
+    this.lastExploredCx = -9999;
+    this.lastExploredCz = -9999;
+    this.vehicleRestCache.clear();
     this.markExploredAroundPlayer();
     this.discoveredLocations = new Set();
     this.completedMissionIds = new Set();
@@ -3296,6 +3366,9 @@ export class GameEngine {
     this.nodeHitShakeTimers.clear();
     this.pendingTreeDrops.clear();
     this.shakenTreeDropIds.clear();
+    this.activeFellingNodeIds.clear();
+    this.respawningNodeIds.clear();
+    this.ecosystemTickAccum = 0;
     this.world.resourceNodes.forEach((n) => {
       n.hp = n.maxHp;
       n.respawnTimer = 0;
@@ -3430,6 +3503,10 @@ export class GameEngine {
 
     this.visitedBiomes = new Set(save.visitedBiomes);
     this.exploredCells = new Set(save.exploredCells || []);
+    this.exploredCellsDirty = true;
+    this.lastExploredCx = -9999;
+    this.lastExploredCz = -9999;
+    this.vehicleRestCache.clear();
     this.markExploredAroundPlayer();
     this.discoveredLocations = new Set(save.discoveredLocations || []);
     this.completedMissionIds = new Set(save.completedMissionIds || []);
@@ -3587,6 +3664,9 @@ export class GameEngine {
     if (loadedWorldType === 'island') {
       // Restore resource node states (felled stumps, rock damage, depleted nodes)
       this.nodeHitShakeTimers.clear();
+      this.activeFellingNodeIds.clear();
+      this.respawningNodeIds.clear();
+      this.ecosystemTickAccum = 0;
       const savedNodeMap = new Map<string, SavedResourceNodeState>();
       if (save.resourceStates) {
         save.resourceStates.forEach((rs) => savedNodeMap.set(rs.id, rs));
@@ -3598,6 +3678,9 @@ export class GameEngine {
           n.respawnTimer = savedNode.respawnTimer;
           n.felled = Boolean(savedNode.felled);
           n.fallTimer = 0;
+          if (n.hp <= 0) {
+            this.respawningNodeIds.add(n.id);
+          }
         } else {
           n.hp = n.maxHp;
           n.respawnTimer = 0;
@@ -4312,7 +4395,7 @@ export class GameEngine {
       ecosystem: { ...this.ecosystem },
       terrainDeltas: this.worldType === 'island' ? exportSparseTerrainDeltas() : [],
       visitedBiomes: Array.from(this.visitedBiomes),
-      exploredCells: Array.from(this.exploredCells),
+      exploredCells: this.getExploredCellsArray(),
       resourceStates,
       activePickups,
       activeCarcasses,
@@ -4353,13 +4436,20 @@ export class GameEngine {
     const cz = Math.floor(
       ((this.playerZ + FOG_WORLD_SPAN / 2) / FOG_WORLD_SPAN) * FOG_GRID_SIZE,
     );
+    if (cx === this.lastExploredCx && cz === this.lastExploredCz) return;
+    this.lastExploredCx = cx;
+    this.lastExploredCz = cz;
     for (let dz = -2; dz <= 2; dz++) {
       for (let dx = -2; dx <= 2; dx++) {
         if (dx * dx + dz * dz > 5) continue;
         const gx = cx + dx;
         const gz = cz + dz;
         if (gx >= 0 && gx < FOG_GRID_SIZE && gz >= 0 && gz < FOG_GRID_SIZE) {
-          this.exploredCells.add(gz * FOG_GRID_SIZE + gx);
+          const cellKey = gz * FOG_GRID_SIZE + gx;
+          if (!this.exploredCells.has(cellKey)) {
+            this.exploredCells.add(cellKey);
+            this.exploredCellsDirty = true;
+          }
         }
       }
     }
@@ -6137,24 +6227,37 @@ export class GameEngine {
     const fwdZ = -Math.cos(this.camYaw);
     let best: ResourceNodeState | null = null;
     let bestScore = Infinity;
+    const scanMax = Math.max(maxRange, 4.4);
+    const baseCx = Math.floor(this.playerX / 16);
+    const baseCz = Math.floor(this.playerZ / 16);
+    const cellRadius = Math.ceil((scanMax + 2) / 16);
 
-    for (const n of this.world.resourceNodes) {
-      if (n.hp <= 0 || n.felled || !predicate(n)) continue;
-      const dx = n.x - this.playerX;
-      const dz = n.z - this.playerZ;
-      const d = Math.hypot(dx, dz);
-      const effRange = this.isTreeKind(n.kind) ? Math.max(maxRange, 4.4) : maxRange;
-      if (d > effRange) continue;
+    for (let gdx = -cellRadius; gdx <= cellRadius; gdx++) {
+      for (let gdz = -cellRadius; gdz <= cellRadius; gdz++) {
+        const key = (baseCx + gdx + 2048) * 4096 + (baseCz + gdz + 2048);
+        const bucket = this.resourceNodeGrid.get(key);
+        if (!bucket) continue;
+        for (let i = 0; i < bucket.length; i++) {
+          const n = bucket[i];
+          if (n.hp <= 0 || n.felled || !predicate(n)) continue;
+          const dx = n.x - this.playerX;
+          const dz = n.z - this.playerZ;
+          const effRange = this.isTreeKind(n.kind) ? scanMax : maxRange;
+          const distSq = dx * dx + dz * dz;
+          if (distSq > effRange * effRange) continue;
+          const d = Math.sqrt(distSq);
 
-      const dot = d > 0.001 ? (dx * fwdX + dz * fwdZ) / d : 1;
-      if (dot < 0.05 && d > 1.4) continue;
+          const dot = d > 0.001 ? (dx * fwdX + dz * fwdZ) / d : 1;
+          if (dot < 0.05 && d > 1.4) continue;
 
-      // Strongly favor the resource aligned with the player's crosshair / facing vector
-      const alignWeight = 1.28 - 0.68 * Math.max(0, dot);
-      const score = d * alignWeight;
-      if (score < bestScore) {
-        bestScore = score;
-        best = n;
+          // Strongly favor the resource aligned with the player's crosshair / facing vector
+          const alignWeight = 1.28 - 0.68 * Math.max(0, dot);
+          const score = d * alignWeight;
+          if (score < bestScore) {
+            bestScore = score;
+            best = n;
+          }
+        }
       }
     }
     return best;
@@ -7406,7 +7509,7 @@ export class GameEngine {
     equippedTool: (typeof ITEMS)[ItemId] | null,
   ): void {
     if (this.worldType === 'flat') return;
-    const node = this.world.resourceNodes.find((n) => n.id === nodeId);
+    const node = this.nodeById.get(nodeId);
     if (!node || node.hp <= 0 || node.felled) return;
 
     // Always swap batched InstancedMesh node to its interactive articulated group BEFORE syncing visuals
@@ -7437,6 +7540,7 @@ export class GameEngine {
       const isFieldCrop =
         node.kind === 'wheat_patch' || node.kind === 'sugarcane_patch';
       node.respawnTimer = isTree || isRock ? 95 : isFieldCrop ? 26 : 65;
+      this.respawningNodeIds.add(node.id);
       const yieldMult = Math.max(1, Math.round(this.modSystem?.tweaks.gatherYieldMultiplier ?? 1));
       const grants = this.getResourceYield(node.kind, equippedTool?.id).map(
         ([id, q]) => [id, Math.round(q * yieldMult)] as [ItemId, number],
@@ -7450,6 +7554,7 @@ export class GameEngine {
         node.fallTimer = 1.05;
         node.fallDirX = dx / dLen;
         node.fallDirZ = dz / dLen;
+        this.activeFellingNodeIds.add(node.id);
         this.nodeHitShakeTimers.delete(node.id);
         if (!this.pendingTreeDrops.has(node.id)) {
           // Ensure fruit falls from fruit trees even if felled in a single heavy blow
@@ -7854,6 +7959,7 @@ export class GameEngine {
   ): void {
     if (this.effectiveParticleScale <= 0 || !this.particleInstanced) return;
     const scaledCount = Math.max(1, Math.round(count * this.effectiveParticleScale));
+    this.hasActiveParticles = true;
     _scratchColorA.setHex(colorHex);
     for (let i = 0; i < scaledCount; i++) {
       const idx = this.particleWriteIdx;
@@ -8224,24 +8330,15 @@ export class GameEngine {
         : this.camera.position;
       this.rainPoints.position.set(center.x, Math.max(0, center.y - 6), center.z);
       const posAttr = this.rainGeo.attributes.position as THREE.BufferAttribute;
-      const fallSpeed = this.weather === 'storm' ? 24 : 18;
-      for (let i = 0; i < posAttr.count; i++) {
-        let ry = posAttr.getY(i) - fallSpeed * dt;
+      const arr = posAttr.array as Float32Array;
+      const fallDelta = (this.weather === 'storm' ? 24 : 18) * dt;
+      for (let i = 1; i < arr.length; i += 3) {
+        let ry = arr[i] - fallDelta;
         if (ry < 0) ry = 18;
-        posAttr.setY(i, ry);
+        arr[i] = ry;
       }
       posAttr.needsUpdate = true;
     }
-
-    // Keep campfires & cooking stations steady and still on the ground
-    this.structureVisuals.forEach((v) => {
-      if (v.fireLight) {
-        v.fireLight.intensity = 2.85;
-      }
-      if (v.flameGroup) {
-        v.flameGroup.scale.set(1, 1, 1);
-      }
-    });
 
     for (const st of this.structures) {
       if (st.type === 'drying_rack' && st.dryingSlots) {
@@ -8504,27 +8601,24 @@ export class GameEngine {
     const hdz = this.playerZ - HILL_HOUSE_POS.z;
     const inHilltopHouse =
       !isFlat && hdx >= -5.6 && hdx <= 5.6 && hdz >= -4.8 && hdz <= 8.8;
-    const nearPlacedSmartTv =
-      this.smartTv.power &&
-      this.structures.some(
-        (s) =>
-          s.type === 'smart_tv' &&
-          Math.hypot(s.x - this.playerX, s.z - this.playerZ) < 6.5,
-      );
+    let nearPlacedSmartTv = false;
+    let sheltered = isFlat || inHilltopHouse;
+    let nearFire = false;
+    const tvPower = this.smartTv.power;
+    for (let i = 0; i < this.structures.length; i++) {
+      const s = this.structures[i];
+      const sdx = s.x - this.playerX;
+      const sdz = s.z - this.playerZ;
+      const dSq = sdx * sdx + sdz * sdz;
+      if (tvPower && !nearPlacedSmartTv && s.type === 'smart_tv' && dSq < 42.25) {
+        nearPlacedSmartTv = true;
+      } else if (!sheltered && s.type === 'basic_shelter' && dSq < 36) {
+        sheltered = true;
+      } else if (!nearFire && (s.type === 'campfire' || s.type === 'cooking_station') && dSq < 64) {
+        nearFire = true;
+      }
+    }
     const sittingOnSofa = this.seatedState?.label === 'Relaxing on Sofa';
-    const sheltered =
-      isFlat ||
-      inHilltopHouse ||
-      this.structures.some(
-        (s) =>
-          s.type === 'basic_shelter' &&
-          Math.hypot(s.x - this.playerX, s.z - this.playerZ) < 6,
-      );
-    const nearFire = this.structures.some(
-      (s) =>
-        (s.type === 'campfire' || s.type === 'cooking_station') &&
-        Math.hypot(s.x - this.playerX, s.z - this.playerZ) < 8,
-    );
 
     const cozyActive = inHilltopHouse || sittingOnSofa || nearPlacedSmartTv;
     this.cozyComfortActive = cozyActive;
@@ -8835,13 +8929,15 @@ export class GameEngine {
           }
         }
       }
-      for (const st of this.structures) {
+      for (let i = 0; i < this.structures.length; i++) {
+        const st = this.structures[i];
         if (st.type === 'sleeping_area' || st.type === 'basic_shelter') continue;
         const cdx = nextX - st.x;
         const cdz = nextZ - st.z;
-        const dist = Math.hypot(cdx, cdz);
+        const distSq = cdx * cdx + cdz * cdz;
         const minD = 0.88;
-        if (dist < minD && dist > 0.001) {
+        if (distSq < minD * minD && distSq > 0.000001) {
+          const dist = Math.sqrt(distSq);
           nextX = st.x + (cdx / dist) * minD;
           nextZ = st.z + (cdz / dist) * minD;
         }
@@ -9246,40 +9342,51 @@ export class GameEngine {
     const fwdX = -Math.sin(this.camYaw);
     const fwdZ = -Math.cos(this.camYaw);
 
-    // 1. Vault over medium obstacles (logs, crates, rocks, fences) directly ahead (Island World only)
+    // 1. Vault over medium obstacles (logs, crates, rocks, fences) directly ahead (Island World only) via 16m spatial hash
     if (this.worldType === 'island') {
-      for (const col of this.world.colliders) {
-        if (col.radius > 1.38) continue;
-        const chdx = col.x - HILL_HOUSE_POS.x;
-        const chdz = col.z - HILL_HOUSE_POS.z;
-        if (chdx >= -6.2 && chdx <= 6.8 && chdz >= -4.8 && chdz <= 9.0) continue;
-        const dx = col.x - this.playerX;
-        const dz = col.z - this.playerZ;
-        const dist = Math.hypot(dx, dz);
-        if (dist > col.radius + 1.55 || dist < 0.45) continue;
-        const dot = (dx * fwdX + dz * fwdZ) / (dist || 1);
-        if (dot < 0.48) continue;
+      const baseCx = Math.floor(this.playerX / 16);
+      const baseCz = Math.floor(this.playerZ / 16);
+      for (let gdx = -1; gdx <= 1; gdx++) {
+        for (let gdz = -1; gdz <= 1; gdz++) {
+          const bucket = this.colliderGrid.get((baseCx + gdx + 2048) * 4096 + (baseCz + gdz + 2048));
+          if (!bucket) continue;
+          for (let ci = 0; ci < bucket.length; ci++) {
+            const col = bucket[ci];
+            if (col.radius > 1.38) continue;
+            const chdx = col.x - HILL_HOUSE_POS.x;
+            const chdz = col.z - HILL_HOUSE_POS.z;
+            if (chdx >= -6.2 && chdx <= 6.8 && chdz >= -4.8 && chdz <= 9.0) continue;
+            const dx = col.x - this.playerX;
+            const dz = col.z - this.playerZ;
+            const maxD = col.radius + 1.55;
+            const distSq = dx * dx + dz * dz;
+            if (distSq > maxD * maxD || distSq < 0.2025) continue;
+            const dist = Math.sqrt(distSq);
+            const dot = (dx * fwdX + dz * fwdZ) / (dist || 1);
+            if (dot < 0.48) continue;
 
-      const endX = col.x + fwdX * (col.radius + 0.95);
-      const endZ = col.z + fwdZ * (col.radius + 0.95);
-      const endY = Math.max(
-        getTerrainHeight(endX, endZ),
-        this.getStructuralSurfaceY(endX, endZ, this.playerY + 2.4),
-      );
-      if (endY - this.playerY > 2.35 || endY - this.playerY < -2.6) continue;
+            const endX = col.x + fwdX * (col.radius + 0.95);
+            const endZ = col.z + fwdZ * (col.radius + 0.95);
+            const endY = Math.max(
+              getTerrainHeight(endX, endZ),
+              this.getStructuralSurfaceY(endX, endZ, this.playerY + 2.4),
+            );
+            if (endY - this.playerY > 2.35 || endY - this.playerY < -2.6) continue;
 
-      this.vaultStartX = this.playerX;
-      this.vaultStartY = this.playerY;
-      this.vaultStartZ = this.playerZ;
-      this.vaultEndX = endX;
-      this.vaultEndY = endY;
-      this.vaultEndZ = endZ;
-      this.vaultTimer = this.vaultDuration;
-      this.isCrouching = false;
-      this.touchCrouch = false;
-      this.sound.playWallRunStep();
-      this.toast('Obstacle Vault!', 'info');
-      return true;
+            this.vaultStartX = this.playerX;
+            this.vaultStartY = this.playerY;
+            this.vaultStartZ = this.playerZ;
+            this.vaultEndX = endX;
+            this.vaultEndY = endY;
+            this.vaultEndZ = endZ;
+            this.vaultTimer = this.vaultDuration;
+            this.isCrouching = false;
+            this.touchCrouch = false;
+            this.sound.playWallRunStep();
+            this.toast('Obstacle Vault!', 'info');
+            return true;
+          }
+        }
       }
     }
 
@@ -10291,7 +10398,7 @@ export class GameEngine {
       const d = Math.hypot(v.x - this.playerX, v.z - this.playerZ);
       if (d < 4.5 && Math.abs(v.y - this.playerY) < 3.6 && d < bestDist) {
         bestDist = d;
-        const specs = computeVehicleSpecs(v.modules);
+        const specs = this.getVehicleSpecs(v);
         best = {
           id: v.id,
           label: `Pilot ${v.name}`,
@@ -11004,8 +11111,13 @@ export class GameEngine {
     }
 
     if (this.worldType === 'island') {
-      for (const n of this.world.resourceNodes) {
-        if (n.felled && (n.fallTimer ?? 0) > 0) {
+      if (this.activeFellingNodeIds.size > 0) {
+        for (const nid of this.activeFellingNodeIds) {
+          const n = this.nodeById.get(nid);
+          if (!n || !n.felled || (n.fallTimer ?? 0) <= 0) {
+            this.activeFellingNodeIds.delete(nid);
+            continue;
+          }
           n.fallTimer = Math.max(0, (n.fallTimer ?? 0) - dt);
           const handle = this.world.resourceHandles.get(n.id);
           if (handle?.felledPivot) {
@@ -11017,6 +11129,7 @@ export class GameEngine {
             handle.felledPivot.rotation.x = fdz * tilt;
           }
           if ((n.fallTimer ?? 0) <= 0) {
+            this.activeFellingNodeIds.delete(nid);
             this.syncResourceVisual(n);
             const fdx = n.fallDirX ?? 1;
             const fdz = n.fallDirZ ?? 0;
@@ -11030,13 +11143,22 @@ export class GameEngine {
             }
           }
         }
+      }
 
-        if (n.hp <= 0) {
+      if (this.respawningNodeIds.size > 0) {
+        for (const nid of this.respawningNodeIds) {
+          const n = this.nodeById.get(nid);
+          if (!n || n.hp > 0) {
+            this.respawningNodeIds.delete(nid);
+            continue;
+          }
           n.respawnTimer -= dt;
           if (n.respawnTimer <= 0) {
             n.hp = n.maxHp;
             n.felled = false;
             n.fallTimer = 0;
+            this.respawningNodeIds.delete(nid);
+            this.activeFellingNodeIds.delete(nid);
             this.shakenTreeDropIds.delete(n.id);
             this.pendingTreeDrops.delete(n.id);
             this.nodeHitShakeTimers.delete(n.id);
@@ -11068,6 +11190,7 @@ export class GameEngine {
 
     // Gently animate, drop falling tree fruit with gravity, and expire ground pickups
     const inOverworld = this.currentDimension === 'overworld';
+    const maxDrawSq = this.effectiveMaxDrawDistance * this.effectiveMaxDrawDistance;
     for (let i = this.pickups.length - 1; i >= 0; i--) {
       const p = this.pickups[i];
       if ((p.autoCollectDelay ?? 0) > 0) {
@@ -11080,8 +11203,9 @@ export class GameEngine {
         this.pickups.splice(i, 1);
         continue;
       }
-      const pDist = Math.hypot(p.x - this.playerX, p.z - this.playerZ);
-      p.mesh.visible = inOverworld && pDist <= this.effectiveMaxDrawDistance;
+      const pdx = p.x - this.playerX;
+      const pdz = p.z - this.playerZ;
+      p.mesh.visible = inOverworld && (pdx * pdx + pdz * pdz <= maxDrawSq);
       if (p.currentY !== undefined && p.currentY > p.y + 0.05) {
         p.fallYVel = (p.fallYVel ?? 0) + 16 * dt;
         p.currentY = Math.max(p.y + 0.05, p.currentY - p.fallYVel * dt);
@@ -11108,10 +11232,9 @@ export class GameEngine {
     // Update collapse physics, aerial drops, settle timers, scavenge cooldowns, and expiration on animal carcasses
     for (let i = this.carcasses.length - 1; i >= 0; i--) {
       const c = this.carcasses[i];
-      c.mesh.visible =
-        inOverworld &&
-        Math.hypot(c.x - this.playerX, c.z - this.playerZ) <=
-          this.effectiveMaxDrawDistance;
+      const cdx = c.x - this.playerX;
+      const cdz = c.z - this.playerZ;
+      c.mesh.visible = inOverworld && (cdx * cdx + cdz * cdz <= maxDrawSq);
       if (c.currentY !== undefined && c.currentY > c.y) {
         c.fallYVel = (c.fallYVel ?? 0) + 18 * dt;
         c.currentY = Math.max(c.y, c.currentY - c.fallYVel * dt);
@@ -11181,8 +11304,11 @@ export class GameEngine {
       if (!remove && this.world?.caveCeilings) {
         for (const cc of this.world.caveCeilings) {
           if (cc.collapsed || cc.falling) continue;
-          const dc = Math.hypot(a.pos.x - cc.x, a.pos.y - cc.y, a.pos.z - cc.z);
-          if (dc <= cc.radius + 0.55) {
+          const dx = a.pos.x - cc.x;
+          const dy = a.pos.y - cc.y;
+          const dz = a.pos.z - cc.z;
+          const r = cc.radius + 0.55;
+          if (dx * dx + dy * dy + dz * dz <= r * r) {
             this.damageCaveCeiling(cc, a.isBullet ? 24 : 20);
             remove = true;
             break;
@@ -11244,16 +11370,26 @@ export class GameEngine {
         }
       }
 
-      // If high velocity bullet didn't hit creature, check if it struck a breakable resource node
+      // If high velocity bullet didn't hit creature, check if it struck a nearby breakable resource node via spatial hash
       if (!remove && a.isBullet && this.worldType === 'island') {
-        for (const n of this.world.resourceNodes) {
-          if (n.hp <= 0) continue;
-          const d = Math.hypot(a.pos.x - n.x, a.pos.z - n.z);
-          if (d < 1.4 && a.pos.y > n.y && a.pos.y < n.y + 4.5) {
-            this.spawnParticles(a.pos.x, a.pos.y, a.pos.z, 0xffd700, 6);
-            this.harvestResourceNode(n.id, ITEMS['gun']);
-            remove = true;
-            break;
+        const bCx = Math.floor(a.pos.x / 16);
+        const bCz = Math.floor(a.pos.z / 16);
+        outerBulletNodes: for (let gdx = -1; gdx <= 1; gdx++) {
+          for (let gdz = -1; gdz <= 1; gdz++) {
+            const bucket = this.resourceNodeGrid.get((bCx + gdx + 2048) * 4096 + (bCz + gdz + 2048));
+            if (!bucket) continue;
+            for (let bi = 0; bi < bucket.length; bi++) {
+              const n = bucket[bi];
+              if (n.hp <= 0) continue;
+              const dx = a.pos.x - n.x;
+              const dz = a.pos.z - n.z;
+              if (dx * dx + dz * dz < 1.96 && a.pos.y > n.y && a.pos.y < n.y + 4.5) {
+                this.spawnParticles(a.pos.x, a.pos.y, a.pos.z, 0xffd700, 6);
+                this.harvestResourceNode(n.id, ITEMS['gun']);
+                remove = true;
+                break outerBulletNodes;
+              }
+            }
           }
         }
       }
@@ -11288,7 +11424,11 @@ export class GameEngine {
       if (!removeDebris && this.world?.caveCeilings) {
         for (const cc of this.world.caveCeilings) {
           if (cc.collapsed || cc.falling) continue;
-          if (Math.hypot(dp.pos.x - cc.x, dp.pos.y - cc.y, dp.pos.z - cc.z) <= cc.radius + 0.5) {
+          const dx = dp.pos.x - cc.x;
+          const dy = dp.pos.y - cc.y;
+          const dz = dp.pos.z - cc.z;
+          const r = cc.radius + 0.5;
+          if (dx * dx + dy * dy + dz * dz <= r * r) {
             this.damageCaveCeiling(cc, 12);
             removeDebris = true;
             break;
@@ -11399,9 +11539,10 @@ export class GameEngine {
       }
     }
 
-    // Step Pooled Instanced Particles (Zero-GC, 1 draw call)
-    if (this.particleInstanced) {
+    // Step Pooled Instanced Particles (Zero-GC, 1 draw call; early-out when pool idle)
+    if (this.hasActiveParticles && this.particleInstanced) {
       let anyParticleDirty = false;
+      let stillActive = false;
       for (let i = 0; i < MAX_POOLED_PARTICLES; i++) {
         const p = this.particlePool[i];
         if (!p.active) continue;
@@ -11412,6 +11553,7 @@ export class GameEngine {
           this.particleInstanced.setMatrixAt(i, _zeroMat4);
           continue;
         }
+        stillActive = true;
         p.vy -= 12 * dt;
         p.x += p.vx * dt;
         p.y += p.vy * dt;
@@ -11426,6 +11568,7 @@ export class GameEngine {
       if (anyParticleDirty) {
         this.particleInstanced.instanceMatrix.needsUpdate = true;
       }
+      this.hasActiveParticles = stillActive;
     }
 
     // Step Pooled Brass Shell Casings, Muzzle Flashes & P2P Tracers
@@ -11572,7 +11715,7 @@ export class GameEngine {
           this.camera.lookAt(_vec3B);
           return;
         }
-        const specs = computeVehicleSpecs(activeV.modules);
+        const specs = this.getVehicleSpecs(activeV);
         const surfY = Math.max(
           getTerrainHeight(activeV.x, activeV.z),
           this.getStructuralSurfaceY(activeV.x, activeV.z, activeV.y + 0.6),
@@ -11685,19 +11828,20 @@ export class GameEngine {
     const hdz = this.playerZ - HILL_HOUSE_POS.z;
     const inHilltopHouse =
       !isFlat && hdx >= -5.6 && hdx <= 5.6 && hdz >= -4.8 && hdz <= 8.8;
-    const sheltered =
-      isFlat ||
-      inHilltopHouse ||
-      this.structures.some(
-        (s) =>
-          s.type === 'basic_shelter' &&
-          Math.hypot(s.x - this.playerX, s.z - this.playerZ) < 6,
-      );
-    const nearFire = this.structures.some(
-      (s) =>
-        (s.type === 'campfire' || s.type === 'cooking_station') &&
-        Math.hypot(s.x - this.playerX, s.z - this.playerZ) < 8,
-    );
+    let sheltered = isFlat || inHilltopHouse;
+    let nearFire = false;
+    for (let i = 0; i < this.structures.length; i++) {
+      const s = this.structures[i];
+      const sdx = s.x - this.playerX;
+      const sdz = s.z - this.playerZ;
+      const dSq = sdx * sdx + sdz * sdz;
+      if (!sheltered && s.type === 'basic_shelter' && dSq < 36) {
+        sheltered = true;
+      } else if (!nearFire && (s.type === 'campfire' || s.type === 'cooking_station') && dSq < 64) {
+        nearFire = true;
+      }
+      if (sheltered && nearFire) break;
+    }
     const nearOceanWater = this.isNearOceanWater();
     const nearLakeWater = this.isNearLakeWater();
     const hasWashableMeat =
@@ -11754,14 +11898,15 @@ export class GameEngine {
       erodedVolume: this.terrainEngine ? Math.round(this.terrainEngine.totalErodedVolume) : 0,
       puddleCount: this.terrainEngine ? this.terrainEngine.activePuddleCount : 0,
     };
+    const caveDx = this.playerX - CAVE_POS.x;
+    const caveDz = this.playerZ - CAVE_POS.z;
     const momentumState: MomentumHudState = {
       wallRunning: this.wallRunTimer > 0,
       wallSide: this.wallRunSide,
       vaulting: this.vaultTimer > 0,
       speedMps: Number(this.currentSpeedMps.toFixed(1)),
       kickCooldown: Number(this.kickCooldown.toFixed(1)),
-      nearCaveBoss:
-        Math.hypot(this.playerX - CAVE_POS.x, this.playerZ - CAVE_POS.z) < 22,
+      nearCaveBoss: caveDx * caveDx + caveDz * caveDz < 484,
     };
 
     const readyProducts = this.kineticNodes.reduce(
@@ -11795,7 +11940,7 @@ export class GameEngine {
     if (this.activeVehicleId) {
       const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
       if (av) {
-        const specs = computeVehicleSpecs(av.modules);
+        const specs = this.getVehicleSpecs(av);
         const surfY = Math.max(
           getTerrainHeight(av.x, av.z),
           this.getStructuralSurfaceY(av.x, av.z, av.y + 0.6),
@@ -11860,6 +12005,151 @@ export class GameEngine {
         ? this.coasterRuntime.getRideCameraTransform(this.ridingCoasterId)
         : null;
 
+    if (this.cachedVisitedBiomes.length !== this.visitedBiomes.size) {
+      this.cachedVisitedBiomes = Array.from(this.visitedBiomes);
+    }
+    if (this.cachedCompletedMissionIds.length !== this.completedMissionIds.size) {
+      this.cachedCompletedMissionIds = Array.from(this.completedMissionIds);
+    }
+    if (this.cachedVisitedDimensions.length !== this.visitedDimensions.size) {
+      this.cachedVisitedDimensions = Array.from(this.visitedDimensions);
+    }
+
+    let invSame = this.cachedHudInventory.length === this.inventory.length;
+    if (invSame) {
+      for (let i = 0; i < this.inventory.length; i++) {
+        if (
+          this.cachedHudInventory[i].itemId !== this.inventory[i].itemId ||
+          this.cachedHudInventory[i].quantity !== this.inventory[i].quantity
+        ) {
+          invSame = false;
+          break;
+        }
+      }
+    }
+    if (!invSame) {
+      this.cachedHudInventory = this.inventory.map((s) => ({ ...s }));
+    }
+
+    let bpSame = this.cachedHudBackpack.length === this.backpackCompartments.length;
+    if (bpSame) {
+      for (let i = 0; i < this.backpackCompartments.length; i++) {
+        const a = this.cachedHudBackpack[i];
+        const b = this.backpackCompartments[i];
+        if (a.compartmentId !== b.compartmentId || a.itemId !== b.itemId || a.quantity !== b.quantity) {
+          bpSame = false;
+          break;
+        }
+      }
+    }
+    if (!bpSame) {
+      this.cachedHudBackpack = this.backpackCompartments.map((c) => ({ ...c }));
+    }
+
+    let structSame = this.cachedHudStructures.length === this.structures.length;
+    if (structSame) {
+      for (let i = 0; i < this.structures.length; i++) {
+        const a = this.cachedHudStructures[i];
+        const b = this.structures[i];
+        if (
+          a.id !== b.id ||
+          a.x !== b.x ||
+          a.z !== b.z ||
+          (a.chestItems?.length ?? 0) !== (b.chestItems?.length ?? 0)
+        ) {
+          structSame = false;
+          break;
+        }
+      }
+    }
+    if (!structSame) {
+      this.cachedHudStructures = this.structures.map((s) => ({
+        ...s,
+        chestItems: s.chestItems ? s.chestItems.map((c) => ({ ...c })) : undefined,
+      }));
+    }
+
+    let cropsSame = this.cachedHudCrops.length === this.plantedCrops.length;
+    if (cropsSame) {
+      for (let i = 0; i < this.plantedCrops.length; i++) {
+        const a = this.cachedHudCrops[i];
+        const b = this.plantedCrops[i];
+        if (a.id !== b.id || a.mature !== b.mature || a.watered !== b.watered) {
+          cropsSame = false;
+          break;
+        }
+      }
+    }
+    if (!cropsSame) {
+      this.cachedHudCrops = this.plantedCrops.map((c) => ({ ...c }));
+    }
+
+    let fridgeSame = this.cachedHudFridge.length === this.fridgeItems.length;
+    if (fridgeSame) {
+      for (let i = 0; i < this.fridgeItems.length; i++) {
+        if (
+          this.cachedHudFridge[i].itemId !== this.fridgeItems[i].itemId ||
+          this.cachedHudFridge[i].quantity !== this.fridgeItems[i].quantity
+        ) {
+          fridgeSame = false;
+          break;
+        }
+      }
+    }
+    if (!fridgeSame) {
+      this.cachedHudFridge = this.fridgeItems.map((s) => ({ ...s }));
+    }
+
+    let vehSame = this.cachedHudVehicles.length === this.vehicles.length;
+    if (vehSame) {
+      for (let i = 0; i < this.vehicles.length; i++) {
+        const a = this.cachedHudVehicles[i];
+        const b = this.vehicles[i];
+        if (
+          a.id !== b.id ||
+          Math.abs(a.x - b.x) > 0.25 ||
+          Math.abs(a.z - b.z) > 0.25 ||
+          a.hp !== b.hp ||
+          Math.round(a.fuel) !== Math.round(b.fuel) ||
+          a.cargoItems.length !== b.cargoItems.length ||
+          a.modules.length !== b.modules.length
+        ) {
+          vehSame = false;
+          break;
+        }
+      }
+    }
+    if (!vehSame) {
+      this.cachedHudVehicles = this.vehicles.map((v) => ({
+        ...v,
+        modules: v.modules.map((m) => ({ ...m })),
+        cargoItems: v.cargoItems.map((c) => ({ ...c })),
+      }));
+    }
+
+    let parkedCount = 0;
+    let damagedCount = 0;
+    let needsFuelCount = 0;
+    const garageRadiusSq = 18.5 * 18.5;
+    for (let i = 0; i < this.vehicles.length; i++) {
+      const v = this.vehicles[i];
+      const gdx = v.x - VEHICLE_GARAGE_POS.x;
+      const gdz = v.z - VEHICLE_GARAGE_POS.z;
+      if (gdx * gdx + gdz * gdz <= garageRadiusSq) {
+        parkedCount++;
+        if (v.hp < v.maxHp) damagedCount++;
+        if (v.fuel < 98) needsFuelCount++;
+      }
+    }
+
+    let bossesDefeatedCount = 0;
+    if (!isFlat) {
+      const clist = this.creatures.creatures;
+      for (let i = 0; i < clist.length; i++) {
+        if (clist[i].isBoss && !clist[i].alive) bossesDefeatedCount++;
+      }
+    }
+
     this.callbacks.onHudUpdate({
       vitals: { ...this.vitals },
       dayCount: this.dayCount,
@@ -11887,48 +12177,41 @@ export class GameEngine {
       nocturnalActiveCount: this.nocturnalActiveCount,
       nearbyInteraction: this.nearbyInteraction,
       nearbyCarcass,
-      inventory: this.inventory.map((s) => ({ ...s })),
+      inventory: this.cachedHudInventory,
       hotbarItemIds: [...this.hotbarItemIds],
       equippedSlot: this.equippedSlot,
       hudBarCapacity: this.hotbarItemIds.length,
       maxHudBarCapacity: MAX_HUD_BAR_SLOTS,
-      backpackCompartments: this.backpackCompartments.map((c) => ({ ...c })),
+      backpackCompartments: this.cachedHudBackpack,
       totalBackpackCompartments: TOTAL_BACKPACK_COMPARTMENTS,
       emptyCompartmentsCount:
         TOTAL_BACKPACK_COMPARTMENTS - this.backpackCompartments.length,
-      structures: this.structures.map((s) => ({
-        ...s,
-        chestItems: s.chestItems ? s.chestItems.map((c) => ({ ...c })) : undefined,
-      })),
-      visitedBiomes: Array.from(this.visitedBiomes),
-      exploredCells: Array.from(this.exploredCells),
+      structures: this.cachedHudStructures,
+      visitedBiomes: this.cachedVisitedBiomes,
+      exploredCells: this.getExploredCellsArray(),
       stats: { ...this.stats },
-      completedMissionIds: Array.from(this.completedMissionIds),
-      trackedSightings: [...this.trackedSightings],
+      completedMissionIds: this.cachedCompletedMissionIds,
+      trackedSightings: this.trackedSightings,
       cinematicActive: this.cinematicActive,
       cinematicSubtitle: this.cinematicSubtitle,
       gameOver: this.gameOver,
       gameOverReason: this.gameOverReason,
       currentDimension: this.currentDimension,
       selectedPortalDimension: this.selectedPortalDimension,
-      visitedDimensions: Array.from(this.visitedDimensions),
+      visitedDimensions: this.cachedVisitedDimensions,
       unlockedGildedPaint: this.unlockedGildedPaint,
       crystalArmorHp: this.crystalArmorHp,
       activePortals: this.activePortals.map((p) => ({ ...p })),
       coins: this.coins,
       seatedLabel: this.seatedState?.label ?? null,
-      plantedCrops: this.plantedCrops.map((c) => ({ ...c })),
-      fridgeItems: this.fridgeItems.map((s) => ({ ...s })),
+      plantedCrops: this.cachedHudCrops,
+      fridgeItems: this.cachedHudFridge,
       structuralSummary,
       terrainSummary,
       targetHitbox: this.targetHitbox ? { ...this.targetHitbox } : null,
       momentumState,
       kineticSummary,
-      vehicles: this.vehicles.map((v) => ({
-        ...v,
-        modules: v.modules.map((m) => ({ ...m })),
-        cargoItems: v.cargoItems.map((c) => ({ ...c })),
-      })),
+      vehicles: this.cachedHudVehicles,
       activeVehicle,
       selectedCargoVehicleId: this.selectedCargoVehicleId,
       worldType: this.worldType,
@@ -11952,9 +12235,7 @@ export class GameEngine {
           : null,
       bloodMoonActive: this.isBloodMoonNight(),
       daysUntilBloodMoon: isFlat ? 0 : 7 - ((this.dayCount - 1) % 7),
-      bossesDefeatedCount: isFlat
-        ? 0
-        : this.creatures.creatures.filter((c) => c.isBoss && !c.alive).length,
+      bossesDefeatedCount,
       objectiveText: this.computeObjectiveText(),
       hitMarkerActive: this.hitMarkerActive,
       fps: this.currentFps,
@@ -12037,16 +12318,11 @@ export class GameEngine {
           (this.smartTv.power || this.seatedState?.label === 'Relaxing on Sofa'),
         restedBonus: this.cozyComfortActive,
       },
-      garageSummary: (() => {
-        const parked = this.vehicles.filter(
-          (v) => Math.hypot(v.x - VEHICLE_GARAGE_POS.x, v.z - VEHICLE_GARAGE_POS.z) <= 18.5,
-        );
-        return {
-          parkedCount: parked.length,
-          damagedCount: parked.filter((v) => v.hp < v.maxHp).length,
-          needsFuelCount: parked.filter((v) => v.fuel < 98).length,
-        };
-      })(),
+      garageSummary: {
+        parkedCount,
+        damagedCount,
+        needsFuelCount,
+      },
       multiplayerState: this.p2p
         ? { ...this.p2p.getStatusSnapshot(), chatLog: [...this.p2pChatLog] }
         : undefined,
@@ -12063,7 +12339,6 @@ export class GameEngine {
     // Clamp frame delta to 0.033s so a hiccup never causes a huge position jump or spiral-of-death stutter
     const frameTime = Math.min(Math.max(rawFrameMs * 0.001, 0), 0.033);
     this.lastFramePerfMs = nowPerf;
-    this.simAccumulator += frameTime;
 
     // 1500 FPS Engine Ramp & Lock: starts at 60 FPS, rises smoothly to 1500 FPS, and never drops below 1500
     if (!this.fpsLockedAt1500) {
@@ -12095,7 +12370,7 @@ export class GameEngine {
       this.fpsSampleTimer += frameTime;
       if (this.fpsSampleTimer >= 1.0) {
         const avgMs = this.fpsSampleAccumMs / Math.max(1, this.fpsSampleFrames);
-        if (avgMs > 18.0) {
+        if (avgMs > 28.0) {
           this.consecutiveSlowSeconds += 1;
         } else {
           this.consecutiveSlowSeconds = 0;
@@ -12104,35 +12379,32 @@ export class GameEngine {
         this.fpsSampleFrames = 0;
         this.fpsSampleAccumMs = 0;
 
-        if (this.consecutiveSlowSeconds >= 3) {
+        if (this.consecutiveSlowSeconds >= 4) {
           this.consecutiveSlowSeconds = 0;
           this.autoFpsTier = Math.min(3, this.autoFpsTier + 1);
           this.applyGraphicsProfile();
           const msg =
             this.autoFpsTier === 1
-              ? 'Auto-FPS Guard: Disabled dynamic shadows to sustain 1500 FPS'
+              ? 'Auto-FPS Guard: Disabled dynamic shadows to sustain smooth FPS'
               : this.autoFpsTier === 2
-                ? 'Auto-FPS Guard: Reduced resolution & particles to sustain 1500 FPS'
-                : 'Auto-FPS Guard: Shortened draw distance to sustain 1500 FPS';
+                ? 'Auto-FPS Guard: Reduced resolution & particles to sustain smooth FPS'
+                : 'Auto-FPS Guard: Shortened draw distance to sustain smooth FPS';
           this.toast(msg, 'info');
         }
       }
     }
 
     const frameStart = performance.now();
-    // Fixed-timestep simulation loop (FIXED_STEP = 1/60s, max 2 substeps, yields early if frame exceeds FREEZE_SHIELD.maxFrameMs)
-    let simSteps = 0;
-    while (this.simAccumulator >= GameEngine.FIXED_STEP && simSteps < 2) {
-      this.updateSimulation(GameEngine.FIXED_STEP, frameStart);
-      this.simAccumulator -= GameEngine.FIXED_STEP;
-      simSteps += 1;
-      if (performance.now() - frameStart >= FREEZE_SHIELD.maxFrameMs) {
-        this.simAccumulator = 0;
-        break;
+    // Smooth clamped step per display frame (eliminates 0-step/2-step VSync micro-stutter on 60Hz+ screens)
+    const simDt = Math.max(frameTime, 0.001);
+    if (simDt > 0.022) {
+      const halfDt = simDt * 0.5;
+      this.updateSimulation(halfDt, frameStart);
+      if (performance.now() - frameStart < FREEZE_SHIELD.maxFrameMs) {
+        this.updateSimulation(halfDt, frameStart);
       }
-    }
-    if (simSteps === 2 && this.simAccumulator > GameEngine.FIXED_STEP) {
-      this.simAccumulator = 0;
+    } else {
+      this.updateSimulation(simDt, frameStart);
     }
 
     // 3. Only run non-essential biome/vine/prop wake-ups if time remains in the Freeze-Shield frame budget
@@ -12172,12 +12444,17 @@ export class GameEngine {
     this.updateMultiplayer(dt);
     measure('weather_particles', () => {
       this.updateWeatherAndAtmosphere(dt);
-      this.ecosystem = simulateEcosystemTick(
-        this.ecosystem,
-        dt,
-        this.weather,
-        { x: this.playerX, y: this.playerY, z: this.playerZ }
-      );
+      this.ecosystemTickAccum += dt;
+      if (this.ecosystemTickAccum >= 1.2) {
+        const ecoDt = this.ecosystemTickAccum;
+        this.ecosystemTickAccum = 0;
+        this.ecosystem = simulateEcosystemTick(
+          this.ecosystem,
+          ecoDt,
+          this.weather,
+          { x: this.playerX, y: this.playerY, z: this.playerZ },
+        );
+      }
       if (
         this.realisticOcean &&
         this.currentDimension === 'overworld' &&
@@ -12435,7 +12712,7 @@ export class GameEngine {
         this.nocturnalActiveCount = nocturnalActiveCount;
 
         this.hudSyncTimer += dt;
-        const hudInterval = this.fpsLockedAt1500 ? 0.22 : 0.08;
+        const hudInterval = 0.18;
         if (this.hudSyncTimer >= hudInterval) {
           this.hudSyncTimer = 0;
           this.emitHud();
@@ -12589,6 +12866,39 @@ export class GameEngine {
     }
   }
 
+  private getExploredCellsArray(): number[] {
+    if (this.exploredCellsDirty) {
+      this.cachedExploredCells = Array.from(this.exploredCells);
+      this.exploredCellsDirty = false;
+    }
+    return this.cachedExploredCells;
+  }
+
+  private getStructuralMeshList(): THREE.Object3D[] {
+    if (this.structuralMeshListDirty) {
+      this.cachedStructuralMeshList = Array.from(this.structuralMeshes.values());
+      this.structuralMeshListDirty = false;
+    }
+    return this.cachedStructuralMeshList;
+  }
+
+  private buildResourceNodeSpatialGrid(): void {
+    this.resourceNodeGrid.clear();
+    const nodes = this.world.resourceNodes;
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      const cx = Math.floor(n.x / 16);
+      const cz = Math.floor(n.z / 16);
+      const key = (cx + 2048) * 4096 + (cz + 2048);
+      let bucket = this.resourceNodeGrid.get(key);
+      if (!bucket) {
+        bucket = [];
+        this.resourceNodeGrid.set(key, bucket);
+      }
+      bucket.push(n);
+    }
+  }
+
   private buildColliderSpatialGrid(): void {
     this.colliderGrid.clear();
     const cols = this.world.colliders;
@@ -12629,11 +12939,25 @@ export class GameEngine {
   private renderScene(): void {
     this.updateCamera();
     this.syncTvScreenProjection();
-    // Refresh shadow map every 2nd frame when shadows are active to halve shadow-pass GPU cost
+    // Adaptive shadow cadence: update every 2-3 frames when moving, every 8 frames when camera is still
     if (this.effectiveShadowsEnabled && this.renderer.shadowMap.enabled) {
-      this.shadowUpdateFrame = (this.shadowUpdateFrame + 1) & 1;
+      const dx = this.camera.position.x - this.shadowLastCamX;
+      const dy = this.camera.position.y - this.shadowLastCamY;
+      const dz = this.camera.position.z - this.shadowLastCamZ;
+      const moved =
+        Number.isNaN(this.shadowLastCamX) ||
+        dx * dx + dy * dy + dz * dz > 0.0025 ||
+        Math.abs(this.camYaw - this.shadowLastYaw) > 0.008 ||
+        Math.abs(this.camPitch - this.shadowLastPitch) > 0.008;
+      const cadence = moved ? (this.isTouchDevice ? 3 : 2) : 8;
+      this.shadowUpdateFrame = (this.shadowUpdateFrame + 1) % cadence;
       if (this.shadowUpdateFrame === 0) {
         this.renderer.shadowMap.needsUpdate = true;
+        this.shadowLastCamX = this.camera.position.x;
+        this.shadowLastCamY = this.camera.position.y;
+        this.shadowLastCamZ = this.camera.position.z;
+        this.shadowLastYaw = this.camYaw;
+        this.shadowLastPitch = this.camPitch;
       }
     }
     measure('render', () => this.renderer.render(this.scene, this.camera));
@@ -12674,6 +12998,9 @@ export class GameEngine {
   private clearStructuralWorld(): void {
     this.structuralMeshes.forEach((m) => this.scene.remove(m));
     this.structuralMeshes.clear();
+    this.structuralMeshListDirty = true;
+    this.structuralVersion += 1;
+    this.lastBuildPreviewKey = '';
     this.structuralBlocks = [];
     for (const c of this.collapsingBlocks) {
       this.scene.remove(c.mesh);
@@ -12702,6 +13029,9 @@ export class GameEngine {
     mesh.userData.structuralId = b.id;
     this.scene.add(mesh);
     this.structuralMeshes.set(b.id, mesh);
+    this.structuralMeshListDirty = true;
+    this.structuralVersion += 1;
+    this.lastBuildPreviewKey = '';
     this.structuralBlocks.push(b);
   }
 
@@ -12764,7 +13094,7 @@ export class GameEngine {
   }
 
   private findNearestAimedStructuralBlock(maxDist: number): StructuralBlock | null {
-    const meshList = Array.from(this.structuralMeshes.values());
+    const meshList = this.getStructuralMeshList();
     if (meshList.length > 0) {
       _raycaster.setFromCamera(_ndcCenter, this.camera);
       _raycaster.far = maxDist;
@@ -12803,7 +13133,10 @@ export class GameEngine {
     if (mesh) {
       this.scene.remove(mesh);
       this.structuralMeshes.delete(b.id);
+      this.structuralMeshListDirty = true;
     }
+    this.structuralVersion += 1;
+    this.lastBuildPreviewKey = '';
     this.sound.playGather('stone', 1);
     this.spawnParticles(b.x, b.y + 1.0, b.z, 0x78716c, 10);
     this.addItem(b.kind, 1, true);
@@ -12827,7 +13160,7 @@ export class GameEngine {
     let gz = 0;
     let snapped = false;
 
-    const meshList = Array.from(this.structuralMeshes.values());
+    const meshList = this.getStructuralMeshList();
     if (meshList.length > 0) {
       _raycaster.setFromCamera(_ndcCenter, this.camera);
       _raycaster.far = 9.5;
@@ -12934,6 +13267,7 @@ export class GameEngine {
       this.cinematicActive ||
       this.activeVehicleId
     ) {
+      this.lastBuildPreviewKey = '';
       if (this.previewGroup) this.previewGroup.visible = false;
       if (this.kineticPreviewGroup) this.kineticPreviewGroup.visible = false;
       this.previewTarget = null;
@@ -12942,6 +13276,7 @@ export class GameEngine {
     }
 
     if (kineticKind) {
+      this.lastBuildPreviewKey = '';
       if (this.previewGroup) this.previewGroup.visible = false;
       this.previewTarget = null;
 
@@ -12972,6 +13307,7 @@ export class GameEngine {
     this.kineticPreviewTarget = null;
 
     if (!structKind) {
+      this.lastBuildPreviewKey = '';
       if (this.previewGroup) {
         this.previewGroup.visible = false;
       }
@@ -12980,6 +13316,7 @@ export class GameEngine {
     }
 
     if (this.previewKind !== structKind) {
+      this.lastBuildPreviewKey = '';
       if (this.previewGroup) {
         this.scene.remove(this.previewGroup);
         this.disposeObject3D(this.previewGroup);
@@ -12988,6 +13325,12 @@ export class GameEngine {
       this.previewKind = structKind;
       this.scene.add(this.previewGroup);
     }
+
+    const previewKey = `${structKind}|${Math.round(this.playerX * 10)}|${Math.round(this.playerY * 10)}|${Math.round(this.playerZ * 10)}|${Math.round(this.camYaw * 64)}|${Math.round(this.camPitch * 64)}|${this.buildRotationStep}|${this.structuralVersion}`;
+    if (previewKey === this.lastBuildPreviewKey && this.previewTarget) {
+      return;
+    }
+    this.lastBuildPreviewKey = previewKey;
 
     const target = this.computeStructuralPlacementTarget(structKind);
     this.previewTarget = target;
@@ -13229,6 +13572,7 @@ export class GameEngine {
         this.structuralBlocks.splice(i, 1);
         const mesh = this.structuralMeshes.get(b.id);
         this.structuralMeshes.delete(b.id);
+        this.structuralMeshListDirty = true;
         if (mesh) {
           this.collapsingBlocks.push({
             mesh,
@@ -13332,6 +13676,7 @@ export class GameEngine {
       if (b.bucklingTimer <= 0) {
         this.structuralBlocks.splice(i, 1);
         this.structuralMeshes.delete(b.id);
+        this.structuralMeshListDirty = true;
         detachedAny = true;
         this.sound.playCollapseCrash();
         this.spawnParticles(b.x, b.y + 1.0, b.z, 0x78716c, 12);
@@ -14235,7 +14580,7 @@ export class GameEngine {
     const fwdZ = -Math.cos(this.camYaw);
     const sx = THREE.MathUtils.clamp(this.playerX + fwdX * 5.8, -142, 142);
     const sz = THREE.MathUtils.clamp(this.playerZ + fwdZ * 5.8, -142, 142);
-    const specs = computeVehicleSpecs(v.modules);
+    const specs = this.getVehicleSpecs(v);
     const surf = Math.max(
       getTerrainHeight(sx, sz),
       this.getStructuralSurfaceY(sx, sz, this.playerY + 1.5),
@@ -14312,7 +14657,7 @@ export class GameEngine {
     this.touchCrouch = false;
     this.camYaw = v.yaw - Math.PI;
     this.camPitch = -0.18;
-    const specs = computeVehicleSpecs(v.modules);
+    const specs = this.getVehicleSpecs(v);
     this.sound.playSteamHiss();
     const extraHint =
       v.preset === 'donk'
@@ -14450,7 +14795,7 @@ export class GameEngine {
       this.playerVelY = 0;
       this.grounded = true;
 
-      const specs = computeVehicleSpecs(v.modules);
+      const specs = this.getVehicleSpecs(v);
       const isPureWatercraft =
         specs.canFloat && !specs.canFly && specs.wheelCount === 0;
       if (!isPureWatercraft) {
@@ -15036,18 +15381,28 @@ export class GameEngine {
       nextZ *= maxVehicleRadius / rad;
     }
 
-    // Ground & bridge collision vs Airship clearance (Island World colliders)
+    // Ground & bridge collision vs Airship clearance (Island World colliders via 16m spatial hash)
     if (this.worldType === 'island' && (!airborne || v.y < Math.max(surfY, waterY) + 3.2)) {
-      for (const col of this.world.colliders) {
-        if (col.radius < 0.9) continue;
-        const dx = nextX - col.x;
-        const dz = nextZ - col.z;
-        const d = Math.hypot(dx, dz);
-        const minD = col.radius + 1.55;
-        if (d < minD && d > 0.01) {
-          nextX = col.x + (dx / d) * minD;
-          nextZ = col.z + (dz / d) * minD;
-          this.vehicleForwardSpeed *= 0.85;
+      const vCx = Math.floor(nextX / 16);
+      const vCz = Math.floor(nextZ / 16);
+      for (let gdx = -1; gdx <= 1; gdx++) {
+        for (let gdz = -1; gdz <= 1; gdz++) {
+          const bucket = this.colliderGrid.get((vCx + gdx + 2048) * 4096 + (vCz + gdz + 2048));
+          if (!bucket) continue;
+          for (let ci = 0; ci < bucket.length; ci++) {
+            const col = bucket[ci];
+            if (col.radius < 0.9) continue;
+            const dx = nextX - col.x;
+            const dz = nextZ - col.z;
+            const minD = col.radius + 1.55;
+            const distSq = dx * dx + dz * dz;
+            if (distSq < minD * minD && distSq > 0.0001) {
+              const d = Math.sqrt(distSq);
+              nextX = col.x + (dx / d) * minD;
+              nextZ = col.z + (dz / d) * minD;
+              this.vehicleForwardSpeed *= 0.85;
+            }
+          }
         }
       }
     }
@@ -15180,6 +15535,15 @@ export class GameEngine {
     this.nearbyInteraction = null;
   }
 
+  private getVehicleSpecs(v: ModularVehicleData): ReturnType<typeof computeVehicleSpecs> {
+    let cached = this.vehicleSpecsCache.get(v.modules);
+    if (!cached) {
+      cached = computeVehicleSpecs(v.modules);
+      this.vehicleSpecsCache.set(v.modules, cached);
+    }
+    return cached;
+  }
+
   private updateVehicles(dt: number): void {
     const activeV = this.activeVehicleId
       ? this.vehicles.find((x) => x.id === this.activeVehicleId)
@@ -15213,46 +15577,45 @@ export class GameEngine {
     const airbagLock = THREE.MathUtils.clamp(activeV?.airbagLockLevel ?? 1.0, 0.4, 1.4);
     const sideWave = Math.sin(this.elapsed * (2.6 + airbagSpeed * 3.4));
 
-    const targets = !activeHasHyd
-      ? { fl: 0, fr: 0, rl: 0, rr: 0 }
-      : activeIsAirbag
-        ? this.hydraulicMode === 'lock_up'
-          ? { fl: 0.72 * airbagLock, fr: 0.72 * airbagLock, rl: 0.72 * airbagLock, rr: 0.72 * airbagLock }
-          : this.hydraulicMode === 'drop_down'
-            ? { fl: -0.22 * airbagLock, fr: -0.22 * airbagLock, rl: -0.22 * airbagLock, rr: -0.22 * airbagLock }
-            : this.hydraulicMode === 'front_lock'
-              ? { fl: 0.86 * airbagLock, fr: 0.86 * airbagLock, rl: -0.14 * airbagLock, rr: -0.14 * airbagLock }
-              : this.hydraulicMode === 'rear_lock'
-                ? { fl: -0.14 * airbagLock, fr: -0.14 * airbagLock, rl: 0.86 * airbagLock, rr: 0.86 * airbagLock }
-                : this.hydraulicMode === 'left_tilt'
-                  ? { fl: 0.82 * airbagLock, fr: -0.16 * airbagLock, rl: 0.82 * airbagLock, rr: -0.16 * airbagLock }
-                  : this.hydraulicMode === 'right_tilt'
-                    ? { fl: -0.16 * airbagLock, fr: 0.82 * airbagLock, rl: -0.16 * airbagLock, rr: 0.82 * airbagLock }
-                    : this.hydraulicMode === 'side_to_side'
-                      ? {
-                          fl: (0.24 + sideWave * 0.56) * airbagLock,
-                          fr: (0.24 - sideWave * 0.56) * airbagLock,
-                          rl: (0.24 + sideWave * 0.56) * airbagLock,
-                          rr: (0.24 - sideWave * 0.56) * airbagLock,
-                        }
-                      : { fl: 0, fr: 0, rl: 0, rr: 0 }
-        : this.hydraulicMode === 'lock_up'
-          ? activeIsDonk
-            ? { fl: 0.62, fr: 0.62, rl: 0.62, rr: 0.62 }
-            : { fl: 0.78, fr: 0.78, rl: 0.78, rr: 0.78 }
-          : this.hydraulicMode === 'drop_down'
-            ? activeIsDonk
-              ? { fl: -0.22, fr: -0.22, rl: -0.22, rr: -0.22 }
-              : { fl: -0.14, fr: -0.14, rl: -0.14, rr: -0.14 }
-            : this.hydraulicMode === 'left_tilt'
-              ? activeIsDonk
-                ? { fl: -0.16, fr: 0.56, rl: -0.16, rr: 0.56 }
-                : { fl: -0.1, fr: 0.96, rl: -0.1, rr: 0.96 }
-              : this.hydraulicMode === 'right_tilt'
-                ? activeIsDonk
-                  ? { fl: 0.56, fr: -0.16, rl: 0.56, rr: -0.16 }
-                  : { fl: 0.96, fr: -0.1, rl: 0.96, rr: -0.1 }
-                : { fl: 0, fr: 0, rl: 0, rr: 0 };
+    let tFl = 0, tFr = 0, tRl = 0, tRr = 0;
+    if (activeHasHyd) {
+      if (activeIsAirbag) {
+        if (this.hydraulicMode === 'lock_up') {
+          tFl = tFr = tRl = tRr = 0.72 * airbagLock;
+        } else if (this.hydraulicMode === 'drop_down') {
+          tFl = tFr = tRl = tRr = -0.22 * airbagLock;
+        } else if (this.hydraulicMode === 'front_lock') {
+          tFl = tFr = 0.86 * airbagLock;
+          tRl = tRr = -0.14 * airbagLock;
+        } else if (this.hydraulicMode === 'rear_lock') {
+          tFl = tFr = -0.14 * airbagLock;
+          tRl = tRr = 0.86 * airbagLock;
+        } else if (this.hydraulicMode === 'left_tilt') {
+          tFl = tRl = 0.82 * airbagLock;
+          tFr = tRr = -0.16 * airbagLock;
+        } else if (this.hydraulicMode === 'right_tilt') {
+          tFl = tRl = -0.16 * airbagLock;
+          tFr = tRr = 0.82 * airbagLock;
+        } else if (this.hydraulicMode === 'side_to_side') {
+          tFl = tRl = (0.24 + sideWave * 0.56) * airbagLock;
+          tFr = tRr = (0.24 - sideWave * 0.56) * airbagLock;
+        }
+      } else if (this.hydraulicMode === 'lock_up') {
+        tFl = tFr = tRl = tRr = activeIsDonk ? 0.62 : 0.78;
+      } else if (this.hydraulicMode === 'drop_down') {
+        tFl = tFr = tRl = tRr = activeIsDonk ? -0.22 : -0.14;
+      } else if (this.hydraulicMode === 'left_tilt') {
+        const low = activeIsDonk ? -0.16 : -0.1;
+        const high = activeIsDonk ? 0.56 : 0.96;
+        tFl = tRl = low;
+        tFr = tRr = high;
+      } else if (this.hydraulicMode === 'right_tilt') {
+        const low = activeIsDonk ? -0.16 : -0.1;
+        const high = activeIsDonk ? 0.56 : 0.96;
+        tFl = tRl = high;
+        tFr = tRr = low;
+      }
+    }
 
     const stiffness = activeIsAirbag
       ? 16 + airbagSpeed * 58
@@ -15266,44 +15629,74 @@ export class GameEngine {
         : 7.0;
     const minClamp = activeIsAirbag ? -0.32 : activeIsDonk ? -0.26 : -0.2;
     const maxClamp = activeIsAirbag ? 1.48 : activeIsDonk ? 0.72 : 1.55;
-    (['fl', 'fr', 'rl', 'rr'] as const).forEach((c) => {
-      const accel = (targets[c] - this.hydCorners[c]) * stiffness - this.hydVel[c] * damping;
-      this.hydVel[c] += accel * dt;
-      this.hydCorners[c] = THREE.MathUtils.clamp(
-        this.hydCorners[c] + this.hydVel[c] * dt,
-        minClamp,
-        maxClamp,
-      );
-    });
+
+    if (activeHasHyd || this.hydVel.fl !== 0 || this.hydVel.fr !== 0 || this.hydVel.rl !== 0 || this.hydVel.rr !== 0 || this.hydCorners.fl !== 0 || this.hydCorners.fr !== 0 || this.hydCorners.rl !== 0 || this.hydCorners.rr !== 0) {
+      this.hydVel.fl += ((tFl - this.hydCorners.fl) * stiffness - this.hydVel.fl * damping) * dt;
+      this.hydCorners.fl = THREE.MathUtils.clamp(this.hydCorners.fl + this.hydVel.fl * dt, minClamp, maxClamp);
+      this.hydVel.fr += ((tFr - this.hydCorners.fr) * stiffness - this.hydVel.fr * damping) * dt;
+      this.hydCorners.fr = THREE.MathUtils.clamp(this.hydCorners.fr + this.hydVel.fr * dt, minClamp, maxClamp);
+      this.hydVel.rl += ((tRl - this.hydCorners.rl) * stiffness - this.hydVel.rl * damping) * dt;
+      this.hydCorners.rl = THREE.MathUtils.clamp(this.hydCorners.rl + this.hydVel.rl * dt, minClamp, maxClamp);
+      this.hydVel.rr += ((tRr - this.hydCorners.rr) * stiffness - this.hydVel.rr * damping) * dt;
+      this.hydCorners.rr = THREE.MathUtils.clamp(this.hydCorners.rr + this.hydVel.rr * dt, minClamp, maxClamp);
+    }
+
+    const maxDrawSq = this.effectiveMaxDrawDistance * this.effectiveMaxDrawDistance;
+    const detailDistSq = 120 * 120;
 
     for (const v of this.vehicles) {
-      const specs = computeVehicleSpecs(v.modules);
+      const specs = this.getVehicleSpecs(v);
       const handles = this.vehicleMeshes.get(v.id);
       const isActive = v.id === this.activeVehicleId;
       const autoJob = !isActive ? this.autoParkJobs.get(v.id) : undefined;
 
+      let cachedGroundSurf: number | null = null;
       if (!isActive) {
         if (autoJob) {
           this.stepAutoParkVehicle(v, specs, autoJob, dt);
         } else {
-          const surf = Math.max(
-            getTerrainHeight(v.x, v.z),
-            this.getStructuralSurfaceY(v.x, v.z, v.y + 0.8),
-          );
-          const water = getWaterLevelAt(v.x, v.z);
-          const restY = specs.canFloat ? Math.max(surf, water - 0.14) : surf;
-          v.y = THREE.MathUtils.damp(v.y, restY, 6, dt);
+          let restEntry = this.vehicleRestCache.get(v.id);
+          if (
+            !restEntry ||
+            restEntry.x !== v.x ||
+            restEntry.z !== v.z ||
+            restEntry.structVer !== this.structuralVersion ||
+            this.elapsed >= restEntry.nextRefreshAt
+          ) {
+            const surf = Math.max(
+              getTerrainHeight(v.x, v.z),
+              this.getStructuralSurfaceY(v.x, v.z, v.y + 0.8),
+            );
+            const water = getWaterLevelAt(v.x, v.z);
+            const restY = specs.canFloat ? Math.max(surf, water - 0.14) : surf;
+            restEntry = {
+              x: v.x,
+              z: v.z,
+              structVer: this.structuralVersion,
+              restY,
+              groundSurf: surf,
+              nextRefreshAt: this.elapsed + 0.65,
+            };
+            this.vehicleRestCache.set(v.id, restEntry);
+          }
+          cachedGroundSurf = restEntry.groundSurf;
+          if (Math.abs(v.y - restEntry.restY) > 0.002) {
+            v.y = THREE.MathUtils.damp(v.y, restEntry.restY, 6, dt);
+          } else {
+            v.y = restEntry.restY;
+          }
           v.vx = 0;
           v.vz = 0;
         }
       }
 
       if (!handles) continue;
-      const distV = Math.hypot(v.x - this.playerX, v.z - this.playerZ);
+      const vdx = v.x - this.playerX;
+      const vdz = v.z - this.playerZ;
+      const distVSq = vdx * vdx + vdz * vdz;
       handles.root.visible =
         isActive ||
-        (this.currentDimension === 'overworld' &&
-          distV <= this.effectiveMaxDrawDistance);
+        (this.currentDimension === 'overworld' && distVSq <= maxDrawSq);
       if (!handles.root.visible) continue;
 
       handles.root.position.set(v.x, v.y, v.z);
@@ -15322,17 +15715,20 @@ export class GameEngine {
 
       const shadowDisc = this.vehicleShadowDiscs.get(v.id);
       if (shadowDisc && shadowDisc.visible) {
-        const groundSurf = Math.max(
-          getTerrainHeight(v.x, v.z),
-          this.getStructuralSurfaceY(v.x, v.z, v.y + 0.8),
-        );
+        const groundSurf =
+          cachedGroundSurf !== null
+            ? cachedGroundSurf
+            : Math.max(
+                getTerrainHeight(v.x, v.z),
+                this.getStructuralSurfaceY(v.x, v.z, v.y + 0.8),
+              );
         const airGap = Math.max(0, v.y - groundSurf);
         shadowDisc.position.y = Math.min(0.05, groundSurf - v.y + 0.05);
         const s = Math.max(0.55, 1 - airGap * 0.14);
         shadowDisc.scale.set(s, 1, s);
       }
 
-      if (!isActive && !autoJob && distV > 120) continue;
+      if (!isActive && !autoJob && distVSq > detailDistSq) continue;
 
       // Base chassis ride height + 4-corner hydraulic heave/pitch/roll + SLAB sub-bass rattle
       const isCustomShowCar =
@@ -15666,25 +16062,36 @@ export class GameEngine {
     let desiredDirX = dx;
     let desiredDirZ = dz;
     if (job.phase === 'approach' && this.worldType === 'island') {
-      for (const col of this.world.colliders) {
-        if (col.radius < 0.9) continue;
-        if (
-          Math.abs(col.x - VEHICLE_GARAGE_POS.x) < 14 &&
-          Math.abs(col.z - VEHICLE_GARAGE_POS.z) < 9
-        ) {
-          continue;
-        }
-        const ox = col.x - v.x;
-        const oz = col.z - v.z;
-        const od = Math.hypot(ox, oz);
-        const avoidR = col.radius + 3.8;
-        if (od < avoidR + 4.5 && od > 0.05) {
-          const fwdDot = (ox / od) * curFwdX + (oz / od) * curFwdZ;
-          if (fwdDot > 0.1) {
-            const sideSign = curFwdX * oz - curFwdZ * ox >= 0 ? 1 : -1;
-            const push = ((avoidR + 4.5 - od) / (avoidR + 4.5)) * 12;
-            desiredDirX += -curFwdZ * sideSign * push;
-            desiredDirZ += curFwdX * sideSign * push;
+      const aCx = Math.floor(v.x / 16);
+      const aCz = Math.floor(v.z / 16);
+      for (let gdx = -1; gdx <= 1; gdx++) {
+        for (let gdz = -1; gdz <= 1; gdz++) {
+          const bucket = this.colliderGrid.get((aCx + gdx + 2048) * 4096 + (aCz + gdz + 2048));
+          if (!bucket) continue;
+          for (let ci = 0; ci < bucket.length; ci++) {
+            const col = bucket[ci];
+            if (col.radius < 0.9) continue;
+            if (
+              Math.abs(col.x - VEHICLE_GARAGE_POS.x) < 14 &&
+              Math.abs(col.z - VEHICLE_GARAGE_POS.z) < 9
+            ) {
+              continue;
+            }
+            const ox = col.x - v.x;
+            const oz = col.z - v.z;
+            const avoidR = col.radius + 3.8;
+            const maxAvoid = avoidR + 4.5;
+            const odSq = ox * ox + oz * oz;
+            if (odSq < maxAvoid * maxAvoid && odSq > 0.0025) {
+              const od = Math.sqrt(odSq);
+              const fwdDot = (ox / od) * curFwdX + (oz / od) * curFwdZ;
+              if (fwdDot > 0.1) {
+                const sideSign = curFwdX * oz - curFwdZ * ox >= 0 ? 1 : -1;
+                const push = ((maxAvoid - od) / maxAvoid) * 12;
+                desiredDirX += -curFwdZ * sideSign * push;
+                desiredDirZ += curFwdX * sideSign * push;
+              }
+            }
           }
         }
       }
@@ -15751,21 +16158,31 @@ export class GameEngine {
     let nextZ = v.z + v.vz * dt;
 
     if (this.worldType === 'island') {
-      for (const col of this.world.colliders) {
-        if (col.radius < 0.9) continue;
-        if (
-          Math.abs(col.x - VEHICLE_GARAGE_POS.x) < 14 &&
-          Math.abs(col.z - VEHICLE_GARAGE_POS.z) < 9
-        ) {
-          continue;
-        }
-        const cdx = nextX - col.x;
-        const cdz = nextZ - col.z;
-        const cd = Math.hypot(cdx, cdz);
-        const minD = col.radius + 1.45;
-        if (cd < minD && cd > 0.01) {
-          nextX = col.x + (cdx / cd) * minD;
-          nextZ = col.z + (cdz / cd) * minD;
+      const pCx = Math.floor(nextX / 16);
+      const pCz = Math.floor(nextZ / 16);
+      for (let gdx = -1; gdx <= 1; gdx++) {
+        for (let gdz = -1; gdz <= 1; gdz++) {
+          const bucket = this.colliderGrid.get((pCx + gdx + 2048) * 4096 + (pCz + gdz + 2048));
+          if (!bucket) continue;
+          for (let ci = 0; ci < bucket.length; ci++) {
+            const col = bucket[ci];
+            if (col.radius < 0.9) continue;
+            if (
+              Math.abs(col.x - VEHICLE_GARAGE_POS.x) < 14 &&
+              Math.abs(col.z - VEHICLE_GARAGE_POS.z) < 9
+            ) {
+              continue;
+            }
+            const cdx = nextX - col.x;
+            const cdz = nextZ - col.z;
+            const minD = col.radius + 1.45;
+            const cdSq = cdx * cdx + cdz * cdz;
+            if (cdSq < minD * minD && cdSq > 0.0001) {
+              const cd = Math.sqrt(cdSq);
+              nextX = col.x + (cdx / cd) * minD;
+              nextZ = col.z + (cdz / cd) * minD;
+            }
+          }
         }
       }
     }
@@ -15927,16 +16344,19 @@ export class GameEngine {
           c.species === 'saltwater_crocodile',
         _creature: c,
       })),
-      ...this.vehicles.map((v) => ({
-        id: v.id,
-        x: v.x,
-        y: v.y,
-        z: v.z,
-        vy: v.vy,
-        canFly: computeVehicleSpecs(v.modules).canFly,
-        isWatercraft: computeVehicleSpecs(v.modules).canFloat,
-        _vehicle: v,
-      })),
+      ...this.vehicles.map((v) => {
+        const vSpecs = this.getVehicleSpecs(v);
+        return {
+          id: v.id,
+          x: v.x,
+          y: v.y,
+          z: v.z,
+          vy: v.vy,
+          canFly: vSpecs.canFly,
+          isWatercraft: vSpecs.canFloat,
+          _vehicle: v,
+        };
+      }),
     ];
 
     const report = sanitizeWorldAndEntities(

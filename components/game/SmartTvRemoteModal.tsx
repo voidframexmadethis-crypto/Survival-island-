@@ -61,7 +61,7 @@ export const SmartTvRemoteModal: React.FC<SmartTvRemoteModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-3 sm:p-4 animate-fadeIn">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-3 sm:p-4 animate-fadeIn">
       {/* Hidden local video file input */}
       <input
         ref={fileInputRef}

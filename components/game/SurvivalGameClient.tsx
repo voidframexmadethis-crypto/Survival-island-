@@ -113,7 +113,7 @@ import {
 import { ModManagerModal } from './ModManagerModal';
 import { MultiplayerModal } from './MultiplayerModal';
 import { PlaceModal } from './PlaceModal';
-import { TouchControls } from './TouchControls';
+import { TouchControls, TouchControlsHandle } from './TouchControls';
 import { PlayerControlsMinimizer } from '@/game/systems/playerControlsMinimizer';
 import { MOBILE_HUD_ROCKET_CONTROLS } from '@/game/systems/multiverseSpace';
 import { SaturnRocketModal } from './SaturnRocketModal';
@@ -190,7 +190,7 @@ export function SurvivalGameClient() {
     seq: number;
   } | null>(null);
   const [gamepadConnected, setGamepadConnected] = useState(false);
-  const [gamepadJoystickOffset, setGamepadJoystickOffset] = useState({ x: 0, y: 0 });
+  const touchControlsRef = useRef<TouchControlsHandle | null>(null);
   const tvOverlayRef = useRef<PersistentYouTubeOverlayHandle | null>(null);
   const hudRef = useRef<HUDStateSnapshot | null>(null);
   const activeModalRef = useRef<ActiveModal>(null);
@@ -214,6 +214,8 @@ export function SurvivalGameClient() {
     controlsMinimizerRef.current = new PlayerControlsMinimizer({
       onToggle: (minimized) => setWalkingControlsMinimized(minimized),
       onResetInputs: () => {
+        touchControlsRef.current?.resetTouchJoystick();
+        touchControlsRef.current?.setGamepadKnobOffset(0, 0);
         engineRef.current?.setTouchJoystick(0, 0);
         engineRef.current?.setTouchSprint(false);
         engineRef.current?.setTouchCrouch(false);
@@ -254,6 +256,8 @@ export function SurvivalGameClient() {
 
   useEffect(() => {
     MOBILE_HUD_ROCKET_CONTROLS.onResetInputs = () => {
+      touchControlsRef.current?.resetTouchJoystick();
+      touchControlsRef.current?.setGamepadKnobOffset(0, 0);
       engineRef.current?.setTouchJoystick(0, 0);
       engineRef.current?.setAiming(false);
     };
@@ -313,7 +317,7 @@ export function SurvivalGameClient() {
       engineRef.current?.setAiming(false);
       engineRef.current?.setGamepadDriveState(0, 0, false);
       lastGpKnobRef.current = { x: 0, y: 0 };
-      setGamepadJoystickOffset({ x: 0, y: 0 });
+      touchControlsRef.current?.setGamepadKnobOffset(0, 0);
       pushToast({
         id: `gp_dc_${e.gamepad.index}`,
         text: 'Xbox Controller Disconnected',
@@ -327,7 +331,22 @@ export function SurvivalGameClient() {
     const prevButtonStates = new Map<number, boolean>();
     let wasGamepadActive = false;
 
+    const hasConnectedGamepad = () => {
+      const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+      for (const gp of gps) {
+        if (gp && gp.connected) return true;
+      }
+      return false;
+    };
+
+    const startPolling = () => {
+      if (animId === 0) {
+        animId = window.requestAnimationFrame(pollGamepads);
+      }
+    };
+
     const pollGamepads = () => {
+      animId = 0;
       const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
       let activeGp: Gamepad | null = null;
       for (const gp of gamepads) {
@@ -381,7 +400,7 @@ export function SurvivalGameClient() {
           engine.setGamepadDriveState(0, 0, false);
           if (lastGpKnobRef.current.x !== 0 || lastGpKnobRef.current.y !== 0) {
             lastGpKnobRef.current = { x: 0, y: 0 };
-            setGamepadJoystickOffset({ x: 0, y: 0 });
+            touchControlsRef.current?.setGamepadKnobOffset(0, 0);
             engine.setTouchJoystick(0, 0);
           }
         } else {
@@ -400,7 +419,7 @@ export function SurvivalGameClient() {
             (knobX === 0 && knobY === 0 && (lastGpKnobRef.current.x !== 0 || lastGpKnobRef.current.y !== 0))
           ) {
             lastGpKnobRef.current = { x: knobX, y: knobY };
-            setGamepadJoystickOffset({ x: knobX, y: knobY });
+            touchControlsRef.current?.setGamepadKnobOffset(knobX, knobY);
           }
 
           // Right Analog Stick (axes[2], axes[3]) smooth 360° camera look
@@ -461,18 +480,29 @@ export function SurvivalGameClient() {
         engine?.setAiming(false);
         engine?.setGamepadDriveState(0, 0, false);
         lastGpKnobRef.current = { x: 0, y: 0 };
-        setGamepadJoystickOffset({ x: 0, y: 0 });
+        touchControlsRef.current?.setGamepadKnobOffset(0, 0);
       }
 
-      animId = window.requestAnimationFrame(pollGamepads);
+      if (isNowConnected) {
+        animId = window.requestAnimationFrame(pollGamepads);
+      }
     };
 
-    animId = window.requestAnimationFrame(pollGamepads);
+    const onConnectedWake = (e: GamepadEvent) => {
+      onConnected(e);
+      startPolling();
+    };
+    window.removeEventListener('gamepadconnected', onConnected as EventListener);
+    window.addEventListener('gamepadconnected', onConnectedWake as EventListener);
+
+    if (hasConnectedGamepad()) {
+      startPolling();
+    }
 
     return () => {
-      window.removeEventListener('gamepadconnected', onConnected as EventListener);
+      window.removeEventListener('gamepadconnected', onConnectedWake as EventListener);
       window.removeEventListener('gamepaddisconnected', onDisconnected as EventListener);
-      window.cancelAnimationFrame(animId);
+      if (animId !== 0) window.cancelAnimationFrame(animId);
     };
   }, [screen, pushToast]);
 
@@ -569,9 +599,15 @@ export function SurvivalGameClient() {
     engineRef.current.setTvModalOpen(screen === 'playing' && activeModal === 'tv');
     if (screen !== 'playing') {
       lookPointerId.current = null;
+      touchControlsRef.current?.resetTouchJoystick();
+      touchControlsRef.current?.setGamepadKnobOffset(0, 0);
+      engineRef.current.setTouchJoystick(0, 0);
       engineRef.current.setMode('menu');
     } else if (activeModal) {
       lookPointerId.current = null;
+      touchControlsRef.current?.resetTouchJoystick();
+      touchControlsRef.current?.setGamepadKnobOffset(0, 0);
+      engineRef.current.setTouchJoystick(0, 0);
       engineRef.current.setMode('paused');
     } else {
       engineRef.current.setMode('playing');
@@ -580,6 +616,28 @@ export function SurvivalGameClient() {
       }
     }
   }, [screen, activeModal]);
+
+  // Reset camera look pointer & joysticks whenever window loses focus or tab hides
+  useEffect(() => {
+    const clearAllSticks = () => {
+      lookPointerId.current = null;
+      lastGpKnobRef.current = { x: 0, y: 0 };
+      touchControlsRef.current?.resetTouchJoystick();
+      touchControlsRef.current?.setGamepadKnobOffset(0, 0);
+      engineRef.current?.setTouchJoystick(0, 0);
+      engineRef.current?.setGamepadDriveState(0, 0, false);
+      engineRef.current?.setAiming(false);
+    };
+    const onVisibility = () => {
+      if (document.hidden) clearAllSticks();
+    };
+    window.addEventListener('blur', clearAllSticks);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('blur', clearAllSticks);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
 
   // Keyboard shortcuts for UI modals (I/Tab, B, M, J, Escape)
   useEffect(() => {
@@ -623,31 +681,69 @@ export function SurvivalGameClient() {
     return () => window.removeEventListener('keydown', onKey);
   }, [screen, activeModal]);
 
-  // Periodic Autosave during active play
+  // Periodic Autosave during active play scheduled on browser idle time to avoid frame hitches
   useEffect(() => {
     if (screen !== 'playing') return;
-    const id = window.setInterval(() => {
-      if (engineRef.current) {
-        const slotId = engineRef.current.getCurrentSlotId() || 'slot_1';
-        saveGameToSlot(engineRef.current.exportSaveData(slotId));
-        refreshSaves();
-      }
-    }, 35000);
-    return () => window.clearInterval(id);
-  }, [screen, refreshSaves]);
+    let idleHandle: number | null = null;
+    let timeoutFallback: number | null = null;
 
-  // Smoothly keep the wheel-selected slot centered in the scrollable HUD bar (supports up to 5,000 HUD slots at 60 FPS)
+    const runIdleSave = () => {
+      if (!engineRef.current) return;
+      const slotId = engineRef.current.getCurrentSlotId() || 'slot_1';
+      saveGameToSlot(engineRef.current.exportSaveData(slotId));
+    };
+
+    const scheduleSave = () => {
+      const win = window as Window & {
+        requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+        cancelIdleCallback?: (id: number) => void;
+      };
+      if (typeof win.requestIdleCallback === 'function') {
+        idleHandle = win.requestIdleCallback(() => {
+          idleHandle = null;
+          runIdleSave();
+        }, { timeout: 2000 });
+      } else {
+        timeoutFallback = window.setTimeout(() => {
+          timeoutFallback = null;
+          runIdleSave();
+        }, 0);
+      }
+    };
+
+    const id = window.setInterval(scheduleSave, 35000);
+    return () => {
+      window.clearInterval(id);
+      const win = window as Window & { cancelIdleCallback?: (id: number) => void };
+      if (idleHandle !== null && typeof win.cancelIdleCallback === 'function') {
+        win.cancelIdleCallback(idleHandle);
+      }
+      if (timeoutFallback !== null) {
+        window.clearTimeout(timeoutFallback);
+      }
+    };
+  }, [screen]);
+
+  // Refresh save list only when viewing Menu or Pause modal
+  useEffect(() => {
+    if (screen === 'menu' || activeModal === 'pause') {
+      const id = window.requestAnimationFrame(() => refreshSaves());
+      return () => window.cancelAnimationFrame(id);
+    }
+  }, [screen, activeModal, refreshSaves]);
+
+  // Keep the wheel-selected slot centered in the scrollable HUD bar without smooth-scroll layout thrashing
   const HUD_BAR_WINDOW = 9;
   const equippedSlot = hud?.equippedSlot ?? -1;
   useEffect(() => {
     if (equippedSlot < 0) {
-      hotbarScrollRef.current?.scrollTo({ left: 0, behavior: 'smooth' });
+      hotbarScrollRef.current?.scrollTo({ left: 0, behavior: 'auto' });
       return;
     }
     const btn = slotButtonRefs.current[equippedSlot - hudWindowStart];
     if (btn) {
       btn.scrollIntoView({
-        behavior: 'smooth',
+        behavior: 'auto',
         block: 'nearest',
         inline: 'center',
       });
@@ -735,7 +831,7 @@ export function SurvivalGameClient() {
     engineRef.current?.updateSettings(next);
   };
 
-  const openModal = (modal: ActiveModal, structureId?: string) => {
+  const openModal = useCallback((modal: ActiveModal, structureId?: string) => {
     if (modal === 'tv') {
       setTvPipDismissed(false);
       setTvViewMode('inline');
@@ -749,7 +845,53 @@ export function SurvivalGameClient() {
     setActiveStationStructureId(structureId);
     setActiveModal(modal);
     engineRef.current?.setMode('paused');
-  };
+  }, []);
+
+  const handleTouchJoystickMove = useCallback((x: number, y: number) => {
+    engineRef.current?.setTouchJoystick(x, y);
+  }, []);
+  const handleTouchCameraDrag = useCallback((dx: number, dy: number) => {
+    engineRef.current?.addCameraLookDelta(dx, dy);
+  }, []);
+  const handleTouchAction = useCallback(() => {
+    engineRef.current?.triggerPrimaryAction();
+  }, []);
+  const handleTouchReload = useCallback(() => {
+    engineRef.current?.reloadEquippedWeapon();
+  }, []);
+  const handleTouchJump = useCallback(() => {
+    engineRef.current?.triggerJump();
+  }, []);
+  const handleTouchKickDebris = useCallback(() => {
+    engineRef.current?.triggerDebrisKick();
+  }, []);
+  const handleTouchSprintToggle = useCallback((active: boolean) => {
+    engineRef.current?.setTouchSprint(active);
+  }, []);
+  const handleTouchCrouchToggle = useCallback((active: boolean) => {
+    engineRef.current?.setTouchCrouch(active);
+  }, []);
+  const handleTouchFlightToggle = useCallback(() => {
+    engineRef.current?.togglePlayerFlight();
+  }, []);
+  const handleTouchFlyAscend = useCallback((active: boolean) => {
+    engineRef.current?.setTouchFlyAscend(active);
+  }, []);
+  const handleTouchFlyDescend = useCallback((active: boolean) => {
+    engineRef.current?.setTouchFlyDescend(active);
+  }, []);
+  const handleTouchTeleportBiome = useCallback((dest: string) => {
+    engineRef.current?.teleportToBiome(dest);
+  }, []);
+  const handleTouchOpenBackpack = useCallback(() => {
+    openModal('inventory');
+  }, [openModal]);
+  const handleTouchOpenCraft = useCallback(() => {
+    openModal('crafting');
+  }, [openModal]);
+  const handleTouchOpenPlace = useCallback(() => {
+    openModal('place');
+  }, [openModal]);
 
   const closeModal = () => {
     setActiveModal(null);
@@ -768,40 +910,62 @@ export function SurvivalGameClient() {
     (settings.touchControlsMode === 'always' ||
       (settings.touchControlsMode === 'auto' && isTouchDevice));
 
+  const hudStructures = hud?.structures;
+  const hudPlayerX = hud?.playerX ?? 0;
+  const hudPlayerZ = hud?.playerZ ?? 0;
+  const hudCompletedMissionIds = hud?.completedMissionIds;
+  const hudInventory = hud?.inventory;
+  const hudStats = hud?.stats;
+  const hudVisitedBiomes = hud?.visitedBiomes;
+
   const nearCraftingTable = useMemo(() => {
-    if (!hud) return false;
-    return hud.structures.some(
+    if (!hudStructures) return false;
+    return hudStructures.some(
       (s) =>
         s.type === 'crafting_table' &&
-        Math.hypot(s.x - hud.playerX, s.z - hud.playerZ) < 6.5,
+        Math.hypot(s.x - hudPlayerX, s.z - hudPlayerZ) < 6.5,
     );
-  }, [hud]);
+  }, [hudStructures, hudPlayerX, hudPlayerZ]);
 
   const nearCookingStation = useMemo(() => {
-    if (!hud) return false;
-    return hud.structures.some(
+    if (!hudStructures) return false;
+    return hudStructures.some(
       (s) =>
         s.type === 'cooking_station' &&
-        Math.hypot(s.x - hud.playerX, s.z - hud.playerZ) < 6.5,
+        Math.hypot(s.x - hudPlayerX, s.z - hudPlayerZ) < 6.5,
     );
-  }, [hud]);
+  }, [hudStructures, hudPlayerX, hudPlayerZ]);
 
   const currentMissionInfo = useMemo(() => {
-    if (!hud) return null;
+    if (
+      !hudCompletedMissionIds ||
+      !hudInventory ||
+      !hudStructures ||
+      !hudStats ||
+      !hudVisitedBiomes
+    ) {
+      return null;
+    }
     const mission =
-      STAGE_1_MISSIONS.find((m) => !hud.completedMissionIds.includes(m.id)) ||
+      STAGE_1_MISSIONS.find((m) => !hudCompletedMissionIds.includes(m.id)) ||
       null;
     if (!mission) return null;
     const ctx = {
-      inventory: hud.inventory,
-      structures: hud.structures,
-      stats: hud.stats,
-      visitedBiomes: hud.visitedBiomes,
+      inventory: hudInventory,
+      structures: hudStructures,
+      stats: hudStats,
+      visitedBiomes: hudVisitedBiomes,
     };
     const progress = mission.checkProgress(ctx);
     const nextStep = mission.steps?.find((s) => !s.done(ctx))?.label;
     return { mission, progress, nextStep };
-  }, [hud]);
+  }, [
+    hudCompletedMissionIds,
+    hudInventory,
+    hudStructures,
+    hudStats,
+    hudVisitedBiomes,
+  ]);
 
   const countOf = (id: ItemId) =>
     hud?.inventory
@@ -2613,33 +2777,33 @@ export function SurvivalGameClient() {
         return (
           <>
             <TouchControls
+              ref={touchControlsRef}
               visible={touchVisible && !stickMinimized}
               gamepadConnected={gamepadConnected}
               mirroredJoystickOnly={!showTouchControls}
-              gamepadJoystickOffset={gamepadJoystickOffset}
               actionLabel={hud.nearbyInteraction?.label || 'Action'}
               actionCategory={hud.nearbyInteraction?.actionCategory}
               isSprinting={hud.isSprinting}
               isCrouching={hud.isCrouching}
               isFlying={Boolean(hud.isFlying)}
-              onJoystickMove={(x, y) => engineRef.current?.setTouchJoystick(x, y)}
-              onCameraDrag={(dx, dy) => engineRef.current?.addCameraLookDelta(dx, dy)}
-              onAction={() => engineRef.current?.triggerPrimaryAction()}
+              onJoystickMove={handleTouchJoystickMove}
+              onCameraDrag={handleTouchCameraDrag}
+              onAction={handleTouchAction}
               showReload={Boolean(hud.equippedWeaponState)}
               isReloading={Boolean(hud.equippedWeaponState?.isReloading)}
-              onReload={() => engineRef.current?.reloadEquippedWeapon()}
-              onJump={() => engineRef.current?.triggerJump()}
-              onKickDebris={() => engineRef.current?.triggerDebrisKick()}
+              onReload={handleTouchReload}
+              onJump={handleTouchJump}
+              onKickDebris={handleTouchKickDebris}
               kickCooldown={hud.momentumState?.kickCooldown ?? 0}
-              onSprintToggle={(active) => engineRef.current?.setTouchSprint(active)}
-              onCrouchToggle={(active) => engineRef.current?.setTouchCrouch(active)}
-              onFlightToggle={() => engineRef.current?.togglePlayerFlight()}
-              onFlyAscendChange={(active) => engineRef.current?.setTouchFlyAscend(active)}
-              onFlyDescendChange={(active) => engineRef.current?.setTouchFlyDescend(active)}
-              onTeleportBiome={(dest) => engineRef.current?.teleportToBiome(dest)}
-              onOpenBackpack={() => openModal('inventory')}
-              onOpenCraft={() => openModal('crafting')}
-              onOpenPlace={() => openModal('place')}
+              onSprintToggle={handleTouchSprintToggle}
+              onCrouchToggle={handleTouchCrouchToggle}
+              onFlightToggle={handleTouchFlightToggle}
+              onFlyAscendChange={handleTouchFlyAscend}
+              onFlyDescendChange={handleTouchFlyDescend}
+              onTeleportBiome={handleTouchTeleportBiome}
+              onOpenBackpack={handleTouchOpenBackpack}
+              onOpenCraft={handleTouchOpenCraft}
+              onOpenPlace={handleTouchOpenPlace}
             />
 
             {!touchVisible &&
@@ -2736,7 +2900,7 @@ export function SurvivalGameClient() {
                     }}
                     onKeyDown={(e) => e.stopPropagation()}
                     onKeyUp={(e) => e.stopPropagation()}
-                    className="flex items-center gap-1.5 h-9 bg-stone-950/85 border border-sky-500/50 rounded-lg px-2 shadow-xl backdrop-blur-sm"
+                    className="flex items-center gap-1.5 h-9 bg-stone-950/92 border border-sky-500/50 rounded-lg px-2 shadow-xl"
                   >
                     <Navigation className="w-3.5 h-3.5 text-sky-400 shrink-0" />
                     <input

@@ -38,7 +38,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body
         className="bg-stone-950 text-stone-100 antialiased selection:bg-amber-500/30 overflow-x-hidden overflow-y-scroll"
         suppressHydrationWarning

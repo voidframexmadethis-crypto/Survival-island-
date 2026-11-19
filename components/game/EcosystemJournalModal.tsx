@@ -47,7 +47,7 @@ export function EcosystemJournalModal({
       : 'text-rose-400 bg-rose-950/40 border-rose-500/30';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fadeIn">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 animate-fadeIn">
       <div className="relative w-full max-w-5xl h-[85vh] bg-stone-900 border border-stone-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden text-stone-100">
         
         {/* Header */}

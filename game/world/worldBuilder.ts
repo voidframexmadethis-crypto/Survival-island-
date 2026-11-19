@@ -1163,7 +1163,7 @@ export function buildIslandWorld(
     const bale = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.68, 0.76), hayMat);
     bale.position.set(bx, by, bz);
     bale.rotation.y = ry;
-    bale.castShadow = true;
+    bale.castShadow = false;
     bale.receiveShadow = true;
     barnGroup.add(bale);
   });
@@ -1841,7 +1841,7 @@ export function buildIslandWorld(
         innerFrond.scale.set(0.32, 1.75, 0.32);
         innerFrond.rotation.z = -Math.PI / 2.6;
         innerFrond.position.set(0.8, 0.14, 0);
-        innerFrond.castShadow = shadowsEnabledState;
+        innerFrond.castShadow = false;
         const tipFrond = new THREE.Mesh(gCone5, palmLeafMat);
         tipFrond.scale.set(0.24, 1.35, 0.24);
         tipFrond.rotation.z = -Math.PI / 1.75;
@@ -2838,13 +2838,16 @@ export function buildIslandWorld(
       meta.kind === 'clay_deposit' ||
       meta.kind === 'sand_mound';
 
+    const secX = Math.floor(meta.x / 220);
+    const secZ = Math.floor(meta.z / 220);
+
     tempHandle.root.traverse((child) => {
       if (!(child instanceof THREE.Mesh) || !child.visible) return;
       const mat = Array.isArray(child.material) ? child.material[0] : child.material;
       const geoId = child.geometry.uuid;
       const matId = mat.uuid;
       const castShadow = !noShadowKind && child.castShadow;
-      const batchKey = `res_${geoId}_${matId}_${castShadow ? 1 : 0}`;
+      const batchKey = `res_${secX}_${secZ}_${geoId}_${matId}_${castShadow ? 1 : 0}`;
       addBatchInstance(batchKey, child.geometry, mat, child.matrixWorld, {
         castShadow,
         receiveShadow: !noShadowKind,
@@ -3414,14 +3417,14 @@ export function buildIslandWorld(
     const tire = new THREE.Mesh(new THREE.TorusGeometry(0.38, 0.14, 8, 16), tireMat);
     tire.rotation.x = Math.PI / 2;
     tire.position.set(-7.6, 0.26 + t * 0.25, -4.85);
-    tire.castShadow = true;
+    tire.castShadow = false;
     garageGroup.add(tire);
   }
   const fuelCanMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.42, metalness: 0.3 });
   [-4.4, -3.9, 4.2, 4.7].forEach((fx) => {
     const can = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.56, 0.24), fuelCanMat);
     can.position.set(fx, 0.42, -5.1);
-    can.castShadow = true;
+    can.castShadow = false;
     garageGroup.add(can);
   });
 
@@ -5143,7 +5146,6 @@ export function buildIslandWorld(
     grassInstanced,
     pebbleInstanced,
     ...waterfallStreams,
-    ...builtBatchMeshes.values(),
   ]);
   const cullableLandmarks: {
     obj: THREE.Object3D;

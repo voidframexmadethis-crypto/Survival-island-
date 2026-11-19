@@ -94,7 +94,7 @@ export const CommandConsoleModal: React.FC<CommandConsoleModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 animate-fadeIn">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 animate-fadeIn">
       <div className="relative w-full max-w-3xl bg-stone-900 border border-amber-500/50 rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[80vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 bg-stone-950 border-b border-stone-800">

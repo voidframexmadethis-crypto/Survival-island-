@@ -266,6 +266,7 @@ export type VehiclePresetKey =
   | 'donk'
   | 'slab'
   | 'cadillac_coupe_deville'
+  | 'chevy_2000_sub'
   | 'steam_boat'
   | 'gyro_airship';
 
@@ -350,7 +351,7 @@ export function buildPresetModules(preset: VehiclePresetKey): VehicleModulePlace
     ];
   }
 
-  if (preset === 'slab' || preset === 'cadillac_coupe_deville') {
+  if (preset === 'slab' || preset === 'cadillac_coupe_deville' || preset === 'chevy_2000_sub') {
     return [
       mk('chassis_frame', 0, 0, 0, 1),
       mk('chassis_frame', 0, 0, 1, 2),
@@ -436,6 +437,7 @@ export function createVehicleFromPreset(
     donk: '1974 Box Chevy DONK (30" Rims)',
     slab: 'Houston Candy SLAB (Swangers)',
     cadillac_coupe_deville: 'Cadillac Coupe DeVille (13" Spinners)',
+    chevy_2000_sub: '2000 Chevy Open-Back Sub Wall',
     steam_boat: 'Pontoon Valley Explorer Boat',
     gyro_airship: 'Island Gyro Rotor Airship',
   };
@@ -447,6 +449,7 @@ export function createVehicleFromPreset(
     donk: '#0284c7',
     slab: '#9f1239',
     cadillac_coupe_deville: '#f8fafc',
+    chevy_2000_sub: '#1d4ed8',
     steam_boat: '#0284c7',
     gyro_airship: '#eab308',
   };
@@ -458,6 +461,7 @@ export function createVehicleFromPreset(
     donk: '#f8fafc',
     slab: '#f8fafc',
     cadillac_coupe_deville: '#f8fafc',
+    chevy_2000_sub: '#e2e8f0',
     steam_boat: '#d97706',
     gyro_airship: '#e2e8f0',
   };
@@ -469,6 +473,7 @@ export function createVehicleFromPreset(
     donk: 0.44,
     slab: -0.12,
     cadillac_coupe_deville: -0.14,
+    chevy_2000_sub: -0.02,
     steam_boat: 0,
     gyro_airship: 0.05,
   };
@@ -480,10 +485,12 @@ export function createVehicleFromPreset(
     donk: 1.52,
     slab: 0.92,
     cadillac_coupe_deville: 0.8,
+    chevy_2000_sub: 0.98,
     steam_boat: 1.0,
     gyro_airship: 0.9,
   };
   const isDeville = preset === 'cadillac_coupe_deville';
+  const isChevySub = preset === 'chevy_2000_sub';
   return {
     id,
     name: names[preset],
@@ -500,22 +507,25 @@ export function createVehicleFromPreset(
     convertibleTopDown: false,
     doorsOpen: false,
     trunkOpen: false,
-    trunkBassEnabled: false,
-    underglowColor: preset === 'slab' ? '#e879f9' : undefined,
+    trunkBassEnabled: isChevySub,
+    underglowColor:
+      preset === 'slab' ? '#e879f9' : isChevySub ? '#38bdf8' : undefined,
     turboBoost:
       preset === 'sports_car'
         ? 1.35
-        : preset === 'donk'
-          ? 1.24
-          : isDeville
-            ? 1.22
-            : preset === 'dune_buggy'
-              ? 1.2
-              : preset === 'slab'
-                ? 1.18
-                : preset === 'lowrider'
-                  ? 1.15
-                  : 1.0,
+        : isChevySub
+          ? 1.28
+          : preset === 'donk'
+            ? 1.24
+            : isDeville
+              ? 1.22
+              : preset === 'dune_buggy'
+                ? 1.2
+                : preset === 'slab'
+                  ? 1.18
+                  : preset === 'lowrider'
+                    ? 1.15
+                    : 1.0,
     x,
     y,
     z,

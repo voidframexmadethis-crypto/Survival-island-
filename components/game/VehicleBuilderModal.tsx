@@ -169,7 +169,7 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4">
       <div className="relative w-full max-w-5xl bg-stone-900 border border-amber-500/40 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 bg-stone-950/90 border-b border-stone-800">

@@ -13,6 +13,9 @@
 
 import * as THREE from "three";
 
+const _dayDeepColor = new THREE.Color("#063b65");
+const _dayShallowColor = new THREE.Color("#28c5c4");
+
 export class RealisticOcean {
   private water: THREE.Mesh;
   private material: THREE.ShaderMaterial;
@@ -27,8 +30,8 @@ export class RealisticOcean {
     this.geometry = new THREE.PlaneGeometry(
       width,
       height,
-      160,
-      160
+      96,
+      96
     );
 
     this.material = new THREE.ShaderMaterial({
@@ -221,10 +224,10 @@ export class RealisticOcean {
     // Smooth day-to-night ocean depth & shallow turquoise tint
     (u.uDeepColor.value as THREE.Color)
       .setHex(0x03182e)
-      .lerp(new THREE.Color("#063b65"), params.daylight);
+      .lerp(_dayDeepColor, params.daylight);
     (u.uShallowColor.value as THREE.Color)
       .setHex(0x0b4b5c)
-      .lerp(new THREE.Color("#28c5c4"), params.daylight);
+      .lerp(_dayShallowColor, params.daylight);
   }
 
   update(deltaTime: number): void {

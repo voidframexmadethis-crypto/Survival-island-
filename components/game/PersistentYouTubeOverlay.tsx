@@ -377,26 +377,44 @@ export const PersistentYouTubeOverlay = forwardRef<
     [mode, tvSafetyMode, applyContainerLayout, syncAudioState, applyBassVisualBump],
   );
 
-  // Sync layout immediately whenever mode changes, and continuously track inline slot / window resize
+  // Sync layout immediately whenever mode changes, and track inline slot via ResizeObserver + passive scroll
   useEffect(() => {
     applyContainerLayout();
     if (!active) return;
 
-    let rafId = 0;
-    const onResize = () => applyContainerLayout();
-    window.addEventListener('resize', onResize);
+    const onSync = () => applyContainerLayout();
+    window.addEventListener('resize', onSync);
+
+    let ro: ResizeObserver | null = null;
+    let scrollParent: Element | null = null;
+    let fallbackTimer: number | null = null;
 
     if (mode === 'inline' && inlineSlotElement) {
-      const syncLoop = () => {
-        applyContainerLayout();
-        rafId = window.requestAnimationFrame(syncLoop);
-      };
-      rafId = window.requestAnimationFrame(syncLoop);
+      if (typeof ResizeObserver !== 'undefined') {
+        ro = new ResizeObserver(onSync);
+        ro.observe(inlineSlotElement);
+      }
+      scrollParent = inlineSlotElement.closest('.survival-scroll');
+      if (scrollParent) {
+        if (ro) ro.observe(scrollParent);
+        scrollParent.addEventListener('scroll', onSync, { passive: true });
+      }
+      window.addEventListener('scroll', onSync, { passive: true });
+      fallbackTimer = window.setInterval(onSync, 250);
     }
 
     return () => {
-      window.removeEventListener('resize', onResize);
-      if (rafId) window.cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', onSync);
+      window.removeEventListener('scroll', onSync);
+      if (scrollParent) {
+        scrollParent.removeEventListener('scroll', onSync);
+      }
+      if (ro) {
+        ro.disconnect();
+      }
+      if (fallbackTimer !== null) {
+        window.clearInterval(fallbackTimer);
+      }
     };
   }, [active, mode, inlineSlotElement, applyContainerLayout]);
 

@@ -11,6 +11,7 @@ import {
   getRiverSample,
   getTerrainHeight,
   isTerrainProtectedAt,
+  markTerrainDeformed,
   terrainDeltaGrid,
   terrainLoosenessGrid,
   terrainPuddleGrid,
@@ -59,6 +60,15 @@ export class VolumetricTerrainEngine {
   private waterInstancedMesh: THREE.InstancedMesh;
   private puddleInstancedMesh: THREE.InstancedMesh;
   private dirtyRect: { minIx: number; maxIx: number; minIz: number; maxIz: number } | null = null;
+  private dirtyHeightChanged = false;
+  private looseScanRect: { minIx: number; maxIx: number; minIz: number; maxIz: number } | null = null;
+  private hasWetnessOrPuddles = false;
+  private hasDeformedOrLooseCells = false;
+  private lastDropletVisCount = 0;
+  private lastPuddleVisCount = 0;
+  private lastPuddleScanX = NaN;
+  private lastPuddleScanZ = NaN;
+  private puddleScanDirty = false;
   private avalancheCooldown = 0;
   private breachCheckCooldown = 0;
   private puddleUpdateCooldown = 0;
@@ -116,6 +126,15 @@ export class VolumetricTerrainEngine {
     this.droplets = [];
     this.emitters = [];
     this.dirtyRect = null;
+    this.dirtyHeightChanged = false;
+    this.looseScanRect = null;
+    this.hasWetnessOrPuddles = false;
+    this.hasDeformedOrLooseCells = false;
+    this.lastDropletVisCount = 0;
+    this.lastPuddleVisCount = 0;
+    this.lastPuddleScanX = NaN;
+    this.lastPuddleScanZ = NaN;
+    this.puddleScanDirty = false;
     this.cratersCarved = 0;
     this.totalErodedVolume = 0;
     this.activePuddleCount = 0;
@@ -129,7 +148,7 @@ export class VolumetricTerrainEngine {
     return this.droplets.length + this.emitters.length * 4;
   }
 
-  private markDirtyArea(cx: number, cz: number, radius: number): void {
+  private markDirtyArea(cx: number, cz: number, radius: number, heightChanged = true): void {
     const pad = radius + TERRAIN_STEP * 2;
     const minIx = Math.max(0, Math.floor((cx - pad + TERRAIN_HALF) / TERRAIN_STEP));
     const maxIx = Math.min(
@@ -148,6 +167,23 @@ export class VolumetricTerrainEngine {
       this.dirtyRect.maxIx = Math.max(this.dirtyRect.maxIx, maxIx);
       this.dirtyRect.minIz = Math.min(this.dirtyRect.minIz, minIz);
       this.dirtyRect.maxIz = Math.max(this.dirtyRect.maxIz, maxIz);
+    }
+    if (heightChanged) {
+      markTerrainDeformed();
+      this.dirtyHeightChanged = true;
+      this.hasDeformedOrLooseCells = true;
+      const lMinIx = Math.max(2, minIx - 2);
+      const lMaxIx = Math.min(TERRAIN_VERTS - 3, maxIx + 2);
+      const lMinIz = Math.max(2, minIz - 2);
+      const lMaxIz = Math.min(TERRAIN_VERTS - 3, maxIz + 2);
+      if (!this.looseScanRect) {
+        this.looseScanRect = { minIx: lMinIx, maxIx: lMaxIx, minIz: lMinIz, maxIz: lMaxIz };
+      } else {
+        this.looseScanRect.minIx = Math.min(this.looseScanRect.minIx, lMinIx);
+        this.looseScanRect.maxIx = Math.max(this.looseScanRect.maxIx, lMaxIx);
+        this.looseScanRect.minIz = Math.min(this.looseScanRect.minIz, lMinIz);
+        this.looseScanRect.maxIz = Math.max(this.looseScanRect.maxIz, lMaxIz);
+      }
     }
   }
 
@@ -367,7 +403,10 @@ export class VolumetricTerrainEngine {
         terrainLoosenessGrid[idx] = Math.min(1, terrainLoosenessGrid[idx] + 0.14 * w);
       }
     }
-    this.markDirtyArea(x, z, TERRAIN_STEP * 1.6);
+    if (wetBoost > 0) {
+      this.hasWetnessOrPuddles = true;
+    }
+    this.markDirtyArea(x, z, TERRAIN_STEP * 1.6, delta !== 0);
   }
 
   /**
@@ -387,15 +426,24 @@ export class VolumetricTerrainEngine {
     let erodedVolumeDelta = 0;
     const avalanches: AvalancheEvent[] = [];
 
-    // 1. Dry/fade wetness slowly when clear, or moisten gradually during rainfall
-    if (!isRaining && Math.random() < dt * 1.4) {
+    // 1. Dry/fade wetness slowly when clear (skip completely when nothing is wet)
+    if (!isRaining && this.hasWetnessOrPuddles && Math.random() < dt * 1.4) {
+      let stillWet = false;
       for (let i = 0; i < terrainWetnessGrid.length; i += 2) {
         if (terrainWetnessGrid[i] > 0.005) {
-          terrainWetnessGrid[i] = Math.max(0, terrainWetnessGrid[i] - 0.018);
+          const nw = Math.max(0, terrainWetnessGrid[i] - 0.018);
+          terrainWetnessGrid[i] = nw;
+          if (nw > 0.005) stillWet = true;
         }
         if (terrainPuddleGrid[i] > 0.005) {
-          terrainPuddleGrid[i] = Math.max(0, terrainPuddleGrid[i] - 0.022);
+          const np = Math.max(0, terrainPuddleGrid[i] - 0.022);
+          terrainPuddleGrid[i] = np;
+          if (np > 0.005) stillWet = true;
+          this.puddleScanDirty = true;
         }
+      }
+      if (!stillWet) {
+        this.hasWetnessOrPuddles = false;
       }
     }
 
@@ -420,7 +468,10 @@ export class VolumetricTerrainEngine {
             const hC = getBaseTerrainHeight(vx, vz) + terrainDeltaGrid[idx];
             if (hC < OCEAN_LEVEL + 0.35 || hC > 11.5) continue;
             const river = getRiverSample(vx, vz);
-            if (river.inRiver || Math.hypot(vx - LAKE_CENTER.x, vz - LAKE_CENTER.z) < LAKE_CENTER.radius + 1.5) {
+            const ldx = vx - LAKE_CENTER.x;
+            const ldz = vz - LAKE_CENTER.z;
+            const lakeLim = LAKE_CENTER.radius + 1.5;
+            if (river.inRiver || ldx * ldx + ldz * ldz < lakeLim * lakeLim) {
               continue;
             }
             const hN = getBaseTerrainHeight(vx, vz - TERRAIN_STEP) + terrainDeltaGrid[idx - TERRAIN_VERTS];
@@ -433,11 +484,14 @@ export class VolumetricTerrainEngine {
               const prevWet = terrainWetnessGrid[idx];
               terrainPuddleGrid[idx] = Math.min(1.0, terrainPuddleGrid[idx] + fillRate + Math.max(0, concavity) * 0.25);
               terrainWetnessGrid[idx] = Math.min(1.0, prevWet + fillRate * 1.4);
+              this.hasWetnessOrPuddles = true;
+              this.puddleScanDirty = true;
               if (terrainWetnessGrid[idx] - prevWet > 0.05) {
-                this.markDirtyArea(vx, vz, TERRAIN_STEP);
+                this.markDirtyArea(vx, vz, TERRAIN_STEP, false);
               }
             } else {
               terrainWetnessGrid[idx] = Math.min(0.65, terrainWetnessGrid[idx] + fillRate * 0.45);
+              this.hasWetnessOrPuddles = true;
             }
           }
         }
@@ -467,7 +521,8 @@ export class VolumetricTerrainEngine {
           terrainDeltaGrid[idx] = Math.max(-0.68, terrainDeltaGrid[idx] - sandErode);
           terrainWetnessGrid[idx] = Math.min(1.0, terrainWetnessGrid[idx] + 0.16);
           terrainLoosenessGrid[idx] = Math.min(1.0, terrainLoosenessGrid[idx] + 0.08);
-          this.markDirtyArea(vx, vz, TERRAIN_STEP * 1.5);
+          this.hasWetnessOrPuddles = true;
+          this.markDirtyArea(vx, vz, TERRAIN_STEP * 1.5, true);
           erodedVolumeDelta += sandErode;
           this.totalErodedVolume += sandErode;
           dirtyVertices = true;
@@ -631,24 +686,30 @@ export class VolumetricTerrainEngine {
       }
     }
 
-    // 5. Slope-Stability Avalanche / Landslide Cellular Mass Wasting
+    // 5. Slope-Stability Avalanche / Landslide Cellular Mass Wasting (bounded to deformed/loose subrect, zero alloc)
     this.avalancheCooldown -= dt;
-    if (this.avalancheCooldown <= 0) {
+    if (this.avalancheCooldown <= 0 && this.hasDeformedOrLooseCells) {
       this.avalancheCooldown = 0.18;
-      // Only run avalanche solver around deformed/loose cells for O(k) speed
-      const stride = 1;
-      for (let iz = 2; iz < TERRAIN_VERTS - 2; iz += stride) {
+      const scanRect = this.looseScanRect ?? {
+        minIx: 2,
+        maxIx: TERRAIN_VERTS - 3,
+        minIz: 2,
+        maxIz: TERRAIN_VERTS - 3,
+      };
+      let anyLooseRemaining = false;
+      let slidAny = false;
+      for (let iz = scanRect.minIz; iz <= scanRect.maxIz; iz++) {
         const vz = -TERRAIN_HALF + iz * TERRAIN_STEP;
-        for (let ix = 2; ix < TERRAIN_VERTS - 2; ix += stride) {
+        for (let ix = scanRect.minIx; ix <= scanRect.maxIx; ix++) {
           const idx = iz * TERRAIN_VERTS + ix;
           const looseness = terrainLoosenessGrid[idx];
           if (looseness <= 0.08 && Math.abs(terrainDeltaGrid[idx]) < 0.08) continue;
+          if (looseness > 0.04) anyLooseRemaining = true;
 
           const vx = -TERRAIN_HALF + ix * TERRAIN_STEP;
           if (isTerrainProtectedAt(vx, vz)) continue;
 
           const hCenter = getBaseTerrainHeight(vx, vz) + terrainDeltaGrid[idx];
-          // Angle-of-repose threshold (~35-44 deg depending on looseness & wetness)
           const wet = terrainWetnessGrid[idx];
           const maxDiff = Math.max(1.25, 2.35 - looseness * 0.72 - wet * 0.45);
 
@@ -657,15 +718,9 @@ export class VolumetricTerrainEngine {
           let worstNz = iz;
           let worstNIdx = idx;
 
-          const neighbors: [number, number][] = [
-            [ix + 1, iz],
-            [ix - 1, iz],
-            [ix, iz + 1],
-            [ix, iz - 1],
-          ];
           for (let n = 0; n < 4; n++) {
-            const nix = neighbors[n][0];
-            const niz = neighbors[n][1];
+            const nix = n === 0 ? ix + 1 : n === 1 ? ix - 1 : ix;
+            const niz = n === 2 ? iz + 1 : n === 3 ? iz - 1 : iz;
             const nvx = -TERRAIN_HALF + nix * TERRAIN_STEP;
             const nvz = -TERRAIN_HALF + niz * TERRAIN_STEP;
             if (isTerrainProtectedAt(nvx, nvz)) continue;
@@ -689,8 +744,10 @@ export class VolumetricTerrainEngine {
               1,
               terrainLoosenessGrid[worstNIdx] + 0.42,
             );
-            this.markDirtyArea(vx, vz, TERRAIN_STEP * 2);
+            this.markDirtyArea(vx, vz, TERRAIN_STEP * 2, true);
             dirtyVertices = true;
+            anyLooseRemaining = true;
+            slidAny = true;
 
             if (slideAmount > 0.14 && avalanches.length < 8) {
               const nvx = -TERRAIN_HALF + worstNx * TERRAIN_STEP;
@@ -703,78 +760,120 @@ export class VolumetricTerrainEngine {
               });
             }
           } else if (looseness > 0) {
-            terrainLoosenessGrid[idx] = Math.max(0, looseness - 0.04);
+            const nl = Math.max(0, looseness - 0.04);
+            terrainLoosenessGrid[idx] = nl;
+            if (nl > 0.04) anyLooseRemaining = true;
           }
         }
+      }
+      if (!anyLooseRemaining && !slidAny) {
+        this.hasDeformedOrLooseCells = false;
+        this.looseScanRect = null;
       }
     }
 
     // 6. Sync dirty BufferGeometry region (Y positions + wet/scorch/rock vertex colors + normals)
     if (this.dirtyRect) {
-      this.syncTerrainGeometryRegion(terrainMesh, baseColors, this.dirtyRect);
+      this.syncTerrainGeometryRegion(
+        terrainMesh,
+        baseColors,
+        this.dirtyRect,
+        this.dirtyHeightChanged,
+      );
       this.dirtyRect = null;
+      this.dirtyHeightChanged = false;
       dirtyVertices = true;
     }
 
-    // 7. Update active fluid water droplets InstancedMesh visuals
+    // 7. Update active fluid water droplets InstancedMesh visuals (only upload matrices when active/changed)
     const visCount = Math.min(this.droplets.length, this.maxDropletVisuals);
     this.waterInstancedMesh.count = visCount;
-    for (let i = 0; i < visCount; i++) {
-      const d = this.droplets[i];
-      const h = getTerrainHeight(d.x, d.z);
-      const speed = Math.hypot(d.vx, d.vz);
-      const stretch = Math.min(2.8, 1.0 + speed * 0.18);
-      const thickness = Math.max(0.45, Math.min(1.45, d.water * 0.9));
-      _dummy.position.set(d.x, h + 0.08, d.z);
-      _dummy.rotation.set(0, Math.atan2(d.vx, d.vz), 0);
-      _dummy.scale.set(thickness, 1, thickness * stretch);
-      _dummy.updateMatrix();
-      this.waterInstancedMesh.setMatrixAt(i, _dummy.matrix);
-      // Foam-white tint at high speed or muddy silt tint when loaded with sediment
-      const mudT = Math.min(0.65, d.sediment * 1.4);
-      _streamColor.setRGB(
-        0.22 + mudT * 0.34,
-        0.74 - mudT * 0.25,
-        0.96 - mudT * 0.52,
-      );
-      this.waterInstancedMesh.setColorAt(i, _streamColor);
+    if (visCount > 0) {
+      for (let i = 0; i < visCount; i++) {
+        const d = this.droplets[i];
+        const h = getTerrainHeight(d.x, d.z);
+        const speed = Math.hypot(d.vx, d.vz);
+        const stretch = Math.min(2.8, 1.0 + speed * 0.18);
+        const thickness = Math.max(0.45, Math.min(1.45, d.water * 0.9));
+        _dummy.position.set(d.x, h + 0.08, d.z);
+        _dummy.rotation.set(0, Math.atan2(d.vx, d.vz), 0);
+        _dummy.scale.set(thickness, 1, thickness * stretch);
+        _dummy.updateMatrix();
+        this.waterInstancedMesh.setMatrixAt(i, _dummy.matrix);
+        const mudT = Math.min(0.65, d.sediment * 1.4);
+        _streamColor.setRGB(
+          0.22 + mudT * 0.34,
+          0.74 - mudT * 0.25,
+          0.96 - mudT * 0.52,
+        );
+        this.waterInstancedMesh.setColorAt(i, _streamColor);
+      }
+      this.waterInstancedMesh.instanceMatrix.needsUpdate = true;
+      if (this.waterInstancedMesh.instanceColor) {
+        this.waterInstancedMesh.instanceColor.needsUpdate = true;
+      }
+    } else if (this.lastDropletVisCount > 0) {
+      this.waterInstancedMesh.instanceMatrix.needsUpdate = true;
     }
-    this.waterInstancedMesh.instanceMatrix.needsUpdate = true;
-    if (this.waterInstancedMesh.instanceColor) {
-      this.waterInstancedMesh.instanceColor.needsUpdate = true;
-    }
+    this.lastDropletVisCount = visCount;
 
-    // 8. Update Instanced Rainwater Puddles pooled in basins & depressions
-    let puddleIdx = 0;
-    for (let iz = 2; iz < TERRAIN_VERTS - 2 && puddleIdx < this.maxPuddleVisuals; iz += 2) {
-      const vz = -TERRAIN_HALF + iz * TERRAIN_STEP;
-      if (Math.abs(vz - playerZ) > 85) continue;
-      for (let ix = 2; ix < TERRAIN_VERTS - 2 && puddleIdx < this.maxPuddleVisuals; ix += 2) {
-        const vx = -TERRAIN_HALF + ix * TERRAIN_STEP;
-        if (Math.abs(vx - playerX) > 85) continue;
-        const idx = iz * TERRAIN_VERTS + ix;
-        const depth = terrainPuddleGrid[idx];
-        if (depth > 0.18) {
-          const h = getBaseTerrainHeight(vx, vz) + terrainDeltaGrid[idx];
-          const sc = 0.65 + depth * 0.95;
-          _dummy.position.set(vx, h + 0.045, vz);
-          _dummy.rotation.set(0, ((ix * 7 + iz * 13) % 6) * 0.5, 0);
-          _dummy.scale.set(sc, 1, sc * 0.88);
-          _dummy.updateMatrix();
-          this.puddleInstancedMesh.setMatrixAt(puddleIdx, _dummy.matrix);
-          puddleIdx++;
+    // 8. Update Instanced Rainwater Puddles pooled in basins & depressions (skip completely when dry)
+    if (!this.hasWetnessOrPuddles && !isRaining) {
+      if (this.lastPuddleVisCount > 0) {
+        this.activePuddleCount = 0;
+        this.puddleInstancedMesh.count = 0;
+        this.puddleInstancedMesh.instanceMatrix.needsUpdate = true;
+        this.lastPuddleVisCount = 0;
+      }
+    } else {
+      const movedFarFromPuddleScan =
+        Number.isNaN(this.lastPuddleScanX) ||
+        Math.abs(playerX - this.lastPuddleScanX) > 4 ||
+        Math.abs(playerZ - this.lastPuddleScanZ) > 4;
+      if (this.puddleScanDirty || movedFarFromPuddleScan) {
+        this.puddleScanDirty = false;
+        this.lastPuddleScanX = playerX;
+        this.lastPuddleScanZ = playerZ;
+        let puddleIdx = 0;
+        const minIz = Math.max(2, Math.floor((playerZ - 85 + TERRAIN_HALF) / TERRAIN_STEP));
+        const maxIz = Math.min(TERRAIN_VERTS - 3, Math.ceil((playerZ + 85 + TERRAIN_HALF) / TERRAIN_STEP));
+        const minIx = Math.max(2, Math.floor((playerX - 85 + TERRAIN_HALF) / TERRAIN_STEP));
+        const maxIx = Math.min(TERRAIN_VERTS - 3, Math.ceil((playerX + 85 + TERRAIN_HALF) / TERRAIN_STEP));
+        const startIz = (minIz & 1) === 0 ? minIz : minIz + 1;
+        const startIx = (minIx & 1) === 0 ? minIx : minIx + 1;
+
+        for (let iz = startIz; iz <= maxIz && puddleIdx < this.maxPuddleVisuals; iz += 2) {
+          const vz = -TERRAIN_HALF + iz * TERRAIN_STEP;
+          for (let ix = startIx; ix <= maxIx && puddleIdx < this.maxPuddleVisuals; ix += 2) {
+            const vx = -TERRAIN_HALF + ix * TERRAIN_STEP;
+            const idx = iz * TERRAIN_VERTS + ix;
+            const depth = terrainPuddleGrid[idx];
+            if (depth > 0.18) {
+              const h = getBaseTerrainHeight(vx, vz) + terrainDeltaGrid[idx];
+              const sc = 0.65 + depth * 0.95;
+              _dummy.position.set(vx, h + 0.045, vz);
+              _dummy.rotation.set(0, ((ix * 7 + iz * 13) % 6) * 0.5, 0);
+              _dummy.scale.set(sc, 1, sc * 0.88);
+              _dummy.updateMatrix();
+              this.puddleInstancedMesh.setMatrixAt(puddleIdx, _dummy.matrix);
+              puddleIdx++;
+            }
+          }
         }
+        this.activePuddleCount = puddleIdx;
+        this.puddleInstancedMesh.count = puddleIdx;
+        if (puddleIdx > 0 || this.lastPuddleVisCount > 0) {
+          this.puddleInstancedMesh.instanceMatrix.needsUpdate = true;
+        }
+        this.lastPuddleVisCount = puddleIdx;
       }
     }
-    this.activePuddleCount = puddleIdx;
-    this.puddleInstancedMesh.count = puddleIdx;
-    this.puddleInstancedMesh.instanceMatrix.needsUpdate = true;
 
     return {
       dirtyVertices,
       avalanches,
       erodedVolumeDelta,
-      puddleCount: puddleIdx,
+      puddleCount: this.activePuddleCount,
     };
   }
 
@@ -791,6 +890,7 @@ export class VolumetricTerrainEngine {
     terrainMesh: THREE.Mesh,
     baseColors: Float32Array,
     rect: { minIx: number; maxIx: number; minIz: number; maxIz: number },
+    heightChanged = true,
   ): void {
     const geo = terrainMesh.geometry as THREE.BufferGeometry;
     const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -802,8 +902,10 @@ export class VolumetricTerrainEngine {
         const vx = -TERRAIN_HALF + ix * TERRAIN_STEP;
         const idx = iz * TERRAIN_VERTS + ix;
         const delta = terrainDeltaGrid[idx];
-        const y = getBaseTerrainHeight(vx, vz) + delta;
-        pos.setY(idx, y);
+        if (heightChanged) {
+          const y = getBaseTerrainHeight(vx, vz) + delta;
+          pos.setY(idx, y);
+        }
 
         let r = baseColors[idx * 3];
         let g = baseColors[idx * 3 + 1];
@@ -850,11 +952,13 @@ export class VolumetricTerrainEngine {
       }
     }
 
-    pos.needsUpdate = true;
     col.needsUpdate = true;
-    geo.computeVertexNormals();
-    geo.computeBoundingBox();
-    geo.computeBoundingSphere();
+    if (heightChanged) {
+      pos.needsUpdate = true;
+      geo.computeVertexNormals();
+      geo.computeBoundingBox();
+      geo.computeBoundingSphere();
+    }
   }
 
   public dispose(scene: THREE.Scene): void {

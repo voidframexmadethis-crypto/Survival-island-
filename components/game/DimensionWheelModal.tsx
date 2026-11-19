@@ -82,7 +82,7 @@ export const DimensionWheelModal: React.FC<DimensionWheelModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 overflow-y-auto survival-scroll">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 overflow-y-auto survival-scroll">
       <div className="relative w-full max-w-5xl rounded-2xl bg-stone-900 border border-stone-700/80 shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 bg-stone-950 border-b border-stone-800 shrink-0">

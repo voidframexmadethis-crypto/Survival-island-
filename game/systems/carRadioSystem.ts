@@ -53,7 +53,8 @@ export function isOldSchoolVehicleDescriptor(car: RadioCarDescriptor = {}): bool
     preset === 'slab' ||
     preset === 'lowrider' ||
     preset === 'donk' ||
-    preset === 'cadillac_coupe_deville'
+    preset === 'cadillac_coupe_deville' ||
+    preset === 'chevy_2000_sub'
   ) {
     return true;
   }

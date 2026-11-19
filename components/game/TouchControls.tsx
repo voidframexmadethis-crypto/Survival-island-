@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState, useCallback } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -25,6 +25,11 @@ import {
 } from 'lucide-react';
 import { NearbyInteraction } from '@/game/types';
 
+export interface TouchControlsHandle {
+  setGamepadKnobOffset: (x: number, y: number) => void;
+  resetTouchJoystick: () => void;
+}
+
 interface TouchControlsProps {
   visible: boolean;
   actionLabel: string;
@@ -37,7 +42,6 @@ interface TouchControlsProps {
   isReloading?: boolean;
   gamepadConnected?: boolean;
   mirroredJoystickOnly?: boolean;
-  gamepadJoystickOffset?: { x: number; y: number };
   onJoystickMove: (x: number, y: number) => void;
   onCameraDrag: (dx: number, dy: number) => void;
   onAction: () => void;
@@ -55,7 +59,7 @@ interface TouchControlsProps {
   onOpenPlace?: () => void;
 }
 
-export function TouchControls({
+export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchControlsProps>(function TouchControls({
   visible,
   actionLabel,
   actionCategory,
@@ -67,7 +71,6 @@ export function TouchControls({
   isReloading = false,
   gamepadConnected = false,
   mirroredJoystickOnly = false,
-  gamepadJoystickOffset,
   onJoystickMove,
   onAction,
   onReload,
@@ -82,12 +85,15 @@ export function TouchControls({
   onOpenBackpack,
   onOpenCraft,
   onOpenPlace,
-}: TouchControlsProps) {
+}, ref) {
   const [tpInput, setTpInput] = useState('');
   const joyPadRef = useRef<HTMLDivElement | null>(null);
+  const knobRef = useRef<HTMLDivElement | null>(null);
   const activePointerId = useRef<number | null>(null);
   const joyCenter = useRef({ x: 0, y: 0 });
-  const [knobOffset, setKnobOffset] = useState({ x: 0, y: 0 });
+  const touchKnobRef = useRef({ x: 0, y: 0 });
+  const gpKnobRef = useRef({ x: 0, y: 0 });
+  const knobDeflectedRef = useRef(false);
   const [isCompact, setIsCompact] = useState(false);
 
   useEffect(() => {
@@ -105,11 +111,140 @@ export function TouchControls({
 
   const maxRadius = isCompact ? 38 : 46;
 
+  const syncKnobDom = useCallback(() => {
+    const knob = knobRef.current;
+    if (!knob) return;
+    const tx = touchKnobRef.current.x;
+    const ty = touchKnobRef.current.y;
+    const rawX = tx !== 0 ? tx : gpKnobRef.current.x;
+    const rawY = ty !== 0 ? ty : gpKnobRef.current.y;
+    const mag = Math.hypot(rawX, rawY);
+    const effectiveX = mag > maxRadius ? (rawX / mag) * maxRadius : rawX;
+    const effectiveY = mag > maxRadius ? (rawY / mag) * maxRadius : rawY;
+    const tiltX = (-effectiveY / maxRadius) * 16;
+    const tiltY = (effectiveX / maxRadius) * 16;
+    knob.style.transform = `perspective(180px) translate(${effectiveX.toFixed(1)}px, ${effectiveY.toFixed(1)}px) rotateX(${tiltX.toFixed(1)}deg) rotateY(${tiltY.toFixed(1)}deg)`;
+    const isDeflected = mag > 2;
+    if (isDeflected !== knobDeflectedRef.current) {
+      knobDeflectedRef.current = isDeflected;
+      if (isDeflected) {
+        knob.classList.remove('border-amber-200');
+        knob.classList.add('border-emerald-300', 'ring-2', 'ring-emerald-400/50');
+      } else {
+        knob.classList.remove('border-emerald-300', 'ring-2', 'ring-emerald-400/50');
+        knob.classList.add('border-amber-200');
+      }
+    }
+  }, [maxRadius]);
+
+  const resetJoystick = useCallback(() => {
+    const prevId = activePointerId.current;
+    activePointerId.current = null;
+    if (prevId !== null && joyPadRef.current) {
+      try {
+        if (joyPadRef.current.hasPointerCapture(prevId)) {
+          joyPadRef.current.releasePointerCapture(prevId);
+        }
+      } catch {
+        // Ignore if element is already detached or capture was lost
+      }
+    }
+    const hadTouchOffset =
+      touchKnobRef.current.x !== 0 || touchKnobRef.current.y !== 0;
+    touchKnobRef.current.x = 0;
+    touchKnobRef.current.y = 0;
+    syncKnobDom();
+    if (prevId !== null || hadTouchOffset) {
+      onJoystickMove(0, 0);
+    }
+  }, [onJoystickMove, syncKnobDom]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      setGamepadKnobOffset(x: number, y: number) {
+        gpKnobRef.current.x = x;
+        gpKnobRef.current.y = y;
+        syncKnobDom();
+      },
+      resetTouchJoystick() {
+        resetJoystick();
+      },
+    }),
+    [syncKnobDom, resetJoystick],
+  );
+
+  useEffect(() => {
+    if (!visible) {
+      resetJoystick();
+      return;
+    }
+    syncKnobDom();
+
+    const handleGlobalPointerEnd = (e: PointerEvent) => {
+      if (activePointerId.current === e.pointerId) {
+        resetJoystick();
+      }
+    };
+    const handleGlobalBlur = () => {
+      resetJoystick();
+    };
+    const handleVisibility = () => {
+      if (document.hidden) {
+        resetJoystick();
+      }
+    };
+
+    window.addEventListener('pointerup', handleGlobalPointerEnd, true);
+    window.addEventListener('pointercancel', handleGlobalPointerEnd, true);
+    window.addEventListener('blur', handleGlobalBlur);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      window.removeEventListener('pointerup', handleGlobalPointerEnd, true);
+      window.removeEventListener('pointercancel', handleGlobalPointerEnd, true);
+      window.removeEventListener('blur', handleGlobalBlur);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      resetJoystick();
+    };
+  }, [visible, syncKnobDom, resetJoystick]);
+
+  const emitVectorFromClient = useCallback(
+    (clientX: number, clientY: number) => {
+      const dx = clientX - joyCenter.current.x;
+      const dy = clientY - joyCenter.current.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < maxRadius * 0.05) {
+        touchKnobRef.current.x = 0;
+        touchKnobRef.current.y = 0;
+        syncKnobDom();
+        onJoystickMove(0, 0);
+        return;
+      }
+      let clampedDx = dx;
+      let clampedDy = dy;
+      if (dist > maxRadius) {
+        clampedDx = (dx / dist) * maxRadius;
+        clampedDy = (dy / dist) * maxRadius;
+      }
+      touchKnobRef.current.x = clampedDx;
+      touchKnobRef.current.y = clampedDy;
+      syncKnobDom();
+      onJoystickMove(clampedDx / maxRadius, -clampedDy / maxRadius);
+    },
+    [maxRadius, onJoystickMove, syncKnobDom],
+  );
+
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation();
-    if (activePointerId.current !== null) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     const pad = joyPadRef.current;
     if (!pad) return;
+
+    // If a previous pointer stalled without firing pointerup, replace cleanly
+    if (activePointerId.current !== null && activePointerId.current !== e.pointerId) {
+      resetJoystick();
+    }
 
     const rect = pad.getBoundingClientRect();
     joyCenter.current = {
@@ -124,42 +259,24 @@ export function TouchControls({
       // Ignore
     }
 
-    const dx = e.clientX - joyCenter.current.x;
-    const dy = e.clientY - joyCenter.current.y;
-    const dist = Math.hypot(dx, dy);
-    let clampedDx = dx;
-    let clampedDy = dy;
-    if (dist > maxRadius) {
-      clampedDx = (dx / dist) * maxRadius;
-      clampedDy = (dy / dist) * maxRadius;
-    }
-    setKnobOffset({ x: clampedDx, y: clampedDy });
-    onJoystickMove(clampedDx / maxRadius, -clampedDy / maxRadius);
-  }, [maxRadius, onJoystickMove]);
+    emitVectorFromClient(e.clientX, e.clientY);
+  }, [emitVectorFromClient, resetJoystick]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (e.pointerId !== activePointerId.current) return;
-    e.stopPropagation();
-
-    const dx = e.clientX - joyCenter.current.x;
-    const dy = e.clientY - joyCenter.current.y;
-    const dist = Math.hypot(dx, dy);
-    let clampedDx = dx;
-    let clampedDy = dy;
-    if (dist > maxRadius) {
-      clampedDx = (dx / dist) * maxRadius;
-      clampedDy = (dy / dist) * maxRadius;
+    if (e.pointerType === 'mouse' && e.buttons === 0) {
+      resetJoystick();
+      return;
     }
-    setKnobOffset({ x: clampedDx, y: clampedDy });
-    onJoystickMove(clampedDx / maxRadius, -clampedDy / maxRadius);
-  }, [maxRadius, onJoystickMove]);
+    e.stopPropagation();
+    emitVectorFromClient(e.clientX, e.clientY);
+  }, [emitVectorFromClient, resetJoystick]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     if (e.pointerId !== activePointerId.current) return;
-    activePointerId.current = null;
-    setKnobOffset({ x: 0, y: 0 });
-    onJoystickMove(0, 0);
-  }, [onJoystickMove]);
+    e.stopPropagation();
+    resetJoystick();
+  }, [resetJoystick]);
 
   if (!visible) return null;
 
@@ -307,37 +424,20 @@ export function TouchControls({
             onPointerCancel={handlePointerUp}
             onLostPointerCapture={handlePointerUp}
           >
-            {(() => {
-              const rawX =
-                knobOffset.x !== 0 ? knobOffset.x : (gamepadJoystickOffset?.x ?? 0);
-              const rawY =
-                knobOffset.y !== 0 ? knobOffset.y : (gamepadJoystickOffset?.y ?? 0);
-              const mag = Math.hypot(rawX, rawY);
-              const effectiveX = mag > maxRadius ? (rawX / mag) * maxRadius : rawX;
-              const effectiveY = mag > maxRadius ? (rawY / mag) * maxRadius : rawY;
-              const tiltX = (-effectiveY / maxRadius) * 16;
-              const tiltY = (effectiveX / maxRadius) * 16;
-              const isDeflected = mag > 2;
-              return (
-                <>
-                  <div
-                    className={`w-11 h-11 sm:w-14 sm:h-14 rounded-full bg-amber-500 border-2 shadow-xl flex items-center justify-center pointer-events-none ${
-                      isDeflected ? 'border-emerald-300 ring-2 ring-emerald-400/50' : 'border-amber-200'
-                    }`}
-                    style={{
-                      transform: `perspective(180px) translate(${effectiveX.toFixed(1)}px, ${effectiveY.toFixed(1)}px) rotateX(${tiltX.toFixed(1)}deg) rotateY(${tiltY.toFixed(1)}deg)`,
-                    }}
-                  >
-                    <Footprints className="w-5 h-5 sm:w-6 sm:h-6 text-stone-950" />
-                  </div>
-                  {gamepadConnected && (
-                    <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded bg-stone-950/90 border border-emerald-500/60 text-[9px] font-bold tracking-wider text-emerald-300 uppercase whitespace-nowrap pointer-events-none">
-                      Xbox LS
-                    </span>
-                  )}
-                </>
-              );
-            })()}
+            <div
+              ref={knobRef}
+              className="w-11 h-11 sm:w-14 sm:h-14 rounded-full bg-amber-500 border-2 border-amber-200 shadow-xl flex items-center justify-center pointer-events-none will-change-transform"
+              style={{
+                transform: 'perspective(180px) translate(0px, 0px) rotateX(0deg) rotateY(0deg)',
+              }}
+            >
+              <Footprints className="w-5 h-5 sm:w-6 sm:h-6 text-stone-950" />
+            </div>
+            {gamepadConnected && (
+              <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded bg-stone-950/90 border border-emerald-500/60 text-[9px] font-bold tracking-wider text-emerald-300 uppercase whitespace-nowrap pointer-events-none">
+                Xbox LS
+              </span>
+            )}
           </div>
 
           {(onFlyAscendChange || onFlyDescendChange) && (
@@ -405,7 +505,7 @@ export function TouchControls({
               onPointerDown={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
               onKeyUp={(e) => e.stopPropagation()}
-              className="flex items-center gap-1 bg-stone-950/85 border border-sky-500/50 rounded-lg px-1.5 py-1 shadow-xl backdrop-blur-sm"
+              className="flex items-center gap-1 bg-stone-950/92 border border-sky-500/50 rounded-lg px-1.5 py-1 shadow-xl"
             >
               <Navigation className="w-3.5 h-3.5 text-sky-400 shrink-0" />
               <input
@@ -565,4 +665,4 @@ export function TouchControls({
       )}
     </div>
   );
-}
+}));

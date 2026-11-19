@@ -1225,7 +1225,35 @@ export interface ActiveCreature {
   rigCastShadow?: boolean;
   summonCooldown?: number;
   summonedMinion?: boolean;
+  cachedInDarkCanopy?: boolean;
+  biomeCheckTimer?: number;
+  cachedFloorY?: number;
 }
+
+const HERD_SPECIES = new Set<CreatureSpecies>([
+  'reindeer',
+  'zebra',
+  'elephant',
+  'flamingo',
+  'penguin',
+  'deer',
+  'velociraptor',
+  'dilophosaurus',
+  'kangaroo',
+  'ostrich',
+  'horse',
+  'sheep',
+  'cattle',
+  'pig',
+  'goat',
+  'camel',
+  'rabbit',
+  'bee',
+  'duck',
+  'gray_wolf',
+  'dolphin',
+  'sea_turtle',
+]);
 
 export interface FootprintMarker {
   id: string;
@@ -1249,6 +1277,7 @@ export class CreatureManager {
     opacity: 0.42,
     depthWrite: false,
   });
+  private footprintMeshPool: THREE.Mesh[] = [];
   private scene: THREE.Scene;
   private fpSeq = 0;
   private replenishTimer = 2.5;
@@ -1329,6 +1358,10 @@ export class CreatureManager {
       (fp.mesh.material as THREE.Material).dispose();
     }
     this.footprints.length = 0;
+    for (const mesh of this.footprintMeshPool) {
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.footprintMeshPool.length = 0;
     this.footprintGeo.dispose();
     this.footprintMat.dispose();
   }
@@ -2134,8 +2167,13 @@ export class CreatureManager {
 
   private spawnFootprint(c: ActiveCreature): void {
     if (c.spec.footprintRadius <= 0 || this.footprints.length > 48) return;
-    const mat = this.footprintMat.clone();
-    const mesh = new THREE.Mesh(this.footprintGeo, mat);
+    let mesh = this.footprintMeshPool.pop();
+    if (!mesh) {
+      mesh = new THREE.Mesh(this.footprintGeo, this.footprintMat.clone());
+    }
+    const mat = mesh.material as THREE.MeshBasicMaterial;
+    mat.opacity = 0.42;
+    mesh.visible = true;
     mesh.scale.set(c.spec.footprintRadius, 1, c.spec.footprintRadius * 1.25);
     const y = getTerrainHeight(c.x, c.z) + 0.05;
     mesh.position.set(c.x, y, c.z);
@@ -2235,8 +2273,13 @@ export class CreatureManager {
       const fp = this.footprints[i];
       fp.life -= dt;
       if (fp.life <= 0) {
+        fp.mesh.visible = false;
         this.scene.remove(fp.mesh);
-        (fp.mesh.material as THREE.Material).dispose();
+        if (this.footprintMeshPool.length < 48) {
+          this.footprintMeshPool.push(fp.mesh);
+        } else {
+          (fp.mesh.material as THREE.Material).dispose();
+        }
         this.footprints.splice(i, 1);
       } else {
         (fp.mesh.material as THREE.MeshBasicMaterial).opacity =
@@ -2376,10 +2419,12 @@ export class CreatureManager {
 
       // Cold breath puffs (Timber Wolf, Polar Bear) & warm nostril steam (American Bison) — LOD skip > 42m
       if (distToPlayer < 42 && c.rig.breathWisps && c.rig.breathWisps.length > 0) {
-        c.rig.breathWisps.forEach((wisp, wi) => {
+        const baseZ = c.species === 'bison' ? 1.48 : c.species === 'polar_bear' ? 1.38 : 0.88;
+        const baseY = c.species === 'bison' ? 1.12 : c.species === 'polar_bear' ? 1.15 : 0.72;
+        const wisps = c.rig.breathWisps;
+        for (let wi = 0; wi < wisps.length; wi++) {
+          const wisp = wisps[wi];
           const cycle = (elapsed * 0.78 + wi * 0.34 + i * 0.19) % 1;
-          const baseZ = c.species === 'bison' ? 1.48 : c.species === 'polar_bear' ? 1.38 : 0.88;
-          const baseY = c.species === 'bison' ? 1.12 : c.species === 'polar_bear' ? 1.15 : 0.72;
           const sideX = c.species === 'bison' ? (wi % 2 === 0 ? -0.1 : 0.1) : 0;
           wisp.position.set(
             sideX + Math.sin(elapsed * 2 + wi) * 0.03,
@@ -2387,18 +2432,18 @@ export class CreatureManager {
             baseZ + cycle * 0.42,
           );
           wisp.scale.setScalar(0.55 + cycle * 1.15);
-          const mat = wisp.material as THREE.MeshBasicMaterial;
-          mat.opacity = Math.sin(cycle * Math.PI) * 0.46;
-        });
+          (wisp.material as THREE.MeshBasicMaterial).opacity = Math.sin(cycle * Math.PI) * 0.46;
+        }
       }
 
       // Windblown Lion Mane Tuft Sway
       if (c.rig.maneTufts && c.rig.maneTufts.length > 0) {
-        c.rig.maneTufts.forEach((tuft, ti) => {
-          const gust = Math.sin(elapsed * 3.1 + ti * 0.75 + i) * 0.09;
-          tuft.rotation.z = gust;
+        const tufts = c.rig.maneTufts;
+        for (let ti = 0; ti < tufts.length; ti++) {
+          const tuft = tufts[ti];
+          tuft.rotation.z = Math.sin(elapsed * 3.1 + ti * 0.75 + i) * 0.09;
           tuft.rotation.x = Math.cos(elapsed * 2.4 + ti * 0.9) * 0.06;
-        });
+        }
       }
 
       // Hovering Honey Bees (Flower Forest / Birch Groves) & Tropical Jungle Parrots
@@ -2419,11 +2464,13 @@ export class CreatureManager {
             : 8.2 + Math.sin(elapsed * 1.9 + i) * 1.45);
         c.rig.root.position.set(c.x, c.y, c.z);
         c.rig.root.rotation.y = c.yaw;
-        c.rig.wings?.forEach((w, wi) => {
-          const side = wi === 0 ? 1 : -1;
-          w.rotation.z =
-            side * (isBee ? Math.sin(elapsed * 46 + i) * 0.62 : 0.14 + Math.sin(elapsed * 15 + i) * 0.52);
-        });
+        if (c.rig.wings) {
+          const wings = c.rig.wings;
+          const flapBase = isBee ? Math.sin(elapsed * 46 + i) * 0.62 : 0.14 + Math.sin(elapsed * 15 + i) * 0.52;
+          for (let wi = 0; wi < wings.length; wi++) {
+            wings[wi].rotation.z = (wi === 0 ? 1 : -1) * flapBase;
+          }
+        }
         c.callCooldown -= dt;
         if (c.callCooldown <= 0) {
           c.callCooldown = isBee ? 14 + Math.random() * 12 : 9 + Math.random() * 10;
@@ -2455,10 +2502,13 @@ export class CreatureManager {
         c.rig.body.rotation.z = -0.18;
         const beatPhase = (elapsed * 0.55 + i) % 1;
         const flapEnv = beatPhase < 0.38 ? Math.sin((beatPhase / 0.38) * Math.PI) : 0;
-        c.rig.wings?.forEach((w, wi) => {
-          const side = wi === 0 ? 1 : -1;
-          w.rotation.z = side * (0.08 + flapEnv * Math.sin(elapsed * 10 + i) * 0.42);
-        });
+        if (c.rig.wings) {
+          const wings = c.rig.wings;
+          const flap = 0.08 + flapEnv * Math.sin(elapsed * 10 + i) * 0.42;
+          for (let wi = 0; wi < wings.length; wi++) {
+            wings[wi].rotation.z = (wi === 0 ? 1 : -1) * flap;
+          }
+        }
         const distSoarer = Math.hypot(playerX - c.x, playerZ - c.z);
         if (distSoarer < 65) {
           sightings.push({
@@ -2536,14 +2586,17 @@ export class CreatureManager {
           c.yaw = Math.atan2(nx, nz);
           c.rig.body.rotation.x = -0.45;
           c.rig.head.rotation.x = 0.05;
-          c.rig.legs.forEach((leg) => {
-            leg.rotation.x = 0.75;
-          });
-          c.rig.wings?.forEach((w, wi) => {
-            w.rotation.y = 0;
-            w.rotation.z =
-              (wi === 0 ? 1 : -1) * (0.25 + Math.sin(elapsed * 22 + i) * 0.68);
-          });
+          for (let li = 0; li < c.rig.legs.length; li++) {
+            c.rig.legs[li].rotation.x = 0.75;
+          }
+          if (c.rig.wings) {
+            const takeOffWave = 0.25 + Math.sin(elapsed * 22 + i) * 0.68;
+            for (let wi = 0; wi < c.rig.wings.length; wi++) {
+              const w = c.rig.wings[wi];
+              w.rotation.y = 0;
+              w.rotation.z = (wi === 0 ? 1 : -1) * takeOffWave;
+            }
+          }
           if (c.y >= 21) {
             c.state = 'wander';
             c.rig.body.rotation.x = 0;
@@ -2569,22 +2622,25 @@ export class CreatureManager {
               c.z += nz * Math.min(horizDist, speed * dt);
               c.yaw = Math.atan2(nx, nz);
             }
-            // Parabolic glide descent: pitch nose down high up, flare nose up near touchdown
             const targetHeight = landY + Math.min(18, horizDist * 0.65);
             c.y = THREE.MathUtils.damp(c.y, targetHeight, horizDist < 3 ? 6.5 : 3.2, dt);
             const flaring = horizDist < 3.5 && c.y < landY + 2.4;
             c.rig.body.rotation.x = flaring ? -0.35 : Math.min(0.45, horizDist * 0.04);
             c.rig.head.rotation.x = 0.1;
-            c.rig.legs.forEach((leg) => {
-              leg.rotation.x = flaring ? -0.25 : 0.72;
-            });
-            c.rig.wings?.forEach((w, wi) => {
-              w.rotation.y = 0;
+            const legPitch = flaring ? -0.25 : 0.72;
+            for (let li = 0; li < c.rig.legs.length; li++) {
+              c.rig.legs[li].rotation.x = legPitch;
+            }
+            if (c.rig.wings) {
               const flapRate = flaring ? 20 : 12;
               const flapAmp = flaring ? 0.62 : 0.36;
-              w.rotation.z =
-                (wi === 0 ? 1 : -1) * (0.18 + Math.sin(elapsed * flapRate + i) * flapAmp);
-            });
+              const wingAngle = 0.18 + Math.sin(elapsed * flapRate + i) * flapAmp;
+              for (let wi = 0; wi < c.rig.wings.length; wi++) {
+                const w = c.rig.wings[wi];
+                w.rotation.y = 0;
+                w.rotation.z = (wi === 0 ? 1 : -1) * wingAngle;
+              }
+            }
 
             if (horizDist <= 0.35 && Math.abs(c.y - landY) <= 0.42) {
               c.state = 'feed';
@@ -2595,21 +2651,22 @@ export class CreatureManager {
               c.yaw = Math.atan2(targetCarcass.x - c.x, targetCarcass.z - c.z);
             }
           } else {
-            // Ground feeding: folded wings, hop & peck motions toward carcass center
             c.y = landY + Math.abs(Math.sin(elapsed * 6.5 + i)) * 0.04;
             c.yaw = Math.atan2(targetCarcass.x - c.x, targetCarcass.z - c.z);
             const peckPulse = Math.max(0, Math.sin(elapsed * 9.5 + i * 1.3));
             c.rig.body.rotation.x = 0.25 + peckPulse * 0.42;
             c.rig.head.rotation.x = 0.32 + peckPulse * 0.58;
-            c.rig.legs.forEach((leg) => {
-              leg.rotation.x = -0.15;
-            });
-            // Fold wings snugly beside torso while standing on carcass
-            c.rig.wings?.forEach((w, wi) => {
-              const side = wi === 0 ? -1 : 1;
-              w.rotation.z = side * -1.18;
-              w.rotation.y = side * 0.22;
-            });
+            for (let li = 0; li < c.rig.legs.length; li++) {
+              c.rig.legs[li].rotation.x = -0.15;
+            }
+            if (c.rig.wings) {
+              for (let wi = 0; wi < c.rig.wings.length; wi++) {
+                const w = c.rig.wings[wi];
+                const side = wi === 0 ? -1 : 1;
+                w.rotation.z = side * -1.18;
+                w.rotation.y = side * 0.22;
+              }
+            }
 
             c.feedTimer = (c.feedTimer ?? 1.8) - dt;
             if ((c.feedTimer ?? 0) <= 0) {
@@ -2639,14 +2696,17 @@ export class CreatureManager {
           );
           c.rig.body.rotation.x = 0;
           c.rig.head.rotation.x = 0;
-          c.rig.legs.forEach((leg) => {
-            leg.rotation.x = 0.85;
-          });
-          c.rig.wings?.forEach((w, wi) => {
-            w.rotation.y = 0;
-            w.rotation.z =
-              (wi === 0 ? 1 : -1) * (0.2 + Math.sin(elapsed * 11 + i) * 0.45);
-          });
+          for (let li = 0; li < c.rig.legs.length; li++) {
+            c.rig.legs[li].rotation.x = 0.85;
+          }
+          if (c.rig.wings) {
+            const glideWave = 0.2 + Math.sin(elapsed * 11 + i) * 0.45;
+            for (let wi = 0; wi < c.rig.wings.length; wi++) {
+              const w = c.rig.wings[wi];
+              w.rotation.y = 0;
+              w.rotation.z = (wi === 0 ? 1 : -1) * glideWave;
+            }
+          }
         }
 
         c.rig.root.position.set(c.x, c.y, c.z);
@@ -2731,9 +2791,10 @@ export class CreatureManager {
           c.rig.tail.rotation.x = Math.sin(elapsed * 7.5 + i) * 0.3;
         }
         if (c.rig.wings && c.rig.wings.length > 0) {
-          c.rig.wings.forEach((w, wi) => {
-            w.rotation.z = (wi === 0 ? 1 : -1) * Math.sin(elapsed * 3.4 + i) * 0.36;
-          });
+          const swing = Math.sin(elapsed * 3.4 + i) * 0.36;
+          for (let wi = 0; wi < c.rig.wings.length; wi++) {
+            c.rig.wings[wi].rotation.z = (wi === 0 ? 1 : -1) * swing;
+          }
         }
         c.rig.root.position.set(c.x, c.y, c.z);
         c.rig.root.rotation.y = c.yaw;
@@ -2769,7 +2830,17 @@ export class CreatureManager {
       }
 
       // Armored Cave Titan, Nighttime Creaking, Woodland Mansion & Outpost Illagers, Dark Forest Canopy Hostiles
-      const inDarkCanopy = getBiomeAt(c.x, c.z) === 'dark_forest';
+      const isPredator =
+        c.spec.temperament === 'apex_predator' || c.spec.temperament === 'pack_predator';
+      let inDarkCanopy = false;
+      if (isPredator) {
+        c.biomeCheckTimer = (c.biomeCheckTimer ?? 0) - dt;
+        if (c.biomeCheckTimer <= 0) {
+          c.biomeCheckTimer = 0.9;
+          c.cachedInDarkCanopy = getBiomeAt(c.x, c.z) === 'dark_forest';
+        }
+        inDarkCanopy = Boolean(c.cachedInDarkCanopy);
+      }
       const isIllager =
         c.species === 'vex' ||
         c.species === 'evoker' ||
@@ -2778,8 +2849,7 @@ export class CreatureManager {
       const isActiveStalker =
         isIllager ||
         c.species === 'creaking' ||
-        (inDarkCanopy &&
-          (c.spec.temperament === 'apex_predator' || c.spec.temperament === 'pack_predator'));
+        (inDarkCanopy && isPredator);
       if (c.isBoss || (!c.tamed && !c.mounted && isActiveStalker)) {
         const aggroDist = (c.isBoss ? 14 : Math.max(12, c.spec.aggroRadius)) * Math.max(0.7, stealthMult);
         if (distToPlayer < aggroDist || c.provokedTimer > 0) {
@@ -2921,22 +2991,20 @@ export class CreatureManager {
         c.rig.root.position.set(c.x, c.y, c.z);
         c.rig.root.rotation.y = c.yaw;
         if (c.perch.mode === 'sit') {
-          // Seated feline posture on golden hay bale
           c.rig.body.rotation.x = -0.46;
           c.rig.head.rotation.x = 0.44 + Math.sin(elapsed * 1.4 + i) * 0.05;
           c.rig.head.rotation.z = Math.sin(elapsed * 0.9 + i) * 0.08;
-          c.rig.legs.forEach((leg, li) => {
-            leg.rotation.x = li < 2 ? 0.35 : -0.68;
-          });
+          for (let li = 0; li < c.rig.legs.length; li++) {
+            c.rig.legs[li].rotation.x = li < 2 ? 0.35 : -0.68;
+          }
           c.rig.tail.rotation.y = Math.sin(elapsed * 2.1 + i) * 0.42;
         } else {
-          // Alert upright posture on wooden barnyard crate
           c.rig.body.rotation.x = 0;
           c.rig.head.rotation.x = Math.sin(elapsed * 1.8 + i) * 0.08;
           c.rig.head.rotation.z = Math.sin(elapsed * 1.1 + i) * 0.06;
-          c.rig.legs.forEach((leg) => {
-            leg.rotation.x = 0;
-          });
+          for (let li = 0; li < c.rig.legs.length; li++) {
+            c.rig.legs[li].rotation.x = 0;
+          }
           c.rig.tail.rotation.y = Math.sin(elapsed * 3.8 + i) * 0.22;
         }
         continue;
@@ -3026,6 +3094,7 @@ export class CreatureManager {
 
       if (c.snaredTimer > 0) moveSpeed *= 0.25;
 
+      let movedThisStep = false;
       if (moveSpeed > 0) {
         const dx = c.targetX - c.x;
         const dz = c.targetZ - c.z;
@@ -3050,6 +3119,7 @@ export class CreatureManager {
           if (nextTerrain > 0.2 && !insideHillHouse) {
             c.x = candidateX;
             c.z = candidateZ;
+            movedThisStep = true;
             c.stepAccum += moveSpeed * dt;
             if (c.stepAccum > 2.6) {
               c.stepAccum = 0;
@@ -3068,15 +3138,20 @@ export class CreatureManager {
         }
       }
 
+      const swDx = c.x - SWAMP_POS.x;
+      const swDz = c.z - SWAMP_POS.z;
       const inSwampZone =
         c.species === 'saltwater_crocodile' &&
-        Math.hypot(c.x - SWAMP_POS.x, c.z - SWAMP_POS.z) < SWAMP_POS.radius - 0.35;
+        swDx * swDx + swDz * swDz < (SWAMP_POS.radius - 0.35) * (SWAMP_POS.radius - 0.35);
 
       const kangarooHop =
         c.species === 'kangaroo' && moveSpeed > 0
           ? Math.abs(Math.sin(elapsed * 8.5 + i)) * 0.28
           : 0;
-      const floorY = Math.max(getTerrainHeight(c.x, c.z), getLandmarkFloorY(c.x, c.z, 999));
+      if (movedThisStep || c.cachedFloorY === undefined) {
+        c.cachedFloorY = Math.max(getTerrainHeight(c.x, c.z), getLandmarkFloorY(c.x, c.z, 999));
+      }
+      const floorY = c.cachedFloorY;
       const vexHover = c.species === 'vex' ? 1.12 + Math.sin(elapsed * 4.8 + i) * 0.24 : 0;
       c.y = (inSwampZone ? SWAMP_POS.waterY - 0.24 : floorY) + kangarooHop + vexHover;
       // Resting/sleeping posture or stealthy Red Fox crouch lowers body subtly; ducks & penguins waddle
@@ -3093,22 +3168,26 @@ export class CreatureManager {
       const isScratchingRooster = c.species === 'jungle_fowl' && c.state === 'graze';
       const animFreq = moveSpeed > 0 ? moveSpeed * 1.9 : isScratchingRooster ? 11.5 : 1.8;
       const legAmp = moveSpeed > 0 ? (inSwampZone ? 0.22 : 0.52) : isScratchingRooster ? 0.48 : 0.03;
-      c.rig.legs.forEach((leg, idx) => {
+      const legs = c.rig.legs;
+      for (let idx = 0; idx < legs.length; idx++) {
         const phase = c.species === 'kangaroo' ? 0 : idx % 2 === 0 ? 0 : Math.PI;
-        leg.rotation.x =
+        legs[idx].rotation.x =
           c.state === 'sleep'
             ? 0.6
             : isFoxCrouch
               ? -0.28
               : Math.sin(elapsed * animFreq + phase) * legAmp;
-      });
+      }
       if ((c.species === 'penguin' || c.species === 'vex') && c.rig.wings) {
         const wingSpeed = c.species === 'vex' ? 22 : 7;
         const wingAmp = c.species === 'vex' ? 0.55 : 0.16;
-        c.rig.wings.forEach((w, wi) => {
-          w.rotation.y = c.species === 'vex' ? (wi === 0 ? 1 : -1) * Math.sin(elapsed * wingSpeed + i) * wingAmp : 0;
-          w.rotation.z = c.species === 'penguin' ? (wi === 0 ? 1 : -1) * (0.14 + Math.sin(elapsed * wingSpeed + i) * wingAmp) : 0;
-        });
+        const wings = c.rig.wings;
+        const wingWave = Math.sin(elapsed * wingSpeed + i) * wingAmp;
+        for (let wi = 0; wi < wings.length; wi++) {
+          const w = wings[wi];
+          w.rotation.y = c.species === 'vex' ? (wi === 0 ? 1 : -1) * wingWave : 0;
+          w.rotation.z = c.species === 'penguin' ? (wi === 0 ? 1 : -1) * (0.14 + wingWave) : 0;
+        }
       }
       c.rig.tail.rotation.y =
         Math.sin(elapsed * (inSwampZone ? 2.6 : c.state === 'feed' ? 5.2 : moveSpeed > 0 ? 4.2 : 1.8) + i) *
@@ -3161,16 +3240,18 @@ export class CreatureManager {
       }
     }
 
-    // Infinite Biome-Aware Wildlife Ecosystem: cleanly recycles distant/dead dynamic spawns & endlessly populates herds, birds, marine life, and dinosaurs around the explorer!
+    // Infinite Biome-Aware Wildlife Ecosystem: cleanly recycles distant/dead dynamic spawns & populates herds smoothly (staggered 1 per tick to prevent frame spikes)
     this.replenishTimer -= dt;
     if (this.replenishTimer <= 0) {
-      this.replenishTimer = 1.6;
+      this.replenishTimer = 0.55;
 
-      // 1. Prune distant (>135m) or expired dead untamed dynamic wildlife back into reusable rig pool (keeps FPS silky smooth!)
+      // 1. Prune distant (>135m) or expired dead untamed dynamic wildlife back into reusable rig pool
       for (let idx = this.creatures.length - 1; idx >= 0; idx--) {
         const dc = this.creatures[idx];
         if (!dc.id.startsWith('wild_') || dc.tamed || dc.mounted) continue;
-        const farAway = Math.hypot(dc.x - playerX, dc.z - playerZ) > 135;
+        const ddx = dc.x - playerX;
+        const ddz = dc.z - playerZ;
+        const farAway = ddx * ddx + ddz * ddz > 18225;
         const deadExpired = !dc.alive && dc.respawnTimer <= 0;
         if (farAway || deadExpired) {
           this.releaseWildRig(dc.species, dc.rig);
@@ -3180,53 +3261,34 @@ export class CreatureManager {
 
       // 2. Count active dynamic & wild creatures near the player
       let liveWildCount = 0;
-      for (const c of this.creatures) {
+      for (let idx = 0; idx < this.creatures.length; idx++) {
+        const c = this.creatures[idx];
         if (c.alive && c.id.startsWith('wild_')) {
           liveWildCount += 1;
         }
       }
 
-      const herdSpecies = new Set<CreatureSpecies>([
-        'reindeer',
-        'zebra',
-        'elephant',
-        'flamingo',
-        'penguin',
-        'deer',
-        'velociraptor',
-        'dilophosaurus',
-        'kangaroo',
-        'ostrich',
-        'horse',
-        'sheep',
-        'cattle',
-        'pig',
-        'goat',
-        'camel',
-        'rabbit',
-        'bee',
-        'duck',
-        'gray_wolf',
-        'dolphin',
-        'sea_turtle',
-      ]);
-
-      // Spawn up to 4 fresh spread-out encounters per tick until target active wild density near the player is met
-      let spawnsThisTick = 0;
-      while (liveWildCount < 68 && spawnsThisTick < 4) {
-        spawnsThisTick += 1;
-        let spawned = false;
-        for (let attempt = 0; attempt < 12; attempt++) {
+      // Spawn at most 1 encounter (+1 companion herd mate) per tick to keep frame times flat
+      if (liveWildCount < 68) {
+        for (let attempt = 0; attempt < 8; attempt++) {
           const angle = Math.random() * Math.PI * 2;
           const rad = 24 + Math.random() * 92;
           const sx = THREE.MathUtils.clamp(playerX + Math.cos(angle) * rad, -735, 735);
           const sz = THREE.MathUtils.clamp(playerZ + Math.sin(angle) * rad, -735, 735);
 
           // Keep safe homestead/garage clearings free of random wild spawns
-          if (Math.hypot(sx - HILL_HOUSE_POS.x, sz - HILL_HOUSE_POS.z) < 16) continue;
-          if (Math.hypot(sx - VEHICLE_GARAGE_POS.x, sz - VEHICLE_GARAGE_POS.z) < 19.5) continue;
-          if (Math.hypot(sx - WHEATFIELD_POS.x, sz - WHEATFIELD_POS.z) < 11) continue;
-          if (Math.hypot(sx - FARMER_POS.x, sz - FARMER_POS.z) < 9) continue;
+          let hdx = sx - HILL_HOUSE_POS.x;
+          let hdz = sz - HILL_HOUSE_POS.z;
+          if (hdx * hdx + hdz * hdz < 256) continue;
+          hdx = sx - VEHICLE_GARAGE_POS.x;
+          hdz = sz - VEHICLE_GARAGE_POS.z;
+          if (hdx * hdx + hdz * hdz < 380.25) continue;
+          hdx = sx - WHEATFIELD_POS.x;
+          hdz = sz - WHEATFIELD_POS.z;
+          if (hdx * hdx + hdz * hdz < 121) continue;
+          hdx = sx - FARMER_POS.x;
+          hdz = sz - FARMER_POS.z;
+          if (hdx * hdx + hdz * hdz < 81) continue;
 
           const h = getTerrainHeight(sx, sz);
           const biome = getBiomeAt(sx, sz);
@@ -3364,7 +3426,7 @@ export class CreatureManager {
           liveWildCount += 1;
 
           // Spawn a companion herd/pack mate nearby for social wild species (spread out by 6-12m)
-          if (herdSpecies.has(chosen) && liveWildCount < 68 && Math.random() < 0.65) {
+          if (HERD_SPECIES.has(chosen) && liveWildCount < 68 && Math.random() < 0.65) {
             const mx = sx + (Math.random() - 0.5) * 12;
             const mz = sz + (Math.random() - 0.5) * 12;
             if (getTerrainHeight(mx, mz) > OCEAN_LEVEL + 0.3) {
@@ -3372,10 +3434,8 @@ export class CreatureManager {
               liveWildCount += 1;
             }
           }
-          spawned = true;
           break;
         }
-        if (!spawned) break;
       }
     }
 
