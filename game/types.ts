@@ -376,6 +376,9 @@ export interface ModularVehicleData {
   turboBoost?: number;
   trunkBassEnabled?: boolean;
   underglowColor?: string;
+  underglowEnabled?: boolean;
+  rimLightMode?: 'off' | 'solid' | 'blink' | 'music';
+  rimLightColor?: string;
   x: number;
   y: number;
   z: number;
@@ -457,6 +460,14 @@ export interface ActiveVehicleHudState {
   radioMode?: 'OLD_SCHOOL_TRUNK_AND_CHEST_BASS' | 'STANDARD_RADIO';
   trunkPumpLevel?: number;
   chestThumpLevel?: number;
+  hasRimLights?: boolean;
+  rimLightMode?: 'off' | 'solid' | 'blink' | 'music';
+  rimLightColor?: string;
+  hasUnderglow?: boolean;
+  underglowEnabled?: boolean;
+  underglowColor?: string;
+  slammedStance?: boolean;
+  liftHeightInches?: number;
   highClearance: boolean;
   cargoUsed: number;
   cargoCapacity: number;

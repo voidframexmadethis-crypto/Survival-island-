@@ -54,6 +54,7 @@ export function isOldSchoolVehicleDescriptor(car: RadioCarDescriptor = {}): bool
     preset === 'lowrider' ||
     preset === 'donk' ||
     preset === 'cadillac_coupe_deville' ||
+    preset === 'chevy_tahoe' ||
     preset === 'chevy_2000_sub'
   ) {
     return true;
@@ -76,6 +77,7 @@ export function isOldSchoolVehicleDescriptor(car: RadioCarDescriptor = {}): bool
     tag.includes('lowrider') ||
     tag.includes('impala') ||
     tag.includes('chevy') ||
+    tag.includes('tahoe') ||
     tag.includes('cadillac') ||
     tag.includes('deville')
   );

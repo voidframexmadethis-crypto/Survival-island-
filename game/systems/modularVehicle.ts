@@ -266,6 +266,7 @@ export type VehiclePresetKey =
   | 'donk'
   | 'slab'
   | 'cadillac_coupe_deville'
+  | 'chevy_tahoe'
   | 'chevy_2000_sub'
   | 'steam_boat'
   | 'gyro_airship';
@@ -351,7 +352,12 @@ export function buildPresetModules(preset: VehiclePresetKey): VehicleModulePlace
     ];
   }
 
-  if (preset === 'slab' || preset === 'cadillac_coupe_deville' || preset === 'chevy_2000_sub') {
+  if (
+    preset === 'slab' ||
+    preset === 'cadillac_coupe_deville' ||
+    preset === 'chevy_tahoe' ||
+    preset === 'chevy_2000_sub'
+  ) {
     return [
       mk('chassis_frame', 0, 0, 0, 1),
       mk('chassis_frame', 0, 0, 1, 2),
@@ -437,6 +443,7 @@ export function createVehicleFromPreset(
     donk: '1974 Box Chevy DONK (30" Rims)',
     slab: 'Houston Candy SLAB (Swangers)',
     cadillac_coupe_deville: 'Cadillac Coupe DeVille (13" Spinners)',
+    chevy_tahoe: 'Chevy Tahoe (40" Slammed Forgiatos)',
     chevy_2000_sub: '2000 Chevy Open-Back Sub Wall',
     steam_boat: 'Pontoon Valley Explorer Boat',
     gyro_airship: 'Island Gyro Rotor Airship',
@@ -449,6 +456,7 @@ export function createVehicleFromPreset(
     donk: '#0284c7',
     slab: '#9f1239',
     cadillac_coupe_deville: '#f8fafc',
+    chevy_tahoe: '#111827',
     chevy_2000_sub: '#1d4ed8',
     steam_boat: '#0284c7',
     gyro_airship: '#eab308',
@@ -461,6 +469,7 @@ export function createVehicleFromPreset(
     donk: '#f8fafc',
     slab: '#f8fafc',
     cadillac_coupe_deville: '#f8fafc',
+    chevy_tahoe: '#f8fafc',
     chevy_2000_sub: '#e2e8f0',
     steam_boat: '#d97706',
     gyro_airship: '#e2e8f0',
@@ -473,7 +482,8 @@ export function createVehicleFromPreset(
     donk: 0.44,
     slab: -0.12,
     cadillac_coupe_deville: -0.14,
-    chevy_2000_sub: -0.02,
+    chevy_tahoe: -0.3,
+    chevy_2000_sub: -0.3,
     steam_boat: 0,
     gyro_airship: 0.05,
   };
@@ -485,12 +495,15 @@ export function createVehicleFromPreset(
     donk: 1.52,
     slab: 0.92,
     cadillac_coupe_deville: 0.8,
-    chevy_2000_sub: 0.98,
+    chevy_tahoe: 1.42,
+    chevy_2000_sub: 1.38,
     steam_boat: 1.0,
     gyro_airship: 0.9,
   };
   const isDeville = preset === 'cadillac_coupe_deville';
+  const isTahoe = preset === 'chevy_tahoe';
   const isChevySub = preset === 'chevy_2000_sub';
+  const hasLedRims = isTahoe || isChevySub;
   return {
     id,
     name: names[preset],
@@ -499,33 +512,38 @@ export function createVehicleFromPreset(
     rimColor: rimColors[preset],
     suspensionOffset: suspensionByPreset[preset],
     wheelScale: wheelScaleByPreset[preset],
-    hydraulicHop: preset === 'lowrider' || preset === 'donk' || isDeville,
-    hasAirbagSuspension: isDeville,
+    hydraulicHop: preset === 'lowrider' || preset === 'donk' || isDeville || isTahoe || isChevySub,
+    hasAirbagSuspension: isDeville || isTahoe || isChevySub,
     airbagSpeed: 1.0,
     airbagLockLevel: 1.0,
     hasConvertibleTop: isDeville,
     convertibleTopDown: false,
     doorsOpen: false,
     trunkOpen: false,
-    trunkBassEnabled: isChevySub,
+    trunkBassEnabled: isTahoe || isChevySub,
     underglowColor:
-      preset === 'slab' ? '#e879f9' : isChevySub ? '#38bdf8' : undefined,
+      preset === 'slab' ? '#e879f9' : isTahoe || isChevySub ? '#38bdf8' : undefined,
+    underglowEnabled: preset === 'slab' || isTahoe || isChevySub,
+    rimLightMode: hasLedRims ? 'blink' : 'off',
+    rimLightColor: hasLedRims ? '#38bdf8' : undefined,
     turboBoost:
       preset === 'sports_car'
         ? 1.35
-        : isChevySub
-          ? 1.28
-          : preset === 'donk'
-            ? 1.24
-            : isDeville
-              ? 1.22
-              : preset === 'dune_buggy'
-                ? 1.2
-                : preset === 'slab'
-                  ? 1.18
-                  : preset === 'lowrider'
-                    ? 1.15
-                    : 1.0,
+        : isTahoe
+          ? 1.3
+          : isChevySub
+            ? 1.28
+            : preset === 'donk'
+              ? 1.24
+              : isDeville
+                ? 1.22
+                : preset === 'dune_buggy'
+                  ? 1.2
+                  : preset === 'slab'
+                    ? 1.18
+                    : preset === 'lowrider'
+                      ? 1.15
+                      : 1.0,
     x,
     y,
     z,

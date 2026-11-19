@@ -43,6 +43,10 @@ interface VehicleBuilderModalProps {
       wheelScale?: number;
       hydraulicHop?: boolean;
       turboBoost?: number;
+      underglowColor?: string;
+      underglowEnabled?: boolean;
+      rimLightMode?: 'off' | 'solid' | 'blink' | 'music';
+      rimLightColor?: string;
     },
   ) => void;
   onParkInGarage?: (vehicleId: string, bay: 'A' | 'B' | 'C' | 'D') => void;
@@ -182,7 +186,7 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                 Vehicle Garage &amp; Modular Assembly Bay
               </h2>
               <p className="text-xs text-stone-400">
-                Build &amp; customize Lowriders, 30&quot; Lifted DONKs, Houston SLABs, Cadillac Coupe DeVilles, Sports Cars, Buggies &amp; Boats
+                Build &amp; customize Chevy Tahoes on 40&quot; Forgiatos, Lowriders, DONKs, SLABs, Coupe DeVilles, Sports Cars, Buggies &amp; Boats
               </p>
             </div>
           </div>
@@ -243,6 +247,13 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   {[
+                    {
+                      key: 'chevy_tahoe' as VehiclePresetKey,
+                      title: 'Chevy Tahoe (40" Forgiatos)',
+                      desc: 'Slammed 3" off the ground on 40" Forgiato 44 auto-spinners, underglow, behind-driver sub wall & in-car lift/light switches.',
+                      icon: Sparkles,
+                      color: 'border-cyan-400/60 bg-cyan-500/15 text-cyan-300',
+                    },
                     {
                       key: 'lowrider' as VehiclePresetKey,
                       title: '1964 Candy Lowrider',
@@ -593,6 +604,105 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                           >
                             {activeGarageVehicle.hydraulicHop ? 'Hydraulics ON' : 'Enable Hydraulics'}
                           </button>
+                        </div>
+
+                        <div className="pt-3 border-t border-stone-800 space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <div className="text-xs font-bold text-cyan-300">
+                                Underglow &amp; Rim LED Lights
+                              </div>
+                              <div className="text-[11px] text-stone-400">
+                                Light up rims &amp; ground neon: solid, blink, or music-reactive bass sync
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onCustomizeVehicle(activeGarageVehicle.id, {
+                                  underglowEnabled: activeGarageVehicle.underglowEnabled === false,
+                                })
+                              }
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition ${
+                                activeGarageVehicle.underglowEnabled !== false
+                                  ? 'bg-cyan-500 border-cyan-200 text-stone-950'
+                                  : 'bg-stone-800 border-stone-700 text-stone-300'
+                              }`}
+                            >
+                              {activeGarageVehicle.underglowEnabled !== false
+                                ? 'Underglow ON'
+                                : 'Underglow OFF'}
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <div className="text-xs text-stone-400 mb-1.5">Rim &amp; Underglow Light Mode</div>
+                              <div className="grid grid-cols-4 gap-1.5">
+                                {(
+                                  [
+                                    { id: 'solid', label: 'Lit' },
+                                    { id: 'blink', label: 'Blink' },
+                                    { id: 'music', label: 'Music' },
+                                    { id: 'off', label: 'Off' },
+                                  ] as const
+                                ).map((m) => (
+                                  <button
+                                    type="button"
+                                    key={m.id}
+                                    onClick={() =>
+                                      onCustomizeVehicle(activeGarageVehicle.id, {
+                                        rimLightMode: m.id,
+                                      })
+                                    }
+                                    className={`px-2 py-1.5 rounded-lg text-xs font-bold border transition ${
+                                      (activeGarageVehicle.rimLightMode ?? 'blink') === m.id
+                                        ? 'bg-cyan-500 border-cyan-200 text-stone-950'
+                                        : 'bg-stone-900 border-stone-700 text-stone-300 hover:border-stone-500'
+                                    }`}
+                                  >
+                                    {m.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div>
+                              <div className="text-xs text-stone-400 mb-1.5">Neon LED Color</div>
+                              <div className="flex flex-wrap gap-2">
+                                {[
+                                  '#38bdf8',
+                                  '#ec4899',
+                                  '#a855f7',
+                                  '#22c55e',
+                                  '#facc15',
+                                  '#ef4444',
+                                  '#f8fafc',
+                                ].map((neon) => (
+                                  <button
+                                    type="button"
+                                    key={neon}
+                                    onClick={() =>
+                                      onCustomizeVehicle(activeGarageVehicle.id, {
+                                        underglowColor: neon,
+                                        rimLightColor: neon,
+                                        underglowEnabled: true,
+                                      })
+                                    }
+                                    className={`w-6 h-6 rounded-full border-2 ${
+                                      (activeGarageVehicle.rimLightColor ??
+                                        activeGarageVehicle.underglowColor ??
+                                        '#38bdf8') === neon
+                                        ? 'border-white scale-110'
+                                        : 'border-stone-700'
+                                    }`}
+                                    style={{ backgroundColor: neon }}
+                                    aria-label={`Neon color ${neon}`}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     )}

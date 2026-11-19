@@ -999,6 +999,8 @@ export class GameEngine {
   private vehicleInteriorCamera = false;
   private convertibleTopProgressMap = new Map<string, number>();
   private droptopButtonPressTimer = 0;
+  private rimLightButtonPressTimer = 0;
+  private liftButtonPressTimer = 0;
   private readonly _tapNdc = new THREE.Vector2();
   private hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
   private trunkBassPulse = 0;
@@ -1432,20 +1434,43 @@ export class GameEngine {
   private onCanvasPointerDown = (e: PointerEvent): void => {
     if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
     if (e.button !== 0) return;
-    // Raycast against any nearby or active convertible car's 3D interior droptop button!
+    // Raycast against any nearby or active vehicle's 3D interior console buttons (Droptop, Rim Lights, Lift)!
     const buttonMeshes: THREE.Object3D[] = [];
-    const buttonOwnerMap = new Map<THREE.Object3D, string>();
+    const buttonActionMap = new Map<
+      THREE.Object3D,
+      { vehicleId: string; action: 'droptop' | 'rim_light' | 'lift' }
+    >();
     for (const v of this.vehicles) {
-      if (!v.hasConvertibleTop && v.preset !== 'cadillac_coupe_deville') continue;
       const dist =
         v.id === this.activeVehicleId
           ? 0
           : Math.hypot(v.x - this.playerX, v.z - this.playerZ);
       if (dist > 6.5) continue;
       const handles = this.vehicleMeshes.get(v.id);
-      if (handles?.droptopButton) {
+      if (!handles) continue;
+      if (
+        handles.droptopButton &&
+        (v.hasConvertibleTop || v.preset === 'cadillac_coupe_deville')
+      ) {
         buttonMeshes.push(handles.droptopButton);
-        buttonOwnerMap.set(handles.droptopButton, v.id);
+        buttonActionMap.set(handles.droptopButton, {
+          vehicleId: v.id,
+          action: 'droptop',
+        });
+      }
+      if (handles.rimLightButton) {
+        buttonMeshes.push(handles.rimLightButton);
+        buttonActionMap.set(handles.rimLightButton, {
+          vehicleId: v.id,
+          action: 'rim_light',
+        });
+      }
+      if (handles.liftButton) {
+        buttonMeshes.push(handles.liftButton);
+        buttonActionMap.set(handles.liftButton, {
+          vehicleId: v.id,
+          action: 'lift',
+        });
       }
     }
     if (buttonMeshes.length === 0) return;
@@ -1462,9 +1487,15 @@ export class GameEngine {
     if (hits.length > 0) {
       let obj: THREE.Object3D | null = hits[0].object;
       while (obj) {
-        const ownerId = buttonOwnerMap.get(obj);
-        if (ownerId) {
-          this.toggleConvertibleTop(ownerId);
+        const meta = buttonActionMap.get(obj);
+        if (meta) {
+          if (meta.action === 'droptop') {
+            this.toggleConvertibleTop(meta.vehicleId);
+          } else if (meta.action === 'rim_light') {
+            this.cycleVehicleRimLights(meta.vehicleId);
+          } else if (meta.action === 'lift') {
+            this.toggleVehicleSlamLift(meta.vehicleId);
+          }
           return;
         }
         obj = obj.parent;
@@ -1598,6 +1629,8 @@ export class GameEngine {
       this.toggleConvertibleTop(activeVehicle.id);
     } else if (activeHasBass && (e.code === 'KeyT' || e.code === 'KeyG')) {
       this.toggleTrunkBass();
+    } else if (e.code === 'KeyL' && this.activeVehicleId) {
+      this.cycleVehicleRimLights(this.activeVehicleId);
     } else if (e.code === 'KeyB' && this.activeVehicleId) {
       this.openCarRadio();
     } else if (e.code === 'KeyV') {
@@ -3621,6 +3654,20 @@ export class GameEngine {
               bay4X,
               getTerrainHeight(bay4X, bay4Z) + 0.14,
               bay4Z,
+              0,
+            ),
+          );
+        }
+        if (!this.vehicles.some((v) => v.preset === 'chevy_tahoe')) {
+          const westX = VEHICLE_GARAGE_POS.x - 16.0;
+          const westZ = VEHICLE_GARAGE_POS.z + 5.2;
+          this.spawnVehicleInstance(
+            createVehicleFromPreset(
+              'veh_starter_tahoe',
+              'chevy_tahoe',
+              westX,
+              getTerrainHeight(westX, westZ) + 0.14,
+              westZ,
               0,
             ),
           );
@@ -11990,6 +12037,38 @@ export class GameEngine {
             : 'STANDARD_RADIO',
           trunkPumpLevel: this.trunkBassPulse,
           chestThumpLevel: this.chestThumpPulse,
+          hasRimLights:
+            av.preset === 'chevy_tahoe' ||
+            av.preset === 'chevy_2000_sub' ||
+            av.rimLightMode !== undefined,
+          rimLightMode: av.rimLightMode ?? 'off',
+          rimLightColor: av.rimLightColor || av.underglowColor || '#38bdf8',
+          hasUnderglow: Boolean(
+            av.underglowColor ||
+              av.preset === 'slab' ||
+              av.preset === 'chevy_tahoe' ||
+              av.preset === 'chevy_2000_sub',
+          ),
+          underglowEnabled: av.underglowEnabled !== false,
+          underglowColor: av.underglowColor || '#38bdf8',
+          slammedStance:
+            (av.suspensionOffset ?? 0) <= -0.22 &&
+            this.hydraulicMode !== 'lock_up' &&
+            this.hydraulicMode !== 'front_lock' &&
+            this.hydraulicMode !== 'rear_lock',
+          liftHeightInches: (() => {
+            const baseRide =
+              av.preset === 'chevy_tahoe' || av.preset === 'chevy_2000_sub'
+                ? Math.max(0.075, 0.38 + (av.suspensionOffset ?? -0.3))
+                : Math.max(0.26, 0.38 + (av.suspensionOffset ?? 0));
+            const avgHeave =
+              (this.hydCorners.fl +
+                this.hydCorners.fr +
+                this.hydCorners.rl +
+                this.hydCorners.rr) *
+              0.25;
+            return Math.max(3, Math.round((baseRide + avgHeave) * 39.37));
+          })(),
           highClearance:
             av.preset === 'donk' ||
             ((av.suspensionOffset ?? 0) >= 0.32 && (av.wheelScale ?? 1) >= 1.3),
@@ -13967,6 +14046,19 @@ export class GameEngine {
       );
       this.spawnVehicleInstance(rover);
 
+      // Slammed Chevy Tahoe on 40" Forgiato "44" Auto Spinners + Behind-Driver Subwoofers (West Apron beside Bay 1)
+      const westApronX = VEHICLE_GARAGE_POS.x - 16.0;
+      const westApronZ = VEHICLE_GARAGE_POS.z + 5.2;
+      const tahoe = createVehicleFromPreset(
+        'veh_starter_tahoe',
+        'chevy_tahoe',
+        westApronX,
+        getTerrainHeight(westApronX, westApronZ) + 0.14,
+        westApronZ,
+        0,
+      );
+      this.spawnVehicleInstance(tahoe);
+
       const boat = createVehicleFromPreset(
         'veh_starter_boat',
         'steam_boat',
@@ -14687,7 +14779,9 @@ export class GameEngine {
         v.preset === 'slab' ||
         v.preset === 'lowrider' ||
         v.preset === 'donk' ||
-        v.preset === 'cadillac_coupe_deville',
+        v.preset === 'cadillac_coupe_deville' ||
+        v.preset === 'chevy_tahoe' ||
+        v.preset === 'chevy_2000_sub',
     };
   }
 
@@ -14702,7 +14796,11 @@ export class GameEngine {
 
   private isAirbagVehicle(v?: ModularVehicleData | null): boolean {
     return Boolean(
-      v && (v.hasAirbagSuspension || v.preset === 'cadillac_coupe_deville'),
+      v &&
+        (v.hasAirbagSuspension ||
+          v.preset === 'cadillac_coupe_deville' ||
+          v.preset === 'chevy_tahoe' ||
+          v.preset === 'chevy_2000_sub'),
     );
   }
 
@@ -14713,7 +14811,9 @@ export class GameEngine {
           v.hasAirbagSuspension ||
           v.preset === 'lowrider' ||
           v.preset === 'donk' ||
-          v.preset === 'cadillac_coupe_deville'),
+          v.preset === 'cadillac_coupe_deville' ||
+          v.preset === 'chevy_tahoe' ||
+          v.preset === 'chevy_2000_sub'),
     );
   }
 
@@ -14737,6 +14837,12 @@ export class GameEngine {
     else if (v.id === 'veh_starter_slab' || v.preset === 'slab') preferredIdx = 2;
     else if (v.id === 'veh_starter_deville' || v.preset === 'cadillac_coupe_deville') preferredIdx = 3;
     else if (v.id === 'veh_starter_rover' || v.preset === 'expedition_rover') preferredIdx = 4;
+    else if (
+      v.id === 'veh_starter_tahoe' ||
+      v.preset === 'chevy_tahoe' ||
+      v.preset === 'chevy_2000_sub'
+    )
+      preferredIdx = 5;
 
     const isOccupied = (slot: { x: number; z: number }) =>
       this.vehicles.some(
@@ -15186,10 +15292,105 @@ export class GameEngine {
     }
     this.toast(
       av.trunkBassEnabled
-        ? 'Trunk Bass ON — Old-School 808 Subwoofers Active!'
-        : 'Trunk Bass OFF',
+        ? 'Subwoofers ON — Behind-Driver 808 Bass Active!'
+        : 'Subwoofers OFF',
       av.trunkBassEnabled ? 'discovery' : 'info',
     );
+    this.emitHud();
+  }
+
+  public setVehicleRimLightMode(
+    mode: 'off' | 'solid' | 'blink' | 'music',
+    vehicleId?: string,
+  ): void {
+    const targetId = vehicleId ?? this.activeVehicleId;
+    if (!targetId) return;
+    const av = this.vehicles.find((x) => x.id === targetId);
+    if (!av) return;
+    this.sound.unlock();
+    av.rimLightMode = mode;
+    if (mode !== 'off') {
+      av.underglowEnabled = true;
+    }
+    if (mode === 'music' && !av.trunkBassEnabled && !CABIN_BASS_AND_FIRST_PERSON.stereoPlaying) {
+      av.trunkBassEnabled = true;
+    }
+    this.rimLightButtonPressTimer = 0.24;
+    this.sound.playPickup();
+    const labelMap: Record<'off' | 'solid' | 'blink' | 'music', string> = {
+      solid: '40" Forgiato Rim Lights & Underglow: SOLID LIT',
+      blink: '40" Forgiato Rim Lights & Underglow: BLINKING',
+      music: '40" Forgiato Rim Lights & Underglow: SYNCED TO MUSIC',
+      off: '40" Forgiato Rim Lights: OFF',
+    };
+    this.toast(labelMap[mode], mode === 'off' ? 'info' : 'discovery');
+    this.emitHud();
+  }
+
+  public cycleVehicleRimLights(vehicleId?: string): void {
+    const targetId = vehicleId ?? this.activeVehicleId;
+    if (!targetId) return;
+    const av = this.vehicles.find((x) => x.id === targetId);
+    if (!av) return;
+    const order: ('solid' | 'blink' | 'music' | 'off')[] = [
+      'solid',
+      'blink',
+      'music',
+      'off',
+    ];
+    const current = av.rimLightMode ?? 'off';
+    const nextIdx = (order.indexOf(current) + 1) % order.length;
+    this.setVehicleRimLightMode(order[nextIdx], targetId);
+  }
+
+  public toggleVehicleUnderglow(vehicleId?: string): void {
+    const targetId = vehicleId ?? this.activeVehicleId;
+    if (!targetId) return;
+    const av = this.vehicles.find((x) => x.id === targetId);
+    if (!av) return;
+    this.sound.unlock();
+    av.underglowEnabled = av.underglowEnabled === false;
+    this.sound.playPickup();
+    this.toast(
+      av.underglowEnabled ? 'Undercarriage Glow ON' : 'Undercarriage Glow OFF',
+      av.underglowEnabled ? 'discovery' : 'info',
+    );
+    this.emitHud();
+  }
+
+  public toggleVehicleSlamLift(vehicleId?: string): void {
+    const targetId = vehicleId ?? this.activeVehicleId;
+    if (!targetId) return;
+    const av = this.vehicles.find((x) => x.id === targetId);
+    if (!av) return;
+    this.sound.unlock();
+    this.liftButtonPressTimer = 0.26;
+    const speed = THREE.MathUtils.clamp(av.airbagSpeed ?? 1.0, 0.25, 2.0);
+    if (this.activeVehicleId === targetId && this.vehicleHasHydraulics(av)) {
+      if (this.hydraulicMode === 'lock_up') {
+        this.hydraulicMode = 'level';
+        this.sound.playAirbagHiss(speed, false);
+        this.toast(`${av.name}: Dropped to 3" Slammed Stance`, 'info');
+      } else {
+        this.hydraulicMode = 'lock_up';
+        this.hydVel.fl += 4.2;
+        this.hydVel.fr += 4.2;
+        this.hydVel.rl += 4.2;
+        this.hydVel.rr += 4.2;
+        this.sound.playAirbagHiss(speed, true);
+        this.toast(`${av.name}: Lifted Up Off 3" Slammed Stance!`, 'discovery');
+      }
+    } else {
+      const currentlySlammed = (av.suspensionOffset ?? 0) <= -0.2;
+      av.suspensionOffset = currentlySlammed ? 0.22 : -0.3;
+      this.sound.playAirbagHiss(speed, !currentlySlammed);
+      this.toast(
+        currentlySlammed
+          ? `${av.name}: Air-Ride Lifted!`
+          : `${av.name}: Slammed 3 Inches Off Ground!`,
+        'discovery',
+      );
+    }
     this.emitHud();
   }
 
@@ -15730,21 +15931,27 @@ export class GameEngine {
 
       if (!isActive && !autoJob && distVSq > detailDistSq) continue;
 
-      // Base chassis ride height + 4-corner hydraulic heave/pitch/roll + SLAB sub-bass rattle
+      // Base chassis ride height + 4-corner hydraulic heave/pitch/roll + SLAB/Tahoe sub-bass rattle
+      const isTahoeShow =
+        v.preset === 'chevy_tahoe' || v.preset === 'chevy_2000_sub';
       const isCustomShowCar =
+        isTahoeShow ||
         v.preset === 'lowrider' ||
         v.preset === 'donk' ||
         v.preset === 'slab' ||
         v.preset === 'cadillac_coupe_deville';
-      const baseBodyY = isCustomShowCar
-        ? Math.max(0.26, 0.38 + (v.suspensionOffset ?? 0))
-        : (v.suspensionOffset ?? 0);
+      const baseBodyY = isTahoeShow
+        ? Math.max(0.075, 0.38 + (v.suspensionOffset ?? -0.3))
+        : isCustomShowCar
+          ? Math.max(0.26, 0.38 + (v.suspensionOffset ?? 0))
+          : (v.suspensionOffset ?? 0);
+      const minChassisY = isTahoeShow ? 0.075 : 0.18;
       const vIsOldSchool = this.isOldSchoolVehicle(v);
       const showBassPulse =
         vIsOldSchool && isActive
           ? this.trunkBassPulse
           : vIsOldSchool && !isActive && v.trunkBassEnabled
-            ? 0.25 + 0.2 * Math.max(0, Math.sin(this.elapsed * 6.5))
+            ? 0.25 + 0.25 * Math.max(0, Math.sin(this.elapsed * 6.5))
             : 0;
 
       if (isActive && activeHasHyd) {
@@ -15753,7 +15960,7 @@ export class GameEngine {
         const hydPitch = activeIsDonk ? 0 : ((rl + rr) - (fl + fr)) * 0.21;
         const hydRoll = ((fr + rr) - (fl + rl)) * (activeIsDonk ? 0.16 : 0.24);
         handles.chassisGroup.position.y =
-          Math.max(0.18, baseBodyY + avgHeave) + showBassPulse * 0.025;
+          Math.max(minChassisY, baseBodyY + avgHeave) + showBassPulse * 0.025;
         handles.chassisGroup.rotation.x = hydPitch;
         handles.chassisGroup.rotation.z = hydRoll;
         const minCorner = Math.min(fl, fr, rl, rr);
@@ -15762,7 +15969,7 @@ export class GameEngine {
             // DONK keeps all 4 wheels planted while body moves up/down/side-to-side
             wc.obj.position.y = wc.baseY;
           } else {
-            // Lowrider & Coupe DeVille coil-over lift active corners cleanly
+            // Lowrider, Coupe DeVille & Tahoe coil-over lift active corners cleanly
             const cornerH = this.hydCorners[wc.corner];
             const relativeLift = Math.max(0, cornerH - minCorner - 0.05);
             wc.obj.position.y = wc.baseY + relativeLift * (activeIsAirbag ? 0.55 : 0.85);
@@ -15797,7 +16004,7 @@ export class GameEngine {
         );
       }
 
-      // Popping Trunk Lid Animation + Real-Time Old-School Trunk Bass Lift & Vibration
+      // Popping Trunk / Liftgate Animation + Real-Time Old-School Trunk Bass Lift & Vibration
       if (handles.trunkLid) {
         if (handles.trunkLid.userData.baseY === undefined) {
           handles.trunkLid.userData.baseY = handles.trunkLid.position.y;
@@ -15819,6 +16026,12 @@ export class GameEngine {
       // Cadillac Coupe DeVille Real-Life 2-Stage Articulated Folding Black Droptop + 3D Button
       if (this.droptopButtonPressTimer > 0) {
         this.droptopButtonPressTimer = Math.max(0, this.droptopButtonPressTimer - dt);
+      }
+      if (this.rimLightButtonPressTimer > 0) {
+        this.rimLightButtonPressTimer = Math.max(0, this.rimLightButtonPressTimer - dt);
+      }
+      if (this.liftButtonPressTimer > 0) {
+        this.liftButtonPressTimer = Math.max(0, this.liftButtonPressTimer - dt);
       }
       if (handles.convertibleTop) {
         const targetProg = v.convertibleTopDown ? 1 : 0;
@@ -15873,14 +16086,111 @@ export class GameEngine {
         }
       }
 
+      // Compute 40" Rim LED + Underglow intensity (Solid, Blink, Follow Music, or Off)
+      const rimMode = v.rimLightMode ?? (isTahoeShow ? 'blink' : 'off');
+      let rimLightFactor = 0;
+      if (rimMode === 'solid') {
+        rimLightFactor = 1.0;
+      } else if (rimMode === 'blink') {
+        // Crisp double-flash show strobe blink on the 40" Forgiato spinner rims
+        const cycle = (this.elapsed * 2.4) % 1;
+        const flashOn = cycle < 0.24 || (cycle > 0.36 && cycle < 0.6);
+        rimLightFactor = flashOn ? 1.25 : 0.05;
+      } else if (rimMode === 'music') {
+        // Follow along directly with the live sub-bass & car radio music beat
+        rimLightFactor =
+          showBassPulse > 0.02
+            ? 0.14 + showBassPulse * 1.45
+            : 0.12 + 0.14 * Math.max(0, Math.sin(this.elapsed * 4.5));
+      }
+
+      if (handles.rimLightMaterials && handles.rimLightMaterials.length > 0) {
+        const rimGlowHex = new THREE.Color(v.rimLightColor || v.underglowColor || '#38bdf8');
+        for (const rMat of handles.rimLightMaterials) {
+          rMat.color.copy(rimGlowHex);
+          rMat.emissive.copy(rimGlowHex);
+          rMat.emissiveIntensity = rimMode === 'off' ? 0.02 : rimLightFactor * 2.9;
+        }
+      }
+
+      // Animate Behind-Driver Subwoofer Cones & Enclosure LED Bars
+      if (handles.subwooferCones && handles.subwooferCones.length > 0) {
+        const excursion = showBassPulse * 0.068;
+        const flutter =
+          showBassPulse > 0.05 ? Math.sin(this.elapsed * 52) * 0.012 * showBassPulse : 0;
+        for (const cone of handles.subwooferCones) {
+          const baseZ = (cone.userData.baseZ as number | undefined) ?? cone.position.z;
+          cone.userData.baseZ = baseZ;
+          cone.position.z = baseZ + excursion + flutter;
+        }
+      }
+      if (handles.subGlowMeshes && handles.subGlowMeshes.length > 0) {
+        for (const sm of handles.subGlowMeshes) {
+          const mat = sm.material as THREE.MeshStandardMaterial;
+          if (mat && 'emissiveIntensity' in mat) {
+            mat.emissiveIntensity =
+              rimMode === 'blink'
+                ? 0.6 + rimLightFactor * 1.8
+                : 0.9 + showBassPulse * 2.6;
+          }
+        }
+      }
+
+      // Animate Pressable 3D Interior Console Buttons (Rim Lights & Lift)
+      if (handles.rimLightButtonCap) {
+        handles.rimLightButtonCap.position.y = THREE.MathUtils.damp(
+          handles.rimLightButtonCap.position.y,
+          this.rimLightButtonPressTimer > 0 ? 0.008 : 0.024,
+          18,
+          dt,
+        );
+        const capMat = handles.rimLightButtonCap.material as THREE.MeshStandardMaterial;
+        if (capMat && 'emissive' in capMat) {
+          capMat.emissive.setHex(
+            rimMode === 'music'
+              ? 0xec4899
+              : rimMode === 'blink'
+                ? 0x38bdf8
+                : rimMode === 'solid'
+                  ? 0x10b981
+                  : 0x334155,
+          );
+          capMat.emissiveIntensity =
+            rimMode === 'off' ? 0.3 : 1.0 + rimLightFactor * 0.9;
+        }
+      }
+      if (handles.liftButtonCap) {
+        handles.liftButtonCap.position.y = THREE.MathUtils.damp(
+          handles.liftButtonCap.position.y,
+          this.liftButtonPressTimer > 0 ? 0.008 : 0.024,
+          18,
+          dt,
+        );
+        const capMat = handles.liftButtonCap.material as THREE.MeshStandardMaterial;
+        if (capMat && 'emissive' in capMat) {
+          const isLifted = isActive && this.hydraulicMode === 'lock_up';
+          capMat.emissive.setHex(isLifted ? 0x10b981 : 0xf59e0b);
+          capMat.emissiveIntensity = isLifted ? 2.0 : 1.35;
+        }
+      }
+
+      const underOn = v.underglowEnabled !== false;
+      const underPulse =
+        rimMode === 'music'
+          ? showBassPulse * 1.35
+          : rimMode === 'blink'
+            ? rimLightFactor * 0.95
+            : showBassPulse;
       if (handles.underglowLight) {
-        handles.underglowLight.intensity = 1.85 + showBassPulse * 3.1;
+        handles.underglowLight.intensity = underOn
+          ? 1.85 + underPulse * 3.1
+          : 0;
       }
       if (handles.underglowMeshes) {
         for (const gm of handles.underglowMeshes) {
           const mat = gm.material as THREE.MeshStandardMaterial;
           if (mat && 'emissiveIntensity' in mat) {
-            mat.emissiveIntensity = 1.9 + showBassPulse * 2.4;
+            mat.emissiveIntensity = underOn ? 1.9 + underPulse * 2.4 : 0.04;
           }
         }
       }
@@ -15895,9 +16205,9 @@ export class GameEngine {
       for (const w of handles.wheels) {
         w.rotation.x += wheelRoll;
       }
-      // 13-inch Chrome Skate Spinner Rims keep spinning smoothly even when stopped!
+      // 13-inch & 40-inch Forgiato 44 Auto-Spinner Rims keep spinning smoothly even when stopped!
       if (handles.spinners && handles.spinners.length > 0) {
-        const spinnerSpin = (Math.abs(spd) * 2.2 + 2.6) * dt;
+        const spinnerSpin = (Math.abs(spd) * 2.2 + 3.1) * dt;
         for (const sp of handles.spinners) {
           sp.rotation.x += spinnerSpin;
         }
@@ -15956,6 +16266,10 @@ export class GameEngine {
       wheelScale?: number;
       hydraulicHop?: boolean;
       turboBoost?: number;
+      underglowColor?: string;
+      underglowEnabled?: boolean;
+      rimLightMode?: 'off' | 'solid' | 'blink' | 'music';
+      rimLightColor?: string;
     },
   ): boolean {
     const v = this.vehicles.find((x) => x.id === vehicleId);
@@ -15967,6 +16281,10 @@ export class GameEngine {
     if (patch.wheelScale !== undefined) v.wheelScale = patch.wheelScale;
     if (patch.hydraulicHop !== undefined) v.hydraulicHop = patch.hydraulicHop;
     if (patch.turboBoost !== undefined) v.turboBoost = patch.turboBoost;
+    if (patch.underglowColor !== undefined) v.underglowColor = patch.underglowColor;
+    if (patch.underglowEnabled !== undefined) v.underglowEnabled = patch.underglowEnabled;
+    if (patch.rimLightMode !== undefined) v.rimLightMode = patch.rimLightMode;
+    if (patch.rimLightColor !== undefined) v.rimLightColor = patch.rimLightColor;
 
     const oldMesh = this.vehicleMeshes.get(v.id);
     if (oldMesh) {

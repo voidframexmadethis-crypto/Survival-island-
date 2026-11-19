@@ -5,11 +5,13 @@ import {
   Disc3,
   ExternalLink,
   Eye,
+  Lightbulb,
   Music,
   Pause,
   Play,
   Radio,
   Search,
+  Sparkles,
   Upload,
   Volume2,
   X,
@@ -27,6 +29,10 @@ interface CarRadioModalProps {
   car: RadioCarDescriptor;
   interiorView: boolean;
   trunkBassOn: boolean;
+  rimLightMode?: 'off' | 'solid' | 'blink' | 'music';
+  underglowEnabled?: boolean;
+  onSetRimLightMode?: (mode: 'off' | 'solid' | 'blink' | 'music') => void;
+  onToggleUnderglow?: () => void;
   onToggleInteriorView: () => void;
   onToggleTrunkBass: () => void;
   onClose: () => void;
@@ -36,6 +42,10 @@ export function CarRadioModal({
   car,
   interiorView,
   trunkBassOn,
+  rimLightMode = 'blink',
+  underglowEnabled = true,
+  onSetRimLightMode,
+  onToggleUnderglow,
   onToggleInteriorView,
   onToggleTrunkBass,
   onClose,
@@ -386,6 +396,64 @@ export function CarRadioModal({
                 </div>
               </div>
             </div>
+
+            {/* 40" Rim Lights & Underglow Music Sync Controls */}
+            {(onSetRimLightMode || onToggleUnderglow) && (
+              <div className="rounded-xl bg-[#0b0e17] border border-cyan-500/30 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Rim LEDs &amp; Underglow Sync</span>
+                  </div>
+                  {onToggleUnderglow && (
+                    <button
+                      type="button"
+                      onClick={onToggleUnderglow}
+                      className={`px-2 py-0.5 rounded border text-[10px] font-bold flex items-center gap-1 transition ${
+                        underglowEnabled
+                          ? 'bg-cyan-500 border-cyan-200 text-slate-950'
+                          : 'bg-slate-900 border-white/15 text-stone-300 hover:bg-slate-800'
+                      }`}
+                    >
+                      <Lightbulb className="w-3 h-3" />
+                      <span>Underglow {underglowEnabled ? 'ON' : 'OFF'}</span>
+                    </button>
+                  )}
+                </div>
+                {onSetRimLightMode && (
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {(
+                      [
+                        { id: 'solid', label: 'Lit' },
+                        { id: 'blink', label: 'Blink' },
+                        { id: 'music', label: 'Follow Music' },
+                        { id: 'off', label: 'Off' },
+                      ] as const
+                    ).map((modeOpt) => {
+                      const active = rimLightMode === modeOpt.id;
+                      return (
+                        <button
+                          key={modeOpt.id}
+                          type="button"
+                          onClick={() => onSetRimLightMode(modeOpt.id)}
+                          className={`px-2 py-1.5 rounded-lg border text-[10px] font-extrabold transition ${
+                            active
+                              ? modeOpt.id === 'music'
+                                ? 'bg-pink-500 border-pink-200 text-white'
+                                : modeOpt.id === 'off'
+                                  ? 'bg-stone-600 border-stone-300 text-white'
+                                  : 'bg-cyan-400 border-cyan-100 text-slate-950'
+                              : 'bg-slate-900/80 border-white/10 text-stone-300 hover:border-white/25'
+                          }`}
+                        >
+                          {modeOpt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Right 7 cols: Pandora Search & Embedded Overlay */}

@@ -48,7 +48,15 @@ export interface ModularVehicleMeshHandles {
   convertibleBoot?: THREE.Object3D;
   droptopButton?: THREE.Object3D;
   droptopButtonCap?: THREE.Mesh;
+  rimLightButton?: THREE.Object3D;
+  rimLightButtonCap?: THREE.Mesh;
+  liftButton?: THREE.Object3D;
+  liftButtonCap?: THREE.Mesh;
   spinners?: THREE.Object3D[];
+  rimLightMeshes?: THREE.Mesh[];
+  rimLightMaterials?: THREE.MeshStandardMaterial[];
+  subwooferCones?: THREE.Object3D[];
+  subGlowMeshes?: THREE.Mesh[];
   underglowLight?: THREE.PointLight;
   underglowMeshes?: THREE.Mesh[];
 }
@@ -465,11 +473,17 @@ export function createBeltSpanMesh(
 }
 
 function buildCustomWheel(
-  style: 'wire_whitewall' | 'donk_30' | 'swanger' | 'spinner_13',
+  style:
+    | 'wire_whitewall'
+    | 'donk_30'
+    | 'swanger'
+    | 'spinner_13'
+    | 'forgiato_40_spinner',
   sideSign: -1 | 1, // -1 = left (-X), +1 = right (+X)
   rimColor: string,
   wheelScale: number,
   chromeMat: THREE.Material,
+  rimLedMat?: THREE.MeshStandardMaterial,
 ): { steerPivot: THREE.Group; spinGroup: THREE.Group; spinnerHub?: THREE.Group } {
   const steerPivot = new THREE.Group();
   steerPivot.scale.setScalar(wheelScale);
@@ -483,6 +497,162 @@ function buildCustomWheel(
     roughness: 0.12,
     metalness: 0.95,
   });
+
+  if (style === 'forgiato_40_spinner') {
+    // Massive 40-inch Forgiato Deep-Lip Barrel + Ultra-Thin Stretched Tire + 44 Auto-Spinner + Blinking Rim LEDs
+    const tireOuter = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.43, 0.43, 0.34, 28),
+      tireMat,
+    );
+    tireOuter.rotation.z = Math.PI / 2;
+
+    const rimBarrel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.392, 0.392, 0.355, 28),
+      rimMat,
+    );
+    rimBarrel.rotation.z = Math.PI / 2;
+
+    const innerDish = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.355, 0.355, 0.24, 24),
+      new THREE.MeshStandardMaterial({ color: 0x090d16, roughness: 0.3, metalness: 0.78 }),
+    );
+    innerDish.rotation.z = Math.PI / 2;
+
+    // Deep milled Forgiato outer step-lip
+    const stepLip = new THREE.Mesh(
+      new THREE.TorusGeometry(0.382, 0.022, 10, 28),
+      chromeMat,
+    );
+    stepLip.rotation.y = Math.PI / 2;
+    stepLip.position.x = sideSign * 0.175;
+
+    spinGroup.add(tireOuter, rimBarrel, innerDish, stepLip);
+
+    // 16 Forgiato perimeter lip hardware bolts
+    for (let b = 0; b < 16; b++) {
+      const ba = (b / 16) * Math.PI * 2;
+      const bolt = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.008, 0.008, 0.02, 6),
+        chromeMat,
+      );
+      bolt.rotation.z = Math.PI / 2;
+      bolt.position.set(
+        sideSign * 0.184,
+        Math.cos(ba) * 0.368,
+        Math.sin(ba) * 0.368,
+      );
+      spinGroup.add(bolt);
+    }
+
+    // 8 Forged Forgiato Y-spokes inside the main wheel barrel
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const spoke = new THREE.Mesh(
+        new THREE.BoxGeometry(0.045, 0.345, 0.038),
+        rimMat,
+      );
+      spoke.position.set(
+        sideSign * 0.115,
+        Math.cos(a) * 0.175,
+        Math.sin(a) * 0.175,
+      );
+      spoke.rotation.x = a;
+      spinGroup.add(spoke);
+    }
+
+    // LED Rim Glow Rings (Outer Lip Halo + Deep Barrel Glow)
+    if (rimLedMat) {
+      const outerLedRing = new THREE.Mesh(
+        new THREE.TorusGeometry(0.362, 0.015, 8, 28),
+        rimLedMat,
+      );
+      outerLedRing.rotation.y = Math.PI / 2;
+      outerLedRing.position.x = sideSign * 0.168;
+
+      const innerLedRing = new THREE.Mesh(
+        new THREE.TorusGeometry(0.31, 0.018, 8, 24),
+        rimLedMat,
+      );
+      innerLedRing.rotation.y = Math.PI / 2;
+      innerLedRing.position.x = sideSign * 0.06;
+
+      spinGroup.add(outerLedRing, innerLedRing);
+    }
+
+    // Free-Spinning "44" Auto-Spinner Floating Forgiato Center Assembly
+    const spinnerHub = new THREE.Group();
+    spinnerHub.position.set(sideSign * 0.195, 0, 0);
+
+    const spinnerOuterRing = new THREE.Mesh(
+      new THREE.TorusGeometry(0.285, 0.018, 8, 24),
+      chromeMat,
+    );
+    spinnerOuterRing.rotation.y = Math.PI / 2;
+    spinnerHub.add(spinnerOuterRing);
+
+    // Dual-tier 4x4 ("44") sculpted floating spinner blades + LED light strips
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2;
+      // Primary "4" blade
+      const bladeA = new THREE.Mesh(
+        new THREE.BoxGeometry(0.032, 0.27, 0.048),
+        chromeMat,
+      );
+      bladeA.position.set(sideSign * 0.012, Math.cos(a) * 0.145, Math.sin(a) * 0.145);
+      bladeA.rotation.x = a + 0.18;
+      spinnerHub.add(bladeA);
+
+      // Paired offset "4" blade (forms 44 double-4 floating spinner geometry)
+      const bAngle = a + Math.PI / 4;
+      const bladeB = new THREE.Mesh(
+        new THREE.BoxGeometry(0.026, 0.25, 0.034),
+        rimMat,
+      );
+      bladeB.position.set(
+        sideSign * 0.004,
+        Math.cos(bAngle) * 0.138,
+        Math.sin(bAngle) * 0.138,
+      );
+      bladeB.rotation.x = bAngle - 0.18;
+      spinnerHub.add(bladeB);
+
+      if (rimLedMat) {
+        const ledBar = new THREE.Mesh(
+          new THREE.BoxGeometry(0.016, 0.21, 0.018),
+          rimLedMat,
+        );
+        ledBar.position.set(
+          sideSign * 0.024,
+          Math.cos(a) * 0.148,
+          Math.sin(a) * 0.148,
+        );
+        ledBar.rotation.x = a + 0.18;
+        spinnerHub.add(ledBar);
+      }
+    }
+
+    // Forgiato floating billet center cap + glowing ring
+    const centerCap = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.082, 0.095, 0.075, 16),
+      chromeMat,
+    );
+    centerCap.rotation.z = Math.PI / 2;
+    centerCap.position.x = sideSign * 0.024;
+    spinnerHub.add(centerCap);
+
+    if (rimLedMat) {
+      const capLedRing = new THREE.Mesh(
+        new THREE.TorusGeometry(0.078, 0.011, 8, 16),
+        rimLedMat,
+      );
+      capLedRing.rotation.y = Math.PI / 2;
+      capLedRing.position.x = sideSign * 0.058;
+      spinnerHub.add(capLedRing);
+    }
+
+    spinGroup.add(spinnerHub);
+    return { steerPivot, spinGroup, spinnerHub };
+  }
 
   if (style === 'donk_30') {
     // Massive 30-inch chrome rim wrapped in ultra-thin low-profile tire
@@ -1299,6 +1469,591 @@ function buildCustomStreetShowCar(
   }
 }
 
+function buildChevyTahoeShowSuv(
+  vehicle: ModularVehicleData,
+  handles: ModularVehicleMeshHandles,
+): void {
+  const rimColor = vehicle.rimColor || '#f8fafc';
+  const wheelScale = vehicle.wheelScale ?? 1.42; // 40-inch Forgiato show wheels
+  const susp = vehicle.suspensionOffset ?? -0.3; // Slammed 3 inches off the ground (0.08m)
+
+  const paintMat = new THREE.MeshPhysicalMaterial({
+    color: vehicle.paintColor || '#111827',
+    metalness: 0.72,
+    roughness: 0.14,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.05,
+  });
+  const chromeMat = new THREE.MeshStandardMaterial({
+    color: rimColor,
+    metalness: 0.96,
+    roughness: 0.08,
+  });
+  const goldBowtieMat = new THREE.MeshStandardMaterial({
+    color: 0xfacc15,
+    metalness: 0.85,
+    roughness: 0.18,
+  });
+  const darkTrimMat = new THREE.MeshStandardMaterial({
+    color: 0x0f172a,
+    roughness: 0.78,
+    metalness: 0.2,
+  });
+  const leatherMat = new THREE.MeshStandardMaterial({
+    color: 0x1c1917,
+    roughness: 0.58,
+    metalness: 0.1,
+  });
+  const stitchMat = new THREE.MeshStandardMaterial({
+    color: 0x38bdf8,
+    roughness: 0.45,
+    metalness: 0.25,
+  });
+  const carpetMat = new THREE.MeshStandardMaterial({
+    color: 0x09090b,
+    roughness: 0.95,
+  });
+  const dashMat = new THREE.MeshStandardMaterial({
+    color: 0x18181b,
+    roughness: 0.5,
+    metalness: 0.25,
+  });
+  const glassMat = new THREE.MeshPhysicalMaterial({
+    color: 0x0f172a,
+    roughness: 0.08,
+    metalness: 0.22,
+    clearcoat: 1.0,
+    transparent: true,
+    opacity: 0.36,
+  });
+  const headlightMat = new THREE.MeshStandardMaterial({
+    color: 0xe0f2fe,
+    emissive: 0xbae6fd,
+    emissiveIntensity: 1.65,
+  });
+  const amberDrlMat = new THREE.MeshStandardMaterial({
+    color: 0xfbbf24,
+    emissive: 0xf59e0b,
+    emissiveIntensity: 1.25,
+  });
+  const taillightMat = new THREE.MeshStandardMaterial({
+    color: 0xef4444,
+    emissive: 0xdc2626,
+    emissiveIntensity: 1.3,
+  });
+
+  // 40" Forgiato wheel radius = 0.43 * 1.42 = ~0.61m; chassis sits slammed 3 inches (0.08m) off ground!
+  const baseWheelY = 0.43 * wheelScale;
+  const bodyRideY = Math.max(0.075, 0.38 + susp);
+  handles.chassisGroup.position.y = bodyRideY;
+
+  const frontZ = 2.48;
+  const rearZ = -2.38;
+  const lowerBodyH = 0.68;
+
+  // 1. Ground-hugging 3-inch slammed underpan, cabin floor & ground-effect rocker skirts
+  const underPan = new THREE.Mesh(new THREE.BoxGeometry(1.88, 0.1, 4.78), darkTrimMat);
+  underPan.position.set(0, 0.05, 0.05);
+  const cabinFloor = new THREE.Mesh(new THREE.BoxGeometry(1.76, 0.06, 3.05), carpetMat);
+  cabinFloor.position.set(0, 0.13, -0.45);
+  handles.chassisGroup.add(underPan, cabinFloor);
+
+  // Slammed rocker skirts + front chin splitter (3 inches above ground!)
+  [-0.99, 0.99].forEach((sx) => {
+    const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.14, 1.56), paintMat);
+    skirt.position.set(sx, 0.09, 0.05);
+    handles.chassisGroup.add(skirt);
+  });
+  const frontLip = new THREE.Mesh(new THREE.BoxGeometry(2.04, 0.1, 0.24), darkTrimMat);
+  frontLip.position.set(0, 0.06, frontZ + 0.02);
+  handles.chassisGroup.add(frontLip);
+
+  // 2. Sculpted Front Clip & Engine Bay (narrowed at wheel wells so 40" Forgiatos tuck clean!)
+  const engineCore = new THREE.Mesh(new THREE.BoxGeometry(1.36, 0.58, 1.62), paintMat);
+  engineCore.position.set(0, 0.44, 1.64);
+  const frontFascia = new THREE.Mesh(new THREE.BoxGeometry(2.02, 0.56, 0.36), paintMat);
+  frontFascia.position.set(0, 0.44, frontZ - 0.16);
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.98, 0.12, 1.68), paintMat);
+  hood.position.set(0, 0.78, 1.66);
+  const powerDome = new THREE.Mesh(new THREE.BoxGeometry(1.16, 0.06, 1.44), paintMat);
+  powerDome.position.set(0, 0.86, 1.64);
+  handles.chassisGroup.add(engineCore, frontFascia, hood, powerDome);
+
+  // Flared front & rear SUV wheel arch fenders tucked over the 40" Forgiatos
+  [1.44, -1.32].forEach((az) => {
+    [-0.97, 0.97].forEach((fx) => {
+      const archCrown = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.16, 1.12), paintMat);
+      archCrown.position.set(fx, 0.76, az);
+      const archFrontLeg = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.48, 0.22), paintMat);
+      archFrontLeg.position.set(fx, 0.46, az + 0.58);
+      const archRearLeg = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.48, 0.22), paintMat);
+      archRearLeg.position.set(fx, 0.46, az - 0.58);
+      handles.chassisGroup.add(archCrown, archFrontLeg, archRearLeg);
+    });
+  });
+
+  // 3. Rear SUV Cargo Tub + Rear Quarter Corners + Liftgate Opening
+  const rearInnerTub = new THREE.Mesh(new THREE.BoxGeometry(1.38, 0.56, 1.62), darkTrimMat);
+  rearInnerTub.position.set(0, 0.42, -1.52);
+  [-0.94, 0.94].forEach((rx) => {
+    const rearUpperQuarter = new THREE.Mesh(
+      new THREE.BoxGeometry(0.22, 0.34, 1.56),
+      paintMat,
+    );
+    rearUpperQuarter.position.set(rx, 0.72, -1.56);
+    const rearCornerPillar = new THREE.Mesh(
+      new THREE.BoxGeometry(0.24, 0.64, 0.44),
+      paintMat,
+    );
+    rearCornerPillar.position.set(rx, 0.44, -2.14);
+    handles.chassisGroup.add(rearUpperQuarter, rearCornerPillar);
+  });
+  const rearLowerValance = new THREE.Mesh(new THREE.BoxGeometry(2.02, 0.28, 0.22), paintMat);
+  rearLowerValance.position.set(0, 0.22, rearZ + 0.08);
+  handles.chassisGroup.add(rearInnerTub, rearLowerValance);
+
+  // 4. MASSIVE PORTED SUBWOOFER WALL DIRECTLY BEHIND THE DRIVER SEAT!
+  const subGlowColor = new THREE.Color(vehicle.rimLightColor || vehicle.underglowColor || '#38bdf8');
+  const subGlowMat = new THREE.MeshStandardMaterial({
+    color: subGlowColor,
+    emissive: subGlowColor,
+    emissiveIntensity: 1.8,
+    roughness: 0.2,
+  });
+  const subBoxMat = new THREE.MeshStandardMaterial({
+    color: 0x111827,
+    roughness: 0.82,
+    metalness: 0.18,
+  });
+  const subBaffleMat = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    roughness: 0.36,
+    metalness: 0.55,
+  });
+  const surroundMat = new THREE.MeshStandardMaterial({
+    color: 0x09090b,
+    roughness: 0.88,
+  });
+  const coneMat = new THREE.MeshStandardMaterial({
+    color: 0x27272a,
+    roughness: 0.35,
+    metalness: 0.65,
+  });
+
+  const subWallGroup = new THREE.Group();
+  // Positioned directly behind driver (-0.44, z=0.16) and passenger (+0.44, z=0.16)
+  subWallGroup.position.set(0, 0.6, -0.78);
+  const subBox = new THREE.Mesh(new THREE.BoxGeometry(1.58, 0.88, 0.66), subBoxMat);
+  const frontBaffle = new THREE.Mesh(new THREE.BoxGeometry(1.52, 0.82, 0.06), subBaffleMat);
+  frontBaffle.position.z = 0.33;
+  // Center vertical slotted bass port with glowing LED acrylic strips
+  const portCavity = new THREE.Mesh(
+    new THREE.BoxGeometry(0.16, 0.72, 0.08),
+    new THREE.MeshStandardMaterial({ color: 0x020617, roughness: 0.95 }),
+  );
+  portCavity.position.z = 0.34;
+  const subGlowMeshes: THREE.Mesh[] = [];
+  [-0.1, 0.1].forEach((gx) => {
+    const portLed = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.74, 0.04), subGlowMat);
+    portLed.position.set(gx, 0, 0.36);
+    subWallGroup.add(portLed);
+    subGlowMeshes.push(portLed);
+  });
+  const topLedBar = new THREE.Mesh(new THREE.BoxGeometry(1.48, 0.032, 0.04), subGlowMat);
+  topLedBar.position.set(0, 0.41, 0.36);
+  subWallGroup.add(subBox, frontBaffle, portCavity, topLedBar);
+  subGlowMeshes.push(topLedBar);
+
+  // 4× Giant 15"/18" Excursion Subwoofers (2 behind driver on left, 2 behind passenger on right)
+  const subwooferCones: THREE.Object3D[] = [];
+  const subCoords = [
+    { x: -0.46, y: 0.2 }, // Top-left directly behind driver's headrest
+    { x: -0.46, y: -0.2 }, // Bottom-left directly behind driver's seat back
+    { x: 0.46, y: 0.2 }, // Top-right behind passenger
+    { x: 0.46, y: -0.2 }, // Bottom-right behind passenger
+  ];
+  for (const sc of subCoords) {
+    const surround = new THREE.Mesh(
+      new THREE.TorusGeometry(0.175, 0.026, 10, 22),
+      surroundMat,
+    );
+    surround.position.set(sc.x, sc.y, 0.365);
+    const ledRing = new THREE.Mesh(
+      new THREE.TorusGeometry(0.195, 0.01, 8, 22),
+      subGlowMat,
+    );
+    ledRing.position.set(sc.x, sc.y, 0.365);
+    subGlowMeshes.push(ledRing);
+
+    const conePivot = new THREE.Group();
+    conePivot.position.set(sc.x, sc.y, 0.36);
+    conePivot.userData.baseZ = 0.36;
+    const cone = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.06, 0.065, 20),
+      coneMat,
+    );
+    cone.rotation.x = Math.PI / 2;
+    const dustCap = new THREE.Mesh(
+      new THREE.SphereGeometry(0.072, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55),
+      chromeMat,
+    );
+    dustCap.rotation.x = Math.PI / 2;
+    dustCap.position.z = 0.025;
+    conePivot.add(cone, dustCap);
+    subWallGroup.add(surround, ledRing, conePivot);
+    subwooferCones.push(conePivot);
+  }
+
+  // Dual Chrome Competition Amps mounted on the back/top of the sub wall (visible through liftgate!)
+  [-0.42, 0.42].forEach((ax) => {
+    const amp = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.09, 0.34), chromeMat);
+    amp.position.set(ax, 0.48, -0.05);
+    const ampMeter = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.02, 0.06), subGlowMat);
+    ampMeter.position.set(ax, 0.53, -0.05);
+    subWallGroup.add(amp, ampMeter);
+    subGlowMeshes.push(ampMeter);
+  });
+
+  handles.chassisGroup.add(subWallGroup);
+  handles.subwooferCones = subwooferCones;
+  handles.subGlowMeshes = subGlowMeshes;
+
+  // 5. Tahoe Interior Cabin (Dash, Gauges, Console, Front Seats + Pressable Light & Lift Buttons!)
+  const dash = new THREE.Mesh(new THREE.BoxGeometry(1.74, 0.36, 0.38), dashMat);
+  dash.position.set(0, 0.68, 0.64);
+  const gaugeCluster = new THREE.Mesh(
+    new THREE.BoxGeometry(0.52, 0.14, 0.04),
+    new THREE.MeshStandardMaterial({
+      color: 0x0f172a,
+      emissive: 0x38bdf8,
+      emissiveIntensity: 0.9,
+    }),
+  );
+  gaugeCluster.position.set(-0.44, 0.74, 0.44);
+  const centerScreen = new THREE.Mesh(
+    new THREE.BoxGeometry(0.28, 0.18, 0.04),
+    new THREE.MeshStandardMaterial({
+      color: 0x020617,
+      emissive: 0x6366f1,
+      emissiveIntensity: 0.85,
+    }),
+  );
+  centerScreen.position.set(0, 0.72, 0.44);
+
+  const centerConsole = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.28, 1.12), dashMat);
+  centerConsole.position.set(0, 0.3, 0.14);
+  const shifter = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.2, 8), chromeMat);
+  shifter.position.set(0, 0.48, 0.26);
+  const shifterKnob = new THREE.Mesh(new THREE.SphereGeometry(0.04, 10, 10), chromeMat);
+  shifterKnob.position.set(0, 0.58, 0.26);
+
+  // Pressable Interior Console Button 1: 40" Rim Lights & Underglow (Lit / Blink / Music Sync / Off)
+  const rimLightButtonGroup = new THREE.Group();
+  rimLightButtonGroup.position.set(-0.075, 0.45, 0.46);
+  const rimBtnBezel = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.032, 0.12), chromeMat);
+  const rimBtnCapMat = new THREE.MeshStandardMaterial({
+    color: 0x38bdf8,
+    emissive: 0x38bdf8,
+    emissiveIntensity: 1.65,
+    roughness: 0.24,
+    metalness: 0.25,
+  });
+  const rimBtnCap = new THREE.Mesh(new THREE.BoxGeometry(0.084, 0.042, 0.084), rimBtnCapMat);
+  rimBtnCap.position.y = 0.024;
+  const rimBtnProxy = new THREE.Mesh(
+    new THREE.BoxGeometry(0.22, 0.18, 0.22),
+    new THREE.MeshBasicMaterial({ visible: false }),
+  );
+  rimBtnProxy.position.y = 0.04;
+  rimBtnProxy.userData.isRimLightButton = true;
+  rimBtnCap.userData.isRimLightButton = true;
+  rimBtnBezel.userData.isRimLightButton = true;
+  rimLightButtonGroup.add(rimBtnBezel, rimBtnCap, rimBtnProxy);
+  handles.rimLightButton = rimLightButtonGroup;
+  handles.rimLightButtonCap = rimBtnCap;
+
+  // Pressable Interior Console Button 2: Air-Ride Lift / 3" Slammed Stance
+  const liftButtonGroup = new THREE.Group();
+  liftButtonGroup.position.set(0.075, 0.45, 0.46);
+  const liftBtnBezel = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.032, 0.12), chromeMat);
+  const liftBtnCapMat = new THREE.MeshStandardMaterial({
+    color: 0xf59e0b,
+    emissive: 0xf59e0b,
+    emissiveIntensity: 1.55,
+    roughness: 0.24,
+    metalness: 0.25,
+  });
+  const liftBtnCap = new THREE.Mesh(new THREE.BoxGeometry(0.084, 0.042, 0.084), liftBtnCapMat);
+  liftBtnCap.position.y = 0.024;
+  const liftBtnProxy = new THREE.Mesh(
+    new THREE.BoxGeometry(0.22, 0.18, 0.22),
+    new THREE.MeshBasicMaterial({ visible: false }),
+  );
+  liftBtnProxy.position.y = 0.04;
+  liftBtnProxy.userData.isLiftButton = true;
+  liftBtnCap.userData.isLiftButton = true;
+  liftBtnBezel.userData.isLiftButton = true;
+  liftButtonGroup.add(liftBtnBezel, liftBtnCap, liftBtnProxy);
+  handles.liftButton = liftButtonGroup;
+  handles.liftButtonCap = liftBtnCap;
+
+  // Steering wheel
+  const helmWheel = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.026, 6, 16), chromeMat);
+  helmWheel.position.set(-0.44, 0.84, 0.42);
+  helmWheel.rotation.x = 0.44;
+  handles.helmWheel = helmWheel;
+
+  handles.chassisGroup.add(
+    dash,
+    gaugeCluster,
+    centerScreen,
+    centerConsole,
+    shifter,
+    shifterKnob,
+    rimLightButtonGroup,
+    liftButtonGroup,
+    helmWheel,
+  );
+
+  // Driver & Front Passenger Bucket Seats (positioned right in front of the subwoofer wall)
+  [-0.44, 0.44].forEach((sx) => {
+    const cushion = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.16, 0.52), leatherMat);
+    cushion.position.set(sx, 0.26, 0.12);
+    const backrest = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.58, 0.14), leatherMat);
+    backrest.position.set(sx, 0.58, -0.1);
+    backrest.rotation.x = -0.12;
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.48, 0.15), stitchMat);
+    stripe.position.set(sx, 0.58, -0.1);
+    stripe.rotation.x = -0.12;
+    const headrest = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.18, 0.1), leatherMat);
+    headrest.position.set(sx, 0.94, -0.15);
+    handles.chassisGroup.add(cushion, backrest, stripe, headrest);
+  });
+
+  // 6. Real Working Hinged Front Doors (with mirrors & door cards)
+  const doorLen = 1.48;
+  const doorH = 0.64;
+  ([-1, 1] as const).forEach((side) => {
+    const doorPivot = new THREE.Group();
+    doorPivot.position.set(side * 0.99, 0.18, 0.78);
+    const outerSkin = new THREE.Mesh(new THREE.BoxGeometry(0.08, doorH, doorLen), paintMat);
+    outerSkin.position.set(0, doorH * 0.5, -doorLen * 0.5);
+    const innerCard = new THREE.Mesh(
+      new THREE.BoxGeometry(0.05, doorH * 0.88, doorLen * 0.92),
+      leatherMat,
+    );
+    innerCard.position.set(-side * 0.045, doorH * 0.5, -doorLen * 0.5);
+    const chromeHandle = new THREE.Mesh(
+      new THREE.BoxGeometry(0.04, 0.045, 0.18),
+      chromeMat,
+    );
+    chromeHandle.position.set(side * 0.05, doorH * 0.76, -doorLen * 0.72);
+    const sideTrim = new THREE.Mesh(
+      new THREE.BoxGeometry(0.03, 0.055, doorLen * 0.95),
+      chromeMat,
+    );
+    sideTrim.position.set(side * 0.05, doorH * 0.42, -doorLen * 0.5);
+    const doorGlass = new THREE.Mesh(
+      new THREE.BoxGeometry(0.03, 0.46, doorLen * 0.86),
+      glassMat,
+    );
+    doorGlass.position.set(-side * 0.01, doorH + 0.22, -doorLen * 0.52);
+    const mirrorArm = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 0.12), paintMat);
+    mirrorArm.position.set(side * 0.1, doorH + 0.04, -0.18);
+
+    doorPivot.add(outerSkin, innerCard, chromeHandle, sideTrim, doorGlass, mirrorArm);
+    handles.chassisGroup.add(doorPivot);
+    if (side < 0) handles.doorLeft = doorPivot;
+    else handles.doorRight = doorPivot;
+  });
+
+  // 7. Boxy Full-Size Chevy Tahoe SUV Cabin, Pillars, Rear Glass & Roof Rack
+  const cabinH = 0.66;
+  const roofY = 0.86 + cabinH; // ~1.52m in chassis local
+  const windshield = new THREE.Mesh(new THREE.BoxGeometry(1.74, cabinH, 0.05), glassMat);
+  windshield.position.set(0, 0.86 + cabinH * 0.5, 0.76);
+  windshield.rotation.x = -0.32;
+  handles.chassisGroup.add(windshield);
+
+  // A, B, C, D SUV Pillars
+  const pillarZList = [0.76, -0.08, -1.06, -2.18];
+  pillarZList.forEach((pz, idx) => {
+    [-0.9, 0.9].forEach((px) => {
+      const pMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.09, cabinH * 1.04, idx === 0 ? 0.1 : 0.16),
+        idx === 0 ? paintMat : darkTrimMat,
+      );
+      pMesh.position.set(px, 0.86 + cabinH * 0.5, pz);
+      if (idx === 0) pMesh.rotation.x = -0.32;
+      handles.chassisGroup.add(pMesh);
+    });
+  });
+
+  // Tinted Rear SUV Side Windows (showing subwoofer wall silhouette inside!)
+  [-0.91, 0.91].forEach((gx) => {
+    const rearSideGlass = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.52, 2.02), glassMat);
+    rearSideGlass.position.set(gx, 0.86 + cabinH * 0.48, -1.14);
+    handles.chassisGroup.add(rearSideGlass);
+  });
+
+  // Full-length SUV Roof + Chrome Roof Rack Rails
+  const roofCap = new THREE.Mesh(new THREE.BoxGeometry(1.88, 0.1, 2.94), paintMat);
+  roofCap.position.set(0, roofY, -0.8);
+  handles.chassisGroup.add(roofCap);
+
+  [-0.74, 0.74].forEach((rx) => {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 2.55), chromeMat);
+    rail.position.set(rx, roofY + 0.075, -0.82);
+    handles.chassisGroup.add(rail);
+  });
+  [-0.1, -1.55].forEach((cz) => {
+    const crossBar = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.035, 0.07), darkTrimMat);
+    crossBar.position.set(0, roofY + 0.085, cz);
+    handles.chassisGroup.add(crossBar);
+  });
+
+  // Animated Hinged Rear Liftgate / Hatch (pivoted at top rear roofline so rotation.x > 0 swings it UP & OUT!)
+  const liftgateHinge = new THREE.Group();
+  liftgateHinge.position.set(0, roofY - 0.02, rearZ + 0.06);
+  const liftgateUpperGlass = new THREE.Mesh(new THREE.BoxGeometry(1.68, 0.52, 0.06), glassMat);
+  liftgateUpperGlass.position.set(0, -0.3, 0);
+  const liftgateLowerPanel = new THREE.Mesh(new THREE.BoxGeometry(1.84, 0.62, 0.1), paintMat);
+  liftgateLowerPanel.position.set(0, -0.86, 0);
+  const liftgateBadge = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.08, 0.04), goldBowtieMat);
+  liftgateBadge.position.set(0, -0.68, -0.06);
+  const liftgateChromeBar = new THREE.Mesh(new THREE.BoxGeometry(1.42, 0.05, 0.04), chromeMat);
+  liftgateChromeBar.position.set(0, -0.78, -0.05);
+  liftgateHinge.add(liftgateUpperGlass, liftgateLowerPanel, liftgateBadge, liftgateChromeBar);
+  handles.chassisGroup.add(liftgateHinge);
+  handles.trunkLid = liftgateHinge;
+
+  // 8. Chevy Front Chrome Split-Bar Grille, Bowtie, Quad Headlights, Taillights & Bumpers
+  const frontBumper = new THREE.Mesh(new THREE.BoxGeometry(2.08, 0.2, 0.24), chromeMat);
+  frontBumper.position.set(0, 0.18, frontZ + 0.06);
+  const rearBumper = new THREE.Mesh(new THREE.BoxGeometry(2.08, 0.2, 0.24), chromeMat);
+  rearBumper.position.set(0, 0.18, rearZ - 0.06);
+  const grilleShell = new THREE.Mesh(new THREE.BoxGeometry(1.36, 0.34, 0.09), chromeMat);
+  grilleShell.position.set(0, 0.52, frontZ + 0.02);
+  const grilleMesh = new THREE.Mesh(new THREE.BoxGeometry(1.24, 0.26, 0.1), darkTrimMat);
+  grilleMesh.position.set(0, 0.52, frontZ + 0.025);
+  const grilleCrossBar = new THREE.Mesh(new THREE.BoxGeometry(1.34, 0.055, 0.115), chromeMat);
+  grilleCrossBar.position.set(0, 0.52, frontZ + 0.03);
+  const bowtie = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.085, 0.05), goldBowtieMat);
+  bowtie.position.set(0, 0.52, frontZ + 0.07);
+  handles.chassisGroup.add(
+    frontBumper,
+    rearBumper,
+    grilleShell,
+    grilleMesh,
+    grilleCrossBar,
+    bowtie,
+  );
+
+  // Stacked Chevy Quad Headlights + Amber Corners + Tall SUV Taillights
+  [-0.84, 0.84].forEach((hx) => {
+    const upperBeam = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.12, 0.06), headlightMat);
+    upperBeam.position.set(hx, 0.58, frontZ + 0.02);
+    const lowerAmber = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.09, 0.06), amberDrlMat);
+    lowerAmber.position.set(hx, 0.44, frontZ + 0.02);
+    handles.chassisGroup.add(upperBeam, lowerAmber);
+  });
+  [-0.9, 0.9].forEach((tx) => {
+    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.46, 0.08), taillightMat);
+    tail.position.set(tx, 0.62, rearZ - 0.02);
+    handles.chassisGroup.add(tail);
+  });
+
+  // Dual Chrome Exhaust Tips
+  [-0.64, 0.64].forEach((ex) => {
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.048, 0.38, 10), chromeMat);
+    pipe.rotation.x = Math.PI / 2;
+    pipe.position.set(ex, 0.1, rearZ - 0.14);
+    handles.chassisGroup.add(pipe);
+  });
+
+  // 9. Undercarriage Glow (Full-Perimeter Neon Tubes + Ground PointLight)
+  const glowColor = new THREE.Color(vehicle.underglowColor || '#38bdf8');
+  const glowMat = new THREE.MeshStandardMaterial({
+    color: glowColor,
+    emissive: glowColor,
+    emissiveIntensity: 2.3,
+    roughness: 0.2,
+  });
+  const glowMeshes: THREE.Mesh[] = [];
+  [-0.94, 0.94].forEach((gx) => {
+    const tube = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.035, 3.65), glowMat);
+    tube.position.set(gx, 0.02, 0.05);
+    handles.chassisGroup.add(tube);
+    glowMeshes.push(tube);
+  });
+  [frontZ - 0.14, rearZ + 0.14].forEach((gz) => {
+    const tube = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.035, 0.06), glowMat);
+    tube.position.set(0, 0.02, gz);
+    handles.chassisGroup.add(tube);
+    glowMeshes.push(tube);
+  });
+  const underLight = new THREE.PointLight(glowColor.getHex(), 2.2, 9.5, 1.4);
+  underLight.position.set(0, 0.06, 0.05);
+  handles.chassisGroup.add(underLight);
+  handles.underglowLight = underLight;
+  handles.underglowMeshes = glowMeshes;
+
+  // 10. Attach 4 Massive 40-Inch Forgiato "44" Auto-Spinner Rims with Blinking/Music LEDs!
+  const rimLedColor = new THREE.Color(vehicle.rimLightColor || vehicle.underglowColor || '#38bdf8');
+  const rimLedMat = new THREE.MeshStandardMaterial({
+    color: rimLedColor,
+    emissive: rimLedColor,
+    emissiveIntensity: 2.4,
+    roughness: 0.15,
+    metalness: 0.2,
+  });
+  handles.rimLightMaterials = [rimLedMat];
+  handles.rimLightMeshes = [];
+  handles.spinners = [];
+
+  const trackHalf = 1.06;
+  const wheelCoords: {
+    corner: 'fl' | 'fr' | 'rl' | 'rr';
+    x: number;
+    z: number;
+    side: -1 | 1;
+    isFront: boolean;
+  }[] = [
+    { corner: 'fl', x: -trackHalf, z: 1.44, side: -1, isFront: true },
+    { corner: 'fr', x: trackHalf, z: 1.44, side: 1, isFront: true },
+    { corner: 'rl', x: -trackHalf, z: -1.32, side: -1, isFront: false },
+    { corner: 'rr', x: trackHalf, z: -1.32, side: 1, isFront: false },
+  ];
+
+  for (const wc of wheelCoords) {
+    const cornerRoot = new THREE.Group();
+    cornerRoot.position.set(wc.x, baseWheelY, wc.z);
+    const { steerPivot, spinGroup, spinnerHub } = buildCustomWheel(
+      'forgiato_40_spinner',
+      wc.side,
+      rimColor,
+      wheelScale,
+      chromeMat,
+      rimLedMat,
+    );
+    cornerRoot.add(steerPivot);
+    handles.root.add(cornerRoot);
+
+    handles.wheels.push(spinGroup);
+    if (spinnerHub) {
+      handles.spinners.push(spinnerHub);
+    }
+    if (wc.isFront) {
+      handles.steerWheels.push(steerPivot);
+    }
+    handles.wheelCorners.push({
+      obj: cornerRoot,
+      corner: wc.corner,
+      baseY: baseWheelY,
+    });
+  }
+}
+
 function buildModulePart(
   m: VehicleModulePlacement,
   paintColor: string,
@@ -1469,6 +2224,11 @@ export function createModularVehicleMesh(
   };
 
   if (
+    vehicle.preset === 'chevy_tahoe' ||
+    vehicle.preset === 'chevy_2000_sub'
+  ) {
+    buildChevyTahoeShowSuv(vehicle, handles);
+  } else if (
     vehicle.preset === 'lowrider' ||
     vehicle.preset === 'donk' ||
     vehicle.preset === 'slab' ||

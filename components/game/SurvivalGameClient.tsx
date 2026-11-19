@@ -1859,6 +1859,26 @@ export function SurvivalGameClient() {
                             30&quot; Lifted
                           </span>
                         )}
+                        {(hud.activeVehicle.preset === 'chevy_tahoe' ||
+                          hud.activeVehicle.preset === 'chevy_2000_sub' ||
+                          hud.activeVehicle.slammedStance) && (
+                          <>
+                            <span className="px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-400/60 text-[9px] font-bold text-cyan-200 uppercase shrink-0">
+                              40&quot; Forgiato 44s
+                            </span>
+                            <span
+                              className={`px-1.5 py-0.5 rounded border text-[9px] font-bold uppercase shrink-0 ${
+                                hud.activeVehicle.slammedStance
+                                  ? 'bg-pink-950 border-pink-400/60 text-pink-200'
+                                  : 'bg-emerald-950 border-emerald-400/60 text-emerald-200'
+                              }`}
+                            >
+                              {hud.activeVehicle.slammedStance
+                                ? '3" Slammed'
+                                : `${hud.activeVehicle.liftHeightInches ?? 12}" Lifted`}
+                            </span>
+                          </>
+                        )}
                         {hud.activeVehicle.inWater && (
                           <span className="px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-500/60 text-[9px] font-bold text-cyan-300 uppercase shrink-0">
                             Water
@@ -2008,6 +2028,75 @@ export function SurvivalGameClient() {
                     </button>
                   )}
                 </div>
+
+                {/* In-Car Console Buttons: Lift/3" Slam + 40" Rim Lights (Lit / Blink / Music Sync) & Underglow */}
+                {(hud.activeVehicle.hasRimLights || hud.activeVehicle.hasUnderglow) && (
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-stone-800">
+                    <button
+                      type="button"
+                      onClick={() => engineRef.current?.toggleVehicleSlamLift()}
+                      className={`min-h-[30px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 transition ${
+                        hud.activeVehicle.slammedStance
+                          ? 'bg-sky-500 border-sky-200 text-stone-950'
+                          : 'bg-pink-500 border-pink-200 text-white'
+                      }`}
+                    >
+                      {hud.activeVehicle.slammedStance ? (
+                        <>
+                          <ArrowUp className="w-3 h-3" />
+                          <span>Lift Ride</span>
+                        </>
+                      ) : (
+                        <>
+                          <ArrowDown className="w-3 h-3" />
+                          <span>Slam 3&quot;</span>
+                        </>
+                      )}
+                    </button>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400 px-1">
+                      40&quot; Rims [L]:
+                    </span>
+                    {(
+                      [
+                        { id: 'solid', label: 'Lit' },
+                        { id: 'blink', label: 'Blink' },
+                        { id: 'music', label: 'Music Sync' },
+                        { id: 'off', label: 'Off' },
+                      ] as const
+                    ).map((opt) => {
+                      const active = hud.activeVehicle?.rimLightMode === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => engineRef.current?.setVehicleRimLightMode(opt.id)}
+                          className={`min-h-[30px] px-2 py-1 rounded-lg border text-[11px] font-bold transition ${
+                            active
+                              ? opt.id === 'music'
+                                ? 'bg-pink-500 border-pink-200 text-white'
+                                : opt.id === 'off'
+                                  ? 'bg-stone-600 border-stone-300 text-white'
+                                  : 'bg-cyan-400 border-cyan-100 text-stone-950'
+                              : 'bg-stone-900 border-stone-700 text-stone-300 hover:bg-stone-800'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => engineRef.current?.toggleVehicleUnderglow()}
+                      className={`min-h-[30px] px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
+                        hud.activeVehicle.underglowEnabled
+                          ? 'bg-emerald-500 border-emerald-200 text-stone-950'
+                          : 'bg-stone-900 border-stone-700 text-stone-300 hover:bg-stone-800'
+                      }`}
+                    >
+                      Underglow {hud.activeVehicle.underglowEnabled ? 'ON' : 'OFF'}
+                    </button>
+                  </div>
+                )}
 
                 {hud.activeVehicle.hasHydraulics && (
                   <div className="space-y-2 pt-1 border-t border-stone-800">
@@ -3277,6 +3366,14 @@ export function SurvivalGameClient() {
           }}
           interiorView={hud.activeVehicle.interiorView}
           trunkBassOn={hud.activeVehicle.trunkBassOn}
+          rimLightMode={hud.activeVehicle.rimLightMode}
+          underglowEnabled={hud.activeVehicle.underglowEnabled}
+          onSetRimLightMode={(mode) =>
+            engineRef.current?.setVehicleRimLightMode(mode)
+          }
+          onToggleUnderglow={() =>
+            engineRef.current?.toggleVehicleUnderglow()
+          }
           onToggleInteriorView={() =>
             engineRef.current?.toggleVehicleInteriorCamera()
           }
