@@ -1866,4 +1866,115 @@ export class SoundEngine {
       osc.stop(t0 + 0.54);
     });
   }
+
+  /**
+   * Pneumatic airbag suspension hiss:
+   * - Low speed (0.25..0.7): long, smooth, drawn-out air release hiss (0.9s - 1.45s)
+   * - High speed (1.3..2.0): fast, sharp, high-pressure burst + coil-over spring thump (0.18s - 0.34s)
+   */
+  public playAirbagHiss(speed = 1.0, withCoilThump = false): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const clampedSpd = Math.max(0.25, Math.min(2.0, speed));
+    // Inverse mapping: slower speed => longer hiss duration
+    const dur = Math.max(0.18, Math.min(1.45, 0.55 / clampedSpd + (clampedSpd < 0.7 ? 0.35 : 0)));
+    const sampleCount = Math.max(1024, Math.floor(this.ctx.sampleRate * dur));
+    const buf = this.ctx.createBuffer(1, sampleCount, this.ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < sampleCount; i++) {
+      const t = i / sampleCount;
+      // Fast attack, smooth exponential air-valve tail
+      const env = Math.min(1, t * 18) * Math.pow(1 - t, clampedSpd >= 1.2 ? 1.8 : 1.15);
+      data[i] = (Math.random() * 2 - 1) * env;
+    }
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = clampedSpd >= 1.2 ? 1.6 : 2.2;
+    const startFreq = clampedSpd >= 1.2 ? 4200 : 2600;
+    const endFreq = clampedSpd >= 1.2 ? 1750 : 1050;
+    bp.frequency.setValueAtTime(startFreq, now);
+    bp.frequency.exponentialRampToValueAtTime(endFreq, now + dur);
+
+    const gain = this.ctx.createGain();
+    const peakGain = clampedSpd >= 1.2 ? 0.44 : 0.32;
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(peakGain, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+
+    src.connect(bp);
+    bp.connect(gain);
+    gain.connect(this.masterGain);
+    src.start(now);
+    src.stop(now + dur + 0.02);
+
+    // Solenoid valve click at start
+    const click = this.ctx.createOscillator();
+    const cg = this.ctx.createGain();
+    click.type = 'triangle';
+    click.frequency.setValueAtTime(clampedSpd >= 1.2 ? 520 : 310, now);
+    click.frequency.exponentialRampToValueAtTime(110, now + 0.045);
+    cg.gain.setValueAtTime(0.18, now);
+    cg.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+    click.connect(cg);
+    cg.connect(this.masterGain);
+    click.start(now);
+    click.stop(now + 0.055);
+
+    if (withCoilThump || clampedSpd >= 1.35) {
+      // Coil-over spring bounce thump
+      const thump = this.ctx.createOscillator();
+      const tg = this.ctx.createGain();
+      thump.type = 'sine';
+      thump.frequency.setValueAtTime(135, now);
+      thump.frequency.exponentialRampToValueAtTime(48, now + 0.16);
+      tg.gain.setValueAtTime(0.28, now);
+      tg.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+      thump.connect(tg);
+      tg.connect(this.masterGain);
+      thump.start(now);
+      thump.stop(now + 0.2);
+    }
+  }
+
+  public playCarDoorLatch(opening: boolean): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(opening ? 260 : 140, now);
+    osc.frequency.exponentialRampToValueAtTime(opening ? 130 : 58, now + 0.12);
+    g.gain.setValueAtTime(0.26, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.15);
+  }
+
+  public playConvertibleMotor(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const lp = this.ctx.createBiquadFilter();
+    const g = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(155, now);
+    osc.frequency.linearRampToValueAtTime(195, now + 0.45);
+    osc.frequency.linearRampToValueAtTime(145, now + 0.72);
+    lp.type = 'lowpass';
+    lp.frequency.value = 520;
+    g.gain.setValueAtTime(0.001, now);
+    g.gain.linearRampToValueAtTime(0.12, now + 0.08);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.76);
+    osc.connect(lp);
+    lp.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.8);
+  }
 }

@@ -366,6 +366,13 @@ export interface ModularVehicleData {
   suspensionOffset?: number;
   wheelScale?: number;
   hydraulicHop?: boolean;
+  hasAirbagSuspension?: boolean;
+  airbagSpeed?: number; // 0.25 (slow long hiss) .. 2.0 (fast sharp hiss + bounce)
+  airbagLockLevel?: number; // 0.4 .. 1.4 adjustable lock-up height
+  hasConvertibleTop?: boolean;
+  convertibleTopDown?: boolean;
+  doorsOpen?: boolean;
+  trunkOpen?: boolean;
   turboBoost?: number;
   trunkBassEnabled?: boolean;
   underglowColor?: string;
@@ -412,7 +419,10 @@ export type HydraulicMode =
   | 'left_tilt'
   | 'right_tilt'
   | 'lock_up'
-  | 'drop_down';
+  | 'drop_down'
+  | 'front_lock'
+  | 'rear_lock'
+  | 'side_to_side';
 
 export interface ActiveVehicleHudState {
   id: string;
@@ -430,8 +440,17 @@ export interface ActiveVehicleHudState {
   canFloat: boolean;
   canFly: boolean;
   hasHydraulics: boolean;
-  hydraulicStyle: 'full_bounce' | 'up_down_side';
+  hydraulicStyle: 'full_bounce' | 'up_down_side' | 'airbag_coilover';
   hydraulicMode: HydraulicMode;
+  hasAirbagSuspension: boolean;
+  airbagSpeed: number;
+  airbagLockLevel: number;
+  doorsOpen: boolean;
+  trunkOpen: boolean;
+  hasConvertibleTop: boolean;
+  convertibleTopDown: boolean;
+  convertibleTopProgress: number;
+  interiorView: boolean;
   hasTrunkBass: boolean;
   trunkBassOn: boolean;
   highClearance: boolean;
@@ -1118,7 +1137,10 @@ export type ActiveModal =
   | 'music_studio'
   | 'coaster'
   | 'ecosystem_journal'
-  | 'dragon_sanctuary';
+  | 'dragon_sanctuary'
+  | 'exchange'
+  | 'saturn_rocket'
+  | 'underground_elevator';
 
 export interface NearbyInteraction {
   id: string;
@@ -1173,7 +1195,10 @@ export interface NearbyInteraction {
     | 'garage_bench'
     | 'armory_chest'
     | 'portal'
-    | 'coaster_station';
+    | 'coaster_station'
+    | 'saturn_rocket'
+    | 'island_ufo'
+    | 'underground_elevator';
   actionCategory?:
     | 'chop'
     | 'mine'
@@ -1383,6 +1408,7 @@ export interface HUDStateSnapshot {
   crystalArmorHp?: number;
   crystalArmorMaxHp?: number;
   portalNearHint?: string | null;
+  spaceState?: import('./systems/multiverseSpace').SpaceHudSnapshot;
 }
 
 export interface ModGameplayTweaks {

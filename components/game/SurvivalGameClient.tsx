@@ -55,6 +55,7 @@ import {
   ShieldPlus,
   Skull,
   Sparkles,
+  Store,
   Sun,
   Swords,
   Terminal,
@@ -112,6 +113,10 @@ import { ModManagerModal } from './ModManagerModal';
 import { MultiplayerModal } from './MultiplayerModal';
 import { PlaceModal } from './PlaceModal';
 import { TouchControls } from './TouchControls';
+import { PlayerControlsMinimizer } from '@/game/systems/playerControlsMinimizer';
+import { MOBILE_HUD_ROCKET_CONTROLS } from '@/game/systems/multiverseSpace';
+import { SaturnRocketModal } from './SaturnRocketModal';
+import { UndergroundElevatorModal } from './UndergroundElevatorModal';
 import { TvPlayerModal, YouTubeStreamSelection } from './TvPlayerModal';
 import {
   PersistentYouTubeOverlay,
@@ -125,6 +130,7 @@ import { WorldSelectionMenu } from './WorldSelectionMenu';
 import { CoasterStudioModal } from './CoasterStudioModal';
 import { EcosystemJournalModal } from './EcosystemJournalModal';
 import { DragonSanctuaryModal } from './DragonSanctuaryModal';
+import { ExchangeModal } from './ExchangeModal';
 import { EcosystemSimulationData } from '@/game/systems/livingEcosystemSystem';
 import { DragonCompanion } from '@/game/systems/dragonValleySystem';
 
@@ -198,6 +204,27 @@ export function SurvivalGameClient() {
   );
 
   const [quickTpInput, setQuickTpInput] = useState('');
+  const [walkingControlsMinimized, setWalkingControlsMinimized] = useState(false);
+  const stickMinimized = walkingControlsMinimized && Boolean(hud?.activeVehicle);
+  const controlsMinimizerRef = useRef<PlayerControlsMinimizer | null>(null);
+
+  useEffect(() => {
+    controlsMinimizerRef.current = new PlayerControlsMinimizer({
+      onToggle: (minimized) => setWalkingControlsMinimized(minimized),
+      onResetInputs: () => {
+        engineRef.current?.setTouchJoystick(0, 0);
+        engineRef.current?.setTouchSprint(false);
+        engineRef.current?.setTouchCrouch(false);
+        engineRef.current?.setTouchFlyAscend(false);
+        engineRef.current?.setTouchFlyDescend(false);
+        engineRef.current?.setAiming(false);
+        engineRef.current?.setGamepadDriveState(0, 0, false);
+      },
+    });
+    return () => {
+      controlsMinimizerRef.current = null;
+    };
+  }, []);
 
   const handleTvSyncYouTubeTime = useCallback((sec: number) => {
     engineRef.current?.syncTvYouTubeTime(sec);
@@ -219,6 +246,26 @@ export function SurvivalGameClient() {
   useEffect(() => {
     activeModalRef.current = activeModal;
   }, [activeModal]);
+
+  const [rocketControlsActive, setRocketControlsActive] = useState(false);
+  const [hudMinimizedMobile, setHudMinimizedMobile] = useState(false);
+
+  useEffect(() => {
+    MOBILE_HUD_ROCKET_CONTROLS.onResetInputs = () => {
+      engineRef.current?.setTouchJoystick(0, 0);
+      engineRef.current?.setAiming(false);
+    };
+    MOBILE_HUD_ROCKET_CONTROLS.onStateChange = ({ isMinimized, rocketModeActive }) => {
+      setHudMinimizedMobile(isMinimized);
+      setRocketControlsActive(rocketModeActive);
+    };
+    return () => {
+      MOBILE_HUD_ROCKET_CONTROLS.isMinimized = false;
+      MOBILE_HUD_ROCKET_CONTROLS.rocketModeActive = false;
+      MOBILE_HUD_ROCKET_CONTROLS.onResetInputs = null;
+      MOBILE_HUD_ROCKET_CONTROLS.onStateChange = null;
+    };
+  }, []);
 
   const refreshSaves = useCallback(() => {
     setSaveSlots(listSaveSlots());
@@ -845,6 +892,7 @@ export function SurvivalGameClient() {
           }}
           onCreateWorld={handleStartNewGame}
           onOpenMultiplayer={() => setActiveModal('multiplayer')}
+          onOpenExchange={() => setActiveModal('exchange')}
           onOpenMods={() => setActiveModal('mods')}
           onOpenSettings={() => setActiveModal('settings')}
         />
@@ -1525,11 +1573,112 @@ export function SurvivalGameClient() {
               </div>
             )}
 
+            {/* Saturn V Launch Telemetry HUD (IGNITION -> STAGE 1 -> STAGE 2 -> ORBIT READY) */}
+            {(hud.spaceState?.launchPhase === 'IGNITION' ||
+              hud.spaceState?.launchPhase === 'ASCENT') && (
+              <div
+                onPointerDown={(e) => e.stopPropagation()}
+                className="pointer-events-auto relative z-30 w-[min(95vw,520px)] rounded-xl bg-slate-950/95 border border-orange-500/80 px-4 py-2.5 shadow-2xl space-y-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-orange-400">
+                      SATURN V TELEMETRY · {hud.spaceState.launchPhase}
+                    </div>
+                    <div className="text-sm font-black text-white">
+                      DESTINATION: {hud.spaceState.launchDestination || 'ORBIT'}
+                    </div>
+                  </div>
+                  <div className="text-right font-mono">
+                    <div className="text-xs font-extrabold text-amber-300">
+                      STAGE {hud.spaceState.launchStage}{' '}
+                      {hud.spaceState.launchStage === 1 ? '(S-IC F-1)' : '(S-II BURN)'}
+                    </div>
+                    <div className="text-[11px] text-sky-300">
+                      ALT {hud.spaceState.launchAltitude}m / {hud.spaceState.launchOrbitAltitude}m ·{' '}
+                      {hud.spaceState.launchVelocityY} m/s
+                    </div>
+                  </div>
+                </div>
+                <div className="relative h-2.5 w-full rounded-full bg-slate-800 overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-orange-500 via-amber-400 to-sky-400 transition-all duration-100"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.round(
+                          (hud.spaceState.launchAltitude /
+                            Math.max(1, hud.spaceState.launchOrbitAltitude)) *
+                            100,
+                        ),
+                      )}%`,
+                    }}
+                  />
+                  {/* Stage 1 Separation marker at 45% orbit altitude */}
+                  <div
+                    className="absolute top-0 bottom-0 w-0.5 bg-white/80"
+                    style={{ left: '45%' }}
+                    title="Stage 1 Separation (45%)"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Space Planet & UFO Combat HUD Banner */}
+            {hud.spaceState?.inSpacePlanet && !activeModal && (
+              <div
+                onPointerDown={(e) => e.stopPropagation()}
+                className="planet-action-card pointer-events-auto relative z-30 w-[min(95vw,640px)] rounded-xl bg-slate-950/92 border border-sky-500/60 px-3 py-2 shadow-2xl flex flex-wrap items-center justify-between gap-2"
+              >
+                <div className="min-w-0">
+                  <div className="text-xs sm:text-sm font-extrabold text-sky-200 truncate">
+                    {hud.spaceState.planetName} · {hud.spaceState.gravity}g
+                  </div>
+                  <div className="text-[11px] text-stone-400 truncate">
+                    {hud.spaceState.universeName} · {hud.spaceState.galaxyName}
+                    {hud.spaceState.activeUfo && !hud.spaceState.activeUfo.isDowned
+                      ? ` · UFO HP ${hud.spaceState.activeUfo.hp}/${hud.spaceState.activeUfo.maxHp}`
+                      : ''}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => engineRef.current?.fireAlienBlaster()}
+                    className="min-h-[32px] px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 border border-purple-300 text-white text-[11px] font-extrabold transition"
+                  >
+                    Fire {hud.spaceState.equippedAlienGunName || 'Alien Blaster'} (∞)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openModal('saturn_rocket')}
+                    className="min-h-[32px] px-2.5 py-1 rounded-lg bg-sky-500 hover:bg-sky-400 text-stone-950 text-[11px] font-extrabold transition"
+                  >
+                    Saturn V Console
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => engineRef.current?.returnToEarthFromSpace()}
+                    className="min-h-[32px] px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-stone-950 text-[11px] font-extrabold transition"
+                  >
+                    Return to Earth
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Active Vehicle Driving HUD */}
             {hud.activeVehicle && !activeModal && (
               <div
+                id="car-hydraulics-deck"
                 onPointerDown={(e) => e.stopPropagation()}
-                className="pointer-events-auto relative z-30 w-[min(95vw,600px)] rounded-xl bg-stone-950/92 border border-amber-500/50 px-3 py-2 shadow-2xl space-y-1.5"
+                className={`pointer-events-auto relative z-30 rounded-xl bg-stone-950/95 border border-amber-500/50 px-3 py-2 shadow-2xl space-y-1.5 transition-all ${
+                  stickMinimized
+                    ? 'controls-minimized-mode w-[min(96vw,680px)] mb-1'
+                    : showTouchControls
+                      ? 'w-[min(94vw,560px)] mb-48 sm:mb-40'
+                      : 'w-[min(95vw,600px)]'
+                }`}
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
@@ -1567,7 +1716,28 @@ export function SurvivalGameClient() {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                    <button
+                      id="minimize-controls-btn"
+                      type="button"
+                      aria-pressed={stickMinimized}
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        controlsMinimizerRef.current?.setMinimized(!stickMinimized);
+                      }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-xs font-bold flex items-center gap-1 transition cursor-pointer ${
+                        stickMinimized
+                          ? 'bg-emerald-500 border-emerald-200 text-stone-950'
+                          : 'bg-purple-900/90 hover:bg-purple-800 border-purple-400/70 text-purple-100'
+                      }`}
+                    >
+                      {stickMinimized ? 'Show Controls' : 'Minimize HUD'}
+                    </button>
                     <button
                       type="button"
                       onPointerDown={(e) => {
@@ -1605,111 +1775,321 @@ export function SurvivalGameClient() {
                   </div>
                 </div>
 
+                {/* Universal Car Doors, Pop Trunk, Interior Camera & Interior Droptop Switch */}
+                <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-stone-800">
+                  <button
+                    type="button"
+                    onClick={() => engineRef.current?.toggleVehicleInteriorCamera()}
+                    className={`min-h-[30px] px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
+                      hud.activeVehicle.interiorView
+                        ? 'bg-indigo-500 border-indigo-200 text-white'
+                        : 'bg-stone-900 border-stone-700 text-stone-200 hover:bg-stone-800'
+                    }`}
+                  >
+                    {hud.activeVehicle.interiorView ? 'Outside Cam [V]' : 'Interior View [V]'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => engineRef.current?.toggleVehicleDoors()}
+                    className={`min-h-[30px] px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
+                      hud.activeVehicle.doorsOpen
+                        ? 'bg-emerald-500 border-emerald-200 text-stone-950'
+                        : 'bg-stone-900 border-stone-700 text-stone-200 hover:bg-stone-800'
+                    }`}
+                  >
+                    {hud.activeVehicle.doorsOpen ? 'Close Doors' : 'Open Doors (Interior)'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => engineRef.current?.toggleVehicleTrunk()}
+                    className={`min-h-[30px] px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
+                      hud.activeVehicle.trunkOpen
+                        ? 'bg-amber-500 border-amber-200 text-stone-950'
+                        : 'bg-stone-900 border-stone-700 text-stone-200 hover:bg-stone-800'
+                    }`}
+                  >
+                    {hud.activeVehicle.trunkOpen ? 'Close Trunk' : 'Pop Trunk'}
+                  </button>
+                  {hud.activeVehicle.hasConvertibleTop && (
+                    <button
+                      type="button"
+                      onClick={() => engineRef.current?.toggleConvertibleTop()}
+                      className={`min-h-[30px] px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
+                        hud.activeVehicle.convertibleTopDown
+                          ? 'bg-emerald-500 border-emerald-200 text-stone-950'
+                          : 'bg-amber-500/20 border-amber-400 text-amber-200 hover:bg-amber-500/30'
+                      }`}
+                    >
+                      {hud.activeVehicle.convertibleTopDown
+                        ? hud.activeVehicle.convertibleTopProgress < 0.98
+                          ? `Dropping Top (${Math.round(hud.activeVehicle.convertibleTopProgress * 100)}%)`
+                          : 'Console Switch [T]: Raise Top'
+                        : hud.activeVehicle.convertibleTopProgress > 0.02
+                          ? `Raising Top (${Math.round((1 - hud.activeVehicle.convertibleTopProgress) * 100)}%)`
+                          : 'Console Switch [T]: Drop Top'}
+                    </button>
+                  )}
+                </div>
+
                 {hud.activeVehicle.hasHydraulics && (
-                  <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-stone-800">
-                    {hud.activeVehicle.hydraulicStyle === 'up_down_side' ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => engineRef.current?.triggerHydraulicAction('lock_up')}
-                          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 ${
-                            hud.activeVehicle.hydraulicMode === 'lock_up'
-                              ? 'bg-sky-500 border-sky-200 text-stone-950'
-                              : 'bg-stone-900 border-stone-700 text-stone-200'
-                          }`}
-                        >
-                          <ArrowUp className="w-3.5 h-3.5" />
-                          <span>Up</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => engineRef.current?.triggerHydraulicAction('drop')}
-                          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 ${
-                            hud.activeVehicle.hydraulicMode === 'drop_down'
-                              ? 'bg-sky-500 border-sky-200 text-stone-950'
-                              : 'bg-stone-900 border-stone-700 text-stone-200'
-                          }`}
-                        >
-                          <ArrowDown className="w-3.5 h-3.5" />
-                          <span>Down</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => engineRef.current?.triggerHydraulicAction('left_tilt')}
-                          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 ${
-                            hud.activeVehicle.hydraulicMode === 'left_tilt'
-                              ? 'bg-amber-500 border-amber-300 text-stone-950'
-                              : 'bg-stone-900 border-stone-700 text-stone-200'
-                          }`}
-                        >
-                          <ChevronLeft className="w-3.5 h-3.5" />
-                          <span>Side L</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => engineRef.current?.triggerHydraulicAction('right_tilt')}
-                          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 ${
-                            hud.activeVehicle.hydraulicMode === 'right_tilt'
-                              ? 'bg-amber-500 border-amber-300 text-stone-950'
-                              : 'bg-stone-900 border-stone-700 text-stone-200'
-                          }`}
-                        >
-                          <span>Side R</span>
-                          <ChevronRight className="w-3.5 h-3.5" />
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => engineRef.current?.triggerHydraulicAction('front_hop')}
-                          className="min-h-[32px] px-2.5 py-1 rounded-lg bg-purple-950/90 border border-purple-500/60 text-purple-100 text-[11px] font-bold flex items-center gap-1"
-                        >
-                          <ArrowUp className="w-3.5 h-3.5" />
-                          <span>Front</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => engineRef.current?.triggerHydraulicAction('rear_hop')}
-                          className="min-h-[32px] px-2.5 py-1 rounded-lg bg-purple-950/90 border border-purple-500/60 text-purple-100 text-[11px] font-bold flex items-center gap-1"
-                        >
-                          <ArrowDown className="w-3.5 h-3.5" />
-                          <span>Rear</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => engineRef.current?.triggerHydraulicAction('left_tilt')}
-                          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
-                            hud.activeVehicle.hydraulicMode === 'left_tilt'
-                              ? 'bg-amber-500 border-amber-300 text-stone-950'
-                              : 'bg-stone-900 border-stone-700 text-stone-200'
-                          }`}
-                        >
-                          Tilt L
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => engineRef.current?.triggerHydraulicAction('right_tilt')}
-                          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
-                            hud.activeVehicle.hydraulicMode === 'right_tilt'
-                              ? 'bg-amber-500 border-amber-300 text-stone-950'
-                              : 'bg-stone-900 border-stone-700 text-stone-200'
-                          }`}
-                        >
-                          Tilt R
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => engineRef.current?.triggerHydraulicAction('lock_up')}
-                          className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
-                            hud.activeVehicle.hydraulicMode === 'lock_up'
-                              ? 'bg-purple-500 border-purple-200 text-stone-950'
-                              : 'bg-stone-900 border-stone-700 text-stone-200'
-                          }`}
-                        >
-                          Lock [X]
-                        </button>
-                      </>
+                  <div className="space-y-2 pt-1 border-t border-stone-800">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {hud.activeVehicle.hydraulicStyle === 'airbag_coilover' ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('lock_up')}
+                            className={`min-h-[30px] px-2 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 ${
+                              hud.activeVehicle.hydraulicMode === 'lock_up'
+                                ? 'bg-sky-400 border-sky-100 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            <ArrowUp className="w-3 h-3" />
+                            <span>Up</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('drop')}
+                            className={`min-h-[30px] px-2 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 ${
+                              hud.activeVehicle.hydraulicMode === 'drop_down'
+                                ? 'bg-sky-400 border-sky-100 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            <ArrowDown className="w-3 h-3" />
+                            <span>Down</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('front_lock')}
+                            className={`min-h-[30px] px-2 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicMode === 'front_lock'
+                                ? 'bg-amber-400 border-amber-100 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            Front Lock
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('rear_lock')}
+                            className={`min-h-[30px] px-2 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicMode === 'rear_lock'
+                                ? 'bg-amber-400 border-amber-100 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            Rear Lock
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('left_tilt')}
+                            className={`min-h-[30px] px-2 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicMode === 'left_tilt'
+                                ? 'bg-amber-400 border-amber-100 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            Left Lock
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('right_tilt')}
+                            className={`min-h-[30px] px-2 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicMode === 'right_tilt'
+                                ? 'bg-amber-400 border-amber-100 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            Right Lock
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('side_to_side')}
+                            className={`min-h-[30px] px-2 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicMode === 'side_to_side'
+                                ? 'bg-emerald-400 border-emerald-100 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            Side-to-Side
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('coil_bounce')}
+                            className="min-h-[30px] px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 border border-purple-300 text-white text-[11px] font-bold"
+                          >
+                            Coil Bounce
+                          </button>
+                        </>
+                      ) : hud.activeVehicle.hydraulicStyle === 'up_down_side' ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('lock_up')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 ${
+                              hud.activeVehicle.hydraulicMode === 'lock_up'
+                                ? 'bg-sky-500 border-sky-200 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            <ArrowUp className="w-3.5 h-3.5" />
+                            <span>Up</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('drop')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 ${
+                              hud.activeVehicle.hydraulicMode === 'drop_down'
+                                ? 'bg-sky-500 border-sky-200 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            <ArrowDown className="w-3.5 h-3.5" />
+                            <span>Down</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('left_tilt')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 ${
+                              hud.activeVehicle.hydraulicMode === 'left_tilt'
+                                ? 'bg-amber-500 border-amber-300 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            <ChevronLeft className="w-3.5 h-3.5" />
+                            <span>Side L</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('right_tilt')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 ${
+                              hud.activeVehicle.hydraulicMode === 'right_tilt'
+                                ? 'bg-amber-500 border-amber-300 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            <span>Side R</span>
+                            <ChevronRight className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('front_hop')}
+                            className="min-h-[32px] px-2.5 py-1 rounded-lg bg-purple-950/90 border border-purple-500/60 text-purple-100 text-[11px] font-bold flex items-center gap-1"
+                          >
+                            <ArrowUp className="w-3.5 h-3.5" />
+                            <span>Front</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('rear_hop')}
+                            className="min-h-[32px] px-2.5 py-1 rounded-lg bg-purple-950/90 border border-purple-500/60 text-purple-100 text-[11px] font-bold flex items-center gap-1"
+                          >
+                            <ArrowDown className="w-3.5 h-3.5" />
+                            <span>Rear</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('left_tilt')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicMode === 'left_tilt'
+                                ? 'bg-amber-500 border-amber-300 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            Tilt L
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('right_tilt')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicMode === 'right_tilt'
+                                ? 'bg-amber-500 border-amber-300 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            Tilt R
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('lock_up')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicMode === 'lock_up'
+                                ? 'bg-purple-500 border-purple-200 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            Lock [X]
+                          </button>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Trunk-Gated Airbag Speed & Lock-Up Valve Tuner */}
+                    {hud.activeVehicle.hasAirbagSuspension && (
+                      <div className="rounded-lg bg-stone-950/90 border border-stone-800 p-2 space-y-1.5">
+                        {!hud.activeVehicle.trunkOpen ? (
+                          <div className="flex items-center justify-between gap-2 text-[11px] text-amber-300">
+                            <span>Pop Trunk to adjust Airbag Speed &amp; Lock-Up Valves</span>
+                            <button
+                              type="button"
+                              onClick={() => engineRef.current?.toggleVehicleTrunk()}
+                              className="px-2 py-0.5 rounded bg-amber-500 text-stone-950 font-bold"
+                            >
+                              Pop Trunk
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-2 gap-2 text-[11px]">
+                            <label className="space-y-0.5">
+                              <div className="flex justify-between text-stone-300">
+                                <span>Airbag Speed</span>
+                                <span className="font-mono text-sky-300">
+                                  {(hud.activeVehicle.airbagSpeed ?? 1.0) < 0.75
+                                    ? 'Slow (Long Hiss)'
+                                    : (hud.activeVehicle.airbagSpeed ?? 1.0) > 1.3
+                                      ? 'Fast (Sharp Hiss)'
+                                      : 'Med'}
+                                </span>
+                              </div>
+                              <input
+                                type="range"
+                                min={0.25}
+                                max={2.0}
+                                step={0.05}
+                                value={hud.activeVehicle.airbagSpeed ?? 1.0}
+                                onChange={(e) =>
+                                  engineRef.current?.setAirbagSpeed(Number(e.target.value))
+                                }
+                                className="w-full accent-sky-400"
+                              />
+                            </label>
+                            <label className="space-y-0.5">
+                              <div className="flex justify-between text-stone-300">
+                                <span>Lock-Up Level</span>
+                                <span className="font-mono text-amber-300">
+                                  {Math.round((hud.activeVehicle.airbagLockLevel ?? 1.0) * 100)}%
+                                </span>
+                              </div>
+                              <input
+                                type="range"
+                                min={0.4}
+                                max={1.4}
+                                step={0.05}
+                                value={hud.activeVehicle.airbagLockLevel ?? 1.0}
+                                onChange={(e) =>
+                                  engineRef.current?.setAirbagLockLevel(Number(e.target.value))
+                                }
+                                className="w-full accent-amber-400"
+                              />
+                            </label>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
@@ -2009,8 +2389,9 @@ export function SurvivalGameClient() {
             {/* Compact Minecraft-Style Bottom Hotbar */}
             {!hud.activeVehicle && (
               <div
+                id="hotbar-dock"
                 data-hud-hotbar="true"
-                className="pointer-events-auto flex items-center gap-0.5 sm:gap-1 p-1 rounded-lg bg-stone-950/92 border-2 border-stone-700/90 shadow-2xl max-w-[calc(100vw-16px)]"
+                className="hotbar-strip pointer-events-auto flex items-center gap-0.5 sm:gap-1 p-1 rounded-lg bg-stone-950/92 border-2 border-stone-700/90 shadow-2xl max-w-[calc(100vw-16px)]"
               >
                 <button
                   type="button"
@@ -2218,7 +2599,7 @@ export function SurvivalGameClient() {
         return (
           <>
             <TouchControls
-              visible={touchVisible}
+              visible={touchVisible && !stickMinimized}
               gamepadConnected={gamepadConnected}
               mirroredJoystickOnly={!showTouchControls}
               gamepadJoystickOffset={gamepadJoystickOffset}
@@ -2330,6 +2711,7 @@ export function SurvivalGameClient() {
                   </div>
 
                   <form
+                    id="teleport-bar"
                     onSubmit={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
@@ -2567,6 +2949,75 @@ export function SurvivalGameClient() {
         />
       )}
 
+      {/* Mobile HUD Mode Switch & Dedicated Rocket Controls Bar */}
+      {screen === 'playing' && hud && !hud.cinematicActive && !activeModal && (
+        <>
+          <div
+            id="hud-mode-switch"
+            onPointerDown={(e) => e.stopPropagation()}
+            className="fixed right-3 bottom-[110px] z-[999] flex gap-2 pointer-events-auto"
+          >
+            <button
+              id="rocket-mode-btn"
+              type="button"
+              onClick={() =>
+                MOBILE_HUD_ROCKET_CONTROLS.setRocketControls(
+                  !MOBILE_HUD_ROCKET_CONTROLS.rocketModeActive,
+                )
+              }
+              className={`min-h-[36px] px-3 py-1.5 rounded-xl border text-xs font-extrabold shadow-lg transition ${
+                rocketControlsActive
+                  ? 'bg-orange-500 border-orange-300 text-stone-950'
+                  : 'bg-slate-950/90 border-sky-400/60 text-sky-200 hover:bg-slate-900'
+              }`}
+            >
+              {rocketControlsActive ? 'Rocket Active' : 'Rocket Controls'}
+            </button>
+            <button
+              id="minimize-hud-btn"
+              type="button"
+              onClick={() => MOBILE_HUD_ROCKET_CONTROLS.toggleMinimize()}
+              className={`min-h-[36px] px-3 py-1.5 rounded-xl border text-xs font-extrabold shadow-lg transition ${
+                hudMinimizedMobile
+                  ? 'bg-amber-400 border-amber-200 text-stone-950'
+                  : 'bg-slate-950/90 border-white/25 text-stone-100 hover:bg-slate-900'
+              }`}
+            >
+              {hudMinimizedMobile ? 'Show HUD' : 'Minimize'}
+            </button>
+          </div>
+
+          <div
+            id="rocket-controls-bar"
+            onPointerDown={(e) => e.stopPropagation()}
+            style={{ display: rocketControlsActive && !hudMinimizedMobile ? 'flex' : 'none' }}
+            className="fixed left-3 right-3 bottom-6 z-[998] items-center justify-around gap-2 p-2.5 rounded-2xl bg-[rgba(10,14,24,0.92)] border border-white/20 shadow-2xl pointer-events-auto"
+          >
+            <button
+              type="button"
+              onClick={() => engineRef.current?.igniteSaturnVQuickLaunch()}
+              className="flex-1 min-h-[44px] px-4 py-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 hover:from-orange-400 hover:to-amber-300 text-stone-950 font-black text-sm shadow-lg transition"
+            >
+              Launch
+            </button>
+            <button
+              type="button"
+              onClick={() => openModal('saturn_rocket')}
+              className="flex-1 min-h-[44px] px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-stone-950 font-extrabold text-sm shadow-lg transition"
+            >
+              Flight Console
+            </button>
+            <button
+              type="button"
+              onClick={() => MOBILE_HUD_ROCKET_CONTROLS.setRocketControls(false)}
+              className="flex-1 min-h-[44px] px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/20 text-white font-bold text-sm transition"
+            >
+              Exit Rocket
+            </button>
+          </div>
+        </>
+      )}
+
       {activeModal === 'place' && hud && (
         <PlaceModal
           hud={hud}
@@ -2605,6 +3056,31 @@ export function SurvivalGameClient() {
           playerY={hud.playerY}
           playerZ={hud.playerZ}
           playerYaw={hud.playerYaw}
+        />
+      )}
+
+      {activeModal === 'saturn_rocket' && hud && (
+        <SaturnRocketModal
+          onClose={closeModal}
+          spaceState={hud.spaceState ?? null}
+          onLaunchPlanet={(planet, system) =>
+            engineRef.current?.launchRocketToPlanet(planet, system)
+          }
+          onLaunchSun={(starName) => engineRef.current?.launchRocketToSun(starName)}
+          onJumpSectorPlanet={(num) => engineRef.current?.jumpToSectorPlanet(num)}
+          onReturnEarth={() => engineRef.current?.returnToEarthFromSpace()}
+          onEquipAlienGun={(gunId) => engineRef.current?.equipAlienGun(gunId)}
+          onClaimIslandUfoLoot={() => engineRef.current?.claimIslandUfoLoot()}
+          onUseAlienLoot={(uid, mode) => engineRef.current?.useAlienLoot(uid, mode)}
+        />
+      )}
+
+      {activeModal === 'underground_elevator' && hud && (
+        <UndergroundElevatorModal
+          onClose={closeModal}
+          onBringCarToSurface={(carId) => {
+            engineRef.current?.summonCarFromUndergroundElevator(carId);
+          }}
         />
       )}
 
@@ -2754,6 +3230,15 @@ export function SurvivalGameClient() {
         />
       )}
 
+      {activeModal === 'exchange' && (
+        <ExchangeModal
+          onClose={closeModal}
+          onCosmeticsChanged={() => {
+            engineRef.current?.applyExchangeCosmetics(true);
+          }}
+        />
+      )}
+
       {activeModal === 'menu_drawer' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
           <div className="relative w-full max-w-md bg-stone-900 border border-amber-500/50 rounded-2xl shadow-2xl p-6 space-y-5 max-h-[90vh] overflow-y-auto survival-scroll">
@@ -2776,6 +3261,13 @@ export function SurvivalGameClient() {
               </button>
             </div>
             <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setActiveModal('exchange')}
+                className="col-span-2 p-3.5 rounded-xl bg-amber-950/90 hover:bg-amber-500 hover:text-stone-950 border border-amber-500/60 font-bold text-amber-200 text-sm flex items-center justify-center gap-2.5 transition"
+              >
+                <Store className="w-5 h-5 text-amber-400 shrink-0" />
+                <span className="tracking-wide uppercase">Survival Island Exchange</span>
+              </button>
               <button
                 onClick={() => setActiveModal('coaster')}
                 className="p-3.5 rounded-xl bg-sky-950/80 hover:bg-sky-500 hover:text-stone-950 border border-sky-500/40 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"

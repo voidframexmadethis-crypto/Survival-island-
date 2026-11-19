@@ -63,6 +63,9 @@ import {
   TERRAIN_SIZE,
   TRAIL_RUINS_POS,
   TRIAL_CHAMBERS_POS,
+  ISLAND_UFO_POS,
+  SATURN_ROCKET_POS,
+  UNDERGROUND_ELEVATOR_POS,
   VEHICLE_GARAGE_POS,
   VEHICLE_GARAGE_Y,
   WATERFALL_POS,
@@ -75,6 +78,15 @@ import {
   getTerrainHeight,
   getTerrainSlope,
 } from './terrain';
+import {
+  SaturnVRocketHandles,
+  buildAlienUfoMesh,
+  buildSaturnVRocket,
+} from './saturnRocketModel';
+import {
+  UndergroundElevatorHandles,
+  buildUndergroundCarElevator,
+} from './undergroundElevatorModel';
 import {
   createBarkTexture,
   createGroundDetailTexture,
@@ -160,6 +172,8 @@ export interface WorldHandles {
   caveCeilings: CaveCeilingCluster[];
   shipwreckChests: ShipwreckChestHandle[];
   eyeblossomGlowMat: THREE.MeshStandardMaterial;
+  saturnRocket: SaturnVRocketHandles;
+  undergroundElevator: UndergroundElevatorHandles;
   overworldGroup: THREE.Group;
   activateInteractiveNode: (nodeId: string) => ResourceVisualHandle | undefined;
   restoreBatchedNode: (nodeId: string) => void;
@@ -3196,6 +3210,12 @@ export function buildIslandWorld(
       emissiveIntensity: 0.7,
       roughness: 0.25,
     }),
+    new THREE.MeshStandardMaterial({
+      color: 0xf8fafc,
+      emissive: 0xe2e8f0,
+      emissiveIntensity: 0.75,
+      roughness: 0.2,
+    }),
   ];
   const tireMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.88 });
   const toolMetalMat = new THREE.MeshStandardMaterial({
@@ -3209,21 +3229,21 @@ export function buildIslandWorld(
     metalness: 0.55,
   });
 
-  // Main leveled concrete foundation pad (22.0m x 13.0m)
-  const garagePad = new THREE.Mesh(new THREE.BoxGeometry(22.0, 0.18, 13.0), concreteBaseMat);
+  // Main leveled concrete foundation pad (28.0m x 13.0m for 4 bays)
+  const garagePad = new THREE.Mesh(new THREE.BoxGeometry(28.0, 0.18, 13.0), concreteBaseMat);
   garagePad.position.set(0, 0.04, 0);
   garagePad.receiveShadow = true;
   garageGroup.add(garagePad);
 
   // Wide beveled concrete driveway apron leading south (+Z) onto the island trails & beach
-  const driveApron = new THREE.Mesh(new THREE.BoxGeometry(22.6, 0.12, 3.8), apronMat);
+  const driveApron = new THREE.Mesh(new THREE.BoxGeometry(28.6, 0.12, 3.8), apronMat);
   driveApron.position.set(0, 0.01, 7.8);
   driveApron.rotation.x = 0.045;
   driveApron.receiveShadow = true;
   garageGroup.add(driveApron);
 
-  // 3 Distinct Covered Custom Bays: Bay 1 (x = -6.0 Lowrider), Bay 2 (x = 0.0 DONK), Bay 3 (x = +6.0 SLAB)
-  const bayCenters = [-6.0, 0.0, 6.0];
+  // 4 Distinct Covered Custom Bays: Bay 1 (-9 Lowrider), Bay 2 (-3 DONK), Bay 3 (+3 SLAB), Bay 4 (+9 Cadillac Coupe DeVille)
+  const bayCenters = [-9.0, -3.0, 3.0, 9.0];
   bayCenters.forEach((bx, bayIdx) => {
     const trimMat = bayTrimMats[bayIdx];
     const bayPad = new THREE.Mesh(new THREE.BoxGeometry(5.0, 0.04, 8.2), concreteBayPadMat);
@@ -3246,11 +3266,10 @@ export function buildIslandWorld(
   });
 
   // Steel-and-Timber Canopy Columns (wide 6m open clear-span per bay, zero pillars blocking drive-in)
-  const colXList = [-10.2, -3.0, 3.0, 10.2];
+  const colXList = [-12.6, -6.0, 0.0, 6.0, 12.6];
   const colZList = [-5.8, 5.4];
   colXList.forEach((px) => {
     colZList.forEach((pz) => {
-      // Skip inner center-front? Actually x = -3.0 & +3.0 sit neatly BETWEEN bays (-6, 0, +6), giving 5.6m clear bay openings!
       const plinth = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.32, 0.56), concreteBaseMat);
       plinth.position.set(px, 0.26, pz);
       const post = new THREE.Mesh(new THREE.BoxGeometry(0.32, 4.7, 0.32), steelFrameMat);
@@ -3266,15 +3285,15 @@ export function buildIslandWorld(
   });
 
   // Back workshop low retaining wall + timber wainscot + steel roof trusses
-  const backWall = new THREE.Mesh(new THREE.BoxGeometry(20.6, 2.4, 0.28), concreteBaseMat);
+  const backWall = new THREE.Mesh(new THREE.BoxGeometry(26.2, 2.4, 0.28), concreteBaseMat);
   backWall.position.set(0, 1.3, -5.85);
   backWall.castShadow = true;
   backWall.receiveShadow = true;
   garageGroup.add(backWall);
 
-  const frontHeaderBeam = new THREE.Mesh(new THREE.BoxGeometry(21.2, 0.42, 0.38), steelFrameMat);
+  const frontHeaderBeam = new THREE.Mesh(new THREE.BoxGeometry(26.8, 0.42, 0.38), steelFrameMat);
   frontHeaderBeam.position.set(0, 4.85, 5.4);
-  const backHeaderBeam = new THREE.Mesh(new THREE.BoxGeometry(21.2, 0.42, 0.38), steelFrameMat);
+  const backHeaderBeam = new THREE.Mesh(new THREE.BoxGeometry(26.8, 0.42, 0.38), steelFrameMat);
   backHeaderBeam.position.set(0, 4.85, -5.8);
   garageGroup.add(frontHeaderBeam, backHeaderBeam);
 
@@ -3284,8 +3303,8 @@ export function buildIslandWorld(
     garageGroup.add(trussBeam);
   });
 
-  // Sloped corrugated steel canopy roof (22.6m x 13.4m)
-  const canopyRoof = new THREE.Mesh(new THREE.BoxGeometry(22.6, 0.2, 13.4), garageRoofMat);
+  // Sloped corrugated steel canopy roof (28.4m x 13.4m)
+  const canopyRoof = new THREE.Mesh(new THREE.BoxGeometry(28.4, 0.2, 13.4), garageRoofMat);
   canopyRoof.position.set(0, 5.22, -0.2);
   canopyRoof.rotation.x = -0.07;
   canopyRoof.castShadow = true;
@@ -3430,6 +3449,36 @@ export function buildIslandWorld(
     -0.35,
     0x10b981,
   );
+
+  // F. Huge Saturn V ("Saturn Five") Rocket Launch Complex — Next to the Premade Shelter & Garage (a bit further out)
+  const saturnGroundY = getTerrainHeight(SATURN_ROCKET_POS.x, SATURN_ROCKET_POS.z);
+  const saturnBuilt = buildSaturnVRocket({ withLaunchTower: true });
+  saturnBuilt.root.position.set(
+    SATURN_ROCKET_POS.x,
+    saturnGroundY - 0.1,
+    SATURN_ROCKET_POS.z,
+  );
+  overworldGroup.add(saturnBuilt.root);
+
+  // F2. Underground Exotic Garage Expansion & Hydraulic Car Elevator — Right Next to the Vehicle Garage
+  const elevatorGroundY = getTerrainHeight(
+    UNDERGROUND_ELEVATOR_POS.x,
+    UNDERGROUND_ELEVATOR_POS.z,
+  );
+  const undergroundElevator = buildUndergroundCarElevator();
+  undergroundElevator.root.position.set(
+    UNDERGROUND_ELEVATOR_POS.x,
+    elevatorGroundY - 0.05,
+    UNDERGROUND_ELEVATOR_POS.z,
+  );
+  overworldGroup.add(undergroundElevator.root);
+
+  // G. Island-Landed Alien UFO (at x: 40, z: -35) with glowing saucer lights & collectible Alien Loot
+  const islandUfoY = getTerrainHeight(ISLAND_UFO_POS.x, ISLAND_UFO_POS.z);
+  const islandUfoMesh = buildAlienUfoMesh({ withTractorBeam: false });
+  islandUfoMesh.position.set(ISLAND_UFO_POS.x, islandUfoY + 1.05, ISLAND_UFO_POS.z);
+  islandUfoMesh.rotation.z = 0.09;
+  overworldGroup.add(islandUfoMesh);
 
   // =========================================================================
   // SIGNATURE BIOME STRUCTURES (Trial Chambers, Woodland Mansion, Villages, Outpost, Ruins, Igloo, Jungle Temple)
@@ -5285,6 +5334,8 @@ export function buildIslandWorld(
     caveCeilings,
     shipwreckChests,
     eyeblossomGlowMat,
+    saturnRocket: saturnBuilt,
+    undergroundElevator,
     overworldGroup,
     activateInteractiveNode,
     restoreBatchedNode,

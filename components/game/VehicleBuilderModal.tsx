@@ -45,7 +45,7 @@ interface VehicleBuilderModalProps {
       turboBoost?: number;
     },
   ) => void;
-  onParkInGarage?: (vehicleId: string, bay: 'A' | 'B' | 'C') => void;
+  onParkInGarage?: (vehicleId: string, bay: 'A' | 'B' | 'C' | 'D') => void;
   playerInventory: { itemId: ItemId; quantity: number }[];
   playerX: number;
   playerY: number;
@@ -182,7 +182,7 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                 Vehicle Garage &amp; Modular Assembly Bay
               </h2>
               <p className="text-xs text-stone-400">
-                Build &amp; customize Lowriders, 30&quot; Lifted DONKs, Houston SLABs, Sports Cars, Buggies, Rovers &amp; Boats
+                Build &amp; customize Lowriders, 30&quot; Lifted DONKs, Houston SLABs, Cadillac Coupe DeVilles, Sports Cars, Buggies &amp; Boats
               </p>
             </div>
           </div>
@@ -263,6 +263,13 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                       desc: 'Luxury sedan on extended Swanger wire elbows, fifth-wheel spare, neon glow & trunk bass.',
                       icon: Zap,
                       color: 'border-pink-500/50 bg-pink-500/10 text-pink-400',
+                    },
+                    {
+                      key: 'cadillac_coupe_deville' as VehiclePresetKey,
+                      title: 'Cadillac Coupe DeVille',
+                      desc: 'Pearl-white body, black convertible droptop, 13" chrome skate spinners, airbags + coil-over bounce & popping trunk.',
+                      icon: Sparkles,
+                      color: 'border-slate-300/60 bg-slate-200/10 text-slate-100',
                     },
                     {
                       key: 'sports_car' as VehiclePresetKey,
@@ -433,7 +440,7 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                           </h4>
                           {onParkInGarage && (
                             <div className="flex items-center gap-1.5">
-                              {(['A', 'B', 'C'] as const).map((bay) => (
+                              {(['A', 'B', 'C', 'D'] as const).map((bay) => (
                                 <button
                                   type="button"
                                   key={bay}

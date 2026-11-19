@@ -15,6 +15,7 @@ import {
   ShieldOff,
   Skull,
   Sparkles,
+  Store,
   Trash2,
   Trees,
   Users,
@@ -42,6 +43,7 @@ interface WorldSelectionMenuProps {
     flatSurfaceStyle?: FlatSurfaceStyle;
   }) => void;
   onOpenMultiplayer: () => void;
+  onOpenExchange: () => void;
   onOpenMods: () => void;
   onOpenSettings: () => void;
 }
@@ -61,6 +63,7 @@ export function WorldSelectionMenu({
   onDeleteSlot,
   onCreateWorld,
   onOpenMultiplayer,
+  onOpenExchange,
   onOpenMods,
   onOpenSettings,
 }: WorldSelectionMenuProps) {
@@ -147,6 +150,14 @@ export function WorldSelectionMenu({
           </button>
           <button
             type="button"
+            onClick={onOpenExchange}
+            className="min-h-[42px] px-3.5 rounded-xl bg-amber-950/95 hover:bg-amber-900 border border-amber-500/60 text-amber-200 text-xs font-bold tracking-wide uppercase flex items-center gap-2 whitespace-nowrap shrink-0 shadow-lg"
+          >
+            <Store className="w-4 h-4 text-amber-400" />
+            <span>Survival Island Exchange</span>
+          </button>
+          <button
+            type="button"
             onClick={onOpenMods}
             className="min-h-[42px] px-3.5 rounded-xl bg-emerald-950/95 hover:bg-emerald-900 border border-emerald-500/50 text-emerald-200 text-xs font-semibold flex items-center gap-2 whitespace-nowrap shrink-0"
           >
@@ -175,8 +186,8 @@ export function WorldSelectionMenu({
             Explore the prehistoric island in Survival, Boss Hunt, or Creative—or launch an expansive level Flat World park built for enormous roller coasters and Music Pro.
           </p>
 
-          {latestSave && (
-            <div className="pt-1 flex flex-wrap items-center gap-3">
+          <div className="pt-1 flex flex-wrap items-center gap-3">
+            {latestSave && (
               <button
                 type="button"
                 onClick={onContinueLatest}
@@ -197,8 +208,23 @@ export function WorldSelectionMenu({
                   </div>
                 </div>
               </button>
-            </div>
-          )}
+            )}
+            <button
+              type="button"
+              onClick={onOpenExchange}
+              className="min-h-[52px] px-5 py-3 rounded-xl bg-stone-950/95 hover:bg-stone-900 border border-amber-500/70 text-amber-200 font-bold text-sm flex items-center gap-3 shadow-xl whitespace-nowrap shrink-0 transition"
+            >
+              <Store className="w-5 h-5 text-amber-400 shrink-0" />
+              <div className="text-left">
+                <div className="leading-tight tracking-wide uppercase">
+                  SURVIVAL ISLAND EXCHANGE
+                </div>
+                <div className="text-[11px] font-medium text-stone-400">
+                  Gun Skins &amp; Tactical Backpack Skins · Cosmetic Only
+                </div>
+              </div>
+            </button>
+          </div>
         </div>
 
         {/* Create New World Section */}

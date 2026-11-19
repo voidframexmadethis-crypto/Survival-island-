@@ -46,6 +46,15 @@ import {
 } from '../systems/flightAndTeleportSystem';
 import { sanitizeWorldAndEntities } from '../systems/worldSanitizer';
 import {
+  getCosmeticImageTexture,
+  getCosmeticPatternTexture,
+} from '../data/exchangeCatalog';
+import {
+  getEquippedBackpackSkin,
+  getEquippedGunSkinForWeapon,
+  getExchangeItemById,
+} from '../systems/exchangeManager';
+import {
   ActiveCreature,
   CreatureManager,
   ScavengerCarcassTarget,
@@ -198,16 +207,19 @@ import {
   HILL_HOUSE_Y,
   HOMESTEAD_POS,
   LAKE_CENTER,
+  ISLAND_UFO_POS,
   OCEAN_LEVEL,
   PILLAGER_OUTPOST_POS,
   PLAYABLE_MAX_RADIUS,
   PLAYER_SPAWN,
+  SATURN_ROCKET_POS,
   SHIPWRECK_POS,
   SNOWY_IGLOO_POS,
   SNOWY_VILLAGE_POS,
   SNOWY_WOODLAND_POS,
   SWAMP_POS,
   TAIGA_VILLAGE_POS,
+  UNDERGROUND_ELEVATOR_POS,
   VEHICLE_GARAGE_POS,
   WHEATFIELD_POS,
   WOODLAND_MANSION_POS,
@@ -224,6 +236,23 @@ import {
   resetTerrainDeformation,
   setActiveTerrainWorldType,
 } from '../world/terrain';
+import {
+  ALIEN_SPACE_SYSTEM,
+  MULTIVERSE_SPACE_ENGINE,
+  SATURN_V_LAUNCH_CONTROLLER,
+  SpaceHudSnapshot,
+  SpacePlanet,
+  StarSystemData,
+} from '../systems/multiverseSpace';
+import {
+  SpacePlanetArenaHandles,
+  buildSpacePlanetArena,
+} from '../world/saturnRocketModel';
+import {
+  ELEVATOR_EXOTIC_LIFT,
+  ExoticElevatorCar,
+  VAULT_COMPUTER_VOICE,
+} from '../systems/undergroundElevator';
 import {
   buildIslandWorld,
   CaveCeilingCluster,
@@ -378,6 +407,8 @@ export interface EngineCallbacks {
       | 'vehicle_cargo'
       | 'music_studio'
       | 'coaster'
+      | 'saturn_rocket'
+      | 'underground_elevator'
     >,
     structureId?: string,
   ) => void;
@@ -573,6 +604,26 @@ export class GameEngine {
 
   // Multiverse & Portal Vortex Handles
   private activeDimensionWorld: DimensionWorldHandle | null = null;
+  private inSpacePlanet = false;
+  private spaceArena: SpacePlanetArenaHandles | null = null;
+  private activeSpacePlanet: SpacePlanet | null = null;
+  private activeSpaceSystem: StarSystemData | null = null;
+  private spaceGravity = 1.0;
+  private lastAlienShotMs = 0;
+  private alienRelicDecorMeshes: THREE.Object3D[] = [];
+  private pendingLaunchTarget: {
+    planet: SpacePlanet;
+    system: StarSystemData;
+  } | null = null;
+  private saturnLaunchCameraShake = 0;
+  private lastLaunchStage = 1;
+  private launchExhaustAccum = 0;
+  private launchHudAccum = 0;
+  private elevatorLiftActive = false;
+  private elevatorLiftProgress = 1;
+  private elevatorSummonedVehicleId: string | null = null;
+  private elevatorTargetCar: ExoticElevatorCar | null = null;
+  private elevatorSteamAccum = 0;
   private portalHandles = new Map<string, PortalVortexHandle>();
   private portalWarpCooldown = 0;
 
@@ -890,6 +941,10 @@ export class GameEngine {
   private vehicleEngineSoundAccum = 0;
   private hydraulicMode: HydraulicMode = 'level';
   private hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
+  private vehicleInteriorCamera = false;
+  private convertibleTopProgressMap = new Map<string, number>();
+  private droptopButtonPressTimer = 0;
+  private readonly _tapNdc = new THREE.Vector2();
   private hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
   private trunkBassPulse = 0;
 
@@ -914,8 +969,11 @@ export class GameEngine {
       vehicleId: string | null;
       biome: string;
       walkPhase: number;
+      appliedGunSkinId?: string | null;
+      appliedBackpackSkinId?: string | null;
     }
   >();
+  private lastAppliedGunSkinKey = '';
   private p2pStateSendAccum = 0;
   private p2pVehicleSyncAccum = 0;
   private p2pChatLog: { peerId: string; name: string; text: string; time: number }[] = [];
@@ -1304,7 +1362,51 @@ export class GameEngine {
     window.addEventListener('wheel', this.onWheel, { passive: true });
     window.addEventListener('blur', this.onWindowBlur);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
+    this.renderer.domElement.addEventListener('pointerdown', this.onCanvasPointerDown);
   }
+
+  private onCanvasPointerDown = (e: PointerEvent): void => {
+    if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
+    if (e.button !== 0) return;
+    // Raycast against any nearby or active convertible car's 3D interior droptop button!
+    const buttonMeshes: THREE.Object3D[] = [];
+    const buttonOwnerMap = new Map<THREE.Object3D, string>();
+    for (const v of this.vehicles) {
+      if (!v.hasConvertibleTop && v.preset !== 'cadillac_coupe_deville') continue;
+      const dist =
+        v.id === this.activeVehicleId
+          ? 0
+          : Math.hypot(v.x - this.playerX, v.z - this.playerZ);
+      if (dist > 6.5) continue;
+      const handles = this.vehicleMeshes.get(v.id);
+      if (handles?.droptopButton) {
+        buttonMeshes.push(handles.droptopButton);
+        buttonOwnerMap.set(handles.droptopButton, v.id);
+      }
+    }
+    if (buttonMeshes.length === 0) return;
+
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    this._tapNdc.set(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    _raycaster.setFromCamera(this._tapNdc, this.camera);
+    _raycaster.far = 7.5;
+    const hits = _raycaster.intersectObjects(buttonMeshes, true);
+    if (hits.length > 0) {
+      let obj: THREE.Object3D | null = hits[0].object;
+      while (obj) {
+        const ownerId = buttonOwnerMap.get(obj);
+        if (ownerId) {
+          this.toggleConvertibleTop(ownerId);
+          return;
+        }
+        obj = obj.parent;
+      }
+    }
+  };
 
   private onWindowBlur = (): void => {
     this.clearMovementInputs();
@@ -1428,10 +1530,18 @@ export class GameEngine {
       this.triggerHydraulicAction('right_tilt');
     } else if (activeHasHyd && (e.code === 'KeyX' || e.code === 'Digit5' || e.code === 'Numpad5')) {
       this.triggerHydraulicAction('lock_up');
+    } else if (
+      activeVehicle &&
+      (activeVehicle.hasConvertibleTop || activeVehicle.preset === 'cadillac_coupe_deville') &&
+      (e.code === 'KeyT' || e.code === 'KeyG')
+    ) {
+      this.toggleConvertibleTop(activeVehicle.id);
     } else if (activeHasBass && (e.code === 'KeyT' || e.code === 'KeyG')) {
       this.toggleTrunkBass();
     } else if (e.code === 'KeyV') {
-      if (!this.activeVehicleId) {
+      if (this.activeVehicleId) {
+        this.toggleVehicleInteriorCamera();
+      } else {
         this.triggerDebrisKick();
       }
     } else if (e.code === 'KeyC' || e.code === 'ControlLeft') {
@@ -3388,7 +3498,7 @@ export class GameEngine {
       }
       if (loadedWorldType === 'island') {
         if (!this.vehicles.some((v) => v.preset === 'donk')) {
-          const bay2X = VEHICLE_GARAGE_POS.x;
+          const bay2X = VEHICLE_GARAGE_POS.x - 3.0;
           const bay2Z = VEHICLE_GARAGE_POS.z + 0.6;
           this.spawnVehicleInstance(
             createVehicleFromPreset(
@@ -3402,7 +3512,7 @@ export class GameEngine {
           );
         }
         if (!this.vehicles.some((v) => v.preset === 'slab')) {
-          const bay3X = VEHICLE_GARAGE_POS.x + 6.0;
+          const bay3X = VEHICLE_GARAGE_POS.x + 3.0;
           const bay3Z = VEHICLE_GARAGE_POS.z + 0.6;
           this.spawnVehicleInstance(
             createVehicleFromPreset(
@@ -3411,6 +3521,20 @@ export class GameEngine {
               bay3X,
               getTerrainHeight(bay3X, bay3Z) + 0.14,
               bay3Z,
+              0,
+            ),
+          );
+        }
+        if (!this.vehicles.some((v) => v.preset === 'cadillac_coupe_deville')) {
+          const bay4X = VEHICLE_GARAGE_POS.x + 9.0;
+          const bay4Z = VEHICLE_GARAGE_POS.z + 0.6;
+          this.spawnVehicleInstance(
+            createVehicleFromPreset(
+              'veh_starter_deville',
+              'cadillac_coupe_deville',
+              bay4X,
+              getTerrainHeight(bay4X, bay4Z) + 0.14,
+              bay4Z,
               0,
             ),
           );
@@ -5465,6 +5589,18 @@ export class GameEngine {
     }
     if (near && near.kind === 'garage_bench') {
       this.handleGarageBenchInteraction();
+      return;
+    }
+    if (near && near.kind === 'saturn_rocket') {
+      this.openSaturnRocketConsole();
+      return;
+    }
+    if (near && near.kind === 'underground_elevator') {
+      this.openUndergroundElevator();
+      return;
+    }
+    if (near && near.kind === 'island_ufo') {
+      this.claimIslandUfoLoot();
       return;
     }
     if (
@@ -8846,12 +8982,24 @@ export class GameEngine {
     const targetTilt = this.wallRunSide * -0.145;
     this.wallTiltAngle = THREE.MathUtils.damp(this.wallTiltAngle, targetTilt, 10, dt);
 
+    // Clamp player to planetary exploration disc while on an off-world planet
+    if (this.inSpacePlanet) {
+      const distSq = this.playerX * this.playerX + this.playerZ * this.playerZ;
+      if (distSq > 88 * 88) {
+        const d = Math.sqrt(distSq);
+        this.playerX = (this.playerX / d) * 88;
+        this.playerZ = (this.playerZ / d) * 88;
+      }
+    }
+
     // Vertical physics / swimming buoyancy + walkable engineered bridges & roofs + wall-run gravity damping
-    const newTerrainY = getTerrainHeight(this.playerX, this.playerZ);
-    const newDeckY = this.getStructuralSurfaceY(this.playerX, this.playerZ, this.playerY);
+    const newTerrainY = this.inSpacePlanet ? 0 : getTerrainHeight(this.playerX, this.playerZ);
+    const newDeckY = this.inSpacePlanet
+      ? -999
+      : this.getStructuralSurfaceY(this.playerX, this.playerZ, this.playerY);
     const newSurfaceY = Math.max(newTerrainY, newDeckY);
-    const newWaterY = getWaterLevelAt(this.playerX, this.playerZ);
-    this.isSwimming = !isFlat && newSurfaceY < newWaterY - 0.45;
+    const newWaterY = this.inSpacePlanet ? -999 : getWaterLevelAt(this.playerX, this.playerZ);
+    this.isSwimming = !this.inSpacePlanet && !isFlat && newSurfaceY < newWaterY - 0.45;
     if (this.dragonFlight.flying) {
       const ascend = this.keys['Space'] ? 1 : 0;
       const descend =
@@ -8880,7 +9028,9 @@ export class GameEngine {
       }
       this.grounded = false;
     } else {
-      const gravMult = this.gravityScale * (this.modSystem?.tweaks.gravityMultiplier ?? 1);
+      const planetGrav = this.inSpacePlanet ? this.spaceGravity : 1.0;
+      const gravMult =
+        this.gravityScale * (this.modSystem?.tweaks.gravityMultiplier ?? 1) * planetGrav;
       this.playerVelY -= 21 * gravMult * dt;
       this.playerY += this.playerVelY * dt;
       if (!Number.isFinite(this.playerY) || this.playerY <= newSurfaceY) {
@@ -9313,6 +9463,7 @@ export class GameEngine {
       } else {
         this.handsRig.gunMesh.scale.set(1, 1, 1);
       }
+      this.applyExchangeCosmetics(false);
     } else {
       this.handsRig.gunMesh.scale.set(1, 1, 1);
     }
@@ -10282,6 +10433,76 @@ export class GameEngine {
             targetX: gb.x,
             targetY: gb.y,
             targetZ: gb.z,
+          };
+        }
+      }
+
+      // 1A-2. Huge Saturn V Rocket Launchpad (on Earth OR landed on any Space Planet!)
+      const rocketX = this.inSpacePlanet ? 0 : SATURN_ROCKET_POS.x;
+      const rocketZ = this.inSpacePlanet ? -14 : SATURN_ROCKET_POS.z;
+      const dRocket = Math.hypot(rocketX - this.playerX, rocketZ - this.playerZ);
+      if (dRocket < 9.5 && dRocket < bestDist) {
+        bestDist = dRocket;
+        best = {
+          id: 'saturn_rocket',
+          label: this.inSpacePlanet
+            ? 'Board Saturn V Rocket (Warp / Return to Earth)'
+            : 'Board Saturn V Rocket (Launch to Space & 4 Universes)',
+          sublabel: 'Explore Solar System, 4 Universes & 10,000+ Alien Worlds',
+          kind: 'saturn_rocket',
+          actionCategory: 'use',
+          distance: dRocket,
+          targetX: rocketX,
+          targetY: this.playerY,
+          targetZ: rocketZ,
+        };
+      }
+
+      // 1A-2B. Underground Exotic Garage & Hydraulic Car Elevator (Right next to the Garage)
+      if (!this.inSpacePlanet && this.currentDimension === 'overworld') {
+        const dElev = Math.hypot(
+          UNDERGROUND_ELEVATOR_POS.x - this.playerX,
+          UNDERGROUND_ELEVATOR_POS.z - this.playerZ,
+        );
+        if (dElev < 9.5 && dElev < bestDist) {
+          bestDist = dElev;
+          best = {
+            id: 'underground_elevator',
+            label: 'Use Garage Elevator Computer (AI Voice · 15 Exotics)',
+            sublabel: 'Ask the Vault Computer to preview & lift your exotic car to the surface',
+            kind: 'underground_elevator',
+            actionCategory: 'use',
+            distance: dElev,
+            targetX: UNDERGROUND_ELEVATOR_POS.x,
+            targetY: this.playerY,
+            targetZ: UNDERGROUND_ELEVATOR_POS.z,
+          };
+        }
+      }
+
+      // 1A-3. Island-Landed Alien UFO (collect Rift Portal Coil & Glowing Saucer Relic)
+      if (!this.inSpacePlanet && this.currentDimension === 'overworld') {
+        const dUfo = Math.hypot(
+          ISLAND_UFO_POS.x - this.playerX,
+          ISLAND_UFO_POS.z - this.playerZ,
+        );
+        if (dUfo < 7.5 && dUfo < bestDist) {
+          bestDist = dUfo;
+          const claimed = Boolean(ALIEN_SPACE_SYSTEM.islandLandedUfo?.claimed);
+          best = {
+            id: 'island_ufo',
+            label: claimed
+              ? 'Inspect Landed Alien UFO (Loot Claimed)'
+              : 'Claim Landed Alien UFO Loot',
+            sublabel: claimed
+              ? 'Open Saturn V Console → Alien Armory to install loot'
+              : 'Rift Portal Coil + Glowing Saucer Relic',
+            kind: 'island_ufo',
+            actionCategory: 'pickup',
+            distance: dUfo,
+            targetX: ISLAND_UFO_POS.x,
+            targetY: this.playerY,
+            targetZ: ISLAND_UFO_POS.z,
           };
         }
       }
@@ -11314,6 +11535,23 @@ export class GameEngine {
       const activeV = this.vehicles.find((v) => v.id === this.activeVehicleId);
       if (activeV) {
         this.handsRig.root.visible = false;
+        const handles = this.vehicleMeshes.get(activeV.id);
+        if (this.vehicleInteriorCamera && handles) {
+          // Real First-Person Driver Seat Interior View (see steering wheel, gauges, 3D droptop button & roof!)
+          handles.root.updateMatrixWorld(true);
+          _vec3A.set(-0.42, 1.04, -0.02);
+          handles.chassisGroup.localToWorld(_vec3A);
+          this.camera.position.copy(_vec3A);
+          const lookYaw = this.camYaw;
+          const lookPitch = THREE.MathUtils.clamp(this.camPitch, -0.95, 0.85);
+          _vec3B.set(
+            _vec3A.x - Math.sin(lookYaw) * Math.cos(lookPitch) * 6,
+            _vec3A.y + Math.sin(lookPitch) * 6,
+            _vec3A.z - Math.cos(lookYaw) * Math.cos(lookPitch) * 6,
+          );
+          this.camera.lookAt(_vec3B);
+          return;
+        }
         const specs = computeVehicleSpecs(activeV.modules);
         const surfY = Math.max(
           getTerrainHeight(activeV.x, activeV.z),
@@ -11398,9 +11636,18 @@ export class GameEngine {
         ? Math.cos(this.elapsed * 49) * 0.14 * (this.cameraShakeTimer / 0.45)
         : 0;
 
+    const rocketShakeX =
+      this.saturnLaunchCameraShake > 0
+        ? Math.sin(this.elapsed * 64) * this.saturnLaunchCameraShake * 0.42
+        : 0;
+    const rocketShakeY =
+      this.saturnLaunchCameraShake > 0
+        ? Math.cos(this.elapsed * 53) * this.saturnLaunchCameraShake * 0.42
+        : 0;
+
     this.camera.position.set(
-      this.playerX + blastShakeX,
-      this.playerY + this.currentEyeHeight + headBobY + washDip + blastShakeY,
+      this.playerX + blastShakeX + rocketShakeX,
+      this.playerY + this.currentEyeHeight + headBobY + washDip + blastShakeY + rocketShakeY,
       this.playerZ,
     );
     this.camera.rotation.set(
@@ -11553,8 +11800,23 @@ export class GameEngine {
           canFloat: specs.canFloat,
           canFly: specs.canFly,
           hasHydraulics: this.vehicleHasHydraulics(av),
-          hydraulicStyle: this.isDonkHydraulicVehicle(av) ? 'up_down_side' : 'full_bounce',
+          hydraulicStyle: this.isAirbagVehicle(av)
+            ? 'airbag_coilover'
+            : this.isDonkHydraulicVehicle(av)
+              ? 'up_down_side'
+              : 'full_bounce',
           hydraulicMode: this.hydraulicMode,
+          hasAirbagSuspension: this.isAirbagVehicle(av),
+          airbagSpeed: av.airbagSpeed ?? 1.0,
+          airbagLockLevel: av.airbagLockLevel ?? 1.0,
+          doorsOpen: Boolean(av.doorsOpen),
+          trunkOpen: Boolean(av.trunkOpen),
+          hasConvertibleTop: Boolean(
+            av.hasConvertibleTop || av.preset === 'cadillac_coupe_deville',
+          ),
+          convertibleTopDown: Boolean(av.convertibleTopDown),
+          convertibleTopProgress: this.convertibleTopProgressMap.get(av.id) ?? (av.convertibleTopDown ? 1 : 0),
+          interiorView: this.vehicleInteriorCamera,
           hasTrunkBass: av.preset === 'slab' || av.trunkBassEnabled !== undefined,
           trunkBassOn: Boolean(av.trunkBassEnabled),
           highClearance:
@@ -11763,6 +12025,7 @@ export class GameEngine {
         ? { ...this.p2p.getStatusSnapshot(), chatLog: [...this.p2pChatLog] }
         : undefined,
       modState: this.modSystem?.getSnapshot(),
+      spaceState: this.buildSpaceHudSnapshot(),
     });
   }
 
@@ -11928,6 +12191,49 @@ export class GameEngine {
             }
             if (this.activeDimensionWorld.animatedPoints) {
               this.activeDimensionWorld.animatedPoints.rotation.y += dt * 0.04;
+            }
+          }
+          if (
+            SATURN_V_LAUNCH_CONTROLLER.phase === 'IGNITION' ||
+            SATURN_V_LAUNCH_CONTROLLER.phase === 'ASCENT'
+          ) {
+            this.updateSaturnVLaunch(dt);
+          }
+          if (this.elevatorLiftActive) {
+            this.updateUndergroundElevatorLift(dt);
+          }
+          if (this.inSpacePlanet && this.spaceArena) {
+            if (
+              this.spaceArena.rocketFlame &&
+              SATURN_V_LAUNCH_CONTROLLER.phase === 'PAD'
+            ) {
+              const s = 0.85 + Math.sin(this.elapsed * 22) * 0.18;
+              this.spaceArena.rocketFlame.scale.set(1, s, 1);
+            }
+            if (this.spaceArena.ufoGroup) {
+              const ufoState = ALIEN_SPACE_SYSTEM.activeUfo;
+              if (ufoState && !ufoState.isDowned) {
+                const orbitA = this.elapsed * 0.55;
+                this.spaceArena.ufoGroup.position.set(
+                  Math.cos(orbitA) * 22,
+                  11.5 + Math.sin(this.elapsed * 1.9) * 1.4,
+                  -18 + Math.sin(orbitA) * 16,
+                );
+                this.spaceArena.ufoGroup.rotation.y += dt * 1.8;
+              } else {
+                this.spaceArena.ufoGroup.position.y = THREE.MathUtils.damp(
+                  this.spaceArena.ufoGroup.position.y,
+                  0.8,
+                  3.5,
+                  dt,
+                );
+                this.spaceArena.ufoGroup.rotation.z = THREE.MathUtils.damp(
+                  this.spaceArena.ufoGroup.rotation.z,
+                  0.35,
+                  3.5,
+                  dt,
+                );
+              }
             }
           }
           this.updateActivePortals(dt);
@@ -13226,7 +13532,7 @@ export class GameEngine {
 
     if (seedVehicles) {
       // Bay 1: 1964 Impala Candy Lowrider (with 4-Corner Hydraulics)
-      const bay1X = VEHICLE_GARAGE_POS.x - 6.0;
+      const bay1X = VEHICLE_GARAGE_POS.x - 9.0;
       const bay1Z = VEHICLE_GARAGE_POS.z + 0.6;
       const lowrider = createVehicleFromPreset(
         'veh_starter_lowrider',
@@ -13239,7 +13545,7 @@ export class GameEngine {
       this.spawnVehicleInstance(lowrider);
 
       // Bay 2: Lifted 1974 Box Chevy DONK on 30-inch Chrome Rims
-      const bay2X = VEHICLE_GARAGE_POS.x;
+      const bay2X = VEHICLE_GARAGE_POS.x - 3.0;
       const bay2Z = VEHICLE_GARAGE_POS.z + 0.6;
       const donk = createVehicleFromPreset(
         'veh_starter_donk',
@@ -13252,7 +13558,7 @@ export class GameEngine {
       this.spawnVehicleInstance(donk);
 
       // Bay 3: Houston Candy SLAB on Swangers + 5th-Wheel Continental + Trunk Bass
-      const bay3X = VEHICLE_GARAGE_POS.x + 6.0;
+      const bay3X = VEHICLE_GARAGE_POS.x + 3.0;
       const bay3Z = VEHICLE_GARAGE_POS.z + 0.6;
       const slab = createVehicleFromPreset(
         'veh_starter_slab',
@@ -13264,8 +13570,21 @@ export class GameEngine {
       );
       this.spawnVehicleInstance(slab);
 
-      // Expedition 4x4 Rover parked on the East Service Apron beside Bay 3
-      const apronX = VEHICLE_GARAGE_POS.x + 13.0;
+      // Bay 4: Pearl-White Cadillac Coupe DeVille (13" Chrome Spinners, Airbags + Coil-Overs, Droptop)
+      const bay4X = VEHICLE_GARAGE_POS.x + 9.0;
+      const bay4Z = VEHICLE_GARAGE_POS.z + 0.6;
+      const deville = createVehicleFromPreset(
+        'veh_starter_deville',
+        'cadillac_coupe_deville',
+        bay4X,
+        getTerrainHeight(bay4X, bay4Z) + 0.14,
+        bay4Z,
+        0,
+      );
+      this.spawnVehicleInstance(deville);
+
+      // Expedition 4x4 Rover parked on the East Service Apron beside Bay 4
+      const apronX = VEHICLE_GARAGE_POS.x + 16.0;
       const apronZ = VEHICLE_GARAGE_POS.z + 5.2;
       const rover = createVehicleFromPreset(
         'veh_starter_rover',
@@ -13983,9 +14302,20 @@ export class GameEngine {
     return Boolean(v && v.preset === 'donk');
   }
 
+  private isAirbagVehicle(v?: ModularVehicleData | null): boolean {
+    return Boolean(
+      v && (v.hasAirbagSuspension || v.preset === 'cadillac_coupe_deville'),
+    );
+  }
+
   private vehicleHasHydraulics(v?: ModularVehicleData | null): boolean {
     return Boolean(
-      v && (v.hydraulicHop || v.preset === 'lowrider' || v.preset === 'donk'),
+      v &&
+        (v.hydraulicHop ||
+          v.hasAirbagSuspension ||
+          v.preset === 'lowrider' ||
+          v.preset === 'donk' ||
+          v.preset === 'cadillac_coupe_deville'),
     );
   }
 
@@ -13996,17 +14326,19 @@ export class GameEngine {
     label: string;
   } {
     const slots = [
-      { x: VEHICLE_GARAGE_POS.x - 6.0, z: VEHICLE_GARAGE_POS.z + 0.6, yaw: 0, label: 'Bay A' },
-      { x: VEHICLE_GARAGE_POS.x, z: VEHICLE_GARAGE_POS.z + 0.6, yaw: 0, label: 'Bay B' },
-      { x: VEHICLE_GARAGE_POS.x + 6.0, z: VEHICLE_GARAGE_POS.z + 0.6, yaw: 0, label: 'Bay C' },
-      { x: VEHICLE_GARAGE_POS.x + 13.0, z: VEHICLE_GARAGE_POS.z + 5.2, yaw: 0, label: 'Apron' },
-      { x: VEHICLE_GARAGE_POS.x - 13.0, z: VEHICLE_GARAGE_POS.z + 5.2, yaw: 0, label: 'West Apron' },
+      { x: VEHICLE_GARAGE_POS.x - 9.0, z: VEHICLE_GARAGE_POS.z + 0.6, yaw: 0, label: 'Bay A' },
+      { x: VEHICLE_GARAGE_POS.x - 3.0, z: VEHICLE_GARAGE_POS.z + 0.6, yaw: 0, label: 'Bay B' },
+      { x: VEHICLE_GARAGE_POS.x + 3.0, z: VEHICLE_GARAGE_POS.z + 0.6, yaw: 0, label: 'Bay C' },
+      { x: VEHICLE_GARAGE_POS.x + 9.0, z: VEHICLE_GARAGE_POS.z + 0.6, yaw: 0, label: 'Bay D' },
+      { x: VEHICLE_GARAGE_POS.x + 16.0, z: VEHICLE_GARAGE_POS.z + 5.2, yaw: 0, label: 'East Apron' },
+      { x: VEHICLE_GARAGE_POS.x - 16.0, z: VEHICLE_GARAGE_POS.z + 5.2, yaw: 0, label: 'West Apron' },
     ];
-    let preferredIdx = 3;
+    let preferredIdx = 4;
     if (v.id === 'veh_starter_lowrider' || v.preset === 'lowrider') preferredIdx = 0;
     else if (v.id === 'veh_starter_donk' || v.preset === 'donk') preferredIdx = 1;
     else if (v.id === 'veh_starter_slab' || v.preset === 'slab') preferredIdx = 2;
-    else if (v.id === 'veh_starter_rover' || v.preset === 'expedition_rover') preferredIdx = 3;
+    else if (v.id === 'veh_starter_deville' || v.preset === 'cadillac_coupe_deville') preferredIdx = 3;
+    else if (v.id === 'veh_starter_rover' || v.preset === 'expedition_rover') preferredIdx = 4;
 
     const isOccupied = (slot: { x: number; z: number }) =>
       this.vehicles.some(
@@ -14028,6 +14360,7 @@ export class GameEngine {
     const v = this.vehicles.find((x) => x.id === this.activeVehicleId);
     const exitSpeed = this.vehicleForwardSpeed;
     this.activeVehicleId = null;
+    this.vehicleInteriorCamera = false;
     this.vehicleForwardSpeed = 0;
     this.vehicleAltitudeVel = 0;
     this.vehicleAscendHold = false;
@@ -14126,7 +14459,17 @@ export class GameEngine {
   }
 
   public triggerHydraulicAction(
-    action: 'front_hop' | 'rear_hop' | 'left_tilt' | 'right_tilt' | 'lock_up' | 'drop',
+    action:
+      | 'front_hop'
+      | 'rear_hop'
+      | 'left_tilt'
+      | 'right_tilt'
+      | 'lock_up'
+      | 'drop'
+      | 'front_lock'
+      | 'rear_lock'
+      | 'side_to_side'
+      | 'coil_bounce',
   ): void {
     if (!this.activeVehicleId || this.mode !== 'playing' || this.gameOver) return;
     const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
@@ -14134,6 +14477,85 @@ export class GameEngine {
 
     this.sound.unlock();
     const isDonk = this.isDonkHydraulicVehicle(av);
+    const isAirbag = this.isAirbagVehicle(av);
+
+    // Cadillac Coupe DeVille Airbag + Coil-Over Spring Suspension
+    if (isAirbag) {
+      const speed = THREE.MathUtils.clamp(av.airbagSpeed ?? 1.0, 0.25, 2.0);
+      const lock = THREE.MathUtils.clamp(av.airbagLockLevel ?? 1.0, 0.4, 1.4);
+      const impulse = (3.4 + speed * 4.4) * lock;
+      const floorY = Math.max(
+        getTerrainHeight(av.x, av.z),
+        this.getStructuralSurfaceY(av.x, av.z, av.y + 0.8),
+      );
+      const nearGround = av.y <= floorY + 1.15;
+
+      if (action === 'coil_bounce' || action === 'front_hop') {
+        this.hydraulicMode = 'front_hop';
+        this.hydVel.fl = impulse * 1.45;
+        this.hydVel.fr = impulse * 1.45;
+        this.hydVel.rl = Math.min(this.hydVel.rl, -1.8 * lock);
+        this.hydVel.rr = Math.min(this.hydVel.rr, -1.8 * lock);
+        if (nearGround && speed >= 0.85) {
+          const hopVy = THREE.MathUtils.clamp(3.6 + speed * 3.1 * lock, 4.0, 9.4);
+          av.vy = av.y <= floorY + 0.35 ? hopVy : Math.min(9.6, Math.max(av.vy + 3.2, hopVy));
+        }
+        this.hydraulicBounceTimer = 0.52;
+        this.sound.playAirbagHiss(speed, true);
+        this.spawnParticles(av.x, av.y + 0.25, av.z, 0xe2e8f0, 7);
+      } else if (action === 'front_lock') {
+        this.hydraulicMode = this.hydraulicMode === 'front_lock' ? 'level' : 'front_lock';
+        if (this.hydraulicMode === 'front_lock') {
+          this.hydVel.fl += impulse * 0.72;
+          this.hydVel.fr += impulse * 0.72;
+        }
+        this.sound.playAirbagHiss(speed, false);
+      } else if (action === 'rear_lock' || action === 'rear_hop') {
+        this.hydraulicMode = this.hydraulicMode === 'rear_lock' ? 'level' : 'rear_lock';
+        if (this.hydraulicMode === 'rear_lock') {
+          this.hydVel.rl += impulse * 0.72;
+          this.hydVel.rr += impulse * 0.72;
+        }
+        this.sound.playAirbagHiss(speed, false);
+      } else if (action === 'left_tilt') {
+        this.hydraulicMode = this.hydraulicMode === 'left_tilt' ? 'level' : 'left_tilt';
+        if (this.hydraulicMode === 'left_tilt') {
+          this.hydVel.fl += impulse * 0.65;
+          this.hydVel.rl += impulse * 0.65;
+        }
+        this.sound.playAirbagHiss(speed, false);
+      } else if (action === 'right_tilt') {
+        this.hydraulicMode = this.hydraulicMode === 'right_tilt' ? 'level' : 'right_tilt';
+        if (this.hydraulicMode === 'right_tilt') {
+          this.hydVel.fr += impulse * 0.65;
+          this.hydVel.rr += impulse * 0.65;
+        }
+        this.sound.playAirbagHiss(speed, false);
+      } else if (action === 'side_to_side') {
+        this.hydraulicMode = this.hydraulicMode === 'side_to_side' ? 'level' : 'side_to_side';
+        this.sound.playAirbagHiss(speed, false);
+      } else if (action === 'lock_up') {
+        this.hydraulicMode = this.hydraulicMode === 'lock_up' ? 'level' : 'lock_up';
+        if (this.hydraulicMode === 'lock_up') {
+          this.hydVel.fl += impulse * 0.62;
+          this.hydVel.fr += impulse * 0.62;
+          this.hydVel.rl += impulse * 0.62;
+          this.hydVel.rr += impulse * 0.62;
+        }
+        this.sound.playAirbagHiss(speed, false);
+      } else {
+        this.hydraulicMode = this.hydraulicMode === 'drop_down' ? 'level' : 'drop_down';
+        if (this.hydraulicMode === 'drop_down') {
+          this.hydVel.fl -= impulse * 0.45;
+          this.hydVel.fr -= impulse * 0.45;
+          this.hydVel.rl -= impulse * 0.45;
+          this.hydVel.rr -= impulse * 0.45;
+        }
+        this.sound.playAirbagHiss(speed, false);
+      }
+      this.emitHud();
+      return;
+    }
 
     // DONK hydraulics can ONLY go Up, Down, and Side-to-Side (no wheelie hops or leaving ground)
     if (isDonk) {
@@ -14173,7 +14595,7 @@ export class GameEngine {
     );
     const nearGround = av.y <= floorY + 1.15;
 
-    if (action === 'front_hop') {
+    if (action === 'front_hop' || action === 'coil_bounce') {
       this.hydraulicMode = 'front_hop';
       this.hydVel.fl = 15.5;
       this.hydVel.fr = 15.5;
@@ -14185,7 +14607,7 @@ export class GameEngine {
       this.hydraulicBounceTimer = 0.55;
       this.sound.playHydraulicHop('hop');
       this.spawnParticles(av.x, av.y + 0.35, av.z, 0xfbbf24, 9);
-    } else if (action === 'rear_hop') {
+    } else if (action === 'rear_hop' || action === 'rear_lock') {
       this.hydraulicMode = 'rear_hop';
       this.hydVel.rl = 15.5;
       this.hydVel.rr = 15.5;
@@ -14211,7 +14633,7 @@ export class GameEngine {
         this.hydVel.rl += 6.2;
       }
       this.sound.playHydraulicHop('tilt');
-    } else if (action === 'lock_up') {
+    } else if (action === 'lock_up' || action === 'front_lock') {
       this.hydraulicMode = this.hydraulicMode === 'lock_up' ? 'level' : 'lock_up';
       if (this.hydraulicMode === 'lock_up') {
         this.hydVel.fl += 4.6;
@@ -14224,6 +14646,108 @@ export class GameEngine {
       this.hydraulicMode = this.hydraulicMode === 'drop_down' ? 'level' : 'drop_down';
       this.sound.playHydraulicHop('tilt');
     }
+    this.emitHud();
+  }
+
+  public toggleVehicleDoors(vehicleId?: string): void {
+    const target = vehicleId
+      ? this.vehicles.find((x) => x.id === vehicleId)
+      : this.activeVehicleId
+        ? this.vehicles.find((x) => x.id === this.activeVehicleId)
+        : this.vehicles
+            .map((v) => ({ v, d: Math.hypot(v.x - this.playerX, v.z - this.playerZ) }))
+            .filter((item) => item.d <= 6.2)
+            .sort((a, b) => a.d - b.d)[0]?.v;
+    if (!target) return;
+    this.sound.unlock();
+    target.doorsOpen = !target.doorsOpen;
+    this.sound.playCarDoorLatch(Boolean(target.doorsOpen));
+    this.toast(
+      target.doorsOpen
+        ? `${target.name}: Doors Opened — Inspect Interior`
+        : `${target.name}: Doors Closed`,
+      'info',
+    );
+    this.emitHud();
+  }
+
+  public toggleVehicleTrunk(vehicleId?: string): void {
+    const target = vehicleId
+      ? this.vehicles.find((x) => x.id === vehicleId)
+      : this.activeVehicleId
+        ? this.vehicles.find((x) => x.id === this.activeVehicleId)
+        : this.vehicles
+            .map((v) => ({ v, d: Math.hypot(v.x - this.playerX, v.z - this.playerZ) }))
+            .filter((item) => item.d <= 6.2)
+            .sort((a, b) => a.d - b.d)[0]?.v;
+    if (!target) return;
+    this.sound.unlock();
+    target.trunkOpen = !target.trunkOpen;
+    this.sound.playCarDoorLatch(Boolean(target.trunkOpen));
+    this.toast(
+      target.trunkOpen
+        ? this.isAirbagVehicle(target)
+          ? `${target.name}: Trunk Popped — Airbag Speed & Lock-Up Tuner Unlocked!`
+          : `${target.name}: Trunk Popped Open`
+        : `${target.name}: Trunk Closed`,
+      target.trunkOpen ? 'discovery' : 'info',
+    );
+    this.emitHud();
+  }
+
+  public toggleVehicleInteriorCamera(): void {
+    if (!this.activeVehicleId) return;
+    this.vehicleInteriorCamera = !this.vehicleInteriorCamera;
+    this.toast(
+      this.vehicleInteriorCamera
+        ? 'Interior Cabin View ON — Look at console & click the TOP button!'
+        : 'Outside Chase Camera ON',
+      'info',
+    );
+    this.emitHud();
+  }
+
+  public toggleConvertibleTop(vehicleId?: string): void {
+    const targetId = vehicleId ?? this.activeVehicleId;
+    if (!targetId) return;
+    const av = this.vehicles.find((x) => x.id === targetId);
+    if (!av || (!av.hasConvertibleTop && av.preset !== 'cadillac_coupe_deville')) return;
+    this.sound.unlock();
+    av.convertibleTopDown = !av.convertibleTopDown;
+    this.droptopButtonPressTimer = 0.28;
+    this.sound.playConvertibleMotor();
+    this.toast(
+      av.convertibleTopDown
+        ? 'Interior Droptop Switch Pressed — Folding Black Soft-Top Down!'
+        : 'Interior Droptop Switch Pressed — Raising Black Soft-Top Up!',
+      'discovery',
+    );
+    this.emitHud();
+  }
+
+  public setAirbagSpeed(speed: number): void {
+    if (!this.activeVehicleId) return;
+    const av = this.vehicles.find((x) => x.id === this.activeVehicleId);
+    if (!av || !this.isAirbagVehicle(av)) return;
+    if (!av.trunkOpen) {
+      this.toast('Pop the trunk open first to adjust Airbag Speed!', 'warning');
+      return;
+    }
+    this.sound.unlock();
+    av.airbagSpeed = THREE.MathUtils.clamp(speed, 0.25, 2.0);
+    this.sound.playAirbagHiss(av.airbagSpeed, false);
+    this.emitHud();
+  }
+
+  public setAirbagLockLevel(level: number): void {
+    if (!this.activeVehicleId) return;
+    const av = this.vehicles.find((x) => x.id === this.activeVehicleId);
+    if (!av || !this.isAirbagVehicle(av)) return;
+    if (!av.trunkOpen) {
+      this.toast('Pop the trunk open first to adjust Airbag Lock-Up!', 'warning');
+      return;
+    }
+    av.airbagLockLevel = THREE.MathUtils.clamp(level, 0.4, 1.4);
     this.emitHud();
   }
 
@@ -14593,33 +15117,67 @@ export class GameEngine {
     );
     this.trunkBassPulse = this.sound.updateTrunkBass(bassActive, dt);
 
-    // Solve 4-corner hydraulic spring-damper physics for active vehicle
+    // Solve 4-corner hydraulic & airbag/coil-over spring-damper physics for active vehicle
     const activeHasHyd = this.vehicleHasHydraulics(activeV);
     const activeIsDonk = this.isDonkHydraulicVehicle(activeV);
+    const activeIsAirbag = this.isAirbagVehicle(activeV);
+    const airbagSpeed = THREE.MathUtils.clamp(activeV?.airbagSpeed ?? 1.0, 0.25, 2.0);
+    const airbagLock = THREE.MathUtils.clamp(activeV?.airbagLockLevel ?? 1.0, 0.4, 1.4);
+    const sideWave = Math.sin(this.elapsed * (2.6 + airbagSpeed * 3.4));
+
     const targets = !activeHasHyd
       ? { fl: 0, fr: 0, rl: 0, rr: 0 }
-      : this.hydraulicMode === 'lock_up'
-        ? activeIsDonk
-          ? { fl: 0.62, fr: 0.62, rl: 0.62, rr: 0.62 }
-          : { fl: 0.78, fr: 0.78, rl: 0.78, rr: 0.78 }
-        : this.hydraulicMode === 'drop_down'
+      : activeIsAirbag
+        ? this.hydraulicMode === 'lock_up'
+          ? { fl: 0.72 * airbagLock, fr: 0.72 * airbagLock, rl: 0.72 * airbagLock, rr: 0.72 * airbagLock }
+          : this.hydraulicMode === 'drop_down'
+            ? { fl: -0.22 * airbagLock, fr: -0.22 * airbagLock, rl: -0.22 * airbagLock, rr: -0.22 * airbagLock }
+            : this.hydraulicMode === 'front_lock'
+              ? { fl: 0.86 * airbagLock, fr: 0.86 * airbagLock, rl: -0.14 * airbagLock, rr: -0.14 * airbagLock }
+              : this.hydraulicMode === 'rear_lock'
+                ? { fl: -0.14 * airbagLock, fr: -0.14 * airbagLock, rl: 0.86 * airbagLock, rr: 0.86 * airbagLock }
+                : this.hydraulicMode === 'left_tilt'
+                  ? { fl: 0.82 * airbagLock, fr: -0.16 * airbagLock, rl: 0.82 * airbagLock, rr: -0.16 * airbagLock }
+                  : this.hydraulicMode === 'right_tilt'
+                    ? { fl: -0.16 * airbagLock, fr: 0.82 * airbagLock, rl: -0.16 * airbagLock, rr: 0.82 * airbagLock }
+                    : this.hydraulicMode === 'side_to_side'
+                      ? {
+                          fl: (0.24 + sideWave * 0.56) * airbagLock,
+                          fr: (0.24 - sideWave * 0.56) * airbagLock,
+                          rl: (0.24 + sideWave * 0.56) * airbagLock,
+                          rr: (0.24 - sideWave * 0.56) * airbagLock,
+                        }
+                      : { fl: 0, fr: 0, rl: 0, rr: 0 }
+        : this.hydraulicMode === 'lock_up'
           ? activeIsDonk
-            ? { fl: -0.22, fr: -0.22, rl: -0.22, rr: -0.22 }
-            : { fl: -0.14, fr: -0.14, rl: -0.14, rr: -0.14 }
-          : this.hydraulicMode === 'left_tilt'
+            ? { fl: 0.62, fr: 0.62, rl: 0.62, rr: 0.62 }
+            : { fl: 0.78, fr: 0.78, rl: 0.78, rr: 0.78 }
+          : this.hydraulicMode === 'drop_down'
             ? activeIsDonk
-              ? { fl: -0.16, fr: 0.56, rl: -0.16, rr: 0.56 }
-              : { fl: -0.1, fr: 0.96, rl: -0.1, rr: 0.96 }
-            : this.hydraulicMode === 'right_tilt'
+              ? { fl: -0.22, fr: -0.22, rl: -0.22, rr: -0.22 }
+              : { fl: -0.14, fr: -0.14, rl: -0.14, rr: -0.14 }
+            : this.hydraulicMode === 'left_tilt'
               ? activeIsDonk
-                ? { fl: 0.56, fr: -0.16, rl: 0.56, rr: -0.16 }
-                : { fl: 0.96, fr: -0.1, rl: 0.96, rr: -0.1 }
-              : { fl: 0, fr: 0, rl: 0, rr: 0 };
+                ? { fl: -0.16, fr: 0.56, rl: -0.16, rr: 0.56 }
+                : { fl: -0.1, fr: 0.96, rl: -0.1, rr: 0.96 }
+              : this.hydraulicMode === 'right_tilt'
+                ? activeIsDonk
+                  ? { fl: 0.56, fr: -0.16, rl: 0.56, rr: -0.16 }
+                  : { fl: 0.96, fr: -0.1, rl: 0.96, rr: -0.1 }
+                : { fl: 0, fr: 0, rl: 0, rr: 0 };
 
-    const stiffness = activeIsDonk ? 78 : 88;
-    const damping = activeIsDonk ? 9.5 : 7.0;
-    const minClamp = activeIsDonk ? -0.26 : -0.2;
-    const maxClamp = activeIsDonk ? 0.72 : 1.55;
+    const stiffness = activeIsAirbag
+      ? 16 + airbagSpeed * 58
+      : activeIsDonk
+        ? 78
+        : 88;
+    const damping = activeIsAirbag
+      ? 9.2 - airbagSpeed * 1.9
+      : activeIsDonk
+        ? 9.5
+        : 7.0;
+    const minClamp = activeIsAirbag ? -0.32 : activeIsDonk ? -0.26 : -0.2;
+    const maxClamp = activeIsAirbag ? 1.48 : activeIsDonk ? 0.72 : 1.55;
     (['fl', 'fr', 'rl', 'rr'] as const).forEach((c) => {
       const accel = (targets[c] - this.hydCorners[c]) * stiffness - this.hydVel[c] * damping;
       this.hydVel[c] += accel * dt;
@@ -14690,9 +15248,12 @@ export class GameEngine {
 
       // Base chassis ride height + 4-corner hydraulic heave/pitch/roll + SLAB sub-bass rattle
       const isCustomShowCar =
-        v.preset === 'lowrider' || v.preset === 'donk' || v.preset === 'slab';
+        v.preset === 'lowrider' ||
+        v.preset === 'donk' ||
+        v.preset === 'slab' ||
+        v.preset === 'cadillac_coupe_deville';
       const baseBodyY = isCustomShowCar
-        ? Math.max(0.28, 0.38 + (v.suspensionOffset ?? 0))
+        ? Math.max(0.26, 0.38 + (v.suspensionOffset ?? 0))
         : (v.suspensionOffset ?? 0);
       const showBassPulse =
         isActive && v.trunkBassEnabled
@@ -14716,10 +15277,10 @@ export class GameEngine {
             // DONK keeps all 4 wheels planted while body moves up/down/side-to-side
             wc.obj.position.y = wc.baseY;
           } else {
-            // Lowrider lifts the two active wheels cleanly off the ground during hops and side tilts
+            // Lowrider & Coupe DeVille coil-over lift active corners cleanly
             const cornerH = this.hydCorners[wc.corner];
             const relativeLift = Math.max(0, cornerH - minCorner - 0.05);
-            wc.obj.position.y = wc.baseY + relativeLift * 0.85;
+            wc.obj.position.y = wc.baseY + relativeLift * (activeIsAirbag ? 0.55 : 0.85);
           }
         }
       } else {
@@ -14731,11 +15292,94 @@ export class GameEngine {
         }
       }
 
-      // SLAB Trunk lid vibration & neon underglow pulse
-      if (handles.trunkLid) {
-        handles.trunkLid.rotation.x =
-          showBassPulse > 0.01 ? -0.055 * showBassPulse : 0;
+      // Real Working Hinged Doors (All Cars)
+      if (handles.doorLeft) {
+        const targetL = v.doorsOpen ? -1.12 : 0;
+        handles.doorLeft.rotation.y = THREE.MathUtils.damp(
+          handles.doorLeft.rotation.y,
+          targetL,
+          8,
+          dt,
+        );
       }
+      if (handles.doorRight) {
+        const targetR = v.doorsOpen ? 1.12 : 0;
+        handles.doorRight.rotation.y = THREE.MathUtils.damp(
+          handles.doorRight.rotation.y,
+          targetR,
+          8,
+          dt,
+        );
+      }
+
+      // Popping Trunk Lid Animation + SLAB Trunk Bass Vibration
+      if (handles.trunkLid) {
+        const targetTrunk = (v.trunkOpen ? 0.96 : 0) + (showBassPulse > 0.01 ? -0.055 * showBassPulse : 0);
+        handles.trunkLid.rotation.x = THREE.MathUtils.damp(
+          handles.trunkLid.rotation.x,
+          targetTrunk,
+          7,
+          dt,
+        );
+      }
+
+      // Cadillac Coupe DeVille Real-Life 2-Stage Articulated Folding Black Droptop + 3D Button
+      if (this.droptopButtonPressTimer > 0) {
+        this.droptopButtonPressTimer = Math.max(0, this.droptopButtonPressTimer - dt);
+      }
+      if (handles.convertibleTop) {
+        const targetProg = v.convertibleTopDown ? 1 : 0;
+        const curProg = this.convertibleTopProgressMap.get(v.id) ?? targetProg;
+        const step = dt * 0.48; // Smooth ~2.1s real-life power convertible cycle
+        const nextProg =
+          curProg < targetProg
+            ? Math.min(targetProg, curProg + step)
+            : curProg > targetProg
+              ? Math.max(targetProg, curProg - step)
+              : targetProg;
+        this.convertibleTopProgressMap.set(v.id, nextProg);
+
+        // Stage 1 (0.0 -> 0.50): Front canopy unlatches from windshield & folds backward onto rear bow
+        const frontFold = THREE.MathUtils.clamp(nextProg / 0.5, 0, 1);
+        const frontSmooth = frontFold * frontFold * (3 - 2 * frontFold);
+        if (handles.convertibleFrontSection) {
+          handles.convertibleFrontSection.rotation.x = -frontSmooth * Math.PI * 0.72;
+        }
+
+        // Stage 2 (0.28 -> 1.0): Whole scissor-bow frame swings backward & tucks into rear deck well
+        const rearFold = THREE.MathUtils.clamp((nextProg - 0.28) / 0.72, 0, 1);
+        const rearSmooth = rearFold * rearFold * (3 - 2 * rearFold);
+        handles.convertibleTop.rotation.x = -rearSmooth * Math.PI * 0.58;
+        handles.convertibleTop.position.y = 0.74 - rearSmooth * 0.28;
+        handles.convertibleTop.visible = nextProg < 0.96;
+
+        // Folded black convertible boot rises cleanly behind the rear seats when top tucks away
+        if (handles.convertibleBoot) {
+          const bootVis = THREE.MathUtils.clamp((nextProg - 0.65) / 0.35, 0, 1);
+          handles.convertibleBoot.visible = bootVis > 0.02;
+          handles.convertibleBoot.scale.set(1, Math.max(0.05, bootVis), 1);
+        }
+
+        // Animate the physical 3D Interior Droptop Button on the center console
+        if (handles.droptopButtonCap) {
+          const pressed = this.droptopButtonPressTimer > 0;
+          handles.droptopButtonCap.position.y = THREE.MathUtils.damp(
+            handles.droptopButtonCap.position.y,
+            pressed ? 0.008 : 0.024,
+            18,
+            dt,
+          );
+          const capMat = handles.droptopButtonCap.material as THREE.MeshStandardMaterial;
+          if (capMat && 'emissive' in capMat) {
+            const isMoving = Math.abs(nextProg - targetProg) > 0.01;
+            capMat.emissive.setHex(
+              isMoving ? 0x38bdf8 : v.convertibleTopDown ? 0x10b981 : 0xf59e0b,
+            );
+            capMat.emissiveIntensity = isMoving ? 2.2 : 1.35;
+          }
+        }
+      }
+
       if (handles.underglowLight) {
         handles.underglowLight.intensity = 1.85 + showBassPulse * 3.1;
       }
@@ -14757,6 +15401,13 @@ export class GameEngine {
       const wheelRoll = (spd / wheelRadius) * dt;
       for (const w of handles.wheels) {
         w.rotation.x += wheelRoll;
+      }
+      // 13-inch Chrome Skate Spinner Rims keep spinning smoothly even when stopped!
+      if (handles.spinners && handles.spinners.length > 0) {
+        const spinnerSpin = (Math.abs(spd) * 2.2 + 2.6) * dt;
+        for (const sp of handles.spinners) {
+          sp.rotation.x += spinnerSpin;
+        }
       }
       if (isActive || autoJob) {
         const steerVal = isActive ? this.vehicleSteerAngle : (autoJob?.steerAngle ?? 0);
@@ -15061,11 +15712,11 @@ export class GameEngine {
     job.pitchAngle = THREE.MathUtils.damp(job.pitchAngle, desiredPitch, 8, dt);
   }
 
-  public parkVehicleInGarage(vehicleId: string, bay: 'A' | 'B' | 'C' = 'A'): boolean {
+  public parkVehicleInGarage(vehicleId: string, bay: 'A' | 'B' | 'C' | 'D' = 'A'): boolean {
     const v = this.vehicles.find((x) => x.id === vehicleId);
     if (!v) return false;
     this.autoParkJobs.delete(v.id);
-    const offsetX = bay === 'A' ? -6.0 : bay === 'B' ? 0.0 : 6.0;
+    const offsetX = bay === 'A' ? -9.0 : bay === 'B' ? -3.0 : bay === 'C' ? 3.0 : 9.0;
     const offsetZ = 0.6;
     v.x = VEHICLE_GARAGE_POS.x + offsetX;
     v.z = VEHICLE_GARAGE_POS.z + offsetZ;
@@ -15920,6 +16571,72 @@ export class GameEngine {
       rp.handle.heldGunMesh.visible = hasGun;
       rp.handle.heldToolMesh.visible = Boolean(packet.heldItemId) && !hasGun;
 
+      // Sync remote player's equipped Gun Skin (cosmetic only)
+      const incomingGunSkinId = packet.gunSkinId ?? null;
+      if (rp.appliedGunSkinId !== incomingGunSkinId) {
+        rp.appliedGunSkinId = incomingGunSkinId;
+        const gunMat = rp.handle.heldGunMesh.material;
+        if (gunMat instanceof THREE.MeshStandardMaterial) {
+          const skin = incomingGunSkinId ? getExchangeItemById(incomingGunSkinId) : null;
+          if (skin && skin.category === 'gun_skin') {
+            const imgTex = getCosmeticImageTexture(skin.productImageUrl);
+            gunMat.color.set(imgTex ? '#ffffff' : skin.visual.primaryHex);
+            gunMat.metalness = skin.visual.metalness;
+            gunMat.roughness = skin.visual.roughness;
+            gunMat.map = imgTex || getCosmeticPatternTexture(skin.visual);
+            if (skin.visual.emissiveHex) {
+              gunMat.emissive.set(skin.visual.emissiveHex);
+              gunMat.emissiveIntensity = 0.28;
+            } else {
+              gunMat.emissive.set(0x000000);
+              gunMat.emissiveIntensity = 0;
+            }
+          } else {
+            gunMat.color.set(0x1f2937);
+            gunMat.metalness = 0.65;
+            gunMat.roughness = 0.35;
+            gunMat.map = null;
+            gunMat.emissive.set(0x000000);
+            gunMat.emissiveIntensity = 0;
+          }
+          gunMat.needsUpdate = true;
+        }
+      }
+
+      // Sync remote player's equipped Backpack Skin (cosmetic only)
+      const incomingBackpackSkinId = packet.backpackSkinId ?? null;
+      if (rp.appliedBackpackSkinId !== incomingBackpackSkinId) {
+        rp.appliedBackpackSkinId = incomingBackpackSkinId;
+        const packMat = rp.handle.backpackMesh.material;
+        if (packMat instanceof THREE.MeshStandardMaterial) {
+          const skin = incomingBackpackSkinId
+            ? getExchangeItemById(incomingBackpackSkinId)
+            : null;
+          if (skin && skin.category === 'backpack_skin') {
+            const imgTex = getCosmeticImageTexture(skin.productImageUrl);
+            packMat.color.set(imgTex ? '#ffffff' : skin.visual.primaryHex);
+            packMat.metalness = skin.visual.metalness;
+            packMat.roughness = skin.visual.roughness;
+            packMat.map = imgTex || getCosmeticPatternTexture(skin.visual);
+            if (skin.visual.emissiveHex) {
+              packMat.emissive.set(skin.visual.emissiveHex);
+              packMat.emissiveIntensity = 0.25;
+            } else {
+              packMat.emissive.set(0x000000);
+              packMat.emissiveIntensity = 0;
+            }
+          } else {
+            packMat.color.set(0x78350f);
+            packMat.metalness = 0.05;
+            packMat.roughness = 0.85;
+            packMat.map = null;
+            packMat.emissive.set(0x000000);
+            packMat.emissiveIntensity = 0;
+          }
+          packMat.needsUpdate = true;
+        }
+      }
+
       if (packet.vehicleId && packet.vx !== undefined && packet.vz !== undefined && packet.vyaw !== undefined) {
         const veh = this.vehicles.find((v) => v.id === packet.vehicleId);
         if (veh && this.activeVehicleId !== veh.id) {
@@ -16097,6 +16814,7 @@ export class GameEngine {
       const av = this.activeVehicleId
         ? this.vehicles.find((v) => v.id === this.activeVehicleId)
         : null;
+      const eqItemId = this.getEquippedItemId();
       this.p2p.broadcast({
         type: 'player_state',
         peerId: this.p2p.localPeerId,
@@ -16107,12 +16825,14 @@ export class GameEngine {
         yaw: this.playerYaw,
         pitch: this.camPitch,
         anim,
-        heldItemId: this.getEquippedItemId(),
+        heldItemId: eqItemId,
         biome: BIOME_INFO[getBiomeAt(this.playerX, this.playerZ)].name,
         vehicleId: this.activeVehicleId,
         vx: av?.x,
         vz: av?.z,
         vyaw: av?.yaw,
+        gunSkinId: getEquippedGunSkinForWeapon(eqItemId)?.id ?? null,
+        backpackSkinId: getEquippedBackpackSkin()?.id ?? null,
       });
     }
 
@@ -16124,6 +16844,76 @@ export class GameEngine {
         if (av) this.p2p.broadcast({ type: 'vehicle_upsert', vehicle: av });
       }
     }
+  }
+
+  // ---- Survival Island Exchange Cosmetics (Visual-Only, Zero Stat Impact) ----
+  public applyExchangeCosmetics(force = false): void {
+    if (!this.handsRig?.gunMesh) return;
+    const eqId = this.getEquippedItemId();
+    const gunSkin = getEquippedGunSkinForWeapon(eqId);
+    const key = `${eqId ?? 'none'}|${gunSkin?.id ?? 'default'}`;
+    if (!force && key === this.lastAppliedGunSkinKey) return;
+    this.lastAppliedGunSkinKey = key;
+
+    const imgTex = gunSkin ? getCosmeticImageTexture(gunSkin.productImageUrl) : null;
+    const tex = gunSkin ? imgTex || getCosmeticPatternTexture(gunSkin.visual) : null;
+    let meshIdx = 0;
+    this.handsRig.gunMesh.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      const mat = obj.material;
+      if (!(mat instanceof THREE.MeshStandardMaterial)) return;
+      if (!obj.userData.__exchangeOrig) {
+        obj.userData.__exchangeOrig = {
+          color: mat.color.getHex(),
+          metalness: mat.metalness,
+          roughness: mat.roughness,
+          emissive: mat.emissive.getHex(),
+          emissiveIntensity: mat.emissiveIntensity,
+        };
+      }
+      if (gunSkin) {
+        const useAccent = meshIdx % 3 === 2;
+        const useSecondary = meshIdx % 3 === 1;
+        mat.color.set(
+          useAccent
+            ? gunSkin.visual.accentHex
+            : imgTex
+              ? '#ffffff'
+              : useSecondary
+                ? gunSkin.visual.secondaryHex
+                : gunSkin.visual.primaryHex,
+        );
+        mat.metalness = gunSkin.visual.metalness;
+        mat.roughness = gunSkin.visual.roughness;
+        mat.map = useAccent ? null : tex;
+        if (gunSkin.visual.emissiveHex && useAccent) {
+          mat.emissive.set(gunSkin.visual.emissiveHex);
+          mat.emissiveIntensity = 0.45;
+        } else if (gunSkin.visual.emissiveHex) {
+          mat.emissive.set(gunSkin.visual.emissiveHex);
+          mat.emissiveIntensity = 0.1;
+        } else {
+          mat.emissive.set(0x000000);
+          mat.emissiveIntensity = 0;
+        }
+      } else {
+        const orig = obj.userData.__exchangeOrig as {
+          color: number;
+          metalness: number;
+          roughness: number;
+          emissive: number;
+          emissiveIntensity: number;
+        };
+        mat.color.setHex(orig.color);
+        mat.metalness = orig.metalness;
+        mat.roughness = orig.roughness;
+        mat.map = null;
+        mat.emissive.setHex(orig.emissive);
+        mat.emissiveIntensity = orig.emissiveIntensity;
+      }
+      mat.needsUpdate = true;
+      meshIdx += 1;
+    });
   }
 
   // ---- Public P2P Multiplayer API ----
@@ -16360,8 +17150,605 @@ export class GameEngine {
     }
   }
 
+  private buildSpaceHudSnapshot(): SpaceHudSnapshot {
+    const sys =
+      this.activeSpaceSystem ??
+      MULTIVERSE_SPACE_ENGINE.generateStarSystem(
+        MULTIVERSE_SPACE_ENGINE.currentUniverseId,
+        MULTIVERSE_SPACE_ENGINE.currentGalaxyIndex,
+        MULTIVERSE_SPACE_ENGINE.currentSystemIndex,
+      );
+    const gun = ALIEN_SPACE_SYSTEM.equippedAlienGun ?? ALIEN_SPACE_SYSTEM.alienGuns[0];
+    return {
+      inSpacePlanet: this.inSpacePlanet,
+      universeId: sys.universe.id,
+      universeName: sys.universe.name,
+      galaxyIndex: sys.galaxyIndex,
+      galaxyName: sys.galaxyName,
+      systemIndex: sys.systemIndex,
+      starName: sys.star.name,
+      planetName: this.activeSpacePlanet?.name ?? null,
+      planetBiome: this.activeSpacePlanet?.biome ?? null,
+      gravity: this.inSpacePlanet ? this.spaceGravity : 1.0,
+      activeUfo: ALIEN_SPACE_SYSTEM.activeUfo ? { ...ALIEN_SPACE_SYSTEM.activeUfo } : null,
+      equippedAlienGunId: gun.id,
+      equippedAlienGunName: gun.name,
+      alienLootCount: ALIEN_SPACE_SYSTEM.alienLootInventory.length,
+      earthPowerUps: ALIEN_SPACE_SYSTEM.earthPowerUpCount,
+      islandUfoClaimed: Boolean(ALIEN_SPACE_SYSTEM.islandLandedUfo?.claimed),
+      launchPhase: SATURN_V_LAUNCH_CONTROLLER.phase,
+      launchAltitude: Math.round(SATURN_V_LAUNCH_CONTROLLER.altitude),
+      launchVelocityY: Math.round(SATURN_V_LAUNCH_CONTROLLER.velocityY),
+      launchStage: SATURN_V_LAUNCH_CONTROLLER.stage,
+      launchOrbitAltitude: SATURN_V_LAUNCH_CONTROLLER.orbitAltitude,
+      launchDestination: this.pendingLaunchTarget?.planet.name ?? null,
+    };
+  }
+
+  public openSaturnRocketConsole(): void {
+    this.sound.unlock();
+    ALIEN_SPACE_SYSTEM.landUfoOnIsland({
+      x: ISLAND_UFO_POS.x,
+      y: 0,
+      z: ISLAND_UFO_POS.z,
+    });
+    if (!ALIEN_SPACE_SYSTEM.equippedAlienGun) {
+      ALIEN_SPACE_SYSTEM.equipAlienGun('alien_pulse_rifle');
+    }
+    this.callbacks.onOpenStation('saturn_rocket');
+    this.emitHud();
+  }
+
+  public openUndergroundElevator(): void {
+    this.sound.unlock();
+    this.callbacks.onOpenStation('underground_elevator');
+    this.emitHud();
+  }
+
+  public summonCarFromUndergroundElevator(carId: string): void {
+    const car = ELEVATOR_EXOTIC_LIFT.bringCarToSurface(carId);
+    if (!car) return;
+
+    this.sound.unlock();
+    if (this.activeVehicleId && this.activeVehicleId === this.elevatorSummonedVehicleId) {
+      this.exitVehicle();
+    }
+
+    // Remove previous surface car on the elevator pad if it is still sitting there
+    if (this.elevatorSummonedVehicleId) {
+      const prevIdx = this.vehicles.findIndex(
+        (v) => v.id === this.elevatorSummonedVehicleId,
+      );
+      if (prevIdx !== -1) {
+        const prev = this.vehicles[prevIdx];
+        const distFromLift = Math.hypot(
+          prev.x - UNDERGROUND_ELEVATOR_POS.x,
+          prev.z - UNDERGROUND_ELEVATOR_POS.z,
+        );
+        if (distFromLift < 7.5) {
+          this.vehicles.splice(prevIdx, 1);
+          const oldMesh = this.vehicleMeshes.get(prev.id);
+          if (oldMesh) {
+            this.scene.remove(oldMesh.root);
+            this.disposeObject3D(oldMesh.root);
+            this.vehicleMeshes.delete(prev.id);
+          }
+        }
+      }
+    }
+
+    const groundY = getTerrainHeight(
+      UNDERGROUND_ELEVATOR_POS.x,
+      UNDERGROUND_ELEVATOR_POS.z,
+    );
+    const vehicleId = `exotic_lift_${car.id}_${Date.now().toString(36)}`;
+    const spawned = createVehicleFromPreset(
+      vehicleId,
+      'sports_car',
+      UNDERGROUND_ELEVATOR_POS.x,
+      groundY - 5.8,
+      UNDERGROUND_ELEVATOR_POS.z,
+      0,
+    );
+    spawned.name = car.name;
+    spawned.paintColor = car.paintColor;
+    spawned.rimColor = car.rimColor;
+    spawned.underglowColor = car.underglowColor;
+    spawned.turboBoost = car.turboBoost;
+    spawned.suspensionOffset = -0.12;
+    spawned.wheelScale = 0.9;
+
+    this.vehicles.push(spawned);
+    const handles = createModularVehicleMesh(spawned);
+    handles.root.position.set(spawned.x, spawned.y, spawned.z);
+    handles.root.rotation.y = spawned.yaw;
+    this.attachVehicleShadowDisc(spawned.id, handles.root);
+    applyRealisticMeshLightingPass(handles.root, {
+      shadowsEnabled: this.effectiveShadowsEnabled,
+      envMapIntensity: 1.15,
+    });
+    this.vehicleMeshes.set(spawned.id, handles);
+    this.scene.add(handles.root);
+
+    this.elevatorSummonedVehicleId = spawned.id;
+    this.elevatorTargetCar = car;
+    this.elevatorLiftProgress = 0;
+    this.elevatorLiftActive = true;
+    this.elevatorSteamAccum = 0;
+    this.world?.undergroundElevator?.setLiftProgress(0);
+    this.sound.playSteamHiss();
+    this.toast(
+      `Underground Car Elevator lifting ${car.name} (${car.horsepower} HP) to the surface...`,
+      'discovery',
+    );
+    this.emitHud();
+  }
+
+  private updateUndergroundElevatorLift(dt: number): void {
+    const elev = this.world?.undergroundElevator;
+    this.elevatorLiftProgress = Math.min(1, this.elevatorLiftProgress + dt / 2.6);
+    // Smooth ease-in-out cubic curve for heavy hydraulic elevator feel
+    const t = this.elevatorLiftProgress;
+    const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+    if (elev) {
+      elev.setLiftProgress(eased);
+      elev.beaconMat.emissiveIntensity = 1.2 + Math.abs(Math.sin(this.elapsed * 12)) * 1.4;
+    }
+
+    const groundY = getTerrainHeight(
+      UNDERGROUND_ELEVATOR_POS.x,
+      UNDERGROUND_ELEVATOR_POS.z,
+    );
+    const carY = groundY - 5.8 + 6.08 * eased;
+
+    if (this.elevatorSummonedVehicleId) {
+      const v = this.vehicles.find((x) => x.id === this.elevatorSummonedVehicleId);
+      const mesh = this.vehicleMeshes.get(this.elevatorSummonedVehicleId);
+      if (v && mesh) {
+        v.x = UNDERGROUND_ELEVATOR_POS.x;
+        v.z = UNDERGROUND_ELEVATOR_POS.z;
+        v.y = carY;
+        v.vx = 0;
+        v.vy = 0;
+        v.vz = 0;
+        mesh.root.position.set(v.x, v.y, v.z);
+      }
+    }
+
+    this.elevatorSteamAccum += dt;
+    if (this.elevatorSteamAccum >= 0.14) {
+      this.elevatorSteamAccum = 0;
+      this.spawnParticles(
+        UNDERGROUND_ELEVATOR_POS.x + (Math.random() - 0.5) * 4.5,
+        groundY + 0.35,
+        UNDERGROUND_ELEVATOR_POS.z + (Math.random() - 0.5) * 5.2,
+        0x38bdf8,
+        4,
+      );
+    }
+
+    if (this.elevatorLiftProgress >= 1) {
+      this.elevatorLiftActive = false;
+      ELEVATOR_EXOTIC_LIFT.markReady();
+      if (elev) {
+        elev.beaconMat.emissiveIntensity = 0.85;
+      }
+      this.sound.playWeldSnap();
+      if (this.elevatorTargetCar) {
+        const arrivedLine = VAULT_COMPUTER_VOICE.speakCarArrived(
+          this.elevatorTargetCar.name,
+        );
+        this.toast(arrivedLine, 'discovery');
+      }
+      this.emitHud();
+    }
+  }
+
+  public launchRocketToSun(starName = 'Sol (The Sun)'): void {
+    this.sound.unlock();
+    this.sound.playExplosion();
+    this.vitals.health = Math.max(10, this.vitals.health - 45);
+    this.spawnParticles(this.playerX, this.playerY + 1.5, this.playerZ, 0xff5500, 26);
+    this.toast(
+      `SOLAR CORONA BURN! You burned up approaching ${starName} (-45 HP)! Emergency abort to pad!`,
+      'warning',
+    );
+    this.emitHud();
+  }
+
+  private getActiveSaturnRocketHandles() {
+    if (this.inSpacePlanet && this.spaceArena?.rocketBody && this.spaceArena.stage1Group && this.spaceArena.rocketFlame) {
+      return {
+        rootPos: new THREE.Vector3(0, 0, -14),
+        rocketBody: this.spaceArena.rocketBody,
+        stage1Group: this.spaceArena.stage1Group,
+        flameGroup: this.spaceArena.rocketFlame,
+      };
+    }
+    if (this.world?.saturnRocket) {
+      return {
+        rootPos: this.world.saturnRocket.root.position.clone(),
+        rocketBody: this.world.saturnRocket.rocketBody,
+        stage1Group: this.world.saturnRocket.stage1Group,
+        flameGroup: this.world.saturnRocket.flameGroup,
+      };
+    }
+    return null;
+  }
+
+  private resetActiveSaturnRocketMesh(): void {
+    const handles = this.getActiveSaturnRocketHandles();
+    if (!handles) return;
+    handles.rocketBody.position.y = 2.0;
+    handles.stage1Group.position.set(0, 0, 0);
+    handles.stage1Group.rotation.set(0, 0, 0);
+    handles.stage1Group.visible = true;
+    handles.flameGroup.scale.set(1, 1, 1);
+  }
+
+  private updateSaturnVLaunch(dt: number): void {
+    const prevStage = this.lastLaunchStage;
+    const state = SATURN_V_LAUNCH_CONTROLLER.update(dt);
+    this.saturnLaunchCameraShake = state.cameraShake;
+
+    const handles = this.getActiveSaturnRocketHandles();
+    if (handles) {
+      // Visual lift scaled so the Saturn V rockets dramatically into the sky!
+      handles.rocketBody.position.y = 2.0 + SATURN_V_LAUNCH_CONTROLLER.altitude * 0.42;
+
+      // Roaring F-1 / J-2 exhaust plume
+      const flameLen = 3.2 + Math.sin(this.elapsed * 48) * 0.85;
+      handles.flameGroup.scale.set(1.55, flameLen, 1.55);
+
+      // Stage 1 separation visual drop at 45% orbit altitude
+      if (state.stage === 2) {
+        if (prevStage === 1) {
+          this.lastLaunchStage = 2;
+          this.sound.playExplosion();
+          const sepY = handles.rootPos.y + handles.rocketBody.position.y + 4;
+          this.spawnParticles(handles.rootPos.x, sepY, handles.rootPos.z, 0xfbbf24, 24);
+          this.toast(
+            'STAGE 1 SEPARATION! S-II Second Stage Burn Engaged!',
+            'discovery',
+          );
+        }
+        handles.stage1Group.position.y -= 24 * dt;
+        handles.stage1Group.rotation.z += 0.65 * dt;
+      }
+
+      // Fiery exhaust trail particles
+      this.launchExhaustAccum += dt;
+      if (this.launchExhaustAccum >= 0.065) {
+        this.launchExhaustAccum = 0;
+        const nozzleY = handles.rootPos.y + handles.rocketBody.position.y - 1.5;
+        this.spawnParticles(
+          handles.rootPos.x + (Math.random() - 0.5) * 1.8,
+          Math.max(handles.rootPos.y + 0.8, nozzleY),
+          handles.rootPos.z + (Math.random() - 0.5) * 1.8,
+          state.stage === 1 ? 0xff7b1a : 0x38bdf8,
+          6,
+        );
+      }
+
+      // Tilt camera smoothly upward to watch the Saturn V climb into orbit
+      const lookY = handles.rootPos.y + handles.rocketBody.position.y + 8;
+      const dx = handles.rootPos.x - this.playerX;
+      const dz = handles.rootPos.z - this.playerZ;
+      const horiz = Math.max(4, Math.hypot(dx, dz));
+      const targetPitch = THREE.MathUtils.clamp(
+        Math.atan2(lookY - (this.playerY + this.currentEyeHeight), horiz),
+        -0.3,
+        1.28,
+      );
+      this.camPitch = THREE.MathUtils.damp(this.camPitch, targetPitch, 5.5, dt);
+    }
+
+    this.launchHudAccum += dt;
+    if (this.launchHudAccum >= 0.08) {
+      this.launchHudAccum = 0;
+      this.emitHud();
+    }
+  }
+
+  public launchRocketToPlanet(planet: SpacePlanet, system?: StarSystemData): void {
+    if (planet.id === 'earth') {
+      this.returnToEarthFromSpace();
+      return;
+    }
+    this.sound.unlock();
+    if (this.activeVehicleId) {
+      this.exitVehicle();
+    }
+
+    const resolvedSystem =
+      system ??
+      MULTIVERSE_SPACE_ENGINE.generateStarSystem(
+        planet.universeId ?? MULTIVERSE_SPACE_ENGINE.currentUniverseId,
+        MULTIVERSE_SPACE_ENGINE.currentGalaxyIndex,
+        MULTIVERSE_SPACE_ENGINE.currentSystemIndex,
+      );
+
+    // Position player at a clear launchpad viewing distance facing the Saturn V Rocket
+    if (!this.inSpacePlanet) {
+      const viewX = SATURN_ROCKET_POS.x + 2.5;
+      const viewZ = SATURN_ROCKET_POS.z + 24.0;
+      this.playerX = viewX;
+      this.playerZ = viewZ;
+      this.playerY = getTerrainHeight(viewX, viewZ) + 0.1;
+      this.camYaw = Math.atan2(
+        this.playerX - SATURN_ROCKET_POS.x,
+        this.playerZ - SATURN_ROCKET_POS.z,
+      );
+      this.camPitch = 0.28;
+    } else {
+      this.playerX = 2.0;
+      this.playerZ = 10.0;
+      this.playerY = 0.2;
+      this.camYaw = Math.atan2(this.playerX - 0, this.playerZ - -14);
+      this.camPitch = 0.28;
+    }
+
+    this.pendingLaunchTarget = { planet, system: resolvedSystem };
+    this.lastLaunchStage = 1;
+    this.launchExhaustAccum = 0;
+    this.launchHudAccum = 0;
+    this.resetActiveSaturnRocketMesh();
+    SATURN_V_LAUNCH_CONTROLLER.resetToPad();
+    SATURN_V_LAUNCH_CONTROLLER.onOrbitReached = () => {
+      this.completeSaturnVArrival();
+    };
+    const igniteState = SATURN_V_LAUNCH_CONTROLLER.ignite();
+    this.saturnLaunchCameraShake = igniteState.cameraShake;
+    this.sound.playExplosion();
+    this.toast(
+      `IGNITION! Saturn V launching for ${planet.name} (Orbit at ${SATURN_V_LAUNCH_CONTROLLER.orbitAltitude}m)...`,
+      'discovery',
+    );
+    this.emitHud();
+  }
+
+  public igniteSaturnVQuickLaunch(): void {
+    if (
+      SATURN_V_LAUNCH_CONTROLLER.phase === 'IGNITION' ||
+      SATURN_V_LAUNCH_CONTROLLER.phase === 'ASCENT'
+    ) {
+      return;
+    }
+    const sys =
+      this.activeSpaceSystem ??
+      MULTIVERSE_SPACE_ENGINE.generateStarSystem(
+        MULTIVERSE_SPACE_ENGINE.currentUniverseId,
+        MULTIVERSE_SPACE_ENGINE.currentGalaxyIndex,
+        MULTIVERSE_SPACE_ENGINE.currentSystemIndex,
+      );
+    const currentId = this.activeSpacePlanet?.id;
+    const nextPlanet =
+      sys.planets.find((p) => p.id !== 'earth' && p.id !== currentId) ??
+      sys.planets[0];
+    this.launchRocketToPlanet(nextPlanet, sys);
+  }
+
+  private completeSaturnVArrival(): void {
+    const target = this.pendingLaunchTarget;
+    this.pendingLaunchTarget = null;
+    this.saturnLaunchCameraShake = 0;
+    this.resetActiveSaturnRocketMesh();
+    SATURN_V_LAUNCH_CONTROLLER.resetToPad();
+    if (!target) {
+      this.emitHud();
+      return;
+    }
+    this.enterSpacePlanet(target.planet, target.system);
+  }
+
+  private enterSpacePlanet(planet: SpacePlanet, resolvedSystem: StarSystemData): void {
+    if (this.spaceArena) {
+      this.scene.remove(this.spaceArena.root);
+      this.spaceArena.dispose();
+      this.spaceArena = null;
+    }
+    if (this.activeDimensionWorld) {
+      disposeDimensionWorld(this.activeDimensionWorld);
+      this.activeDimensionWorld = null;
+    }
+
+    MULTIVERSE_SPACE_ENGINE.currentUniverseId = resolvedSystem.universe.id;
+    MULTIVERSE_SPACE_ENGINE.currentGalaxyIndex = resolvedSystem.galaxyIndex;
+    MULTIVERSE_SPACE_ENGINE.currentSystemIndex = resolvedSystem.systemIndex;
+    MULTIVERSE_SPACE_ENGINE.activePlanet = planet;
+
+    this.activeSpaceSystem = resolvedSystem;
+    this.activeSpacePlanet = planet;
+    this.spaceGravity = THREE.MathUtils.clamp(planet.gravity || 0.6, 0.2, 2.3);
+    this.inSpacePlanet = true;
+    this.currentDimension = 'space';
+    this.setOverworldActiveState(false);
+
+    if (planet.hasUfoEncounter) {
+      ALIEN_SPACE_SYSTEM.spawnUfo(planet.name, 150);
+    } else {
+      ALIEN_SPACE_SYSTEM.activeUfo = null;
+    }
+    if (!ALIEN_SPACE_SYSTEM.equippedAlienGun) {
+      ALIEN_SPACE_SYSTEM.equipAlienGun('alien_pulse_rifle');
+    }
+
+    this.spaceArena = buildSpacePlanetArena(
+      planet,
+      resolvedSystem.star,
+      resolvedSystem.universe,
+      Boolean(planet.hasUfoEncounter),
+    );
+    this.scene.add(this.spaceArena.root);
+
+    _skyColor.set(resolvedSystem.universe.skyTint || '#050814');
+    if (this.scene.background instanceof THREE.Color) {
+      this.scene.background.copy(_skyColor);
+    } else {
+      this.scene.background = _skyColor.clone();
+    }
+    if (this.scene.fog instanceof THREE.FogExp2) {
+      this.scene.fog.color.copy(_skyColor);
+      this.scene.fog.density = 0.0022;
+    }
+
+    // Place player right in front of the landed Saturn V Rocket
+    this.playerX = 0;
+    this.playerY = 0.2;
+    this.playerZ = -4;
+    this.playerYaw = Math.PI;
+    this.camYaw = 0;
+    this.camPitch = 0.08;
+    this.playerVelY = 0;
+    this.grounded = true;
+    this.sound.playExplosion();
+    this.spawnParticles(0, 1.2, -14, 0xffaa33, 22);
+    this.toast(
+      `ORBIT REACHED! Saturn V Landed on ${planet.name} (${resolvedSystem.universe.name} · ${planet.gravity}g)!`,
+      'discovery',
+    );
+    this.emitHud();
+  }
+
+  public jumpToSectorPlanet(planetNumber: number): void {
+    const planet = ALIEN_SPACE_SYSTEM.getPlanet(planetNumber);
+    const sys = MULTIVERSE_SPACE_ENGINE.generateStarSystem(
+      planet.universeId ?? 2,
+      0,
+      planetNumber % 10,
+    );
+    this.launchRocketToPlanet(planet, sys);
+  }
+
+  public returnToEarthFromSpace(): void {
+    if (this.spaceArena) {
+      this.scene.remove(this.spaceArena.root);
+      this.spaceArena.dispose();
+      this.spaceArena = null;
+    }
+    this.inSpacePlanet = false;
+    this.activeSpacePlanet = null;
+    this.spaceGravity = 1.0;
+    ALIEN_SPACE_SYSTEM.activeUfo = null;
+    this.currentDimension = 'overworld';
+    this.setOverworldActiveState(true);
+
+    const padX = SATURN_ROCKET_POS.x;
+    const padZ = SATURN_ROCKET_POS.z + 11.0;
+    this.playerX = padX;
+    this.playerZ = padZ;
+    this.playerY = getTerrainHeight(padX, padZ) + 0.25;
+    this.playerVelY = 0;
+    this.grounded = true;
+    this.sound.playSteamHiss();
+    this.toast('Saturn V Returned Safely to Earth Launch Complex!', 'discovery');
+    this.emitHud();
+  }
+
+  public equipAlienGun(gunId: string): void {
+    const gun = ALIEN_SPACE_SYSTEM.equipAlienGun(gunId);
+    if (!gun) return;
+    this.sound.playPickup();
+    this.toast(`Equipped ${gun.name} (Unlimited Alien Energy!)`, 'discovery');
+    this.emitHud();
+  }
+
+  public fireAlienBlaster(): void {
+    const now = Date.now();
+    const res = ALIEN_SPACE_SYSTEM.fireAlienGun(now, this.lastAlienShotMs);
+    if (!res.fired) return;
+    this.lastAlienShotMs = now;
+    this.sound.unlock();
+    this.sound.playGunshot('plasma');
+
+    const boltHex = new THREE.Color(res.boltColor).getHex();
+    if (this.inSpacePlanet && this.spaceArena?.ufoGroup && ALIEN_SPACE_SYSTEM.activeUfo && !ALIEN_SPACE_SYSTEM.activeUfo.isDowned) {
+      const uPos = this.spaceArena.ufoGroup.position;
+      this.spawnParticles(uPos.x, uPos.y, uPos.z, boltHex, 14);
+      const hit = ALIEN_SPACE_SYSTEM.damageUfo(res.damage);
+      if (hit?.shotDown) {
+        this.sound.playExplosion();
+        this.spawnParticles(uPos.x, uPos.y, uPos.z, 0x4ade80, 28);
+        this.toast(
+          `UFO SHOT DOWN! Collected ${hit.loot.name} — install it in the Saturn V Console!`,
+          'discovery',
+        );
+      } else if (hit) {
+        this.toast(
+          `${res.gunName} hit UFO! (${hit.hp}/${ALIEN_SPACE_SYSTEM.activeUfo.maxHp} HP)`,
+          'info',
+        );
+      }
+    } else {
+      const fx = this.playerX - Math.sin(this.camYaw) * 8;
+      const fz = this.playerZ - Math.cos(this.camYaw) * 8;
+      this.spawnParticles(fx, this.playerY + 1.5, fz, boltHex, 10);
+      this.toast(`${res.gunName} fired (∞ Energy)`, 'info');
+    }
+    this.emitHud();
+  }
+
+  public claimIslandUfoLoot(): void {
+    ALIEN_SPACE_SYSTEM.landUfoOnIsland({
+      x: ISLAND_UFO_POS.x,
+      y: 0,
+      z: ISLAND_UFO_POS.z,
+    });
+    const claimed = ALIEN_SPACE_SYSTEM.claimIslandUfoLoot();
+    if (claimed.length === 0) {
+      this.toast('Island UFO loot already claimed! Open Saturn V Console → Alien Armory.', 'info');
+      return;
+    }
+    this.sound.playPickup();
+    this.toast(
+      `Claimed Island UFO Loot: ${claimed.map((c) => c.name).join(' & ')}!`,
+      'discovery',
+    );
+    this.emitHud();
+  }
+
+  public useAlienLoot(uid: string, mode: 'power_up' | 'decoration'): void {
+    const res = ALIEN_SPACE_SYSTEM.applyAlienLoot(uid, mode);
+    if (!res.ok) {
+      this.toast(res.message, 'warning');
+      return;
+    }
+    this.sound.playWeldSnap();
+    if (mode === 'decoration') {
+      // Spawn a glowing floating Alien Relic Beacon right beside the player!
+      const relic = new THREE.Mesh(
+        new THREE.OctahedronGeometry(0.55, 0),
+        new THREE.MeshStandardMaterial({
+          color: 0x22d3ee,
+          emissive: 0x06b6d4,
+          emissiveIntensity: 1.6,
+          metalness: 0.7,
+          roughness: 0.2,
+        }),
+      );
+      relic.position.set(
+        this.playerX - Math.sin(this.playerYaw) * 2.5,
+        this.playerY + 1.2,
+        this.playerZ - Math.cos(this.playerYaw) * 2.5,
+      );
+      this.scene.add(relic);
+      this.alienRelicDecorMeshes.push(relic);
+    }
+    this.toast(res.effect, 'discovery');
+    this.emitHud();
+  }
+
   public switchDimension(dim: DimensionId): void {
     if (!DIMENSION_DEFINITIONS[dim]) return;
+    if (this.spaceArena) {
+      this.scene.remove(this.spaceArena.root);
+      this.spaceArena.dispose();
+      this.spaceArena = null;
+      this.inSpacePlanet = false;
+      this.activeSpacePlanet = null;
+      this.spaceGravity = 1.0;
+    }
     if (this.activeDimensionWorld) {
       disposeDimensionWorld(this.activeDimensionWorld);
       this.activeDimensionWorld = null;
@@ -16513,6 +17900,7 @@ export class GameEngine {
     window.removeEventListener('wheel', this.onWheel);
     window.removeEventListener('blur', this.onWindowBlur);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    this.renderer.domElement.removeEventListener('pointerdown', this.onCanvasPointerDown);
 
     this.p2p?.leaveRoom();
     this.modSystem?.dispose();

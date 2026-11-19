@@ -265,6 +265,7 @@ export type VehiclePresetKey =
   | 'lowrider'
   | 'donk'
   | 'slab'
+  | 'cadillac_coupe_deville'
   | 'steam_boat'
   | 'gyro_airship';
 
@@ -349,7 +350,7 @@ export function buildPresetModules(preset: VehiclePresetKey): VehicleModulePlace
     ];
   }
 
-  if (preset === 'slab') {
+  if (preset === 'slab' || preset === 'cadillac_coupe_deville') {
     return [
       mk('chassis_frame', 0, 0, 0, 1),
       mk('chassis_frame', 0, 0, 1, 2),
@@ -434,6 +435,7 @@ export function createVehicleFromPreset(
     lowrider: '1964 Impala Candy Lowrider',
     donk: '1974 Box Chevy DONK (30" Rims)',
     slab: 'Houston Candy SLAB (Swangers)',
+    cadillac_coupe_deville: 'Cadillac Coupe DeVille (13" Spinners)',
     steam_boat: 'Pontoon Valley Explorer Boat',
     gyro_airship: 'Island Gyro Rotor Airship',
   };
@@ -444,6 +446,7 @@ export function createVehicleFromPreset(
     lowrider: '#7e22ce',
     donk: '#0284c7',
     slab: '#9f1239',
+    cadillac_coupe_deville: '#f8fafc',
     steam_boat: '#0284c7',
     gyro_airship: '#eab308',
   };
@@ -454,6 +457,7 @@ export function createVehicleFromPreset(
     lowrider: '#f8fafc',
     donk: '#f8fafc',
     slab: '#f8fafc',
+    cadillac_coupe_deville: '#f8fafc',
     steam_boat: '#d97706',
     gyro_airship: '#e2e8f0',
   };
@@ -464,6 +468,7 @@ export function createVehicleFromPreset(
     lowrider: -0.16,
     donk: 0.44,
     slab: -0.12,
+    cadillac_coupe_deville: -0.14,
     steam_boat: 0,
     gyro_airship: 0.05,
   };
@@ -474,9 +479,11 @@ export function createVehicleFromPreset(
     lowrider: 0.86,
     donk: 1.52,
     slab: 0.92,
+    cadillac_coupe_deville: 0.8,
     steam_boat: 1.0,
     gyro_airship: 0.9,
   };
+  const isDeville = preset === 'cadillac_coupe_deville';
   return {
     id,
     name: names[preset],
@@ -485,7 +492,14 @@ export function createVehicleFromPreset(
     rimColor: rimColors[preset],
     suspensionOffset: suspensionByPreset[preset],
     wheelScale: wheelScaleByPreset[preset],
-    hydraulicHop: preset === 'lowrider' || preset === 'donk',
+    hydraulicHop: preset === 'lowrider' || preset === 'donk' || isDeville,
+    hasAirbagSuspension: isDeville,
+    airbagSpeed: 1.0,
+    airbagLockLevel: 1.0,
+    hasConvertibleTop: isDeville,
+    convertibleTopDown: false,
+    doorsOpen: false,
+    trunkOpen: false,
     trunkBassEnabled: false,
     underglowColor: preset === 'slab' ? '#e879f9' : undefined,
     turboBoost:
@@ -493,13 +507,15 @@ export function createVehicleFromPreset(
         ? 1.35
         : preset === 'donk'
           ? 1.24
-          : preset === 'dune_buggy'
-            ? 1.2
-            : preset === 'slab'
-              ? 1.18
-              : preset === 'lowrider'
-                ? 1.15
-                : 1.0,
+          : isDeville
+            ? 1.22
+            : preset === 'dune_buggy'
+              ? 1.2
+              : preset === 'slab'
+                ? 1.18
+                : preset === 'lowrider'
+                  ? 1.15
+                  : 1.0,
     x,
     y,
     z,

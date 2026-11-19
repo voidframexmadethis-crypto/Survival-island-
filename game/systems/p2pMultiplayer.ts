@@ -34,6 +34,8 @@ export type P2PPacket =
       vx?: number;
       vz?: number;
       vyaw?: number;
+      gunSkinId?: string | null;
+      backpackSkinId?: string | null;
     }
   | {
       type: 'place_structure';

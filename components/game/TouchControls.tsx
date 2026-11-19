@@ -218,7 +218,10 @@ export function TouchControls({
   return (
     <div className="pointer-events-none fixed inset-0 z-20 touch-surface select-none overflow-hidden">
       {/* LEFT ZONE: Sprint/Crouch + Flight ON/OFF Switch stacked cleanly above Movement Joystick + Teleport Box */}
-      <div className="pointer-events-auto absolute bottom-[74px] sm:bottom-[86px] left-2.5 sm:left-5 safe-bottom flex flex-col items-start gap-2">
+      <div
+        id="joystick-pad"
+        className="joystick-pad pointer-events-auto absolute bottom-[74px] sm:bottom-[86px] left-2.5 sm:left-5 safe-bottom flex flex-col items-start gap-2"
+      >
         <div className="flex items-center gap-1.5 pl-1">
           {!mirroredJoystickOnly && (
             <>
@@ -338,7 +341,7 @@ export function TouchControls({
           </div>
 
           {(onFlyAscendChange || onFlyDescendChange) && (
-            <div className="flex flex-col gap-1.5 shrink-0">
+            <div id="flight-controls" className="flex flex-col gap-1.5 shrink-0">
               {onFlyAscendChange && (
                 <button
                   type="button"
@@ -390,6 +393,7 @@ export function TouchControls({
 
           {onTeleportBiome && (
             <form
+              id="teleport-bar"
               onSubmit={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -427,7 +431,10 @@ export function TouchControls({
 
       {/* RIGHT ZONE: Compact Minecraft-PE-Style Jump + Primary Action Arc + Quick Utility Row */}
       {!mirroredJoystickOnly && (
-      <div className="pointer-events-auto absolute bottom-[74px] sm:bottom-[86px] right-2.5 sm:right-5 safe-bottom flex flex-col items-end gap-2">
+      <div
+        id="combat-controls"
+        className="action-wheel pointer-events-auto absolute bottom-[74px] sm:bottom-[86px] right-2.5 sm:right-5 safe-bottom flex flex-col items-end gap-2"
+      >
         {/* Compact Utility Row: Backpack, Craft, Build */}
         <div className="flex items-center gap-1.5">
           {onOpenBackpack && (

@@ -5237,6 +5237,7 @@ export interface RemotePlayerMeshHandle {
   legR: THREE.Group;
   heldGunMesh: THREE.Mesh;
   heldToolMesh: THREE.Mesh;
+  backpackMesh: THREE.Mesh;
   speakerSprite?: THREE.Sprite;
 }
 
@@ -5429,6 +5430,7 @@ export function createRemotePlayerMesh(
     legR,
     heldGunMesh,
     heldToolMesh,
+    backpackMesh: backpack,
     speakerSprite,
   };
 }
