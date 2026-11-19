@@ -74,3 +74,97 @@ body::-webkit-scrollbar-thumb:hover,
 .survival-scroll::-webkit-scrollbar-thumb:hover {
   background: rgba(217, 119, 6, 0.75);
 }
+
+/* MUSIC PRO DAW Controls */
+.daw-step-pad {
+  transition: transform 0.05s ease, background-color 0.08s ease, box-shadow 0.08s ease;
+}
+.daw-step-pad:active {
+  transform: scale(0.92);
+}
+.daw-step-pad.active {
+  background: linear-gradient(180deg, #fde68a 0%, #f97316 55%, #c2410c 100%);
+  border-color: #fed7aa;
+  box-shadow: 0 0 7px rgba(249, 115, 22, 0.55);
+}
+.daw-step-pad.beat-group {
+  background-color: #6b5359;
+  border-color: #82676e;
+}
+.daw-step-pad.step-playhead {
+  outline: 2px solid #4ade80;
+  outline-offset: -1px;
+  filter: brightness(1.22);
+}
+
+input[type="range"].daw-mixer-fader {
+  -webkit-appearance: none;
+  appearance: none;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 16px;
+  height: 76px;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"].daw-mixer-fader::-webkit-slider-runnable-track {
+  width: 5px;
+  border-radius: 999px;
+  background: #14181f;
+  border: 1px solid #3c4452;
+}
+input[type="range"].daw-mixer-fader::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 11px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #e2e8f0 0%, #64748b 100%);
+  border: 1px solid #f8fafc;
+  margin-left: -5px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.65);
+}
+
+input[type="range"].daw-mini-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 5px;
+  border-radius: 999px;
+  background: #14181f;
+  border: 1px solid #2f3846;
+  cursor: pointer;
+}
+input[type="range"].daw-mini-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #38bdf8;
+  border: 1px solid #e0f2fe;
+  cursor: pointer;
+}
+
+.daw-playlist-clip {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.daw-playlist-clip:hover {
+  filter: brightness(1.12);
+}
+

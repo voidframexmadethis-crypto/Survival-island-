@@ -914,6 +914,7 @@ export interface GameStats {
 export type GraphicsPreset = 'low' | 'medium' | 'high' | 'ultra';
 export type DrawDistanceTier = 'near' | 'medium' | 'far';
 export type TvSafetyMode = 'auto' | 'safe_mini' | 'full_3d';
+export type TvBassMode = 'off' | 'trunk' | 'extreme';
 
 export interface GameSettings {
   masterVolume: number;
@@ -1012,6 +1013,7 @@ export interface GameSaveData {
   tvIsMuted?: boolean;
   tvAutoCycle?: boolean;
   tvPaused?: boolean;
+  tvBassMode?: TvBassMode;
   tamedCreatures?: { species: CreatureSpecies; name: string }[];
   weaponMagazines?: Partial<Record<ItemId, number>>;
   baseArmoryOpened?: boolean;
@@ -1297,6 +1299,8 @@ export interface HUDStateSnapshot {
     spatialVolume?: number;
     safetyMode?: TvSafetyMode;
     effectiveSafetyMode?: TvSafetyMode;
+    bassMode?: TvBassMode;
+    bassEnergy?: number;
   };
   buildGhost?: {
     visible: boolean;

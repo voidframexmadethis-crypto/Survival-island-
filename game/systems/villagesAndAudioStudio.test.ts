@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   addShelterUpgrade,
+  buildMelodyPresetNotes,
   canOpenMusicStudio,
   computeStepDurationMs,
   createDefaultMix,
@@ -10,9 +11,15 @@ import {
   createPremadeShelter,
   discoverVillage,
   expandHome,
+  mapMidiSequenceToDrumSteps,
+  mapMidiSequenceToPianoRollNotes,
   midiToFrequency,
+  midiToNoteName,
+  StudioImportManager,
+  toggleOrAddPianoRollNote,
   togglePatternStep,
   tradeWithMerchant,
+  transposePianoRollChannel,
   validateWebPluginManifest,
   type DrumPattern,
   type PlayerEconomy,
@@ -243,3 +250,127 @@ test('walking from East porch through living room into Music Studio and Recordin
     }
   }
 });
+
+test('StudioImportManager parses MIDI, decodes WAV/MP3 audio samples, and loads JS AudioWorklet processors', async () => {
+  const addedModules: string[] = [];
+  const fakeBuffer = { duration: 1.25 } as unknown as AudioBuffer;
+  const mockCtx = {
+    decodeAudioData: async () => fakeBuffer,
+    audioWorklet: {
+      addModule: async (url: string) => {
+        addedModules.push(url);
+      },
+    },
+  } as unknown as AudioContext;
+
+  const importer = new StudioImportManager(mockCtx);
+
+  // Build a minimal valid Standard MIDI File (Format 0, 1 track, 480 TPQN, 140 BPM + Kick note 36 + Snare note 38)
+  const midiBytes = new Uint8Array([
+    // MThd (6 bytes)
+    0x4d, 0x54, 0x68, 0x64,
+    0x00, 0x00, 0x00, 0x06,
+    0x00, 0x00, // format 0
+    0x00, 0x01, // 1 track
+    0x01, 0xe0, // 480 ticks/quarter
+    // MTrk
+    0x4d, 0x54, 0x72, 0x6b,
+    0x00, 0x00, 0x00, 0x1b, // 27 bytes
+    // delta 0: Tempo 140 BPM -> 428571 us = 0x068a1b
+    0x00, 0xff, 0x51, 0x03, 0x06, 0x8a, 0x1b,
+    // delta 0: Note On ch 9, note 36 (Kick), vel 100
+    0x00, 0x99, 0x24, 0x64,
+    // delta 120 (0x78): Note Off ch 9, note 36
+    0x78, 0x89, 0x24, 0x00,
+    // delta 0: Note On ch 9, note 38 (Snare), vel 95
+    0x00, 0x99, 0x26, 0x5f,
+    // delta 120: Note Off ch 9, note 38
+    0x78, 0x89, 0x26, 0x00,
+    // delta 0: End of Track
+    0x00, 0xff, 0x2f, 0x00,
+  ]);
+
+  const midiFile = new File([midiBytes], 'beat_140.mid', { type: 'audio/midi' });
+  const wavFile = new File([new Uint8Array([1, 2, 3, 4])], 'kick_custom.wav', { type: 'audio/wav' });
+  const jsFile = new File(['class CustomProc extends AudioWorkletProcessor {}'], 'tape_sat.js', {
+    type: 'application/javascript',
+  });
+
+  const result = await importer.handleFiles({
+    target: { files: [midiFile, wavFile, jsFile] },
+  });
+
+  assert.equal(result.errors.length, 0);
+  assert.deepEqual(result.importedAudioNames, ['kick_custom.wav']);
+  assert.equal(importer.drumKit['kick_custom.wav'], fakeBuffer);
+  assert.equal(importer.customProcessors.has('tape_sat.js'), true);
+  assert.equal(addedModules.length, 1);
+
+  assert.ok(importer.midiSequence);
+  assert.equal(importer.midiSequence.name, 'beat_140.mid');
+  assert.equal(importer.midiSequence.bpm, 140);
+  assert.equal(importer.midiSequence.totalNotes, 2);
+
+  const steps = mapMidiSequenceToDrumSteps(importer.midiSequence, 5);
+  assert.equal(steps[0][0], true); // Kick at step 0
+  assert.equal(steps[1][1], true); // Snare at step 1
+
+  importer.dispose();
+});
+
+test('Piano Roll pattern melody helpers add, toggle, transpose, preset, and map MIDI melodies accurately', () => {
+  assert.equal(midiToNoteName(60), 'C4');
+  assert.equal(midiToNoteName(61), 'C#4');
+  assert.equal(midiToNoteName(48), 'C3');
+
+  // Add and toggle notes for a channel
+  const first = toggleOrAddPianoRollNote([], 5, 60, 0, 2, 0.9, 16);
+  assert.equal(first.added, true);
+  assert.equal(first.nextNotes.length, 1);
+  assert.equal(first.nextNotes[0].midi, 60);
+  assert.equal(first.nextNotes[0].duration, 2);
+
+  // Add second note (harmony) without removing first
+  const second = toggleOrAddPianoRollNote(first.nextNotes, 5, 67, 0, 4, 0.85, 16);
+  assert.equal(second.added, true);
+  assert.equal(second.nextNotes.length, 2);
+
+  // Toggle first note off
+  const toggledOff = toggleOrAddPianoRollNote(second.nextNotes, 5, 60, 0, 2, 0.9, 16);
+  assert.equal(toggledOff.added, false);
+  assert.equal(toggledOff.nextNotes.length, 1);
+  assert.equal(toggledOff.nextNotes[0].midi, 67);
+
+  // Transpose only targets specified channel and clamps safely within range
+  const preset = buildMelodyPresetNotes('trap_minor', 5);
+  assert.ok(preset.length >= 8);
+  const combined = [...preset, ...buildMelodyPresetNotes('bass_808', 4)];
+  const transposed = transposePianoRollChannel(combined, 5, 3, 48, 72);
+  assert.equal(transposed.find((n) => n.channelId === 5 && n.step === 0)?.midi, 63);
+  assert.equal(transposed.find((n) => n.channelId === 4 && n.step === 0)?.midi, 48); // unchanged
+
+  // Map non-percussion MIDI track notes to Piano Roll pattern notes
+  const prFromMidi = mapMidiSequenceToPianoRollNotes(
+    {
+      name: 'melody.mid',
+      format: 0,
+      ticksPerQuarterNote: 480,
+      bpm: 128,
+      totalNotes: 2,
+      tracks: [
+        {
+          name: 'Lead',
+          notes: [
+            { note: 64, velocity: 100, channel: 0, startTick: 0, durationTicks: 240, stepIndex: 0 },
+            { note: 36, velocity: 100, channel: 9, startTick: 0, durationTicks: 120, stepIndex: 0 },
+          ],
+        },
+      ],
+    },
+    6,
+  );
+  assert.equal(prFromMidi.length, 1);
+  assert.equal(prFromMidi[0].midi, 64);
+  assert.equal(prFromMidi[0].duration, 2);
+});
+

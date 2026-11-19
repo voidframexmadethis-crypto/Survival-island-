@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
+  Disc3,
   ExternalLink,
   FileVideo,
   Gamepad2,
@@ -33,9 +34,12 @@ import {
   Youtube,
 } from 'lucide-react';
 import {
+  TV_BASS_MODES,
   TV_CHANNELS,
+  TvBassMode,
   TvChannelId,
   normalizeChannelId,
+  normalizeTvBassMode,
 } from '@/game/systems/smartTvSystem';
 import type { HUDStateSnapshot, TvSafetyMode } from '@/game/types';
 
@@ -153,6 +157,7 @@ interface TvPlayerModalProps {
   onStop?: () => void;
   onSetVolume: (vol: number) => void;
   onToggleMute: () => void;
+  onSetBassMode?: (mode: TvBassMode) => void;
   onNextChannel: () => void;
   onPrevChannel: () => void;
   onToggleAutoCycle: (enabled: boolean) => void;
@@ -199,6 +204,7 @@ export function TvPlayerModal({
   onStop,
   onSetVolume,
   onToggleMute,
+  onSetBassMode,
   onNextChannel,
   onPrevChannel,
   onToggleAutoCycle,
@@ -258,6 +264,8 @@ export function TvPlayerModal({
   const youtubeChannel = tvState?.youtubeChannel || 'YouTube';
   const currentTime = tvState?.currentTime ?? 0;
   const spatialVol = tvState?.spatialVolume ?? Math.round(volume * 100);
+  const bassMode: TvBassMode = normalizeTvBassMode(tvState?.bassMode);
+  const bassEnergy = tvState?.bassEnergy ?? 0;
   const activeMeta =
     TV_CHANNELS.find((c) => c.id === activeChannel) || TV_CHANNELS[0];
 
@@ -667,7 +675,13 @@ export function TvPlayerModal({
               </div>
             )}
 
-            <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-stone-700/80 bg-black shadow-inner">
+            <div
+              className={`relative w-full aspect-video rounded-xl overflow-hidden border bg-black shadow-inner transition-colors ${
+                bassMode !== 'off' && isPowerOn && !isPaused && !isStopped && bassEnergy > 0.35
+                  ? 'border-orange-500/80'
+                  : 'border-stone-700/80'
+              }`}
+            >
               {showInlineYouTube ? (
                 <div
                   ref={setInlineSlotRef}
@@ -1098,8 +1112,75 @@ export function TvPlayerModal({
           </div>
         </div>
 
-        {/* Bottom Audio & Hide Remote Footer */}
+        {/* Bottom Audio, Car Trunk Bass & Hide Remote Footer */}
         <div className="p-3 border-t border-stone-800 bg-stone-900/95 space-y-2.5 shrink-0">
+          {/* Car Trunk Subwoofer Selector + Live Excursion Meter */}
+          <div className="rounded-xl bg-stone-950/90 border border-stone-800 px-2.5 py-2 space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Disc3
+                  className={`w-3.5 h-3.5 shrink-0 ${
+                    bassMode !== 'off' && isPowerOn && !isPaused && !isStopped
+                      ? 'text-orange-400 animate-pulse'
+                      : 'text-stone-400'
+                  }`}
+                />
+                <span className="text-[11px] font-bold uppercase tracking-wider text-stone-200 truncate">
+                  Car Trunk Subwoofer
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <div className="w-16 h-1.5 rounded-full bg-stone-800 overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-75 ${
+                      bassMode === 'extreme'
+                        ? 'bg-gradient-to-r from-orange-500 to-red-500'
+                        : 'bg-gradient-to-r from-amber-500 to-orange-500'
+                    }`}
+                    style={{
+                      width: `${Math.round(
+                        (isPowerOn && !isPaused && !isStopped && !isMuted && bassMode !== 'off'
+                          ? bassEnergy
+                          : 0) * 100,
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <span className="text-[10px] font-mono-tabular font-bold text-orange-300">
+                  {bassMode === 'off'
+                    ? '0dB'
+                    : bassMode === 'extreme'
+                      ? '+18dB'
+                      : '+13dB'}
+                </span>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-1.5">
+              {TV_BASS_MODES.map((m) => {
+                const selected = bassMode === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => onSetBassMode?.(m.id)}
+                    aria-pressed={selected}
+                    className={`min-h-[34px] px-2 rounded-lg border text-[11px] font-bold transition-colors ${
+                      selected
+                        ? m.id === 'off'
+                          ? 'bg-stone-800 border-stone-500 text-stone-100'
+                          : m.id === 'extreme'
+                            ? 'bg-red-950/80 border-red-500 text-red-200 shadow-sm shadow-red-600/20'
+                            : 'bg-orange-950/75 border-orange-500 text-orange-200 shadow-sm shadow-orange-600/20'
+                        : 'bg-stone-900 border-stone-800 hover:border-stone-700 text-stone-400 hover:text-stone-200'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="flex items-center gap-2">
             <button
               type="button"

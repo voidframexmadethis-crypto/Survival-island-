@@ -11,10 +11,11 @@ import React, {
 } from 'react';
 import { Pause, Play, SlidersHorizontal, Tv, X } from 'lucide-react';
 import type { TvScreenProjection } from '@/game/engine/GameEngine';
-import type { TvSafetyMode } from '@/game/types';
+import type { TvBassMode, TvSafetyMode } from '@/game/types';
 
 export interface PersistentYouTubeOverlayHandle {
   updateProjection: (proj: TvScreenProjection | null) => void;
+  updateBassBump: (bassEnergy: number, bassMode: TvBassMode) => void;
 }
 
 interface PersistentYouTubeOverlayProps {
@@ -70,6 +71,7 @@ export const PersistentYouTubeOverlay = forwardRef<
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const bumpFrameRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const projectionRef = useRef<TvScreenProjection | null>(null);
   const readyRef = useRef(false);
@@ -78,6 +80,7 @@ export const PersistentYouTubeOverlay = forwardRef<
   const lastSentPausedRef = useRef<boolean | null>(null);
   const lastVolPushAtRef = useRef<number>(0);
   const lastLayoutKeyRef = useRef<string>('');
+  const lastBassStateRef = useRef<string>('');
 
   const [projVisible, setProjVisible] = useState(false);
   const [nocookieVideoId, setNocookieVideoId] = useState<string | null>(null);
@@ -296,6 +299,52 @@ export const PersistentYouTubeOverlay = forwardRef<
     });
   }, [active, videoId, mode, inlineSlotElement]);
 
+  const applyBassVisualBump = useCallback(
+    (rawEnergy: number, bassMode: TvBassMode) => {
+      const frameEl = bumpFrameRef.current;
+      const outerEl = containerRef.current;
+      if (!frameEl || !outerEl) return;
+
+      const energy =
+        !active || isPaused || isMuted || bassMode === 'off'
+          ? 0
+          : Math.max(0, Math.min(1, rawEnergy));
+
+      if (energy <= 0.005) {
+        if (lastBassStateRef.current !== 'idle') {
+          lastBassStateRef.current = 'idle';
+          frameEl.style.transform = 'translate3d(0px, 0px, 0) scale(1)';
+          outerEl.style.boxShadow = '';
+        }
+        return;
+      }
+
+      const amp = bassMode === 'extreme' ? 1.35 : 1.0;
+      const t = performance.now() * 0.058;
+      const scale = 1 + energy * (mode === 'world3d' ? 0.024 : 0.018) * amp;
+      const dx = Math.cos(t * 0.92) * energy * 1.7 * amp;
+      const dy = Math.sin(t * 1.15) * energy * (mode === 'world3d' ? 3.4 : 2.6) * amp;
+      const rot = Math.sin(t * 1.4) * energy * 0.48 * amp;
+
+      const xform = `translate3d(${dx.toFixed(2)}px, ${dy.toFixed(2)}px, 0) scale(${scale.toFixed(4)}) rotate(${rot.toFixed(3)}deg)`;
+      const glowAlpha = Math.min(0.85, 0.2 + energy * 0.65);
+      const glowBlur = Math.round(14 + energy * 28 * amp);
+      const shadowVal =
+        mode === 'world3d'
+          ? ''
+          : `0 0 ${glowBlur}px rgba(249, 115, 22, ${glowAlpha.toFixed(2)})`;
+
+      const stateKey = `${xform}|${shadowVal}`;
+      if (lastBassStateRef.current === stateKey) return;
+      lastBassStateRef.current = stateKey;
+      frameEl.style.transform = xform;
+      if (mode !== 'world3d') {
+        outerEl.style.boxShadow = shadowVal;
+      }
+    },
+    [active, isPaused, isMuted, mode],
+  );
+
   useImperativeHandle(
     ref,
     () => ({
@@ -316,10 +365,16 @@ export const PersistentYouTubeOverlay = forwardRef<
         if (mode === 'world3d') {
           applyContainerLayout();
           syncAudioState(false);
+          if (proj) {
+            applyBassVisualBump(proj.bassEnergy ?? 0, proj.bassMode ?? 'trunk');
+          }
         }
       },
+      updateBassBump(bassEnergy: number, bassMode: TvBassMode) {
+        applyBassVisualBump(bassEnergy, bassMode);
+      },
     }),
-    [mode, tvSafetyMode, applyContainerLayout, syncAudioState],
+    [mode, tvSafetyMode, applyContainerLayout, syncAudioState, applyBassVisualBump],
   );
 
   // Sync layout immediately whenever mode changes, and continuously track inline slot / window resize
@@ -455,82 +510,88 @@ export const PersistentYouTubeOverlay = forwardRef<
         transformOrigin: '0 0',
       }}
     >
-      {/* Minimal Mini-TV Bezel (only visible in floating PiP screen mode when remote is closed & 3D TV is off-camera) */}
-      {mode === 'pip' && (
-        <div className="h-8 px-2 bg-stone-950/95 border-b border-stone-800 flex items-center justify-between gap-1.5 shrink-0">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <Tv className="w-3.5 h-3.5 text-red-400 shrink-0" />
-            <span className="text-[11px] font-semibold text-stone-100 truncate">
-              {title || 'TV Playing'}
-            </span>
+      <div
+        ref={bumpFrameRef}
+        className="flex flex-col w-full h-full will-change-transform"
+        style={{ transformOrigin: 'center center' }}
+      >
+        {/* Minimal Mini-TV Bezel (only visible in floating PiP screen mode when remote is closed & 3D TV is off-camera) */}
+        {mode === 'pip' && (
+          <div className="h-8 px-2 bg-stone-950/95 border-b border-stone-800 flex items-center justify-between gap-1.5 shrink-0">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Tv className="w-3.5 h-3.5 text-red-400 shrink-0" />
+              <span className="text-[11px] font-semibold text-stone-100 truncate">
+                {title || 'TV Playing'}
+              </span>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={onTogglePlayPause}
+                className="w-6 h-6 rounded-md bg-stone-800 hover:bg-stone-700 text-stone-100 flex items-center justify-center transition-colors"
+                aria-label={isPaused ? 'Resume TV' : 'Pause TV'}
+                title={isPaused ? 'Resume Video' : 'Pause Video'}
+              >
+                {isPaused ? (
+                  <Play className="w-3 h-3 fill-current" />
+                ) : (
+                  <Pause className="w-3 h-3 fill-current" />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={onOpenRemote}
+                className="h-6 px-1.5 rounded-md bg-stone-800 hover:bg-stone-700 text-amber-300 text-[10px] font-semibold flex items-center gap-1 transition-colors"
+                aria-label="Open TV Remote"
+                title="Open TV Remote"
+              >
+                <SlidersHorizontal className="w-3 h-3" />
+                <span>Remote</span>
+              </button>
+              <button
+                type="button"
+                onClick={onDismissPip}
+                className="w-6 h-6 rounded-md bg-stone-800 hover:bg-red-900/80 text-stone-300 hover:text-white flex items-center justify-center transition-colors"
+                aria-label="Hide Floating TV Screen"
+                title="Hide Mini-TV Screen"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              type="button"
-              onClick={onTogglePlayPause}
-              className="w-6 h-6 rounded-md bg-stone-800 hover:bg-stone-700 text-stone-100 flex items-center justify-center transition-colors"
-              aria-label={isPaused ? 'Resume TV' : 'Pause TV'}
-              title={isPaused ? 'Resume Video' : 'Pause Video'}
-            >
-              {isPaused ? (
-                <Play className="w-3 h-3 fill-current" />
-              ) : (
-                <Pause className="w-3 h-3 fill-current" />
-              )}
-            </button>
-            <button
-              type="button"
-              onClick={onOpenRemote}
-              className="h-6 px-1.5 rounded-md bg-stone-800 hover:bg-stone-700 text-amber-300 text-[10px] font-semibold flex items-center gap-1 transition-colors"
-              aria-label="Open TV Remote"
-              title="Open TV Remote"
-            >
-              <SlidersHorizontal className="w-3 h-3" />
-              <span>Remote</span>
-            </button>
-            <button
-              type="button"
-              onClick={onDismissPip}
-              className="w-6 h-6 rounded-md bg-stone-800 hover:bg-red-900/80 text-stone-300 hover:text-white flex items-center justify-center transition-colors"
-              aria-label="Hide Floating TV Screen"
-              title="Hide Mini-TV Screen"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
+        )}
 
-      {/* Single Persistent YouTube IFrame — Never Unmounts When Exiting Remote */}
-      <div className="relative flex-1 w-full h-full bg-black overflow-hidden">
-        <iframe
-          key={streamInstanceKey}
-          ref={iframeRef}
-          src={embedUrl}
-          title={title || 'Smart TV YouTube Player'}
-          className="w-full h-full border-0 block"
-          referrerPolicy="strict-origin-when-cross-origin"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-          onLoad={() => {
-            readyRef.current = true;
-            try {
-              iframeRef.current?.contentWindow?.postMessage(
-                JSON.stringify({
-                  event: 'listening',
-                  id: 1,
-                  channel: 'widget',
-                }),
-                '*',
-              );
-            } catch {
-              // Ignore cross-origin timing
-            }
-            lastSentPausedRef.current = isPaused;
-            sendCommand(isPaused ? 'pauseVideo' : 'playVideo');
-            syncAudioState(true);
-            applyContainerLayout();
-          }}
-        />
+        {/* Single Persistent YouTube IFrame — Never Unmounts When Exiting Remote */}
+        <div className="relative flex-1 w-full h-full bg-black overflow-hidden">
+          <iframe
+            key={streamInstanceKey}
+            ref={iframeRef}
+            src={embedUrl}
+            title={title || 'Smart TV YouTube Player'}
+            className="w-full h-full border-0 block"
+            referrerPolicy="strict-origin-when-cross-origin"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+            onLoad={() => {
+              readyRef.current = true;
+              try {
+                iframeRef.current?.contentWindow?.postMessage(
+                  JSON.stringify({
+                    event: 'listening',
+                    id: 1,
+                    channel: 'widget',
+                  }),
+                  '*',
+                );
+              } catch {
+                // Ignore cross-origin timing
+              }
+              lastSentPausedRef.current = isPaused;
+              sendCommand(isPaused ? 'pauseVideo' : 'playVideo');
+              syncAudioState(true);
+              applyContainerLayout();
+            }}
+          />
+        </div>
       </div>
     </div>
   );

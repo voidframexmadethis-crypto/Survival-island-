@@ -479,6 +479,9 @@ export function SurvivalGameClient() {
       onTvProjectionUpdate: (proj) => {
         tvOverlayRef.current?.updateProjection(proj);
       },
+      onTvBassUpdate: (bassEnergy, bassMode) => {
+        tvOverlayRef.current?.updateBassBump(bassEnergy, bassMode);
+      },
     });
     engineRef.current = engine;
 
@@ -2400,6 +2403,7 @@ export function SurvivalGameClient() {
           onStop={() => engineRef.current?.stopTvPlayback()}
           onSetVolume={(vol) => engineRef.current?.setTvVolume(vol)}
           onToggleMute={() => engineRef.current?.toggleTvMute()}
+          onSetBassMode={(mode) => engineRef.current?.setTvBassMode(mode)}
           onNextChannel={() => engineRef.current?.nextTvChannel()}
           onPrevChannel={() => engineRef.current?.prevTvChannel()}
           onToggleAutoCycle={(enabled) => engineRef.current?.setTvAutoCycle(enabled)}

@@ -10,6 +10,7 @@ import {
   SmartTvSystem,
   TvChannelId,
   normalizeChannelId,
+  normalizeTvBassMode,
 } from '../systems/smartTvSystem';
 import {
   FARM_SHOP_STOCK,
@@ -131,6 +132,7 @@ import {
   StructuralBlockKind,
   TargetHitboxSnapshot,
   TrackedSighting,
+  TvBassMode,
   VehicleModulePlacement,
   WeaponMaterialClass,
   WeatherType,
@@ -332,6 +334,8 @@ export interface TvScreenProjection {
   height: number;
   spatialVolume: number;
   isHouseTv: boolean;
+  bassEnergy?: number;
+  bassMode?: TvBassMode;
 }
 
 export interface EngineCallbacks {
@@ -357,6 +361,7 @@ export interface EngineCallbacks {
   ) => void;
   onYouTubeError?: (videoId: string, errorCode: number) => void;
   onTvProjectionUpdate?: (projection: TvScreenProjection | null) => void;
+  onTvBassUpdate?: (bassEnergy: number, bassMode: TvBassMode) => void;
 }
 
 function formatTimePhase(t: number): string {
@@ -2127,6 +2132,19 @@ export class GameEngine {
     return muted;
   }
 
+  public setTvBassMode(mode: TvBassMode): TvBassMode {
+    const next = this.smartTv.setBassMode(mode);
+    const label =
+      next === 'extreme'
+        ? '2x12" Competition Trunk Sub'
+        : next === 'trunk'
+          ? 'Car Trunk Subwoofer ON'
+          : 'Stock TV Speakers (Bass Boost Off)';
+    this.toast(`3D TV Audio: ${label}`, 'info');
+    this.emitHud();
+    return next;
+  }
+
   public setTvAutoCycle(enabled: boolean): void {
     this.smartTv.setAutoCycle(enabled);
     this.emitHud();
@@ -2235,6 +2253,15 @@ export class GameEngine {
 
     if (!shouldProjectYouTube || !tvTarget) {
       this.emitTvProjection(null);
+      this.smartTv.setDirectListenOverride(
+        Boolean(
+          this.tvInlinePlayerActive ||
+            (this.smartTv.power &&
+              !this.smartTv.isStopped &&
+              this.smartTv.isUsingYouTube &&
+              Boolean(this.smartTv.youtubeVideoId)),
+        ),
+      );
       return;
     }
 
@@ -2365,6 +2392,7 @@ export class GameEngine {
       ),
     );
 
+    this.smartTv.setDirectListenOverride(Boolean(this.tvInlinePlayerActive));
     this.emitTvProjection({
       visible: true,
       cssMatrix3d,
@@ -2372,6 +2400,8 @@ export class GameEngine {
       height: refH,
       spatialVolume,
       isHouseTv: tvTarget.isHouseTv,
+      bassEnergy: this.smartTv.getTrunkBassEnergy(),
+      bassMode: this.smartTv.getBassMode(),
     });
   }
 
@@ -3194,6 +3224,9 @@ export class GameEngine {
     if (typeof save.tvChannel === 'number') {
       this.smartTv.setChannel(normalizeChannelId(save.tvChannel));
     }
+    if (save.tvBassMode !== undefined) {
+      this.smartTv.setBassMode(normalizeTvBassMode(save.tvBassMode));
+    }
     if (save.tvPower === false && this.smartTv.power) {
       this.smartTv.togglePower();
     } else if (save.tvPaused && this.smartTv.power) {
@@ -3952,6 +3985,7 @@ export class GameEngine {
       tvIsMuted: this.smartTv.isMuted,
       tvAutoCycle: this.smartTv.autoCycleChannels,
       tvPaused: this.smartTv.isPaused,
+      tvBassMode: this.smartTv.getBassMode(),
       weaponMagazines: Object.fromEntries(this.weaponMagazines.entries()),
       baseArmoryOpened: Boolean(this.armoryChestState?.opened),
       clearedStructureIds:
@@ -11215,8 +11249,10 @@ export class GameEngine {
           youtubeVideoId: this.smartTv.youtubeVideoId,
           youtubeTitle: this.smartTv.youtubeTitle,
           youtubeChannel: this.smartTv.youtubeChannel,
-            spatialVolume:
-              Math.round(this.smartTv.volume * this.smartTv.getSpatialMultiplier() * 100),
+          spatialVolume:
+            Math.round(this.smartTv.volume * this.smartTv.getSpatialMultiplier() * 100),
+          bassMode: this.smartTv.getBassMode(),
+          bassEnergy: Number(this.smartTv.getTrunkBassEnergy().toFixed(3)),
         };
       })(),
       equippedWeaponState: (() => {
@@ -11595,13 +11631,17 @@ export class GameEngine {
     }
 
     // Sync placed smart_tv structure materials & standby LEDs with global SmartTvSystem
+    const tvBassEnergy = this.smartTv.getTrunkBassEnergy();
+    const tvBassMode = this.smartTv.getBassMode();
     for (const st of this.structures) {
       if (st.type !== 'smart_tv') continue;
       const visual = this.structureVisuals.get(st.id);
       if (visual) {
         this.smartTv.syncPlacedTvVisual(visual.group);
         if (visual.fireLight) {
-          visual.fireLight.intensity = this.smartTv.power ? 1.65 : 0;
+          visual.fireLight.intensity = this.smartTv.power
+            ? 1.65 + tvBassEnergy * (tvBassMode === 'extreme' ? 2.4 : 1.55)
+            : 0;
         }
       }
     }
@@ -11616,6 +11656,7 @@ export class GameEngine {
 
     this.updateCamera();
     this.syncTvScreenProjection();
+    this.callbacks.onTvBassUpdate?.(tvBassEnergy, tvBassMode);
     this.renderer.render(this.scene, this.camera);
 
     if (this.isSoftwareGl) {

@@ -1,5 +1,119 @@
 import * as THREE from 'three';
-import type { TvSafetyMode } from '../types';
+import type { TvBassMode, TvSafetyMode } from '../types';
+
+export type { TvBassMode };
+
+export interface TvBassModeMeta {
+  id: TvBassMode;
+  label: string;
+  badge: string;
+  lowShelfDb: number;
+  subPeakDb: number;
+  bumpScale: number;
+}
+
+export const TV_BASS_MODES: TvBassModeMeta[] = [
+  {
+    id: 'off',
+    label: 'Stock',
+    badge: 'CLEAN',
+    lowShelfDb: 0,
+    subPeakDb: 0,
+    bumpScale: 0,
+  },
+  {
+    id: 'trunk',
+    label: 'Car Trunk',
+    badge: 'TRUNK SUB',
+    lowShelfDb: 13.5,
+    subPeakDb: 9.5,
+    bumpScale: 0.78,
+  },
+  {
+    id: 'extreme',
+    label: '2x12" Sub',
+    badge: 'MAX TRUNK',
+    lowShelfDb: 18.5,
+    subPeakDb: 14.5,
+    bumpScale: 1.0,
+  },
+];
+
+export function normalizeTvBassMode(mode: unknown): TvBassMode {
+  if (mode === 'off' || mode === 'trunk' || mode === 'extreme') return mode;
+  return 'trunk';
+}
+
+export function getTvBassModeMeta(mode: TvBassMode): TvBassModeMeta {
+  return TV_BASS_MODES.find((m) => m.id === mode) || TV_BASS_MODES[1];
+}
+
+export function computeTrunkBassEnvelope(params: {
+  timeSec: number;
+  active: boolean;
+  bassMode: TvBassMode;
+  volume: number;
+  spatialMult: number;
+  analyserEnergy?: number;
+  transientPulse?: number;
+}): number {
+  if (!params.active || params.bassMode === 'off') return 0;
+  const vol = Math.max(0, Math.min(1, params.volume));
+  const spatial = Math.max(0, Math.min(1, params.spatialMult));
+  const acousticScale = Math.min(1, vol * spatial * 1.15);
+  if (acousticScale <= 0.005) return 0;
+
+  const meta = getTvBassModeMeta(params.bassMode);
+  const t = Math.max(0, params.timeSec);
+  const analyser = Math.max(0, Math.min(1, params.analyserEnergy ?? 0));
+  const transient = Math.max(0, Math.min(1, params.transientPulse ?? 0));
+
+  // Rhythmic sub-bass swell + double-kick 808 trunk cadence
+  const beatPhase = (t * 2.15) % 1;
+  const primaryKick = Math.exp(-beatPhase * 5.4);
+  const doubleHitPhase = ((t * 4.3 + 0.35) % 1);
+  const subDrop = Math.exp(-doubleHitPhase * 7.2) * 0.55;
+  const subSwell = 0.14 + 0.16 * (0.5 + 0.5 * Math.sin(t * 6.75));
+  const rawDriver = Math.max(analyser, transient, primaryKick * 0.72 + subDrop * 0.35 + subSwell);
+
+  return Math.max(0, Math.min(1, rawDriver * acousticScale * meta.bumpScale));
+}
+
+export function computeTrunkVisualOffsets(
+  energy: number,
+  timeSec: number,
+  bassMode: TvBassMode,
+): {
+  scaleBoost: number;
+  offsetZ: number;
+  offsetY: number;
+  tiltXRad: number;
+  tiltZRad: number;
+  glowBoost: number;
+} {
+  const e = Math.max(0, Math.min(1, energy));
+  if (e <= 0.002 || bassMode === 'off') {
+    return {
+      scaleBoost: 0,
+      offsetZ: 0,
+      offsetY: 0,
+      tiltXRad: 0,
+      tiltZRad: 0,
+      glowBoost: 0,
+    };
+  }
+  const amp = bassMode === 'extreme' ? 1.32 : 1.0;
+  const rattle = Math.sin(timeSec * 58) * e * amp;
+  const sideRattle = Math.cos(timeSec * 47) * e * amp;
+  return {
+    scaleBoost: e * 0.024 * amp,
+    offsetZ: e * 0.026 * amp + rattle * 0.004,
+    offsetY: Math.abs(rattle) * 0.009 + e * 0.007 * amp,
+    tiltXRad: rattle * 0.011,
+    tiltZRad: sideRattle * 0.0085,
+    glowBoost: e * (bassMode === 'extreme' ? 2.45 : 1.55),
+  };
+}
 
 export interface SmartTvTelemetry {
   dayCount: number;
@@ -128,6 +242,11 @@ export class SmartTvSystem {
   public isMuted = false;
   public autoCycleChannels = false;
   public currentTimestamp = 0;
+  public bassMode: TvBassMode = 'trunk';
+  private trunkBassEnergy = 0;
+  private trunkTransientPulse = 0;
+  private lastTrunkHitTime = 0;
+  private trunkStep = 0;
 
   private turnOnProgress = 1.0;
   private turnOffProgress = 0.0;
@@ -143,12 +262,24 @@ export class SmartTvSystem {
   private staticFrameDirty = true;
   private activeAudioNodes = 0;
 
-  // Web Audio Synthesizer
+  // Web Audio Synthesizer & Car Trunk Subwoofer DSP Chain
   private audioCtx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
+  private localVideoSourceGain: GainNode | null = null;
+  private trunkLowShelf: BiquadFilterNode | null = null;
+  private trunkSubPeak: BiquadFilterNode | null = null;
+  private trunkWarmthShaper: WaveShaperNode | null = null;
+  private trunkCompressor: DynamicsCompressorNode | null = null;
+  private trunkAnalyser: AnalyserNode | null = null;
+  private trunkFreqBins: Uint8Array<ArrayBuffer> | null = null;
+  private connectedVideoElements = new WeakMap<
+    HTMLVideoElement,
+    MediaElementAudioSourceNode
+  >();
   private lastAudioNoteTime = 0;
   private audioStep = 0;
   private lastSpatialMult = 1.0;
+  private directListenOverride = false;
 
   // TV Screen mesh & Light references
   private screenMesh: THREE.Mesh | null = null;
@@ -242,7 +373,7 @@ export class SmartTvSystem {
       if (this.power) {
         mat.color.setHex(0xffffff);
         mat.emissive.setHex(0xffffff);
-        mat.emissiveIntensity = 1.0;
+        mat.emissiveIntensity = 1.0 + this.trunkBassEnergy * 0.35;
         mat.roughness = 0.18;
         mat.metalness = 0.1;
       } else {
@@ -258,7 +389,7 @@ export class SmartTvSystem {
       if (this.power) {
         ledMat.color.setHex(this.isPaused ? 0xf59e0b : 0x22c55e);
         ledMat.emissive.setHex(this.isPaused ? 0xf59e0b : 0x22c55e);
-        ledMat.emissiveIntensity = 1.45;
+        ledMat.emissiveIntensity = 1.45 + this.trunkBassEnergy * 0.9;
       } else {
         const pulse = 0.9 + Math.sin(this.animClock * 2.4) * 0.45;
         ledMat.color.setHex(0xef4444);
@@ -266,6 +397,24 @@ export class SmartTvSystem {
         ledMat.emissiveIntensity = pulse;
       }
     }
+
+    // Physical Car Trunk Subwoofer shake on placed 3D Smart TVs
+    if (typeof group.userData.__tvBaseY !== 'number') {
+      group.userData.__tvBaseY = group.position.y;
+      group.userData.__tvBaseRotX = group.rotation.x;
+      group.userData.__tvBaseRotZ = group.rotation.z;
+    }
+    const baseY = group.userData.__tvBaseY as number;
+    const baseRotX = group.userData.__tvBaseRotX as number;
+    const baseRotZ = group.userData.__tvBaseRotZ as number;
+    const offsets = computeTrunkVisualOffsets(
+      this.trunkBassEnergy,
+      this.animClock,
+      this.bassMode,
+    );
+    group.position.y = baseY + offsets.offsetY;
+    group.rotation.x = baseRotX + offsets.tiltXRad;
+    group.rotation.z = baseRotZ + offsets.tiltZRad;
   }
 
   public setWorldPosition(worldPos: THREE.Vector3): void {
@@ -286,6 +435,11 @@ export class SmartTvSystem {
   ): void {
     this.screenMesh = mesh;
     this.screenMat = material;
+    if (!mesh.userData.__tvBasePos) {
+      mesh.userData.__tvBasePos = mesh.position.clone();
+      mesh.userData.__tvBaseRot = mesh.rotation.clone();
+      mesh.userData.__tvBaseScale = mesh.scale.clone();
+    }
     this.standbyLedMat =
       (mesh.userData.standbyLedMat as THREE.MeshStandardMaterial | undefined) || null;
     if (worldPos) {
@@ -480,8 +634,16 @@ export class SmartTvSystem {
       this.isPoweringTransition = true;
       this.turnOnProgress = 0.25;
     }
-    this.updateSpatialAudioGain(0);
+    this.updateSpatialAudioGain(
+      this.directListenOverride ? 1.0 : this.lastSpatialMult,
+    );
     this.applyMaterialTexture();
+  }
+
+  public setDirectListenOverride(direct: boolean): void {
+    if (this.directListenOverride === direct) return;
+    this.directListenOverride = direct;
+    this.updateSpatialAudioGain(direct ? 1.0 : this.lastSpatialMult);
   }
 
   public getSpatialMultiplier(): number {
@@ -514,6 +676,26 @@ export class SmartTvSystem {
     this.isMuted = !this.isMuted;
     this.updateSpatialAudioGain(this.lastSpatialMult);
     return this.isMuted;
+  }
+
+  public setBassMode(mode: TvBassMode): TvBassMode {
+    this.initAudioContext();
+    this.bassMode = normalizeTvBassMode(mode);
+    if (this.bassMode === 'off') {
+      this.trunkBassEnergy = 0;
+      this.trunkTransientPulse = 0;
+    }
+    this.applyTrunkDspEq();
+    this.staticFrameDirty = true;
+    return this.bassMode;
+  }
+
+  public getBassMode(): TvBassMode {
+    return this.bassMode;
+  }
+
+  public getTrunkBassEnergy(): number {
+    return this.trunkBassEnergy;
   }
 
   private cleanupLocalVideoElement(): void {
@@ -591,13 +773,58 @@ export class SmartTvSystem {
 
     video.addEventListener('canplay', () => {
       if (this.localVideoElement === video && !this.isPaused && this.power) {
+        this.attachLocalVideoToTrunkDsp(video);
         video.play().catch(() => {});
       }
     });
     video.load();
+    this.attachLocalVideoToTrunkDsp(video);
     video.play().catch(() => {});
 
     this.localVideoElement = video;
+  }
+
+  private buildTrunkSaturationCurve(): Float32Array<ArrayBuffer> {
+    const samples = 256;
+    const buffer = new ArrayBuffer(samples * 4);
+    const curve = new Float32Array(buffer);
+    for (let i = 0; i < samples; i++) {
+      const x = (i * 2) / samples - 1;
+      // Soft car-amp warm saturation curve
+      curve[i] = Math.tanh(x * 1.65);
+    }
+    return curve;
+  }
+
+  private applyTrunkDspEq(): void {
+    if (!this.audioCtx || this.audioCtx.state === 'closed') return;
+    const meta = getTvBassModeMeta(this.bassMode);
+    const now = this.audioCtx.currentTime;
+    try {
+      this.trunkLowShelf?.gain.setTargetAtTime(meta.lowShelfDb, now, 0.04);
+      this.trunkSubPeak?.gain.setTargetAtTime(meta.subPeakDb, now, 0.04);
+    } catch {
+      // Ignore AudioParam scheduling edge cases
+    }
+  }
+
+  private attachLocalVideoToTrunkDsp(video: HTMLVideoElement): void {
+    if (
+      !this.audioCtx ||
+      !this.localVideoSourceGain ||
+      this.audioCtx.state === 'closed' ||
+      this.connectedVideoElements.has(video)
+    ) {
+      return;
+    }
+    try {
+      const src = this.audioCtx.createMediaElementSource(video);
+      src.connect(this.localVideoSourceGain);
+      this.connectedVideoElements.set(video, src);
+    } catch {
+      // Some browsers restrict MediaElementSource on already-bound or codec-limited elements;
+      // fallback keeps standard HTML5 <video> audio playing cleanly.
+    }
   }
 
   private initAudioContext(): void {
@@ -611,7 +838,48 @@ export class SmartTvSystem {
         if (AudioCtxClass) {
           this.audioCtx = new AudioCtxClass();
           this.masterGain = this.audioCtx.createGain();
-          this.masterGain.connect(this.audioCtx.destination);
+          this.localVideoSourceGain = this.audioCtx.createGain();
+          this.localVideoSourceGain.gain.value = 1.0;
+
+          // Car Trunk Subwoofer Acoustic DSP Chain:
+          // Low-shelf chest boost (88Hz) -> Tuned trunk cavity sub-peak (48Hz) ->
+          // Warm amp saturation -> Tight compressor -> Sub-bass FFT Analyser -> Destination
+          this.trunkLowShelf = this.audioCtx.createBiquadFilter();
+          this.trunkLowShelf.type = 'lowshelf';
+          this.trunkLowShelf.frequency.value = 88;
+
+          this.trunkSubPeak = this.audioCtx.createBiquadFilter();
+          this.trunkSubPeak.type = 'peaking';
+          this.trunkSubPeak.frequency.value = 48;
+          this.trunkSubPeak.Q.value = 1.35;
+
+          this.trunkWarmthShaper = this.audioCtx.createWaveShaper();
+          this.trunkWarmthShaper.curve = this.buildTrunkSaturationCurve();
+          this.trunkWarmthShaper.oversample = '2x';
+
+          this.trunkCompressor = this.audioCtx.createDynamicsCompressor();
+          this.trunkCompressor.threshold.value = -16;
+          this.trunkCompressor.knee.value = 18;
+          this.trunkCompressor.ratio.value = 6;
+          this.trunkCompressor.attack.value = 0.004;
+          this.trunkCompressor.release.value = 0.18;
+
+          this.trunkAnalyser = this.audioCtx.createAnalyser();
+          this.trunkAnalyser.fftSize = 128;
+          this.trunkAnalyser.smoothingTimeConstant = 0.72;
+          this.trunkFreqBins = new Uint8Array(
+            new ArrayBuffer(this.trunkAnalyser.frequencyBinCount),
+          );
+
+          this.masterGain.connect(this.trunkLowShelf);
+          this.localVideoSourceGain.connect(this.trunkLowShelf);
+          this.trunkLowShelf.connect(this.trunkSubPeak);
+          this.trunkSubPeak.connect(this.trunkWarmthShaper);
+          this.trunkWarmthShaper.connect(this.trunkCompressor);
+          this.trunkCompressor.connect(this.trunkAnalyser);
+          this.trunkAnalyser.connect(this.audioCtx.destination);
+
+          this.applyTrunkDspEq();
         }
       }
       if (this.audioCtx && this.audioCtx.state === 'suspended') {
@@ -736,26 +1004,31 @@ export class SmartTvSystem {
       spatialMult = Math.max(0, 1.0 - (dist - 4.5) / 25.5);
     }
     this.lastSpatialMult = spatialMult;
-    this.updateSpatialAudioGain(spatialMult);
+    const effectiveMult = this.directListenOverride ? 1.0 : spatialMult;
+    this.updateSpatialAudioGain(effectiveMult);
 
     if (this.localVideoElement) {
       const effectiveVol =
-        !this.power || this.isMuted || this.isPaused ? 0 : this.volume * spatialMult;
+        !this.power || this.isMuted || this.isPaused ? 0 : this.volume * effectiveMult;
       this.localVideoElement.volume = Math.max(0, Math.min(1, effectiveVol));
     }
   }
 
   private updateSpatialAudioGain(spatialMult: number): void {
+    const effectiveMult = this.directListenOverride ? 1.0 : spatialMult;
     if (this.localVideoElement) {
       this.localVideoElement.muted = this.isMuted;
       const effectiveVol =
-        !this.power || this.isMuted || this.isPaused ? 0 : this.volume * spatialMult;
+        !this.power || this.isMuted || this.isPaused ? 0 : this.volume * effectiveMult;
       this.localVideoElement.volume = Math.max(0, Math.min(1, effectiveVol));
     }
     if (!this.masterGain || !this.audioCtx || this.audioCtx.state === 'closed') return;
     try {
+      const channelHeadroom = this.isUsingYouTube ? 0.42 : 0.26;
       const finalGain =
-        !this.power || this.isMuted || this.isPaused ? 0 : this.volume * spatialMult * 0.24;
+        !this.power || this.isMuted || this.isPaused || this.isStopped
+          ? 0
+          : this.volume * effectiveMult * channelHeadroom;
       this.masterGain.gain.setTargetAtTime(finalGain, this.audioCtx.currentTime, 0.05);
     } catch {
       // Ignore AudioContext timing errors
@@ -796,6 +1069,10 @@ export class SmartTvSystem {
         }
       }
     }
+
+    // Update live Car Trunk Subwoofer energy, sub-bass companion synth & physical 3D TV excursion
+    this.updateTrunkSubBassState(dt);
+    this.applyScreenMeshTrunkBump();
 
     if (!this.ctx) return;
 
@@ -843,10 +1120,18 @@ export class SmartTvSystem {
       }
     }
 
+    const trunkGlowBoost = computeTrunkVisualOffsets(
+      this.trunkBassEnergy,
+      this.animClock,
+      this.bassMode,
+    ).glowBoost;
+
     if (this.isUsingYouTube) {
       if (this.tvGlowLight) {
-        this.tvGlowLight.intensity = 1.35;
-        this.tvGlowLight.color.setHex(0xef4444);
+        this.tvGlowLight.intensity = 1.35 + trunkGlowBoost;
+        this.tvGlowLight.color.setHex(
+          this.trunkBassEnergy > 0.55 ? 0xff3b30 : 0xef4444,
+        );
       }
       // When the live YouTube iframe covers the screen (Inline, PiP, or 3D Wall) or player is far away,
       // draw the fallback card once and skip continuous 3D texture uploads to protect GPU memory.
@@ -895,7 +1180,7 @@ export class SmartTvSystem {
 
     if (this.isUsingLocalVideo && this.localVideoElement) {
       if (this.tvGlowLight) {
-        this.tvGlowLight.intensity = 1.45;
+        this.tvGlowLight.intensity = 1.45 + trunkGlowBoost;
         this.tvGlowLight.color.setHex(0x38bdf8);
       }
       if (skipUpload || farAway) return;
@@ -950,31 +1235,31 @@ export class SmartTvSystem {
     switch (this.currentChannel) {
       case 1:
         if (this.tvGlowLight) {
-          this.tvGlowLight.intensity = 1.5;
+          this.tvGlowLight.intensity = 1.5 + trunkGlowBoost;
           this.tvGlowLight.color.setHex(0xa855f7);
         }
         break;
       case 2:
         if (this.tvGlowLight) {
-          this.tvGlowLight.intensity = 1.45;
+          this.tvGlowLight.intensity = 1.45 + trunkGlowBoost;
           this.tvGlowLight.color.setHex(0xef4444);
         }
         break;
       case 3:
         if (this.tvGlowLight) {
-          this.tvGlowLight.intensity = 1.45;
+          this.tvGlowLight.intensity = 1.45 + trunkGlowBoost;
           this.tvGlowLight.color.setHex(0x10b981);
         }
         break;
       case 4:
         if (this.tvGlowLight) {
-          this.tvGlowLight.intensity = 1.55;
+          this.tvGlowLight.intensity = 1.55 + trunkGlowBoost;
           this.tvGlowLight.color.setHex(0x06b6d4);
         }
         break;
       case 5:
         if (this.tvGlowLight) {
-          this.tvGlowLight.intensity = 0.85;
+          this.tvGlowLight.intensity = 0.85 + trunkGlowBoost * 0.4;
           this.tvGlowLight.color.setHex(0x94a3b8);
         }
         break;
@@ -1863,23 +2148,31 @@ export class SmartTvSystem {
     );
     ctx.textAlign = 'left';
 
-    // Audio-Reactive Visualizer Bars at bottom
+    // Audio-Reactive Visualizer Bars at bottom (boosted by live Car Trunk Subwoofer energy)
     const barCount = 32;
     const barW = (w - 160) / barCount - 6;
+    const bassLift = this.trunkBassEnergy * 46;
     for (let i = 0; i < barCount; i++) {
+      const edgeSubWeight = i < 6 || i > barCount - 7 ? 1.25 : 0.85;
       const amp = this.isPaused
         ? 0.14
         : 0.25 + 0.65 * Math.abs(Math.sin(t * 4.2 + i * 0.52));
-      const barH = 14 + amp * 95;
+      const barH = Math.min(155, 14 + amp * 88 + bassLift * edgeSubWeight);
       const bx = 80 + i * (barW + 6);
       const by = h - 48 - barH;
       const barGrad = ctx.createLinearGradient(0, by, 0, by + barH);
-      barGrad.addColorStop(0, '#f87171');
+      barGrad.addColorStop(0, this.trunkBassEnergy > 0.55 ? '#fb923c' : '#f87171');
       barGrad.addColorStop(1, '#991b1b');
       ctx.fillStyle = barGrad;
       ctx.beginPath();
       ctx.roundRect(bx, by, barW, barH, 4);
       ctx.fill();
+    }
+
+    if (this.bassMode !== 'off') {
+      ctx.strokeStyle = `rgba(249, 115, 22, ${(0.18 + this.trunkBassEnergy * 0.68).toFixed(2)})`;
+      ctx.lineWidth = 4 + this.trunkBassEnergy * 10;
+      ctx.strokeRect(4, 50, w - 8, h - 54);
     }
   }
 
@@ -2014,12 +2307,16 @@ export class SmartTvSystem {
 
     switch (this.currentChannel) {
       case 1: {
-        // Lo-Fi Chill Radio warm Maj7 chords
+        // Lo-Fi Chill Radio warm Maj7 chords + car trunk 808 thump
         const lofiNotes = [220.0, 261.63, 329.63, 392.0, 440.0, 329.63, 293.66, 261.63];
         const freq = lofiNotes[this.audioStep % lofiNotes.length];
         this.playTone(freq, 'sine', 0.42, 0.11);
         if (this.audioStep % 4 === 0) {
           this.playTone(110.0, 'triangle', 0.55, 0.08);
+          if (this.bassMode !== 'off') {
+            this.playTrunkSubDrop(this.bassMode === 'extreme' ? 0.55 : 0.36);
+            this.trunkTransientPulse = 1.0;
+          }
         }
         break;
       }
@@ -2028,6 +2325,10 @@ export class SmartTvSystem {
         if (this.audioStep % 4 === 0) {
           const newsScale = [440, 554.37, 659.25, 880];
           this.playTone(newsScale[(this.audioStep / 4) % newsScale.length], 'triangle', 0.2, 0.07);
+          if (this.bassMode !== 'off') {
+            this.playTrunkSubDrop(0.28);
+            this.trunkTransientPulse = 0.8;
+          }
         } else if (this.audioStep % 8 === 2) {
           this.playTone(1174.66, 'sine', 0.14, 0.04);
         }
@@ -2040,15 +2341,23 @@ export class SmartTvSystem {
         this.playTone(freq, 'sine', 0.65, 0.06);
         if (this.audioStep % 4 === 0) {
           this.playStaticBurst(0.35, 0.035);
+          if (this.bassMode !== 'off') {
+            this.playTrunkSubDrop(0.24);
+            this.trunkTransientPulse = 0.65;
+          }
         }
         break;
       }
       case 4: {
-        // Retro Arcade & Gaming energetic chiptune synth
+        // Retro Arcade & Gaming energetic chiptune synth + heavy sub kick
         const bass = this.audioStep % 4 === 0 ? 110 : 146.83;
         this.playTone(bass, 'sawtooth', 0.18, 0.07);
         const lead = [329.63, 392.0, 440.0, 523.25, 587.33, 659.25];
         this.playTone(lead[(this.audioStep * 2) % lead.length], 'square', 0.12, 0.045);
+        if (this.bassMode !== 'off' && this.audioStep % 2 === 0) {
+          this.playTrunkSubDrop(this.bassMode === 'extreme' ? 0.52 : 0.34);
+          this.trunkTransientPulse = this.audioStep % 4 === 0 ? 1.0 : 0.7;
+        }
         break;
       }
       case 5: {
@@ -2056,6 +2365,184 @@ export class SmartTvSystem {
         this.playStaticBurst(0.28, 0.06);
         break;
       }
+    }
+  }
+
+  private playTrunkSubDrop(gainScale = 0.45): void {
+    if (
+      !this.audioCtx ||
+      !this.masterGain ||
+      this.audioCtx.state !== 'running' ||
+      !this.power ||
+      this.isMuted ||
+      this.isPaused ||
+      this.isStopped ||
+      this.bassMode === 'off' ||
+      this.activeAudioNodes >= 10
+    ) {
+      return;
+    }
+    try {
+      const now = this.audioCtx.currentTime;
+      const isExtreme = this.bassMode === 'extreme';
+      const subOsc = this.audioCtx.createOscillator();
+      const subFilter = this.audioCtx.createBiquadFilter();
+      const subGain = this.audioCtx.createGain();
+
+      // Tuned Car Trunk 12" Subwoofer 808 pitch-drop: 76Hz -> 43Hz -> 36Hz
+      subOsc.type = isExtreme ? 'triangle' : 'sine';
+      subOsc.frequency.setValueAtTime(isExtreme ? 82 : 72, now);
+      subOsc.frequency.exponentialRampToValueAtTime(44, now + 0.09);
+      subOsc.frequency.exponentialRampToValueAtTime(36, now + 0.34);
+
+      subFilter.type = 'lowpass';
+      subFilter.frequency.setValueAtTime(isExtreme ? 115 : 96, now);
+      subFilter.Q.value = 1.6;
+
+      const peakGain = Math.max(
+        0.01,
+        gainScale * this.volume * (isExtreme ? 0.95 : 0.68),
+      );
+      subGain.gain.setValueAtTime(0.0001, now);
+      subGain.gain.linearRampToValueAtTime(peakGain, now + 0.014);
+      subGain.gain.exponentialRampToValueAtTime(0.0008, now + 0.36);
+
+      subOsc.connect(subFilter);
+      subFilter.connect(subGain);
+      subGain.connect(this.masterGain);
+
+      this.activeAudioNodes += 1;
+      subOsc.onended = () => {
+        this.activeAudioNodes = Math.max(0, this.activeAudioNodes - 1);
+        try {
+          subOsc.disconnect();
+          subFilter.disconnect();
+          subGain.disconnect();
+        } catch {
+          // Ignore already disconnected nodes
+        }
+      };
+
+      subOsc.start(now);
+      subOsc.stop(now + 0.38);
+    } catch {
+      // Ignore Web Audio edge cases
+    }
+  }
+
+  private sampleTrunkAnalyserEnergy(): number {
+    if (!this.trunkAnalyser || !this.trunkFreqBins || !this.audioCtx) return 0;
+    if (this.audioCtx.state !== 'running') return 0;
+    try {
+      this.trunkAnalyser.getByteFrequencyData(this.trunkFreqBins);
+      // Sub-bass & low-bass bins (first 4 bins at 128 FFT)
+      let sum = 0;
+      const count = Math.min(4, this.trunkFreqBins.length);
+      for (let i = 0; i < count; i++) {
+        sum += this.trunkFreqBins[i] / 255;
+      }
+      return count > 0 ? Math.min(1, (sum / count) * 1.4) : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  private updateTrunkSubBassState(dt: number): void {
+    const isPlaying =
+      this.power &&
+      !this.isPaused &&
+      !this.isStopped &&
+      !this.isMuted &&
+      this.bassMode !== 'off';
+
+    if (!isPlaying) {
+      this.trunkTransientPulse = 0;
+      this.trunkBassEnergy = Math.max(0, this.trunkBassEnergy - dt * 7.5);
+      return;
+    }
+
+    this.trunkTransientPulse = Math.max(0, this.trunkTransientPulse - dt * 4.2);
+
+    const effectiveSpatial = this.directListenOverride ? 1.0 : this.lastSpatialMult;
+
+    // When YouTube video is playing in Trunk Sub mode, trigger deep low-passed 808 car-trunk
+    // chest thumps synced to playback clock so cross-origin YouTube streams bump like a trunk sub.
+    if (this.isUsingYouTube) {
+      if (
+        this.audioCtx &&
+        this.audioCtx.state === 'running' &&
+        this.volume > 0.01 &&
+        effectiveSpatial > 0.02
+      ) {
+        const now = this.audioCtx.currentTime;
+        const stepInterval = 0.23; // ~130 BPM sixteenth cadence
+        if (now - this.lastTrunkHitTime >= stepInterval) {
+          this.lastTrunkHitTime = now;
+          this.trunkStep = (this.trunkStep + 1) % 16;
+          // Classic hip-hop/car-trunk 808 kick pattern on steps 0, 3, 6, 8, 10, 14
+          const isMainHit = this.trunkStep === 0 || this.trunkStep === 8;
+          const isAccentHit =
+            this.trunkStep === 3 ||
+            this.trunkStep === 6 ||
+            this.trunkStep === 10 ||
+            this.trunkStep === 14;
+          if (isMainHit || isAccentHit) {
+            const hitPower = isMainHit ? 0.92 : 0.62;
+            this.playTrunkSubDrop(
+              hitPower * (this.bassMode === 'extreme' ? 0.95 : 0.65),
+            );
+            this.trunkTransientPulse = hitPower;
+          }
+        }
+      }
+    }
+
+    const analyserEnergy = this.sampleTrunkAnalyserEnergy();
+    const targetEnergy = computeTrunkBassEnvelope({
+      timeSec: this.currentTimestamp,
+      active: isPlaying,
+      bassMode: this.bassMode,
+      volume: this.volume,
+      spatialMult: effectiveSpatial,
+      analyserEnergy,
+      transientPulse: this.trunkTransientPulse,
+    });
+
+    const lerpRate = targetEnergy > this.trunkBassEnergy ? 20 : 7.5;
+    this.trunkBassEnergy +=
+      (targetEnergy - this.trunkBassEnergy) * Math.min(1, dt * lerpRate);
+  }
+
+  private applyScreenMeshTrunkBump(): void {
+    const mesh = this.screenMesh;
+    if (!mesh) return;
+    const basePos = mesh.userData.__tvBasePos as THREE.Vector3 | undefined;
+    const baseRot = mesh.userData.__tvBaseRot as THREE.Euler | undefined;
+    const baseScale = mesh.userData.__tvBaseScale as THREE.Vector3 | undefined;
+    if (!basePos || !baseRot || !baseScale) return;
+
+    const offsets = computeTrunkVisualOffsets(
+      this.power && !this.isPaused && !this.isStopped ? this.trunkBassEnergy : 0,
+      this.animClock,
+      this.bassMode,
+    );
+    mesh.position.set(
+      basePos.x,
+      basePos.y + offsets.offsetY,
+      basePos.z + offsets.offsetZ,
+    );
+    mesh.rotation.set(
+      baseRot.x + offsets.tiltXRad,
+      baseRot.y,
+      baseRot.z + offsets.tiltZRad,
+    );
+    mesh.scale.set(
+      baseScale.x * (1 + offsets.scaleBoost),
+      baseScale.y * (1 + offsets.scaleBoost),
+      baseScale.z,
+    );
+    if (this.screenMat && this.power) {
+      this.screenMat.emissiveIntensity = 1.0 + this.trunkBassEnergy * 0.35;
     }
   }
 
