@@ -181,6 +181,7 @@ import {
   PILLAGER_OUTPOST_POS,
   PLAYABLE_MAX_RADIUS,
   PLAYER_SPAWN,
+  SHIPWRECK_POS,
   SNOWY_IGLOO_POS,
   SNOWY_VILLAGE_POS,
   SNOWY_WOODLAND_POS,
@@ -265,7 +266,7 @@ const _oceanDayColor = new THREE.Color(0x0b7285);
 const _lakeDayColor = new THREE.Color(0x14b8a6);
 
 const FOG_GRID_SIZE = 32;
-const FOG_WORLD_SPAN = 320;
+const FOG_WORLD_SPAN = 1360;
 const MAX_POOLED_PARTICLES = 192;
 
 interface ArrowProjectile {
@@ -1838,8 +1839,8 @@ export class GameEngine {
     this.playerYaw = this.camYaw + Math.PI;
     this.markExploredAroundPlayer();
 
-    const wreckX = -4;
-    const wreckZ = 135;
+    const wreckX = SHIPWRECK_POS.x;
+    const wreckZ = SHIPWRECK_POS.z;
     const treasureDrops: [ItemId, number][] = [
       ['gold_bar', 10],
       ['diamond', 4],
@@ -1862,8 +1863,8 @@ export class GameEngine {
       ['captain_key', 1],
       ['ammo', 120],
     ];
-    this.spawnWorldPickupsFromGrants(-6.8, 128.0, treasureDrops.slice(0, 8), 0, 0);
-    this.spawnWorldPickupsFromGrants(-5.5, 133.0, treasureDrops.slice(8), 0, 0);
+    this.spawnWorldPickupsFromGrants(wreckX - 2.8, wreckZ - 7.0, treasureDrops.slice(0, 8), 0, 0);
+    this.spawnWorldPickupsFromGrants(wreckX - 1.5, wreckZ - 2.0, treasureDrops.slice(8), 0, 0);
 
     this.toast(
       'SHIPWRECK BEACHED! 4 Unlocked Loot Chests on ship & shoreline (Shotguns, Rifles, Barrett .50, Glocks & Ammo)!',
@@ -2973,10 +2974,11 @@ export class GameEngine {
       this.cinematicActive = true;
       this.cinematicTimer = 0;
       this.cinematicSubtitle =
-        'A violent storm strikes your vessel in uncharted tropical waters...';
+        'A violent storm strikes your pirate galleon in uncharted tropical waters...';
       this.shipModel.visible = true;
-      this.shipModel.position.set(-8, OCEAN_LEVEL - 0.1, 168);
-      this.shipModel.rotation.set(0, 0.35, 0);
+      // Start far offshore in deep open ocean (coastline is ~z=560) so the ship always stays on water
+      this.shipModel.position.set(-34, OCEAN_LEVEL - 0.15, 670);
+      this.shipModel.rotation.set(0, Math.PI * 0.82, 0);
     } else {
       this.cinematicActive = false;
       this.cinematicSubtitle = '';
@@ -6539,7 +6541,12 @@ export class GameEngine {
       kind === 'mega_spruce_tree' ||
       kind === 'snowy_spruce_tree' ||
       kind === 'jungle_tree' ||
-      kind === 'mega_jungle_tree'
+      kind === 'mega_jungle_tree' ||
+      kind === 'cherry_tree' ||
+      kind === 'bee_nest_oak' ||
+      kind === 'acacia_tree' ||
+      kind === 'swamp_oak_tree' ||
+      kind === 'mangrove_tree'
     );
   }
 
@@ -6550,7 +6557,11 @@ export class GameEngine {
       kind === 'mossy_cobble_boulder' ||
       kind === 'mountain_rock' ||
       kind === 'ore_vein' ||
-      kind === 'flint_outcrop'
+      kind === 'flint_outcrop' ||
+      kind === 'ice_spike' ||
+      kind === 'emerald_ore_vein' ||
+      kind === 'gold_ore_vein' ||
+      kind === 'terracotta_spire'
     );
   }
 
@@ -7173,6 +7184,15 @@ export class GameEngine {
       case 'jungle_tree':
       case 'mega_jungle_tree':
         return r < 0.52 ? 'banana' : r < 0.84 ? 'coconut' : 'apple';
+      case 'cherry_tree':
+        return r < 0.62 ? 'berries' : 'apple';
+      case 'bee_nest_oak':
+        return r < 0.6 ? 'apple' : 'maple_syrup';
+      case 'acacia_tree':
+        return r < 0.55 ? 'apple' : 'berries';
+      case 'swamp_oak_tree':
+      case 'mangrove_tree':
+        return r < 0.55 ? 'mushrooms' : 'berries';
       default:
         return null;
     }
@@ -7220,6 +7240,19 @@ export class GameEngine {
       if (r < 0.65) drops.push(['mushrooms', 2]);
       if (Math.random() < 0.4) drops.push(['apple', 1]);
       if (drops.length === 0) drops.push(['mushrooms', 1]);
+    } else if (kind === 'cherry_tree') {
+      if (r < 0.7) drops.push(['berries', 2]);
+      if (Math.random() < 0.45) drops.push(['apple', 1]);
+      if (drops.length === 0) drops.push(['berries', 1]);
+    } else if (kind === 'bee_nest_oak') {
+      drops.push(['maple_syrup', 2]);
+      if (r < 0.65) drops.push(['apple', 1]);
+    } else if (kind === 'acacia_tree') {
+      if (r < 0.6) drops.push(['apple', 1]);
+      drops.push(['branch', 2]);
+    } else if (kind === 'swamp_oak_tree' || kind === 'mangrove_tree') {
+      drops.push(['mushrooms', 2]);
+      drops.push(['fiber', 2]);
     }
     return drops;
   }
@@ -7243,6 +7276,11 @@ export class GameEngine {
       case 'taiga_pine_tree':
       case 'spruce_tree':
       case 'snowy_spruce_tree':
+      case 'cherry_tree':
+      case 'bee_nest_oak':
+      case 'acacia_tree':
+      case 'swamp_oak_tree':
+      case 'mangrove_tree':
         return [
           ['wood', toolId === 'stone_axe' ? 5 : 3],
           ['branch', 2],
@@ -7294,10 +7332,24 @@ export class GameEngine {
       case 'rose_bush':
       case 'lilac_bush':
       case 'peony_bush':
+      case 'sunflower_patch':
+      case 'pink_petals':
+      case 'blue_orchid_patch':
         return [
           ['plant_material', 3],
           ['berries', 1],
           ['fiber', 1],
+        ];
+      case 'cactus_plant':
+        return [
+          ['plant_material', 3],
+          ['fiber', 2],
+        ];
+      case 'coral_cluster':
+        return [
+          ['plant_material', 3],
+          ['sand', 2],
+          ['flint', 1],
         ];
       case 'eyeblossom_patch':
         return [
@@ -7345,6 +7397,28 @@ export class GameEngine {
         return [
           ['metal_ore', toolId === 'stone_pickaxe' ? 3 : 2],
           ['stone', 2],
+        ];
+      case 'emerald_ore_vein':
+        return [
+          ['emerald', toolId === 'stone_pickaxe' ? 3 : 2],
+          ['metal_ore', 1],
+          ['stone', 2],
+        ];
+      case 'gold_ore_vein':
+        return [
+          ['gold_bar', toolId === 'stone_pickaxe' ? 2 : 1],
+          ['metal_ore', 2],
+          ['stone', 2],
+        ];
+      case 'terracotta_spire':
+        return [
+          ['clay', toolId === 'stone_pickaxe' ? 5 : 3],
+          ['stone', 3],
+        ];
+      case 'ice_spike':
+        return [
+          ['stone', toolId === 'stone_pickaxe' ? 4 : 2],
+          ['flint', 2],
         ];
       case 'fiber_fern':
         return [
@@ -7815,61 +7889,75 @@ export class GameEngine {
     this.cinematicTimer += dt;
     const t = this.cinematicTimer;
 
-    // Ship tosses violently on storm ocean swells
-    const swellY = Math.sin(t * 2.2) * 0.75;
-    if (t < 3.2) {
+    // Giant pirate galleon stays strictly on deep open water (z >= 622, far offshore from the ~560m coastline)
+    const swellY = Math.sin(t * 2.1) * 0.85;
+    if (t < 3.4) {
+      const p = t / 3.4;
       this.cinematicSubtitle =
         'A violent tropical storm tears across the open sea...';
-      this.shipModel.position.set(-8 + t * 1.4, OCEAN_LEVEL + swellY, 168 - t * 2.5);
+      // Sail across deep open water parallel/angled toward the distant island without ever touching land
+      const shipX = THREE.MathUtils.lerp(-34, -16, p);
+      const shipZ = THREE.MathUtils.lerp(670, 636, p);
+      this.shipModel.position.set(shipX, OCEAN_LEVEL + swellY, shipZ);
       this.shipModel.rotation.set(
-        Math.sin(t * 2.5) * 0.12,
-        0.35,
-        Math.cos(t * 2.1) * 0.2,
+        Math.sin(t * 2.3) * 0.09,
+        Math.PI * 0.82 + Math.sin(t * 0.7) * 0.04,
+        Math.cos(t * 1.9) * 0.14,
       );
       this.camera.position.set(
-        this.shipModel.position.x + 14,
-        5.8 + Math.sin(t * 1.8) * 0.4,
-        this.shipModel.position.z + 14,
+        shipX + 34 - p * 4,
+        13.5 + Math.sin(t * 1.6) * 0.55,
+        shipZ + 22 - p * 4,
       );
-      this.camera.lookAt(
-        this.shipModel.position.x,
-        2.5,
-        this.shipModel.position.z,
-      );
-    } else if (t < 6.4) {
-      const p = (t - 3.2) / 3.2;
+      this.camera.lookAt(shipX, 8.2, shipZ - 2);
+    } else if (t < 6.6) {
+      const p = (t - 3.4) / 3.2;
       this.cinematicSubtitle =
-        'The hull cracks against hidden reefs — the vessel is going down!';
+        'A colossal rogue wave slams the galleon — you are swept overboard into the surf!';
+      // Pirate ship remains afloat & heeling in deep water (z = 636 -> 622, never hitting land)
+      const shipX = THREE.MathUtils.lerp(-16, -10, p);
+      const shipZ = THREE.MathUtils.lerp(636, 622, p);
       this.shipModel.position.set(
-        -3.5,
-        OCEAN_LEVEL + swellY * 0.5 - p * 2.4,
-        160 - p * 5,
+        shipX,
+        OCEAN_LEVEL + swellY * 0.6 - p * 0.65,
+        shipZ,
       );
-      this.shipModel.rotation.set(0.18 * p, 0.35, 0.2 + p * 0.55);
+      this.shipModel.rotation.set(
+        0.1 * Math.sin(t * 2.6),
+        Math.PI * 0.82 + p * 0.18,
+        0.14 + p * 0.28,
+      );
       this.camera.position.set(
-        this.shipModel.position.x + 11 - p * 4,
-        4.6 - p * 1.6,
-        this.shipModel.position.z + 11 - p * 4,
+        shipX + THREE.MathUtils.lerp(30, 18, p),
+        THREE.MathUtils.lerp(13.0, 5.2, p),
+        shipZ + THREE.MathUtils.lerp(18, -16, p),
       );
-      this.camera.lookAt(
-        this.shipModel.position.x,
-        1.4 - p * 0.8,
-        this.shipModel.position.z,
-      );
-    } else if (t < 9.6) {
-      const p = (t - 6.4) / 3.2;
+      this.camera.lookAt(shipX, THREE.MathUtils.lerp(7.5, 4.2, p), shipZ);
+    } else if (t < 9.8) {
+      const p = (t - 6.6) / 3.2;
       this.cinematicSubtitle =
-        'Thrown into the churning surf, you wash ashore on a mysterious island...';
-      this.shipModel.position.y = OCEAN_LEVEL - 2.4 - p * 3.0;
-      const camX = THREE.MathUtils.lerp(4, PLAYER_SPAWN.x, p);
-      const camZ = THREE.MathUtils.lerp(144, PLAYER_SPAWN.z, p);
-      const groundY = Math.max(OCEAN_LEVEL + 0.3, getTerrainHeight(camX, camZ));
+        'Carried by the tide, you wash ashore on the island while the pirate ship drifts offshore...';
+      // Giant pirate ship stays offshore on deep water (z = 622 -> 630) — ONLY the player goes onto land!
+      this.shipModel.position.set(
+        -10 - p * 4,
+        OCEAN_LEVEL - 0.5 + swellY * 0.5,
+        622 + p * 8,
+      );
+      this.shipModel.rotation.set(
+        Math.sin(t * 1.8) * 0.06,
+        Math.PI * 1.0 + p * 0.12,
+        0.32 + Math.cos(t * 1.5) * 0.06,
+      );
+      // Player washes from the coastal surf onto the sandy beach at PLAYER_SPAWN (0, 505)
+      const camX = THREE.MathUtils.lerp(6, PLAYER_SPAWN.x, p);
+      const camZ = THREE.MathUtils.lerp(580, PLAYER_SPAWN.z, p);
+      const groundY = Math.max(OCEAN_LEVEL + 0.35, getTerrainHeight(camX, camZ));
       this.camera.position.set(
         camX,
-        groundY + THREE.MathUtils.lerp(0.6, 1.62, p),
+        groundY + THREE.MathUtils.lerp(0.65, 1.62, p),
         camZ,
       );
-      this.camera.lookAt(0, 2.5, 86);
+      this.camera.lookAt(0, 4.0, PLAYER_SPAWN.z - 52);
     } else {
       this.finishCinematic();
     }
@@ -8094,19 +8182,54 @@ export class GameEngine {
       } else {
         if (this.worldType !== 'flat') {
           const bTemp = getBiomeAt(this.playerX, this.playerZ);
-          if (bTemp === 'snowy_taiga') targetTemp -= 2.0;
-          else if (
+          if (
+            bTemp === 'ice_spikes' ||
+            bTemp === 'frozen_peaks' ||
+            bTemp === 'jagged_peaks' ||
+            bTemp === 'frozen_ocean' ||
+            bTemp === 'frozen_river'
+          ) {
+            targetTemp -= 2.6;
+          } else if (
+            bTemp === 'snowy_taiga' ||
+            bTemp === 'snowy_plains' ||
+            bTemp === 'snowy_slopes' ||
+            bTemp === 'grove' ||
+            bTemp === 'snowy_beach' ||
+            bTemp === 'cold_ocean'
+          ) {
+            targetTemp -= 2.0;
+          } else if (
             bTemp === 'taiga' ||
             bTemp === 'old_growth_pine_taiga' ||
-            bTemp === 'old_growth_spruce_taiga'
+            bTemp === 'old_growth_spruce_taiga' ||
+            bTemp === 'stony_peaks' ||
+            bTemp === 'stony_shore' ||
+            bTemp === 'windswept_hills' ||
+            bTemp === 'windswept_gravelly_hills' ||
+            bTemp === 'windswept_forest'
           ) {
-            targetTemp -= 0.7;
+            targetTemp -= 0.8;
           } else if (bTemp === 'pale_garden' || bTemp === 'dark_forest') {
             targetTemp -= bTemp === 'pale_garden' ? 0.6 : 0.5;
           } else if (
+            bTemp === 'desert' ||
+            bTemp === 'badlands' ||
+            bTemp === 'wooded_badlands' ||
+            bTemp === 'eroded_badlands'
+          ) {
+            targetTemp += 1.4;
+          } else if (
+            bTemp === 'savanna' ||
+            bTemp === 'savanna_plateau' ||
+            bTemp === 'windswept_savanna'
+          ) {
+            targetTemp += 0.8;
+          } else if (
             bTemp === 'jungle' ||
             bTemp === 'sparse_jungle' ||
-            bTemp === 'bamboo_jungle'
+            bTemp === 'bamboo_jungle' ||
+            bTemp === 'warm_ocean'
           ) {
             targetTemp += 0.4;
           }
@@ -8250,7 +8373,7 @@ export class GameEngine {
       // Collision detection (skip Island colliders in Flat World)
       if (!isFlat) {
         for (const col of this.world.colliders) {
-          if (Math.hypot(col.x - (-4), col.z - 135) < 14) continue;
+          if (Math.hypot(col.x - SHIPWRECK_POS.x, col.z - SHIPWRECK_POS.z) < 14) continue;
           let activeRadius = col.radius;
           if (col.nodeId) {
             const node = this.nodeById.get(col.nodeId);
@@ -8358,7 +8481,7 @@ export class GameEngine {
           }
           // 2. Large cliff / cavern rock / house wall collider
           for (const col of this.world.colliders) {
-            if (Math.hypot(col.x - (-4), col.z - 135) < 14) continue;
+            if (Math.hypot(col.x - SHIPWRECK_POS.x, col.z - SHIPWRECK_POS.z) < 14) continue;
             if (col.radius < 1.1) continue;
             const d = Math.hypot(px - col.x, pz - col.z);
             if (d <= col.radius + 0.45) {
@@ -9860,8 +9983,8 @@ export class GameEngine {
         }
       }
 
-      // 1C. General Beached Shipwreck Area Check (at -4, 135)
-      const shipDist = Math.hypot(-4 - this.playerX, 135 - this.playerZ);
+      // 1C. General Beached Shipwreck Area Check
+      const shipDist = Math.hypot(SHIPWRECK_POS.x - this.playerX, SHIPWRECK_POS.z - this.playerZ);
       if (shipDist < 13.0 && shipDist < bestDist) {
         const unopened = this.shipwreckChests.filter((c) => !c.opened).length;
         bestDist = shipDist;
@@ -9878,9 +10001,9 @@ export class GameEngine {
           kind: 'shipwreck',
           actionCategory: 'search',
           distance: shipDist,
-          targetX: -4,
+          targetX: SHIPWRECK_POS.x,
           targetY: OCEAN_LEVEL + 0.5,
-          targetZ: 135,
+          targetZ: SHIPWRECK_POS.z,
         };
       }
     }
@@ -10154,12 +10277,23 @@ export class GameEngine {
         snowy_spruce_tree: 'Chop Frosted Spruce',
         jungle_tree: 'Chop Jungle Tree',
         mega_jungle_tree: 'Chop Mega Jungle Tree',
+        cherry_tree: 'Chop Cherry Blossom Tree',
+        bee_nest_oak: 'Chop Meadow Bee-Nest Oak',
+        acacia_tree: 'Chop Savanna Acacia Tree',
+        swamp_oak_tree: 'Chop Vine-Draped Swamp Oak',
+        mangrove_tree: 'Chop Mangrove Tree',
+        cactus_plant: 'Harvest Desert Cactus',
+        blue_orchid_patch: 'Gather Swamp Blue Orchids',
+        terracotta_spire: 'Mine Terracotta Hoodoo Spire',
+        coral_cluster: 'Harvest Coral Reef Cluster',
         jungle_bush: 'Clear Jungle Bush',
         bamboo_stalk: 'Harvest Bamboo Culms',
         flower_patch: 'Gather Wildflowers',
         rose_bush: 'Gather Rose Bush',
         lilac_bush: 'Gather Lilac Blossoms',
         peony_bush: 'Gather Peonies',
+        sunflower_patch: 'Gather Sunflowers',
+        pink_petals: 'Gather Cherry Pink Petals',
         eyeblossom_patch: 'Inspect Eyeblossoms',
         dead_bush: 'Collect Dry Twigs',
         melon_patch: 'Harvest Wild Melon',
@@ -10168,7 +10302,10 @@ export class GameEngine {
         stone_boulder: 'Mine Stone Boulder',
         mossy_cobble_boulder: 'Mine Mossy Cobble Boulder',
         mountain_rock: 'Mine Mountain Rock',
+        ice_spike: 'Mine Packed Ice Spike',
         ore_vein: 'Mine Metal Ore Vein',
+        emerald_ore_vein: 'Mine Emerald Ore Vein',
+        gold_ore_vein: 'Mine Surface Gold Ore Vein',
         flint_outcrop: 'Chip Sharp Flint',
         fiber_fern: 'Gather Plant Fiber',
         grass_tuft: 'Cut Dried Grass',
@@ -11746,25 +11883,27 @@ export class GameEngine {
     }
     // Shipwreck walkable deck surfaces (Island World only)
     if (this.worldType === 'island') {
-      const distToShip = Math.hypot(x - (-4), z - 135);
+      const sdx = x - SHIPWRECK_POS.x;
+      const sdz = z - SHIPWRECK_POS.z;
+      const distToShip = Math.hypot(sdx, sdz);
       if (distToShip < 14) {
         // 1. Collapsed mast bridge & Forecastle deck (gentle ramp from shoreline up to upper deck)
-        if (z >= 124 && z <= 132 && x >= -9.0 && x <= -1.5) {
-          const rampT = (z - 124) / 8;
+        if (sdz >= -11 && sdz <= -3 && sdx >= -5.0 && sdx <= 2.5) {
+          const rampT = (sdz + 11) / 8;
           const rampY = (OCEAN_LEVEL + 0.15) * (1 - rampT) + (OCEAN_LEVEL + 0.85) * rampT;
           if (footY >= rampY - 0.95 && rampY > bestY) {
             bestY = rampY;
           }
         }
         // 2. Mid Deck platform & Armory
-        if (z > 132 && z <= 138 && x >= -7.0 && x <= 0.5) {
+        if (sdz > -3 && sdz <= 3 && sdx >= -3.0 && sdx <= 4.5) {
           const midDeckY = OCEAN_LEVEL + 0.95;
           if (footY >= midDeckY - 0.95 && midDeckY > bestY) {
             bestY = midDeckY;
           }
         }
         // 3. Captain's Quarters (Aft Cabin at raised stern)
-        if (z > 138 && z <= 145 && x >= -5.5 && x <= 1.5) {
+        if (sdz > 3 && sdz <= 10 && sdx >= -1.5 && sdx <= 5.5) {
           const aftDeckY = OCEAN_LEVEL + 1.75;
           if (footY >= aftDeckY - 0.95 && aftDeckY > bestY) {
             bestY = aftDeckY;

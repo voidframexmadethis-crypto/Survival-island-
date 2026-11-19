@@ -5,19 +5,38 @@ import { Compass, MapPin, X } from 'lucide-react';
 import { HUDStateSnapshot } from '@/game/types';
 import {
   AUTUMN_GROVE_POS,
+  BADLANDS_MINESHAFT_POS,
   BIOME_INFO,
   CAVE_POS,
+  CHERRY_GROVE_POS,
+  CORAL_REEF_POS,
   DEAD_OAK_POS,
+  DESERT_PYRAMID_POS,
+  DESERT_VILLAGE_POS,
   EXPEDITION_POS,
   FARMER_POS,
+  FROZEN_OCEAN_ICEBERG_POS,
+  FROZEN_PEAKS_POS,
   HILL_HOUSE_POS,
   HOMESTEAD_POS,
+  ICE_SPIKES_POS,
+  JAGGED_PEAKS_POS,
   JUNGLE_TEMPLE_POS,
   LAKE_CENTER,
+  MANGROVE_SWAMP_POS,
+  MUSHROOM_FIELDS_POS,
+  OCEAN_MONUMENT_POS,
   PILLAGER_OUTPOST_POS,
+  PLAINS_VILLAGE_POS,
+  RUINED_PORTAL_POS,
+  SAVANNA_VILLAGE_POS,
   SNOWY_IGLOO_POS,
+  SNOWY_SLOPES_IGLOO_POS,
   SNOWY_VILLAGE_POS,
   SNOWY_WOODLAND_POS,
+  STONY_PEAKS_POS,
+  SUNFLOWER_VILLAGE_POS,
+  SWAMP_HUT_POS,
   SWAMP_POS,
   TAIGA_VILLAGE_POS,
   TRAIL_RUINS_POS,
@@ -46,7 +65,7 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
     if (!ctx) return;
 
     const size = 340;
-    const worldSpan = isFlat ? 640 : 320; // Flat covers -320..+320, Island covers -160..+160
+    const worldSpan = isFlat ? 640 : 1360; // Flat covers -320..+320, Mega-Island covers -680..+680
     const fogGrid = 32;
     const exploredSet = new Set(hud.exploredCells || []);
     const isExploredWorld = (wx: number, wz: number) => {
@@ -150,15 +169,43 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
               r = 152;
               g = 90;
               b = 44;
+            } else if (biome === 'warm_ocean') {
+              r = 14;
+              g = 165;
+              b = 185;
+            } else if (biome === 'lukewarm_ocean') {
+              r = 14;
+              g = 116;
+              b = 168;
+            } else if (biome === 'cold_ocean') {
+              r = 24;
+              g = 72;
+              b = 148;
+            } else if (biome === 'frozen_ocean') {
+              r = 134;
+              g = 186;
+              b = 232;
             } else if (biome === 'ocean' || h < -0.2) {
               const depth = Math.max(0, Math.min(1, (-h) / 5));
               r = 12 - depth * 6;
               g = 84 - depth * 35;
               b = 125 - depth * 35;
+            } else if (biome === 'frozen_river') {
+              r = 182;
+              g = 228;
+              b = 250;
             } else if (biome === 'lake' || biome === 'river') {
               r = 20;
               g = 184;
               b = 166;
+            } else if (biome === 'snowy_beach') {
+              r = 226;
+              g = 234;
+              b = 242;
+            } else if (biome === 'stony_shore') {
+              r = 122;
+              g = 118;
+              b = 112;
             } else if (biome === 'beach') {
               r = 230;
               g = 200;
@@ -224,6 +271,102 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
               r = 30;
               g = 58;
               b = 36;
+            } else if (biome === 'plains') {
+              r = 126;
+              g = 184;
+              b = 84;
+            } else if (biome === 'sunflower_plains') {
+              r = 212;
+              g = 190;
+              b = 62;
+            } else if (biome === 'snowy_plains') {
+              r = 228;
+              g = 238;
+              b = 248;
+            } else if (biome === 'ice_spikes') {
+              r = 124;
+              g = 198;
+              b = 245;
+            } else if (biome === 'meadow') {
+              r = 96;
+              g = 168;
+              b = 110;
+            } else if (biome === 'cherry_grove') {
+              r = 242;
+              g = 164;
+              b = 198;
+            } else if (biome === 'grove') {
+              r = 178;
+              g = 204;
+              b = 216;
+            } else if (biome === 'snowy_slopes') {
+              r = 236;
+              g = 244;
+              b = 252;
+            } else if (biome === 'jagged_peaks') {
+              r = 148;
+              g = 158;
+              b = 172;
+            } else if (biome === 'frozen_peaks') {
+              r = 154;
+              g = 212;
+              b = 244;
+            } else if (biome === 'stony_peaks') {
+              r = 166;
+              g = 164;
+              b = 158;
+            } else if (biome === 'windswept_hills') {
+              r = 104;
+              g = 132;
+              b = 102;
+            } else if (biome === 'windswept_gravelly_hills') {
+              r = 138;
+              g = 136;
+              b = 132;
+            } else if (biome === 'windswept_forest') {
+              r = 66;
+              g = 108;
+              b = 76;
+            } else if (biome === 'desert') {
+              r = 234;
+              g = 204;
+              b = 132;
+            } else if (biome === 'savanna') {
+              r = 184;
+              g = 160;
+              b = 78;
+            } else if (biome === 'savanna_plateau') {
+              r = 164;
+              g = 142;
+              b = 68;
+            } else if (biome === 'windswept_savanna') {
+              r = 144;
+              g = 132;
+              b = 88;
+            } else if (biome === 'badlands') {
+              r = 198;
+              g = 90;
+              b = 52;
+            } else if (biome === 'wooded_badlands') {
+              r = 166;
+              g = 104;
+              b = 58;
+            } else if (biome === 'eroded_badlands') {
+              r = 222;
+              g = 110;
+              b = 58;
+            } else if (biome === 'swamp') {
+              r = 74;
+              g = 104;
+              b = 56;
+            } else if (biome === 'mangrove_swamp') {
+              r = 54;
+              g = 90;
+              b = 56;
+            } else if (biome === 'mushroom_fields') {
+              r = 146;
+              g = 114;
+              b = 166;
             } else {
               r = 46;
               g = 112;
@@ -263,6 +406,25 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
         { label: 'Snowy Village', pos: SNOWY_VILLAGE_POS, color: '#bae6fd' },
         { label: 'Ice Igloo', pos: SNOWY_IGLOO_POS, color: '#f0f9ff' },
         { label: 'Jungle Temple', pos: JUNGLE_TEMPLE_POS, color: '#34d399' },
+        { label: 'Plains Village', pos: PLAINS_VILLAGE_POS, color: '#a3e635' },
+        { label: 'Sunflower Village', pos: SUNFLOWER_VILLAGE_POS, color: '#fde047' },
+        { label: 'Ruined Portal', pos: RUINED_PORTAL_POS, color: '#a855f7' },
+        { label: 'Cherry Grove', pos: CHERRY_GROVE_POS, color: '#f472b6' },
+        { label: 'Ice Spikes', pos: ICE_SPIKES_POS, color: '#7dd3fc' },
+        { label: 'Jagged Peaks', pos: JAGGED_PEAKS_POS, color: '#e2e8f0' },
+        { label: 'Frozen Peaks', pos: FROZEN_PEAKS_POS, color: '#bae6fd' },
+        { label: 'Stony Peaks', pos: STONY_PEAKS_POS, color: '#d6d3d1' },
+        { label: 'Slopes Igloo', pos: SNOWY_SLOPES_IGLOO_POS, color: '#f8fafc' },
+        { label: 'Desert Pyramid', pos: DESERT_PYRAMID_POS, color: '#fcd34d' },
+        { label: 'Desert Village', pos: DESERT_VILLAGE_POS, color: '#fde68a' },
+        { label: 'Savanna Village', pos: SAVANNA_VILLAGE_POS, color: '#d97706' },
+        { label: 'Mineshaft', pos: BADLANDS_MINESHAFT_POS, color: '#ea580c' },
+        { label: 'Swamp Hut', pos: SWAMP_HUT_POS, color: '#84cc16' },
+        { label: 'Mangrove', pos: MANGROVE_SWAMP_POS, color: '#22c55e' },
+        { label: 'Mushroom Fields', pos: MUSHROOM_FIELDS_POS, color: '#c084fc' },
+        { label: 'Ocean Monument', pos: OCEAN_MONUMENT_POS, color: '#2dd4bf' },
+        { label: 'Coral Reef', pos: CORAL_REEF_POS, color: '#fb7185' },
+        { label: 'Icebergs', pos: FROZEN_OCEAN_ICEBERG_POS, color: '#93c5fd' },
       ];
       ctx.font = '600 10px sans-serif';
       landmarks.forEach((lm) => {

@@ -555,46 +555,348 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
 }
 
 /**
- * 3D Composite Sailing Ship for the Storm Shipwreck Intro Cinematic.
+ * 3D Giant Realistic Pirate Galleon for the Storm Intro Cinematic.
+ * Features a layered timber hull, 16+ broadside iron cannons, 3 towering masts,
+ * multiple billowing square sails + lateen spanker + bowsprit jibs, full rope
+ * climbing nets (ratlines/shrouds), crow's nests, stern gallery lanterns, and Jolly Roger flag.
  */
 export function createSailingShipModel(): THREE.Group {
   const ship = new THREE.Group();
-  const hullMat = new THREE.MeshStandardMaterial({ color: 0x5c3a21, roughness: 0.85 });
-  const deckMat = new THREE.MeshStandardMaterial({ color: 0x85532a, roughness: 0.82 });
+
+  const darkHullMat = new THREE.MeshStandardMaterial({ color: 0x3b2314, roughness: 0.82, metalness: 0.06 });
+  const hullMidMat = new THREE.MeshStandardMaterial({ color: 0x52311b, roughness: 0.84, metalness: 0.05 });
+  const copperBottomMat = new THREE.MeshStandardMaterial({ color: 0x2c4a3e, roughness: 0.65, metalness: 0.35 });
+  const deckMat = new THREE.MeshStandardMaterial({ color: 0x7a4f2b, roughness: 0.86 });
+  const trimGoldMat = new THREE.MeshStandardMaterial({ color: 0xd4a438, roughness: 0.32, metalness: 0.78 });
+  const ironMat = new THREE.MeshStandardMaterial({ color: 0x1f2328, roughness: 0.38, metalness: 0.86 });
+  const ropeMat = new THREE.MeshStandardMaterial({ color: 0x9c8259, roughness: 0.94 });
+  const mastMat = new THREE.MeshStandardMaterial({ color: 0x4a2e19, roughness: 0.84 });
   const sailMat = new THREE.MeshStandardMaterial({
-    color: 0xe5dccb,
-    roughness: 0.9,
+    color: 0xebe2d0,
+    roughness: 0.88,
     side: THREE.DoubleSide,
   });
-
-  // Main Hull + Bow + Stern Cabin
-  const hull = new THREE.Mesh(new THREE.BoxGeometry(4.6, 2.6, 13.5), hullMat);
-  hull.position.y = 0.8;
-  const bow = new THREE.Mesh(new THREE.ConeGeometry(2.4, 4.5, 4), hullMat);
-  bow.rotation.x = Math.PI / 2;
-  bow.rotation.y = Math.PI / 4;
-  bow.scale.set(1.0, 1.0, 0.72);
-  bow.position.set(0, 1.05, 8.2);
-  const deck = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.25, 13.0), deckMat);
-  deck.position.y = 2.15;
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(3.8, 1.7, 3.6), hullMat);
-  cabin.position.set(0, 3.0, -4.4);
-  ship.add(hull, bow, deck, cabin);
-
-  // Masts & Sails
-  [
-    [0, 3.2, 8.6],
-    [-3.4, -2.2, 6.8],
-  ].forEach(([mz, _, h]) => {
-    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.24, h, 8), hullMat);
-    mast.position.set(0, 2.2 + h / 2, mz);
-    const yard = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 5.2, 6), hullMat);
-    yard.rotation.z = Math.PI / 2;
-    yard.position.set(0, 2.2 + h * 0.72, mz + 0.2);
-    const sail = new THREE.Mesh(new THREE.PlaneGeometry(4.8, h * 0.52), sailMat);
-    sail.position.set(0, 2.2 + h * 0.48, mz + 0.35);
-    ship.add(mast, yard, sail);
+  const weatheredSailMat = new THREE.MeshStandardMaterial({
+    color: 0xd9ccb2,
+    roughness: 0.92,
+    side: THREE.DoubleSide,
   });
+  const blackFlagMat = new THREE.MeshStandardMaterial({
+    color: 0x111317,
+    roughness: 0.88,
+    side: THREE.DoubleSide,
+  });
+  const skullMat = new THREE.MeshStandardMaterial({
+    color: 0xf8fafc,
+    roughness: 0.6,
+    side: THREE.DoubleSide,
+  });
+  const lanternGlowMat = new THREE.MeshStandardMaterial({
+    color: 0xffe49e,
+    emissive: 0xff9f2e,
+    emissiveIntensity: 1.8,
+    roughness: 0.25,
+  });
+
+  // Helper to create a curved, wind-billowed square sail
+  const makeBillowingSail = (width: number, height: number, belly: number, mat: THREE.Material) => {
+    const geo = new THREE.PlaneGeometry(width, height, 10, 8);
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const px = pos.getX(i);
+      const py = pos.getY(i);
+      const nx = px / (width * 0.5);
+      const ny = py / (height * 0.5);
+      // Billow forward (+Z) in the center, pinned at top yard and bottom corners
+      const curve = Math.cos(nx * Math.PI * 0.45) * Math.cos(ny * Math.PI * 0.48);
+      pos.setZ(i, Math.max(0, curve) * belly);
+    }
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = true;
+    return mesh;
+  };
+
+  // Helper to build a realistic rope climbing net (shrouds + horizontal ratline rungs)
+  const makeRopeNet = (
+    bottomX: number,
+    bottomY: number,
+    topX: number,
+    topY: number,
+    centerZ: number,
+    halfSpreadZ: number,
+    shroudCount: number,
+    rungCount: number,
+  ) => {
+    const netGroup = new THREE.Group();
+    const dy = topY - bottomY;
+    const dx = topX - bottomX;
+    const shroudLen = Math.hypot(dx, dy);
+    const tiltZ = -Math.atan2(dx, dy);
+
+    // Vertical/angled shrouds fanning from hull chainwale up to masthead
+    for (let s = 0; s < shroudCount; s++) {
+      const f = shroudCount === 1 ? 0 : (s / (shroudCount - 1)) * 2 - 1;
+      const zBot = centerZ + f * halfSpreadZ;
+      const zTop = centerZ + f * (halfSpreadZ * 0.28);
+      const dz = zTop - zBot;
+      const len = Math.hypot(shroudLen, dz);
+      const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, len, 5), ropeMat);
+      rope.position.set((bottomX + topX) * 0.5, (bottomY + topY) * 0.5, (zBot + zTop) * 0.5);
+      rope.rotation.z = tiltZ;
+      rope.rotation.x = Math.atan2(dz, dy);
+      netGroup.add(rope);
+    }
+
+    // Horizontal climbing ratline rungs across the shrouds
+    for (let r = 1; r <= rungCount; r++) {
+      const t = r / (rungCount + 1);
+      const rx = bottomX + dx * t;
+      const ry = bottomY + dy * t;
+      const span = halfSpreadZ * 2 * (1 - 0.72 * t);
+      const rung = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, span, 4), ropeMat);
+      rung.rotation.x = Math.PI / 2;
+      rung.position.set(rx, ry, centerZ);
+      netGroup.add(rung);
+    }
+
+    return netGroup;
+  };
+
+  // 1. MASSIVE LAYERED PIRATE GALLEON HULL (~36m long, ~9.2m beam)
+  const lowerKeel = new THREE.Mesh(new THREE.BoxGeometry(7.2, 2.2, 24.0), copperBottomMat);
+  lowerKeel.position.set(0, 0.4, 0);
+
+  const mainHull = new THREE.Mesh(new THREE.BoxGeometry(8.8, 3.6, 25.5), darkHullMat);
+  mainHull.position.set(0, 2.9, 0);
+  mainHull.castShadow = true;
+
+  // Tapered flared bow & sharp prow
+  const bowLower = new THREE.Mesh(new THREE.ConeGeometry(4.6, 9.0, 4), darkHullMat);
+  bowLower.rotation.x = Math.PI / 2;
+  bowLower.rotation.y = Math.PI / 4;
+  bowLower.scale.set(1.0, 1.0, 0.72);
+  bowLower.position.set(0, 2.8, 15.8);
+
+  const forecastle = new THREE.Mesh(new THREE.BoxGeometry(8.2, 1.8, 7.0), hullMidMat);
+  forecastle.position.set(0, 5.4, 10.2);
+
+  // Main weather deck + raised quarterdeck + grand captain's stern castle
+  const mainDeck = new THREE.Mesh(new THREE.BoxGeometry(8.3, 0.35, 25.0), deckMat);
+  mainDeck.position.set(0, 4.75, 0);
+
+  const quarterDeck = new THREE.Mesh(new THREE.BoxGeometry(8.4, 2.4, 9.2), hullMidMat);
+  quarterDeck.position.set(0, 5.9, -8.8);
+
+  const poopDeck = new THREE.Mesh(new THREE.BoxGeometry(7.8, 2.0, 5.8), darkHullMat);
+  poopDeck.position.set(0, 8.0, -10.8);
+
+  // Ornate gold trim strakes along port & starboard gunwales
+  [-4.46, 4.46].forEach((sideX) => {
+    const strakeUpper = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.24, 25.6), trimGoldMat);
+    strakeUpper.position.set(sideX, 4.55, 0);
+    const strakeLower = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 25.2), trimGoldMat);
+    strakeLower.position.set(sideX, 2.35, 0);
+    // Bulwark railing walls along waist
+    const bulwark = new THREE.Mesh(new THREE.BoxGeometry(0.32, 1.15, 16.5), hullMidMat);
+    bulwark.position.set(sideX * 0.96, 5.35, 0.8);
+    ship.add(strakeUpper, strakeLower, bulwark);
+  });
+
+  // Stern Gallery Windows & 3 Glowing Brass Stern Lanterns
+  for (let w = -2; w <= 2; w++) {
+    const winFrame = new THREE.Mesh(new THREE.BoxGeometry(1.05, 1.3, 0.22), trimGoldMat);
+    winFrame.position.set(w * 1.35, 7.6, -13.75);
+    const winGlass = new THREE.Mesh(new THREE.BoxGeometry(0.82, 1.05, 0.26), lanternGlowMat);
+    winGlass.position.set(w * 1.35, 7.6, -13.78);
+    ship.add(winFrame, winGlass);
+  }
+  [-2.6, 0, 2.6].forEach((lx) => {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 1.4, 6), ironMat);
+    post.position.set(lx, 9.5, -13.6);
+    const lamp = new THREE.Mesh(new THREE.OctahedronGeometry(0.42, 0), lanternGlowMat);
+    lamp.position.set(lx, 10.3, -13.6);
+    ship.add(post, lamp);
+  });
+
+  // Captain's Helm Wheel on Quarterdeck
+  const helmStand = new THREE.Mesh(new THREE.BoxGeometry(0.45, 1.2, 0.5), hullMidMat);
+  helmStand.position.set(0, 7.55, -5.8);
+  const helmWheel = new THREE.Mesh(new THREE.TorusGeometry(0.68, 0.08, 6, 12), trimGoldMat);
+  helmWheel.position.set(0, 8.15, -5.55);
+  ship.add(lowerKeel, mainHull, bowLower, forecastle, mainDeck, quarterDeck, poopDeck, helmStand, helmWheel);
+
+  // 2. BROADSIDE IRON NAVAL CANNONS (16 Heavy Cannons: 8 Port + 8 Starboard)
+  const cannonZPositions = [-7.8, -5.2, -2.6, 0.0, 2.6, 5.2, 7.8, 10.2];
+  [-1, 1].forEach((side) => {
+    cannonZPositions.forEach((cz) => {
+      // Dark open gunport cutout + gold trim surround
+      const portHole = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.85, 0.92), ironMat);
+      portHole.position.set(side * 4.42, 3.45, cz);
+      // Tapered cast-iron cannon barrel protruding through gunport
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.26, 2.15, 8), ironMat);
+      barrel.rotation.z = side * (Math.PI / 2);
+      barrel.position.set(side * 4.85, 3.45, cz);
+      // Muzzle ring
+      const muzzle = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.055, 6, 10), ironMat);
+      muzzle.rotation.y = Math.PI / 2;
+      muzzle.position.set(side * 5.88, 3.45, cz);
+      // Wooden carriage visible on gun deck
+      const carriage = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.55, 0.65), hullMidMat);
+      carriage.position.set(side * 3.7, 5.05, cz);
+      ship.add(portHole, barrel, muzzle, carriage);
+    });
+  });
+
+  // Heavy Iron Anchors hanging at Port & Starboard Bow
+  [-1, 1].forEach((side) => {
+    const shank = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 2.2, 6), ironMat);
+    shank.position.set(side * 4.2, 4.1, 12.6);
+    const fluke = new THREE.Mesh(new THREE.TorusGeometry(0.75, 0.11, 6, 10, Math.PI), ironMat);
+    fluke.rotation.z = Math.PI;
+    fluke.position.set(side * 4.2, 3.2, 12.6);
+    ship.add(shank, fluke);
+  });
+
+  // 3. LONG ANGLED BOWSPRIT + BOWSPRIT NETTING + 2 TRIANGULAR JIB SAILS
+  const bowsprit = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.36, 13.5, 8), mastMat);
+  bowsprit.rotation.x = Math.PI / 2 - 0.34;
+  bowsprit.position.set(0, 7.6, 19.2);
+  ship.add(bowsprit);
+
+  // Golden figurehead beneath bowsprit
+  const figurehead = new THREE.Mesh(new THREE.ConeGeometry(0.65, 2.2, 6), trimGoldMat);
+  figurehead.rotation.x = Math.PI / 2 - 0.35;
+  figurehead.position.set(0, 5.1, 16.5);
+  ship.add(figurehead);
+
+  // Two large triangular jib sails on the bowsprit forestays
+  const makeJibSail = (zFront: number, yFront: number, zBack: number, yTop: number) => {
+    const shape = new THREE.Shape();
+    shape.moveTo(0, 0);
+    shape.lineTo(zFront - zBack, yFront - 6.8);
+    shape.lineTo(0, yTop - 6.8);
+    shape.closePath();
+    const geo = new THREE.ShapeGeometry(shape);
+    geo.rotateY(-Math.PI / 2);
+    const jib = new THREE.Mesh(geo, weatheredSailMat);
+    jib.position.set(0.15, 6.8, zBack);
+    return jib;
+  };
+  ship.add(
+    makeJibSail(24.5, 9.6, 8.6, 18.8),
+    makeJibSail(20.5, 8.2, 8.6, 15.6),
+  );
+
+  // 4. THREE TOWERING MASTS + MULTIPLE BILLOWING SAILS + CROW'S NESTS + ROPE CLIMBING NETS
+  const mastConfigs = [
+    { z: 8.6, baseY: 6.1, height: 18.5, yardScale: 0.86, isMain: false },
+    { z: -0.4, baseY: 4.8, height: 24.0, yardScale: 1.08, isMain: true },
+    { z: -9.6, baseY: 8.9, height: 15.5, yardScale: 0.72, isMain: false },
+  ];
+
+  mastConfigs.forEach(({ z: mz, baseY, height, yardScale, isMain }) => {
+    // Main Mast Spar
+    const mast = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.24, 0.44, height, 10),
+      mastMat,
+    );
+    mast.position.set(0, baseY + height * 0.5, mz);
+    mast.castShadow = true;
+    ship.add(mast);
+
+    // Crow's Nest Lookout Platform
+    const nestY = baseY + height * 0.56;
+    const nestFloor = new THREE.Mesh(new THREE.CylinderGeometry(1.45, 1.15, 0.35, 10), hullMidMat);
+    nestFloor.position.set(0, nestY, mz);
+    const nestRail = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.48, 1.48, 0.85, 10, 1, true),
+      darkHullMat,
+    );
+    nestRail.position.set(0, nestY + 0.55, mz);
+    ship.add(nestFloor, nestRail);
+
+    // 3 Tiers of Yards & Big Billowing Square Sails per Mast (Lower Course, Topsail, Topgallant)
+    const tiers = [
+      { yFrac: 0.32, w: 12.2 * yardScale, h: height * 0.28, belly: 1.85, mat: sailMat },
+      { yFrac: 0.64, w: 9.8 * yardScale, h: height * 0.24, belly: 1.55, mat: weatheredSailMat },
+      { yFrac: 0.86, w: 6.8 * yardScale, h: height * 0.17, belly: 1.15, mat: sailMat },
+    ];
+    tiers.forEach((tier) => {
+      const yy = baseY + height * tier.yFrac;
+      const yard = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.11, 0.14, tier.w + 1.4, 8),
+        mastMat,
+      );
+      yard.rotation.z = Math.PI / 2;
+      yard.position.set(0, yy + tier.h * 0.48, mz + 0.35);
+      const sail = makeBillowingSail(tier.w, tier.h, tier.belly, tier.mat);
+      sail.position.set(0, yy, mz + 0.45);
+      ship.add(yard, sail);
+    });
+
+    // Port & Starboard Rope Climbing Nets (Shrouds + Horizontal Ratlines) from hull up to Crow's Nest
+    const netBottomY = baseY + 0.4;
+    const netTopY = nestY - 0.1;
+    ship.add(
+      makeRopeNet(-4.25, netBottomY, -0.7, netTopY, mz, 2.35, 5, 11),
+      makeRopeNet(4.25, netBottomY, 0.7, netTopY, mz, 2.35, 5, 11),
+    );
+
+    // Upper Topmast Rope Nets above Crow's Nest
+    ship.add(
+      makeRopeNet(-1.25, nestY + 0.3, -0.35, baseY + height * 0.88, mz, 1.15, 3, 6),
+      makeRopeNet(1.25, nestY + 0.3, 0.35, baseY + height * 0.88, mz, 1.15, 3, 6),
+    );
+
+    // Pirate Jolly Roger Black Flag at the Mainmast Peak (and black pennants on Fore/Mizzen)
+    const flagY = baseY + height - 0.8;
+    const flagW = isMain ? 4.4 : 2.8;
+    const flagH = isMain ? 2.5 : 1.3;
+    const flag = makeBillowingSail(flagW, flagH, 0.45, blackFlagMat);
+    flag.rotation.y = Math.PI / 2;
+    flag.position.set(0, flagY, mz - flagW * 0.5);
+    ship.add(flag);
+
+    if (isMain) {
+      // Crisp white Skull & Crossbones emblem on both sides of the main Jolly Roger
+      const skull = new THREE.Mesh(new THREE.CircleGeometry(0.52, 10), skullMat);
+      skull.rotation.y = Math.PI / 2;
+      skull.position.set(0.32, flagY + 0.18, mz - flagW * 0.5);
+      const bone1 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.14, 1.45), skullMat);
+      bone1.position.set(0.32, flagY - 0.42, mz - flagW * 0.5);
+      bone1.rotation.x = 0.45;
+      const bone2 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.14, 1.45), skullMat);
+      bone2.position.set(0.32, flagY - 0.42, mz - flagW * 0.5);
+      bone2.rotation.x = -0.45;
+      ship.add(skull, bone1, bone2);
+    }
+  });
+
+  // Aft Mizzen Spanker / Lateen Boom Sail
+  const spankerBoom = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 7.6, 6), mastMat);
+  spankerBoom.rotation.x = Math.PI / 2;
+  spankerBoom.position.set(0, 10.6, -13.4);
+  const spankerSail = makeBillowingSail(6.4, 5.4, 0.9, weatheredSailMat);
+  spankerSail.rotation.y = Math.PI / 2;
+  spankerSail.position.set(0.15, 13.4, -13.2);
+  ship.add(spankerBoom, spankerSail);
+
+  // Centerline Forestays & Backstays connecting Masts & Bowsprit
+  const addStayRope = (y1: number, z1: number, y2: number, z2: number) => {
+    const dy = y2 - y1;
+    const dz = z2 - z1;
+    const len = Math.hypot(dy, dz);
+    const stay = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, len, 5), ropeMat);
+    stay.position.set(0, (y1 + y2) * 0.5, (z1 + z2) * 0.5);
+    stay.rotation.x = Math.atan2(dz, dy);
+    ship.add(stay);
+  };
+  addStayRope(24.5, 8.6, 9.6, 25.2);   // Foremast -> Bowsprit tip
+  addStayRope(18.0, 8.6, 7.5, 19.5);   // Lower forestay -> Bowsprit
+  addStayRope(28.0, -0.4, 21.5, 8.6);  // Mainmast -> Foremast
+  addStayRope(24.0, -9.6, 25.5, -0.4); // Mizzenmast -> Mainmast
+  addStayRope(24.0, -9.6, 9.4, -13.8); // Mizzen backstay -> Stern
 
   return ship;
 }

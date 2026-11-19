@@ -15,21 +15,45 @@ import {
 } from '../world/models';
 import {
   AUTUMN_GROVE_POS,
+  BADLANDS_MINESHAFT_POS,
   CAVE_POS,
+  CHERRY_GROVE_POS,
+  CORAL_REEF_POS,
   DEAD_OAK_POS,
+  DESERT_PYRAMID_POS,
+  DESERT_VILLAGE_POS,
+  ERODED_BADLANDS_POS,
   FARMER_POS,
+  FROZEN_OCEAN_ICEBERG_POS,
+  FROZEN_PEAKS_POS,
   getBiomeAt,
   getLandmarkFloorY,
   getTerrainHeight,
+  GROVE_OUTPOST_POS,
   HILL_HOUSE_POS,
   HOMESTEAD_POS,
+  ICE_SPIKES_POS,
+  JAGGED_PEAKS_POS,
   LAKE_CENTER,
+  MANGROVE_SWAMP_POS,
+  MEADOW_OUTPOST_POS,
+  MUSHROOM_FIELDS_POS,
   OCEAN_LEVEL,
   PILLAGER_OUTPOST_POS,
+  PLAINS_VILLAGE_POS,
+  SAVANNA_PLATEAU_POS,
+  SAVANNA_VILLAGE_POS,
+  SNOWY_PLAINS_OUTPOST_POS,
+  SNOWY_SLOPES_IGLOO_POS,
   SNOWY_WOODLAND_POS,
+  STONY_PEAKS_POS,
+  SUNFLOWER_VILLAGE_POS,
+  SWAMP_HUT_POS,
   SWAMP_POS,
   VEHICLE_GARAGE_POS,
   WHEATFIELD_POS,
+  WINDSWEPT_SAVANNA_POS,
+  WOODED_BADLANDS_POS,
   WOODLAND_MANSION_POS,
 } from '../world/terrain';
 import { getCreatureDefaultArmor } from './combatSystem';
@@ -1318,145 +1342,207 @@ export class CreatureManager {
       'diurnal' | 'nocturnal' | 'always',
     ][] = [
       // Diurnal Ordinary Wildlife (active in daylight, shelter/burrow at night)
-      ['jungle_fowl', -18.5, 58.8, 'diurnal'],
-      ['jungle_fowl', -17.2, 61.5, 'diurnal'],
-      ['jungle_fowl', 10, 86, 'diurnal'],
-      ['rabbit', -18, 72, 'diurnal'],
-      ['rabbit', -32, 46, 'diurnal'],
-      ['bird', 0, 60, 'diurnal'],
-      ['bird', 6, 98, 'diurnal'],
-      ['bird', -16, 88, 'diurnal'],
-      ['bird', 28, -10, 'diurnal'],
-      ['bird', -32, 18, 'diurnal'],
-      // Homestead Pasture & Barnyard Animals (always visible & approachable)
-      ['cattle', -34, 48, 'always'],
-      ['cattle', -42, 42, 'always'],
-      ['cattle', -50, 22, 'always'],
-      ['pig', -22.2, 64.2, 'always'],
-      ['pig', -26.4, 63.4, 'always'],
-      ['horse', -31.5, 66.5, 'always'],
-      ['horse', -35.2, 64.5, 'always'],
-      ['sheep', -45, 52, 'always'],
-      ['sheep', -41, 56, 'always'],
-      ['goat', -22.0, 56.2, 'always'],
-      ['goat', -26, -52, 'always'],
-      ['goat', 14, -56, 'always'],
-      ['duck', -16.2, 54.8, 'always'],
-      ['duck', -14.8, 59.2, 'always'],
-      ['duck', -16, 25, 'always'],
-      ['barn_cat', -28.8, 56.8, 'always'],
+      ['jungle_fowl', HOMESTEAD_POS.x + 5.5, HOMESTEAD_POS.z + 0.8, 'diurnal'],
+      ['jungle_fowl', HOMESTEAD_POS.x + 6.8, HOMESTEAD_POS.z + 3.5, 'diurnal'],
+      ['jungle_fowl', 18, 142, 'diurnal'],
+      ['rabbit', -32, 120, 'diurnal'],
+      ['rabbit', -54, 76, 'diurnal'],
+      ['bird', 0, 98, 'diurnal'],
+      ['bird', 12, 162, 'diurnal'],
+      ['bird', -28, 146, 'diurnal'],
+      ['bird', 48, -18, 'diurnal'],
+      ['bird', -54, 30, 'diurnal'],
+      // Homestead Pasture & Barnyard Animals (anchored cleanly around HOMESTEAD_POS)
+      ['cattle', HOMESTEAD_POS.x - 10, HOMESTEAD_POS.z - 10, 'always'],
+      ['cattle', HOMESTEAD_POS.x - 18, HOMESTEAD_POS.z - 16, 'always'],
+      ['cattle', -82, 36, 'always'],
+      ['pig', HOMESTEAD_POS.x + 1.8, HOMESTEAD_POS.z + 6.2, 'always'],
+      ['pig', HOMESTEAD_POS.x - 2.4, HOMESTEAD_POS.z + 5.4, 'always'],
+      ['horse', HOMESTEAD_POS.x - 7.5, HOMESTEAD_POS.z + 8.5, 'always'],
+      ['horse', HOMESTEAD_POS.x - 11.2, HOMESTEAD_POS.z + 6.5, 'always'],
+      ['sheep', HOMESTEAD_POS.x - 21, HOMESTEAD_POS.z - 6, 'always'],
+      ['sheep', HOMESTEAD_POS.x - 17, HOMESTEAD_POS.z - 2, 'always'],
+      ['goat', HOMESTEAD_POS.x + 2.0, HOMESTEAD_POS.z - 1.8, 'always'],
+      ['goat', -44, -86, 'always'],
+      ['goat', 24, -94, 'always'],
+      ['duck', HOMESTEAD_POS.x + 7.8, HOMESTEAD_POS.z - 3.2, 'always'],
+      ['duck', HOMESTEAD_POS.x + 9.2, HOMESTEAD_POS.z + 1.2, 'always'],
+      ['duck', LAKE_CENTER.x - 2, LAKE_CENTER.z + 18, 'always'],
+      ['barn_cat', HOMESTEAD_POS.x - 4.8, HOMESTEAD_POS.z - 1.2, 'always'],
       // Persistent Forest & Savanna Wildlife
-      ['wild_boar', 18, 72, 'always'],
-      ['wild_boar', -22, 82, 'always'],
-      ['deer', -38, 28, 'always'],
-      ['deer', 22, 46, 'always'],
-      // Aquatic Fish & Dolphins
+      ['wild_boar', 32, 118, 'always'],
+      ['wild_boar', -38, 136, 'always'],
+      ['deer', -64, 46, 'always'],
+      ['deer', 38, 76, 'always'],
+      // Aquatic Fish & Dolphins (offshore beyond the 560m coastline)
       ['fish_school', LAKE_CENTER.x, LAKE_CENTER.z, 'always'],
-      ['fish_school', 14, 130, 'always'],
-      ['dolphin', -28, 134, 'always'],
-      ['dolphin', 24, 132, 'always'],
-      // Prehistoric Dinosaurs
-      ['parasaurolophus', -34, 12, 'always'],
-      ['triceratops', -52, -4, 'always'],
-      ['stegosaurus', -24, -22, 'always'],
-      ['brachiosaurus', 12, -18, 'always'],
-      ['velociraptor', 36, 16, 'always'],
-      ['trex', 16, -40, 'always'],
+      ['fish_school', 34, 582, 'always'],
+      ['dolphin', -62, 592, 'always'],
+      ['dolphin', 56, 588, 'always'],
+      // Prehistoric Dinosaurs (spread across the expanded island)
+      ['parasaurolophus', -58, 20, 'always'],
+      ['triceratops', -88, -8, 'always'],
+      ['stegosaurus', -42, -38, 'always'],
+      ['brachiosaurus', 22, -30, 'always'],
+      ['velociraptor', 62, 26, 'always'],
+      ['trex', 28, -68, 'always'],
       // Nocturnal Stalkers (emerge from dens at Dusk/Night, retreat at Dawn)
-      ['velociraptor', 14, 66, 'nocturnal'],
-      ['velociraptor', -26, 40, 'nocturnal'],
-      ['velociraptor', -2, 34, 'nocturnal'],
+      ['velociraptor', 24, 110, 'nocturnal'],
+      ['velociraptor', -44, 66, 'nocturnal'],
+      ['velociraptor', -4, 56, 'nocturnal'],
       // 8 Iconic Wild Animals in Dedicated Habitats
-      ['grizzly_bear', -4, -26, 'always'],
-      ['grizzly_bear', 1.5, -30, 'always'],
-      ['gray_wolf', SNOWY_WOODLAND_POS.x + 1.0, SNOWY_WOODLAND_POS.z + 2.0, 'always'],
-      ['gray_wolf', SNOWY_WOODLAND_POS.x - 2.5, SNOWY_WOODLAND_POS.z - 2.0, 'always'],
-      ['african_lion', -62, 10, 'always'],
-      ['african_lion', -57, -16, 'always'],
+      ['grizzly_bear', -8, -44, 'always'],
+      ['grizzly_bear', 4, -52, 'always'],
+      ['gray_wolf', SNOWY_WOODLAND_POS.x + 2.0, SNOWY_WOODLAND_POS.z + 3.0, 'always'],
+      ['gray_wolf', SNOWY_WOODLAND_POS.x - 4.0, SNOWY_WOODLAND_POS.z - 3.5, 'always'],
+      ['african_lion', -104, 16, 'always'],
+      ['african_lion', -96, -26, 'always'],
       ['bald_eagle', LAKE_CENTER.x, LAKE_CENTER.z, 'always'],
-      ['bald_eagle', LAKE_CENTER.x + 6, LAKE_CENTER.z - 6, 'always'],
-      ['red_fox', AUTUMN_GROVE_POS.x - 0.5, AUTUMN_GROVE_POS.z + 0.8, 'always'],
-      ['red_fox', AUTUMN_GROVE_POS.x + 1.8, AUTUMN_GROVE_POS.z - 1.5, 'always'],
+      ['bald_eagle', LAKE_CENTER.x + 10, LAKE_CENTER.z - 10, 'always'],
+      ['red_fox', AUTUMN_GROVE_POS.x - 1.5, AUTUMN_GROVE_POS.z + 1.8, 'always'],
+      ['red_fox', AUTUMN_GROVE_POS.x + 3.2, AUTUMN_GROVE_POS.z - 2.5, 'always'],
       ['saltwater_crocodile', SWAMP_POS.x, SWAMP_POS.z, 'always'],
-      ['saltwater_crocodile', SWAMP_POS.x + 3.0, SWAMP_POS.z + 1.5, 'always'],
-      ['bison', -54, 32, 'always'],
-      ['bison', -60, 22, 'always'],
+      ['saltwater_crocodile', SWAMP_POS.x + 4.5, SWAMP_POS.z + 2.5, 'always'],
+      ['bison', -90, 54, 'always'],
+      ['bison', -102, 36, 'always'],
       ['great_horned_owl', DEAD_OAK_POS.x + 1.35, DEAD_OAK_POS.z + 0.2, 'always'],
       // Expanded Global Wildlife Showcase (Savanna, Arctic, Jungle, Coast & Prehistoric)
-      ['elephant', -70, 18, 'always'],
-      ['elephant', -75, 22, 'always'],
-      ['giraffe', -66, 28, 'always'],
-      ['zebra', -64, 4, 'always'],
-      ['zebra', -68, 7, 'always'],
-      ['rhinoceros', -78, -6, 'always'],
-      ['cheetah', -58, -28, 'always'],
-      ['hyena', -48, -32, 'always'],
-      ['reindeer', SNOWY_WOODLAND_POS.x - 5, SNOWY_WOODLAND_POS.z + 4, 'always'],
-      ['reindeer', SNOWY_WOODLAND_POS.x + 6, SNOWY_WOODLAND_POS.z - 3, 'always'],
-      ['moose', SNOWY_WOODLAND_POS.x + 11, SNOWY_WOODLAND_POS.z + 7, 'always'],
-      ['polar_bear', SNOWY_WOODLAND_POS.x - 8, SNOWY_WOODLAND_POS.z - 7, 'always'],
-      ['penguin', SNOWY_WOODLAND_POS.x + 3, SNOWY_WOODLAND_POS.z + 10, 'always'],
-      ['penguin', SNOWY_WOODLAND_POS.x + 5, SNOWY_WOODLAND_POS.z + 11, 'always'],
-      ['tiger', 42, -16, 'always'],
-      ['gorilla', 48, 22, 'always'],
-      ['kangaroo', -46, 74, 'always'],
-      ['camel', 52, 74, 'always'],
-      ['ostrich', -52, 62, 'always'],
-      ['flamingo', SWAMP_POS.x - 7, SWAMP_POS.z + 6, 'always'],
-      ['flamingo', LAKE_CENTER.x - 14, LAKE_CENTER.z + 10, 'always'],
-      ['hippopotamus', LAKE_CENTER.x + 12, LAKE_CENTER.z - 9, 'always'],
-      ['toucan', 34, 34, 'diurnal'],
-      ['peregrine_falcon', -20, -45, 'diurnal'],
-      ['pteranodon', 28, -24, 'always'],
-      ['pteranodon', -35, -35, 'always'],
-      ['spinosaurus', SWAMP_POS.x - 8, SWAMP_POS.z - 7, 'always'],
-      ['ankylosaurus', -38, -28, 'always'],
-      ['allosaurus', 40, -34, 'always'],
-      ['dilophosaurus', 28, 4, 'always'],
-      ['diplodocus', 6, -32, 'always'],
-      ['sea_turtle', -12, 128, 'always'],
-      ['great_white_shark', 38, 138, 'always'],
-      ['manta_ray', -42, 136, 'always'],
-      // Wide Expanded Marine Wildlife Ecosystem Population
-      ['dolphin', -65, 115, 'always'],
-      ['dolphin', 65, -115, 'always'],
-      ['dolphin', -115, -65, 'always'],
-      ['dolphin', 115, 65, 'always'],
-      ['great_white_shark', -90, 100, 'always'],
-      ['great_white_shark', 100, -90, 'always'],
-      ['sea_turtle', -95, -95, 'always'],
-      ['sea_turtle', 95, 95, 'always'],
-      ['manta_ray', -105, 35, 'always'],
-      ['manta_ray', 35, -105, 'always'],
-      ['fish_school', -75, -75, 'always'],
-      ['fish_school', 75, 75, 'always'],
-      ['fish_school', -125, 0, 'always'],
-      ['fish_school', 125, 0, 'always'],
+      ['elephant', -118, 30, 'always'],
+      ['elephant', -126, 38, 'always'],
+      ['giraffe', -110, 48, 'always'],
+      ['zebra', -108, 6, 'always'],
+      ['zebra', -116, 12, 'always'],
+      ['rhinoceros', -132, -10, 'always'],
+      ['cheetah', -98, -46, 'always'],
+      ['hyena', -80, -54, 'always'],
+      ['reindeer', SNOWY_WOODLAND_POS.x - 8, SNOWY_WOODLAND_POS.z + 6, 'always'],
+      ['reindeer', SNOWY_WOODLAND_POS.x + 9, SNOWY_WOODLAND_POS.z - 5, 'always'],
+      ['moose', SNOWY_WOODLAND_POS.x + 16, SNOWY_WOODLAND_POS.z + 10, 'always'],
+      ['polar_bear', SNOWY_WOODLAND_POS.x - 12, SNOWY_WOODLAND_POS.z - 10, 'always'],
+      ['penguin', SNOWY_WOODLAND_POS.x + 4, SNOWY_WOODLAND_POS.z + 14, 'always'],
+      ['penguin', SNOWY_WOODLAND_POS.x + 7, SNOWY_WOODLAND_POS.z + 16, 'always'],
+      ['tiger', 72, -28, 'always'],
+      ['gorilla', 84, 38, 'always'],
+      ['kangaroo', -78, 122, 'always'],
+      ['camel', 88, 124, 'always'],
+      ['ostrich', -88, 102, 'always'],
+      ['flamingo', SWAMP_POS.x - 9, SWAMP_POS.z + 8, 'always'],
+      ['flamingo', LAKE_CENTER.x - 18, LAKE_CENTER.z + 14, 'always'],
+      ['hippopotamus', LAKE_CENTER.x + 16, LAKE_CENTER.z - 12, 'always'],
+      ['toucan', 58, 56, 'diurnal'],
+      ['peregrine_falcon', -34, -76, 'diurnal'],
+      ['pteranodon', 48, -42, 'always'],
+      ['pteranodon', -60, -60, 'always'],
+      ['spinosaurus', SWAMP_POS.x - 11, SWAMP_POS.z - 10, 'always'],
+      ['ankylosaurus', -64, -48, 'always'],
+      ['allosaurus', 68, -58, 'always'],
+      ['dilophosaurus', 48, 8, 'always'],
+      ['diplodocus', 12, -54, 'always'],
+      ['sea_turtle', -28, 578, 'always'],
+      ['great_white_shark', 86, 596, 'always'],
+      ['manta_ray', -92, 588, 'always'],
+      // Wide Expanded Marine Wildlife Ecosystem Population around the 560m coastline
+      ['dolphin', -290, 515, 'always'],
+      ['dolphin', 290, -515, 'always'],
+      ['dolphin', -515, -290, 'always'],
+      ['dolphin', 515, 290, 'always'],
+      ['great_white_shark', -420, 440, 'always'],
+      ['great_white_shark', 440, -420, 'always'],
+      ['sea_turtle', -430, -430, 'always'],
+      ['sea_turtle', 430, 430, 'always'],
+      ['manta_ray', -525, 145, 'always'],
+      ['manta_ray', 145, -525, 'always'],
+      ['fish_school', -390, -390, 'always'],
+      ['fish_school', 390, 390, 'always'],
+      ['fish_school', -595, 0, 'always'],
+      ['fish_school', 595, 0, 'always'],
       // Curated Biome Spec Encounters (Bees, Creaking, White Foxes, Parrots, Ocelots, Pandas, Dark Forest Prowlers)
-      ['bee', 14, 72, 'diurnal'],
-      ['bee', 26, 78, 'diurnal'],
-      ['bee', 8, 66, 'diurnal'],
-      ['bee', 24, 42, 'diurnal'],
-      ['bee', 22, 18, 'diurnal'],
-      ['creaking', 58, -10, 'nocturnal'],
-      ['creaking', 66, -4, 'nocturnal'],
-      ['creaking', 60, 6, 'nocturnal'],
-      ['white_fox', -38, -70, 'always'],
-      ['white_fox', -12, -74, 'always'],
-      ['parrot', 68, 36, 'diurnal'],
-      ['parrot', 78, 46, 'diurnal'],
-      ['parrot', 54, 72, 'diurnal'],
-      ['parrot', 48, 32, 'diurnal'],
-      ['ocelot', 70, 42, 'always'],
-      ['ocelot', 52, 66, 'always'],
-      ['ocelot', 46, 36, 'always'],
-      ['panda', 44, 28, 'always'],
-      ['panda', 52, 34, 'always'],
-      ['panda', 48, 22, 'always'],
-      ['panda', 68, 48, 'always'],
-      ['gray_wolf', 18, -12, 'always'],
-      ['velociraptor', 26, -6, 'always'],
-      ['dilophosaurus', 16, -2, 'always'],
+      ['bee', 24, 120, 'diurnal'],
+      ['bee', 44, 130, 'diurnal'],
+      ['bee', 14, 110, 'diurnal'],
+      ['bee', 42, 70, 'diurnal'],
+      ['bee', 38, 30, 'diurnal'],
+      ['creaking', 98, -16, 'nocturnal'],
+      ['creaking', 112, -6, 'nocturnal'],
+      ['creaking', 102, 10, 'nocturnal'],
+      ['white_fox', -64, -118, 'always'],
+      ['white_fox', -22, -124, 'always'],
+      ['parrot', 116, 60, 'diurnal'],
+      ['parrot', 132, 76, 'diurnal'],
+      ['parrot', 92, 118, 'diurnal'],
+      ['parrot', 82, 54, 'diurnal'],
+      ['ocelot', 118, 70, 'always'],
+      ['ocelot', 88, 110, 'always'],
+      ['ocelot', 78, 60, 'always'],
+      ['panda', 74, 48, 'always'],
+      ['panda', 88, 58, 'always'],
+      ['panda', 82, 38, 'always'],
+      ['panda', 116, 82, 'always'],
+      ['gray_wolf', 32, -20, 'always'],
+      ['velociraptor', 46, -10, 'always'],
+      ['dilophosaurus', 28, -4, 'always'],
+      // Curated Spawns for the 14 New Expansion Biomes
+      // Plains & Sunflower Plains: Horses, Pigs, Sheep, Cows, Chickens
+      ['horse', PLAINS_VILLAGE_POS.x + 14, PLAINS_VILLAGE_POS.z + 10, 'always'],
+      ['cattle', PLAINS_VILLAGE_POS.x - 12, PLAINS_VILLAGE_POS.z + 14, 'always'],
+      ['sheep', PLAINS_VILLAGE_POS.x + 10, PLAINS_VILLAGE_POS.z - 12, 'always'],
+      ['pig', PLAINS_VILLAGE_POS.x - 14, PLAINS_VILLAGE_POS.z - 10, 'always'],
+      ['horse', SUNFLOWER_VILLAGE_POS.x + 14, SUNFLOWER_VILLAGE_POS.z - 8, 'always'],
+      ['jungle_fowl', SUNFLOWER_VILLAGE_POS.x - 10, SUNFLOWER_VILLAGE_POS.z + 10, 'diurnal'],
+      // Meadow: Bees, Sheep, Rabbits, Horses
+      ['bee', MEADOW_OUTPOST_POS.x + 16, MEADOW_OUTPOST_POS.z + 12, 'diurnal'],
+      ['sheep', MEADOW_OUTPOST_POS.x - 14, MEADOW_OUTPOST_POS.z + 14, 'always'],
+      ['rabbit', MEADOW_OUTPOST_POS.x + 12, MEADOW_OUTPOST_POS.z - 14, 'diurnal'],
+      // Cherry Grove: Bees, Pigs, Sheep, Rabbits
+      ['bee', CHERRY_GROVE_POS.x + 6, CHERRY_GROVE_POS.z + 8, 'diurnal'],
+      ['bee', CHERRY_GROVE_POS.x - 8, CHERRY_GROVE_POS.z - 6, 'diurnal'],
+      ['pig', CHERRY_GROVE_POS.x + 10, CHERRY_GROVE_POS.z - 10, 'always'],
+      ['sheep', CHERRY_GROVE_POS.x - 12, CHERRY_GROVE_POS.z + 8, 'always'],
+      ['rabbit', CHERRY_GROVE_POS.x + 2, CHERRY_GROVE_POS.z + 14, 'diurnal'],
+      // Snowy Plains & Ice Spikes: Polar Bears, Rabbits, White Foxes
+      ['polar_bear', SNOWY_PLAINS_OUTPOST_POS.x - 16, SNOWY_PLAINS_OUTPOST_POS.z + 14, 'always'],
+      ['rabbit', SNOWY_PLAINS_OUTPOST_POS.x + 14, SNOWY_PLAINS_OUTPOST_POS.z + 12, 'diurnal'],
+      ['polar_bear', ICE_SPIKES_POS.x + 10, ICE_SPIKES_POS.z + 12, 'always'],
+      ['rabbit', ICE_SPIKES_POS.x - 12, ICE_SPIKES_POS.z - 8, 'diurnal'],
+      // Grove: Wolves, Foxes, Rabbits
+      ['gray_wolf', GROVE_OUTPOST_POS.x + 14, GROVE_OUTPOST_POS.z + 10, 'always'],
+      ['white_fox', GROVE_OUTPOST_POS.x - 12, GROVE_OUTPOST_POS.z + 12, 'always'],
+      // Snowy Slopes, Jagged Peaks, Frozen Peaks, Stony Peaks: Mountain Goats
+      ['goat', SNOWY_SLOPES_IGLOO_POS.x + 10, SNOWY_SLOPES_IGLOO_POS.z + 8, 'always'],
+      ['goat', JAGGED_PEAKS_POS.x + 12, JAGGED_PEAKS_POS.z + 12, 'always'],
+      ['goat', FROZEN_PEAKS_POS.x - 12, FROZEN_PEAKS_POS.z + 10, 'always'],
+      ['goat', STONY_PEAKS_POS.x - 12, STONY_PEAKS_POS.z + 10, 'always'],
+      // Windswept Hills, Gravelly Hills & Forest: Goats, Wolves, Passive farm animals
+      ['goat', -185, -75, 'always'],
+      ['gray_wolf', -165, -20, 'always'],
+      ['sheep', -178, -42, 'always'],
+      // Curated Spawns for the 2x Mega-Island 17 New Biomes
+      // Desert: Camels (in Desert Village), Cream Rabbits, Desert Pyramid prowlers
+      ['camel', DESERT_VILLAGE_POS.x + 12, DESERT_VILLAGE_POS.z + 8, 'always'],
+      ['camel', DESERT_VILLAGE_POS.x - 10, DESERT_VILLAGE_POS.z + 12, 'always'],
+      ['rabbit', DESERT_PYRAMID_POS.x + 16, DESERT_PYRAMID_POS.z + 10, 'diurnal'],
+      // Savanna, Savanna Plateau & Windswept Savanna: Horses, Goats/Llamas, Passive livestock
+      ['horse', SAVANNA_VILLAGE_POS.x + 14, SAVANNA_VILLAGE_POS.z + 10, 'always'],
+      ['goat', SAVANNA_PLATEAU_POS.x + 12, SAVANNA_PLATEAU_POS.z + 12, 'always'],
+      ['horse', WINDSWEPT_SAVANNA_POS.x - 10, WINDSWEPT_SAVANNA_POS.z + 12, 'always'],
+      // Badlands, Wooded Badlands & Eroded Badlands
+      ['rabbit', BADLANDS_MINESHAFT_POS.x + 14, BADLANDS_MINESHAFT_POS.z + 10, 'diurnal'],
+      ['goat', WOODED_BADLANDS_POS.x + 12, WOODED_BADLANDS_POS.z - 10, 'always'],
+      ['rabbit', ERODED_BADLANDS_POS.x - 12, ERODED_BADLANDS_POS.z + 10, 'diurnal'],
+      // Swamp & Mangrove Swamp: Witch at Swamp Hut, Crocodiles, Ducks
+      ['witch', SWAMP_HUT_POS.x + 6, SWAMP_HUT_POS.z + 6, 'always'],
+      ['saltwater_crocodile', SWAMP_HUT_POS.x - 14, SWAMP_HUT_POS.z + 12, 'always'],
+      ['duck', MANGROVE_SWAMP_POS.x + 10, MANGROVE_SWAMP_POS.z + 8, 'always'],
+      ['saltwater_crocodile', MANGROVE_SWAMP_POS.x - 12, MANGROVE_SWAMP_POS.z - 8, 'always'],
+      // Mushroom Fields: Peaceful Mooshrooms / Cattle ONLY (zero hostiles!)
+      ['cattle', MUSHROOM_FIELDS_POS.x + 10, MUSHROOM_FIELDS_POS.z + 12, 'always'],
+      ['cattle', MUSHROOM_FIELDS_POS.x - 12, MUSHROOM_FIELDS_POS.z + 8, 'always'],
+      ['cattle', MUSHROOM_FIELDS_POS.x + 6, MUSHROOM_FIELDS_POS.z - 14, 'always'],
+      // Warm Ocean Coral Reefs & Frozen Ocean Icebergs
+      ['dolphin', CORAL_REEF_POS.x + 10, CORAL_REEF_POS.z + 12, 'always'],
+      ['sea_turtle', CORAL_REEF_POS.x - 12, CORAL_REEF_POS.z + 8, 'always'],
+      ['fish_school', CORAL_REEF_POS.x, CORAL_REEF_POS.z - 6, 'always'],
+      ['polar_bear', FROZEN_OCEAN_ICEBERG_POS.x, FROZEN_OCEAN_ICEBERG_POS.z + 35, 'always'],
     ];
 
     spawns.forEach(([species, x, z, spawnCycle], i) => {
@@ -1465,20 +1551,26 @@ export class CreatureManager {
 
       // Exact perched placements: Tabby Barn Cat on hay bales, Nigerian Dwarf Goat on crate, Great Horned Owl on dead oak branch
       let perch: ActiveCreature['perch'];
-      if (species === 'barn_cat' && Math.hypot(x - -28.8, z - 56.8) < 1) {
-        const barnBaseY = getTerrainHeight(-28.5, 58);
+      if (
+        species === 'barn_cat' &&
+        Math.hypot(x - (HOMESTEAD_POS.x - 4.8), z - (HOMESTEAD_POS.z - 1.2)) < 1
+      ) {
+        const barnBaseY = getTerrainHeight(HOMESTEAD_POS.x - 4.5, HOMESTEAD_POS.z);
         perch = {
-          x: -28.8,
+          x: HOMESTEAD_POS.x - 4.8,
           y: barnBaseY + 1.4,
-          z: 56.8,
+          z: HOMESTEAD_POS.z - 1.2,
           yaw: 1.28,
           mode: 'sit',
         };
-      } else if (species === 'goat' && Math.hypot(x - -22.0, z - 56.2) < 1) {
+      } else if (
+        species === 'goat' &&
+        Math.hypot(x - (HOMESTEAD_POS.x + 2.0), z - (HOMESTEAD_POS.z - 1.8)) < 1
+      ) {
         perch = {
-          x: -22.0,
-          y: getTerrainHeight(-22.0, 56.2) + 0.68,
-          z: 56.2,
+          x: HOMESTEAD_POS.x + 2.0,
+          y: getTerrainHeight(HOMESTEAD_POS.x + 2.0, HOMESTEAD_POS.z - 1.8) + 0.68,
+          z: HOMESTEAD_POS.z - 1.8,
           yaw: 1.05,
           mode: 'stand',
         };
@@ -3093,8 +3185,44 @@ export class CreatureManager {
           const dSwamp = Math.hypot(sx - SWAMP_POS.x, sz - SWAMP_POS.z);
 
           let pool: CreatureSpecies[];
-          if (h < OCEAN_LEVEL - 0.65 || biome === 'ocean') {
+          if (biome === 'warm_ocean') {
+            pool = ['dolphin', 'sea_turtle', 'manta_ray', 'fish_school'];
+          } else if (biome === 'frozen_ocean') {
+            pool = ['polar_bear', 'penguin', 'fish_school'];
+          } else if (
+            h < OCEAN_LEVEL - 0.65 ||
+            biome === 'ocean' ||
+            biome === 'lukewarm_ocean' ||
+            biome === 'cold_ocean'
+          ) {
             pool = ['great_white_shark', 'sea_turtle', 'manta_ray', 'dolphin', 'fish_school'];
+          } else if (biome === 'snowy_beach') {
+            pool = ['rabbit', 'penguin', 'polar_bear'];
+          } else if (biome === 'stony_shore') {
+            pool = isNight ? ['velociraptor', 'gray_wolf'] : ['goat', 'bird'];
+          } else if (biome === 'frozen_river') {
+            pool = ['polar_bear', 'penguin', 'white_fox'];
+          } else if (biome === 'desert') {
+            pool = isNight ? ['camel', 'rabbit', 'hyena'] : ['camel', 'camel', 'rabbit'];
+          } else if (
+            biome === 'savanna' ||
+            biome === 'savanna_plateau' ||
+            biome === 'windswept_savanna'
+          ) {
+            pool = ['horse', 'horse', 'goat', 'sheep', 'cattle', 'pig'];
+          } else if (
+            biome === 'badlands' ||
+            biome === 'wooded_badlands' ||
+            biome === 'eroded_badlands'
+          ) {
+            pool = isNight ? ['rabbit', 'hyena', 'velociraptor'] : ['rabbit', 'goat'];
+          } else if (biome === 'swamp') {
+            pool = ['witch', 'saltwater_crocodile', 'duck', 'hippopotamus'];
+          } else if (biome === 'mangrove_swamp') {
+            pool = ['duck', 'saltwater_crocodile', 'flamingo', 'fish_school'];
+          } else if (biome === 'mushroom_fields') {
+            // Peaceful Mushroom Fields sanctuary: NO hostile mobs spawn naturally here!
+            pool = ['cattle'];
           } else if (biome === 'beach') {
             pool = ['flamingo', 'camel', 'ostrich', 'sea_turtle', 'toucan', 'bird', 'peregrine_falcon'];
           } else if (biome === 'snowy_taiga') {
@@ -3123,6 +3251,29 @@ export class CreatureManager {
             pool = ['parrot', 'ocelot', 'panda', 'tiger', 'gorilla', 'toucan'];
           } else if (biome === 'sparse_jungle') {
             pool = ['parrot', 'ocelot', 'pig', 'sheep', 'cattle', 'jungle_fowl'];
+          } else if (biome === 'plains' || biome === 'sunflower_plains') {
+            pool = ['horse', 'horse', 'pig', 'sheep', 'cattle', 'jungle_fowl', 'rabbit'];
+          } else if (biome === 'snowy_plains' || biome === 'ice_spikes') {
+            pool = ['polar_bear', 'polar_bear', 'rabbit', 'white_fox', 'gray_wolf'];
+          } else if (biome === 'meadow') {
+            pool = ['bee', 'bee', 'sheep', 'rabbit', 'horse'];
+          } else if (biome === 'cherry_grove') {
+            pool = ['bee', 'bee', 'pig', 'sheep', 'rabbit'];
+          } else if (biome === 'grove') {
+            pool = ['gray_wolf', 'red_fox', 'white_fox', 'rabbit'];
+          } else if (biome === 'snowy_slopes') {
+            pool = ['goat', 'goat', 'rabbit'];
+          } else if (biome === 'jagged_peaks' || biome === 'frozen_peaks') {
+            pool = ['goat', 'goat', 'peregrine_falcon'];
+          } else if (biome === 'stony_peaks') {
+            pool = ['goat', 'sheep'];
+          } else if (
+            biome === 'windswept_hills' ||
+            biome === 'windswept_gravelly_hills'
+          ) {
+            pool = ['goat', 'sheep', 'cattle', 'pig'];
+          } else if (biome === 'windswept_forest') {
+            pool = ['gray_wolf', 'goat', 'sheep', 'pig', 'cattle'];
           } else if (dSwamp < 20 || biome === 'river' || biome === 'lake') {
             pool = ['hippopotamus', 'saltwater_crocodile', 'flamingo', 'duck', 'spinosaurus', 'bald_eagle'];
           } else if (biome === 'grassland') {

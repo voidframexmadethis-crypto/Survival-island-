@@ -21,8 +21,8 @@ export class RealisticOcean {
 
   constructor(
     private scene: THREE.Scene,
-    private width = 2000,
-    private height = 2000
+    private width = 6400,
+    private height = 6400
   ) {
     this.geometry = new THREE.PlaneGeometry(
       width,
@@ -123,7 +123,7 @@ export class RealisticOcean {
 
         void main() {
           float distFromCenter = length(vWorldPos.xz);
-          float radialDepth = smoothstep(105.0, 220.0, distFromCenter);
+          float radialDepth = smoothstep(500.0, 740.0, distFromCenter);
           float uvDepth = smoothstep(0.0, 0.75, vUv.y);
           float depthBlend = mix(uvDepth, radialDepth, 0.65);
 
