@@ -1,22 +1,49 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  getAuthenticatedPlayer,
   getExchangeDb,
-  getOrCreatePlayerAccount,
   getPaymentProviderStatus,
-  sanitizePlayerId,
+  toPublicPlayerProfile,
 } from '@/lib/exchangeStore';
 
 export async function GET(req: NextRequest) {
-  const playerId = sanitizePlayerId(req.nextUrl.searchParams.get('playerId'));
   const db = getExchangeDb();
-  const account = getOrCreatePlayerAccount(playerId);
+  const account = getAuthenticatedPlayer(req);
 
   // Players ONLY see published products and active coin packages
   const publishedProducts = db.products.filter((p) => p.status === 'published');
   const activeCoinPackages = db.coinPackages.filter((pkg) => pkg.active);
+  const freeDefaultIds = publishedProducts
+    .filter((p) => p.freeByDefault)
+    .map((p) => p.id);
+
+  if (!account) {
+    const freeProducts = publishedProducts.filter((p) => p.freeByDefault);
+    return NextResponse.json({
+      authenticated: false,
+      account: null,
+      playerId: null,
+      coinBalance: 0,
+      ownedProductIds: freeDefaultIds,
+      revokedProductIds: [],
+      ownedProducts: freeProducts,
+      equippedGunSkinsByClass: {},
+      equippedBackpackSkinId: null,
+      equippedCosmeticIds: [],
+      products: publishedProducts,
+      coinPackages: activeCoinPackages,
+      transactions: [],
+      pendingCheckouts: [],
+      paymentProvider: getPaymentProviderStatus(),
+    });
+  }
+
+  const effectiveOwnedIds = Array.from(
+    new Set([...freeDefaultIds, ...account.ownedProductIds]),
+  );
 
   // Preserve owned items even if they were later unpublished or removed from the public store
-  const ownedProducts = account.ownedProductIds
+  const ownedProducts = effectiveOwnedIds
     .map(
       (id) =>
         db.products.find((p) => p.id === id) || account.ownedProductSnapshots[id] || null,
@@ -27,16 +54,30 @@ export async function GET(req: NextRequest) {
     .filter((t) => t.playerId === account.playerId)
     .slice(0, 60);
 
+  const pendingCheckouts = Object.values(db.payhipCheckouts || {})
+    .filter(
+      (c) =>
+        c.playerId === account.playerId &&
+        (c.status === 'waiting_confirmation' || c.status === 'pending_verification'),
+    )
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, 10);
+
   return NextResponse.json({
+    authenticated: true,
+    account: toPublicPlayerProfile(account),
     playerId: account.playerId,
     coinBalance: account.coinBalance,
-    ownedProductIds: account.ownedProductIds,
+    ownedProductIds: effectiveOwnedIds,
+    revokedProductIds: account.revokedProductIds || [],
     ownedProducts,
     equippedGunSkinsByClass: account.equippedGunSkinsByClass,
     equippedBackpackSkinId: account.equippedBackpackSkinId,
+    equippedCosmeticIds: account.equippedCosmeticIds || [],
     products: publishedProducts,
     coinPackages: activeCoinPackages,
     transactions: playerTransactions,
+    pendingCheckouts,
     paymentProvider: getPaymentProviderStatus(),
   });
 }

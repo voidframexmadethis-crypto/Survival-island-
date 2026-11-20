@@ -147,6 +147,7 @@ import {
   getCustomMarketplaceSnapshot,
   getVaultCatalogItems,
   getVaultPayhipSnapshot,
+  refreshStorefront,
   subscribeExchangeState,
   unlockCustomMarketplaceSkin,
   unlockVaultPayhipItem,
@@ -287,11 +288,14 @@ export function SurvivalGameClient() {
   );
 
   useEffect(() => {
-    return subscribeExchangeState(() => {
+    const unsub = subscribeExchangeState(() => {
       setVaultPayhipState({ ...getVaultPayhipSnapshot() });
       setVaultPayhipItems(getVaultCatalogItems());
       setCustomPhoneState({ ...getCustomMarketplaceSnapshot() });
+      engineRef.current?.applyExchangeCosmetics(true);
     });
+    void refreshStorefront().catch(() => {});
+    return unsub;
   }, []);
 
   useEffect(() => {
@@ -3315,6 +3319,7 @@ export function SurvivalGameClient() {
           }
           onCraft={(recipeId) => engineRef.current?.craftRecipe(recipeId)}
           onCraftSound={() => engineRef.current?.playWorkbenchCraftSound()}
+          onCosmeticsChanged={() => engineRef.current?.applyExchangeCosmetics(true)}
           onClose={closeModal}
         />
       )}
@@ -3357,6 +3362,7 @@ export function SurvivalGameClient() {
           onTransferFromChest={(sid, id) =>
             engineRef.current?.transferFromChest(sid, id, 1)
           }
+          onCosmeticsChanged={() => engineRef.current?.applyExchangeCosmetics(true)}
           onClose={closeModal}
         />
       )}

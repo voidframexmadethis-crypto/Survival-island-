@@ -116,8 +116,7 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
   const [uploadSlot, setUploadSlot] = useState<'backpack' | 'weapon'>('backpack');
   const [uploadMediaUrl, setUploadMediaUrl] = useState('');
   const [uploadMediaKind, setUploadMediaKind] = useState<'image' | 'glb' | 'none'>('none');
-  const [unlockCode, setUnlockCode] = useState('');
-  const [enteredCode, setEnteredCode] = useState('');
+  const [payhipProductIdInput, setPayhipProductIdInput] = useState('');
 
   // "+ Checkout" state (for pasting your Payhip embedded checkout)
   const [targetSkinId, setTargetSkinId] = useState('');
@@ -327,7 +326,8 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
       category: uploadSlot,
       priceLabel: '',
       payhipUrl: '',
-      unlockCode: unlockCode.trim(),
+      payhipProductId: payhipProductIdInput.trim() || null,
+      freeByDefault: true,
       primaryHex: '#ffffff',
       secondaryHex: '#18181b',
       accentHex: '#f59e0b',
@@ -342,7 +342,7 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
     setUploadName('');
     setUploadMediaUrl('');
     setUploadMediaKind('none');
-    setUnlockCode('');
+    setPayhipProductIdInput('');
     if (fileInputRef.current) fileInputRef.current.value = '';
     setActiveTool('none');
     setStatusMsg(`Added "${created.name}" (${created.category}).`);
@@ -370,8 +370,7 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
   };
 
   const isUnlocked = selectedSkin
-    ? !selectedSkin.payhipUrl ||
-      !selectedSkin.unlockCode ||
+    ? (!selectedSkin.payhipUrl && Boolean(selectedSkin.freeByDefault)) ||
       unlockedIds.includes(selectedSkin.id)
     : false;
 
@@ -476,9 +475,9 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
 
             <input
               type="text"
-              value={unlockCode}
-              onChange={(e) => setUnlockCode(e.target.value)}
-              placeholder="Unlock code (optional)"
+              value={payhipProductIdInput}
+              onChange={(e) => setPayhipProductIdInput(e.target.value)}
+              placeholder="Payhip Product ID (optional)"
               className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-white sm:col-span-2"
             />
 
@@ -630,46 +629,22 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
                           {selectedSkin.payhipUrl && (
                             <button
                               type="button"
-                              onClick={() =>
+                              onClick={() => {
                                 setCheckoutState({
                                   skinId: selectedSkin.id,
                                   url: selectedSkin.payhipUrl,
-                                })
-                              }
+                                });
+                                setStatusMsg('Waiting for payment confirmation via Payhip webhook.');
+                              }}
                               className="rounded-xl bg-amber-500 px-4 py-3 text-xs font-black uppercase text-black hover:bg-amber-400"
                             >
-                              Open Checkout{' '}
+                              Buy via Payhip{' '}
                               {selectedSkin.priceLabel ? `(${selectedSkin.priceLabel})` : ''}
                             </button>
                           )}
 
-                          <div className="flex gap-2">
-                            <input
-                              type="text"
-                              value={enteredCode}
-                              onChange={(e) => setEnteredCode(e.target.value)}
-                              placeholder="Enter unlock code"
-                              className="flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-white"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (
-                                  enteredCode.trim() &&
-                                  enteredCode.trim() === selectedSkin.unlockCode
-                                ) {
-                                  onUnlockSkin(selectedSkin.id);
-                                  onEquipSkin(selectedSkin);
-                                  setEnteredCode('');
-                                  setStatusMsg(`Unlocked & equipped ${selectedSkin.name}.`);
-                                } else {
-                                  setStatusMsg('Code does not match.');
-                                }
-                              }}
-                              className="rounded-lg bg-zinc-800 px-4 py-2 text-xs font-bold uppercase text-amber-400"
-                            >
-                              Unlock
-                            </button>
+                          <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-2 text-[11px] text-zinc-400">
+                            Paid Payhip items unlock automatically after server webhook confirmation. Manage official Payhip products in Owner Admin.
                           </div>
                         </>
                       )}

@@ -1,16 +1,26 @@
 import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  getAuthenticatedPlayer,
   getExchangeDb,
-  getOrCreatePlayerAccount,
   persistExchangeDb,
-  sanitizePlayerId,
 } from '@/lib/exchangeStore';
 
 export async function POST(req: NextRequest) {
+  const account = getAuthenticatedPlayer(req);
+  if (!account) {
+    return NextResponse.json(
+      {
+        ok: false,
+        authRequired: true,
+        error: 'Please sign in to your account before purchasing cosmetics.',
+      },
+      { status: 401 },
+    );
+  }
+
   try {
-    const body = (await req.json()) as { playerId?: string; productId?: string };
-    const playerId = sanitizePlayerId(body.playerId);
+    const body = (await req.json()) as { productId?: string };
     const productId = String(body.productId || '').trim();
     if (!productId) {
       return NextResponse.json({ ok: false, error: 'Missing productId.' }, { status: 400 });
@@ -25,7 +35,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const account = getOrCreatePlayerAccount(playerId);
+    // Payhip-priced items without SI Coin price must go through Payhip checkout
+    if (product.price <= 0 && (product.realMoneyAmount ?? 0) > 0) {
+      return NextResponse.json(
+        { ok: false, error: 'This item must be purchased through Payhip Checkout.' },
+        { status: 400 },
+      );
+    }
 
     // Prevent duplicate purchase
     if (account.ownedProductIds.includes(product.id)) {
@@ -61,7 +77,7 @@ export async function POST(req: NextRequest) {
       coinDelta: -product.price,
       status: 'completed' as const,
       createdAt: Date.now(),
-      note: `Purchased ${product.name} (${product.category === 'gun_skin' ? 'Gun Skin' : 'Backpack Skin'})`,
+      note: `Purchased ${product.name}`,
     };
     db.transactions.unshift(tx);
     if (db.transactions.length > 500) db.transactions.length = 500;

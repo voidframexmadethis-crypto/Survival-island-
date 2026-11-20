@@ -22,8 +22,15 @@ import {
   X,
 } from 'lucide-react';
 import { ITEMS } from '@/game/data/items';
+import { CATEGORY_LABELS, ExchangeProduct } from '@/game/data/exchangeCatalog';
 import { CRAFTING_RECIPES } from '@/game/data/recipes';
 import { CraftingRecipe, HUDStateSnapshot, ItemId } from '@/game/types';
+import {
+  equipExchangeProduct,
+  getExchangeStateSnapshot,
+  refreshStorefront,
+  subscribeExchangeState,
+} from '@/game/systems/exchangeManager';
 import { ItemIcon } from './ItemIcon';
 
 type BackpackTab = 'inventory' | 'crafting' | 'equipment' | 'resources';
@@ -75,6 +82,7 @@ interface InventoryModalProps {
   onCraftSound?: () => void;
   onTransferToChest?: (structureId: string, itemId: ItemId) => void;
   onTransferFromChest?: (structureId: string, itemId: ItemId) => void;
+  onCosmeticsChanged?: () => void;
   onClose: () => void;
 }
 
@@ -99,8 +107,10 @@ export function InventoryModal({
   onCraftSound,
   onTransferToChest,
   onTransferFromChest,
+  onCosmeticsChanged,
   onClose,
 }: InventoryModalProps) {
+  const [exchangeState, setExchangeState] = useState(() => getExchangeStateSnapshot());
   const [activeTab, setActiveTab] = useState<BackpackTab>('inventory');
   const [selectedItemId, setSelectedItemId] = useState<ItemId | null>(
     hud.inventory[0]?.itemId || null,
@@ -166,7 +176,12 @@ export function InventoryModal({
   }, [safeCompartmentPage, totalCompartments]);
 
   useEffect(() => {
+    const unsub = subscribeExchangeState(() => {
+      setExchangeState({ ...getExchangeStateSnapshot() });
+    });
+    void refreshStorefront().catch(() => {});
     return () => {
+      unsub();
       if (craftTimerRef.current !== null) {
         window.clearInterval(craftTimerRef.current);
       }
@@ -1360,6 +1375,72 @@ export function InventoryModal({
                           }`}
                         >
                           {equipped ? 'Equipped' : 'Equip'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-stone-800 pt-4 space-y-3">
+              <div className="text-xs font-semibold text-stone-400">
+                Owned Skins &amp; Cosmetics ({exchangeState.ownedProducts.length})
+              </div>
+              {exchangeState.ownedProducts.length === 0 ? (
+                <div className="rounded-xl bg-stone-950/60 border border-stone-800 p-4 text-xs text-stone-400">
+                  {exchangeState.authenticated
+                    ? 'No paid skins unlocked on this account yet. Visit the Exchange or Vault Store to purchase skins.'
+                    : 'Sign in inside the Exchange / Vault Store to access and equip your purchased skins.'}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {exchangeState.ownedProducts.map((cos: ExchangeProduct) => {
+                    const isCosEquipped =
+                      cos.category === 'backpack_skin'
+                        ? exchangeState.equippedBackpackSkinId === cos.id
+                        : cos.category === 'gun_skin'
+                          ? Object.values(exchangeState.equippedGunSkinsByClass).includes(
+                              cos.id,
+                            )
+                          : exchangeState.equippedCosmeticIds.includes(cos.id);
+                    return (
+                      <div
+                        key={cos.id}
+                        className="rounded-xl bg-stone-950/70 border border-stone-800 p-3 flex items-center justify-between gap-3"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div
+                            className="w-10 h-10 rounded-lg border border-stone-700 shrink-0"
+                            style={{
+                              background: `linear-gradient(135deg, ${cos.visual.primaryHex}, ${cos.visual.accentHex})`,
+                            }}
+                          />
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold text-stone-100 truncate">
+                              {cos.name}
+                            </div>
+                            <div className="text-[10px] text-emerald-400 font-semibold uppercase">
+                              OWNED · {CATEGORY_LABELS[cos.category]}
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await equipExchangeProduct(
+                              cos.id,
+                              isCosEquipped ? 'unequip' : 'equip',
+                            );
+                            onCosmeticsChanged?.();
+                          }}
+                          className={`min-h-[34px] px-3 rounded-lg text-xs font-bold shrink-0 ${
+                            isCosEquipped
+                              ? 'bg-stone-800 border border-stone-600 text-stone-200'
+                              : 'bg-emerald-600 hover:bg-emerald-500 text-stone-950'
+                          }`}
+                        >
+                          {isCosEquipped ? 'Unequip' : 'Equip'}
                         </button>
                       </div>
                     );

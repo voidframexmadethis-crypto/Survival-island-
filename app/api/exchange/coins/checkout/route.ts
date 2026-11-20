@@ -1,21 +1,31 @@
 import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  getAuthenticatedPlayer,
   getExchangeDb,
-  getOrCreatePlayerAccount,
   getPaymentProviderStatus,
   persistExchangeDb,
-  sanitizePlayerId,
 } from '@/lib/exchangeStore';
 
 /**
- * Real-money SI Coin checkout initiation.
- * NEVER credits SI Coins without verified payment-provider confirmation via /api/exchange/coins/webhook.
+ * SI Coin checkout preview endpoint.
+ * Real-money product purchases use Payhip checkout (/api/exchange/payhip/checkout + /api/payhip/webhook).
  */
 export async function POST(req: NextRequest) {
+  const account = getAuthenticatedPlayer(req);
+  if (!account) {
+    return NextResponse.json(
+      {
+        ok: false,
+        authRequired: true,
+        error: 'Please sign in to your Survival Island account before purchasing SI Coins.',
+      },
+      { status: 401 },
+    );
+  }
+
   try {
-    const body = (await req.json()) as { playerId?: string; packageId?: string };
-    const playerId = sanitizePlayerId(body.playerId);
+    const body = (await req.json()) as { packageId?: string };
     const packageId = String(body.packageId || '').trim();
     if (!packageId) {
       return NextResponse.json({ ok: false, error: 'Missing packageId.' }, { status: 400 });
@@ -30,7 +40,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const account = getOrCreatePlayerAccount(playerId);
     const providerStatus = getPaymentProviderStatus();
     const totalCoins = pkg.coins + (pkg.bonusCoins || 0);
 

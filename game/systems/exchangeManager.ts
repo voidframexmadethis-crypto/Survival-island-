@@ -15,19 +15,51 @@ export interface PaymentProviderStatus {
   configured: boolean;
   provider: string | null;
   webhookConfigured: boolean;
+  payhipConfigured?: boolean;
+  payhipWebhookConfigured?: boolean;
+}
+
+export interface PlayerProfileSummary {
+  playerId: string;
+  username: string;
+  email: string;
+  createdAt: number;
+}
+
+export type PayhipPurchaseStatus =
+  | 'waiting_confirmation'
+  | 'pending_verification'
+  | 'paid'
+  | 'delivered'
+  | 'failed'
+  | 'refunded';
+
+export interface PayhipCheckoutSummary {
+  checkoutId: string;
+  productId: string;
+  productName: string;
+  status: PayhipPurchaseStatus;
+  statusMessage: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface ExchangeStorefrontState {
   loaded: boolean;
-  playerId: string;
+  authenticated: boolean;
+  account: PlayerProfileSummary | null;
+  playerId: string | null;
   coinBalance: number;
   ownedProductIds: string[];
+  revokedProductIds: string[];
   ownedProducts: ExchangeProduct[];
   equippedGunSkinsByClass: Partial<Record<GunWeaponClass, string>>;
   equippedBackpackSkinId: string | null;
+  equippedCosmeticIds: string[];
   products: ExchangeProduct[];
   coinPackages: CoinPackage[];
   transactions: ExchangeTransaction[];
+  pendingCheckouts: PayhipCheckoutSummary[];
   paymentProvider: PaymentProviderStatus;
 }
 
@@ -46,60 +78,59 @@ export interface AdminCatalogState {
   paymentProvider: PaymentProviderStatus;
 }
 
-const PLAYER_ID_KEY = 'survival_island_exchange_player_id_v1';
-const EQUIPPED_CACHE_KEY = 'survival_island_exchange_equipped_cache_v2';
+const EQUIPPED_CACHE_KEY = 'survival_island_exchange_equipped_cache_v3';
 
 type Listener = () => void;
 const listeners = new Set<Listener>();
 
-function getOrCreatePlayerId(): string {
-  if (typeof window === 'undefined') return 'guest_survivor';
-  try {
-    const existing = window.localStorage.getItem(PLAYER_ID_KEY);
-    if (existing && existing.length >= 6) return existing;
-    const generated = `surv_${Date.now().toString(36)}_${Math.random()
-      .toString(36)
-      .slice(2, 8)}`;
-    window.localStorage.setItem(PLAYER_ID_KEY, generated);
-    return generated;
-  } catch {
-    return 'guest_survivor';
-  }
-}
-
 let cachedState: ExchangeStorefrontState = {
   loaded: false,
-  playerId: 'guest_survivor',
+  authenticated: false,
+  account: null,
+  playerId: null,
   coinBalance: 0,
-  ownedProductIds: [],
+  ownedProductIds: ['vault_backpack_explorer'],
+  revokedProductIds: [],
   ownedProducts: [],
   equippedGunSkinsByClass: {},
   equippedBackpackSkinId: null,
+  equippedCosmeticIds: [],
   products: [],
   coinPackages: [],
   transactions: [],
-  paymentProvider: { configured: false, provider: null, webhookConfigured: false },
+  pendingCheckouts: [],
+  paymentProvider: {
+    configured: false,
+    provider: null,
+    webhookConfigured: false,
+    payhipConfigured: false,
+    payhipWebhookConfigured: false,
+  },
 };
 
-// Hydrate read-only equipped cosmetic visual cache on client boot so GameEngine has instant access
 function hydrateEquippedCacheOnce(): void {
   if (typeof window === 'undefined') return;
   try {
-    cachedState.playerId = getOrCreatePlayerId();
     const raw = window.localStorage.getItem(EQUIPPED_CACHE_KEY);
     if (!raw) return;
     const parsed = JSON.parse(raw) as Partial<ExchangeStorefrontState>;
-    if (Array.isArray(parsed.ownedProducts)) {
-      cachedState.ownedProducts = parsed.ownedProducts;
-    }
-    if (Array.isArray(parsed.ownedProductIds)) {
-      cachedState.ownedProductIds = parsed.ownedProductIds;
-    }
-    if (parsed.equippedGunSkinsByClass) {
-      cachedState.equippedGunSkinsByClass = parsed.equippedGunSkinsByClass;
-    }
-    if (parsed.equippedBackpackSkinId !== undefined) {
-      cachedState.equippedBackpackSkinId = parsed.equippedBackpackSkinId;
+    if (parsed.authenticated && parsed.playerId) {
+      cachedState.authenticated = true;
+      cachedState.playerId = parsed.playerId;
+      cachedState.account = parsed.account ?? null;
+      if (Array.isArray(parsed.ownedProducts)) cachedState.ownedProducts = parsed.ownedProducts;
+      if (Array.isArray(parsed.ownedProductIds)) {
+        cachedState.ownedProductIds = parsed.ownedProductIds;
+      }
+      if (parsed.equippedGunSkinsByClass) {
+        cachedState.equippedGunSkinsByClass = parsed.equippedGunSkinsByClass;
+      }
+      if (parsed.equippedBackpackSkinId !== undefined) {
+        cachedState.equippedBackpackSkinId = parsed.equippedBackpackSkinId;
+      }
+      if (Array.isArray(parsed.equippedCosmeticIds)) {
+        cachedState.equippedCosmeticIds = parsed.equippedCosmeticIds;
+      }
     }
   } catch {
     // Ignore corrupt cache
@@ -109,13 +140,21 @@ function hydrateEquippedCacheOnce(): void {
 function saveEquippedCache(): void {
   if (typeof window === 'undefined') return;
   try {
+    if (!cachedState.authenticated) {
+      window.localStorage.removeItem(EQUIPPED_CACHE_KEY);
+      return;
+    }
     window.localStorage.setItem(
       EQUIPPED_CACHE_KEY,
       JSON.stringify({
+        authenticated: cachedState.authenticated,
+        account: cachedState.account,
+        playerId: cachedState.playerId,
         ownedProductIds: cachedState.ownedProductIds,
         ownedProducts: cachedState.ownedProducts,
         equippedGunSkinsByClass: cachedState.equippedGunSkinsByClass,
         equippedBackpackSkinId: cachedState.equippedBackpackSkinId,
+        equippedCosmeticIds: cachedState.equippedCosmeticIds,
       }),
     );
   } catch {
@@ -174,55 +213,6 @@ export interface VaultPayhipState {
   weaponSource?: ActiveCosmeticSource;
 }
 
-const VAULT_PAYHIP_STORAGE_KEY = 'survival_island_vault_payhip_v1';
-
-let cachedVaultState: VaultPayhipState = {
-  unlockedIds: ['vault_backpack_explorer'],
-  equippedBackpackId: null,
-  equippedWeaponId: null,
-  customPayhipUrls: {},
-  preferVaultBackpack: false,
-  preferVaultWeapon: false,
-};
-
-function hydrateVaultPayhipOnce(): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const raw = window.localStorage.getItem(VAULT_PAYHIP_STORAGE_KEY);
-    if (!raw) return;
-    const parsed = JSON.parse(raw) as Partial<VaultPayhipState>;
-    cachedVaultState = {
-      unlockedIds: Array.isArray(parsed.unlockedIds)
-        ? parsed.unlockedIds
-        : ['vault_backpack_explorer'],
-      equippedBackpackId: parsed.equippedBackpackId ?? null,
-      equippedWeaponId: parsed.equippedWeaponId ?? null,
-      customPayhipUrls:
-        parsed.customPayhipUrls && typeof parsed.customPayhipUrls === 'object'
-          ? parsed.customPayhipUrls
-          : {},
-      preferVaultBackpack: Boolean(parsed.preferVaultBackpack),
-      preferVaultWeapon: Boolean(parsed.preferVaultWeapon),
-      backpackSource: parsed.backpackSource,
-      weaponSource: parsed.weaponSource,
-    };
-  } catch {
-    // Ignore storage errors
-  }
-}
-
-function saveVaultPayhipState(): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(
-      VAULT_PAYHIP_STORAGE_KEY,
-      JSON.stringify(cachedVaultState),
-    );
-  } catch {
-    // Ignore storage quota errors
-  }
-}
-
 const CUSTOM_PHONE_STORAGE_KEY = 'survival_island_custom_phone_skins_v1';
 
 let cachedCustomPhoneState: CustomPhoneMarketplaceState = {
@@ -240,9 +230,9 @@ function hydrateCustomPhoneOnce(): void {
     const parsed = JSON.parse(raw) as Partial<CustomPhoneMarketplaceState>;
     cachedCustomPhoneState = {
       skins: Array.isArray(parsed.skins) ? parsed.skins : [],
-      unlockedIds: Array.isArray(parsed.unlockedIds) ? parsed.unlockedIds : [],
-      equippedBackpackId: parsed.equippedBackpackId ?? null,
-      equippedWeaponId: parsed.equippedWeaponId ?? null,
+      unlockedIds: [], // Paid unlocks are never persisted solely in unverified localStorage
+      equippedBackpackId: null,
+      equippedWeaponId: null,
     };
   } catch {
     // Ignore storage errors
@@ -254,7 +244,12 @@ function saveCustomPhoneState(): void {
   try {
     window.localStorage.setItem(
       CUSTOM_PHONE_STORAGE_KEY,
-      JSON.stringify(cachedCustomPhoneState),
+      JSON.stringify({
+        skins: cachedCustomPhoneState.skins,
+        unlockedIds: [],
+        equippedBackpackId: null,
+        equippedWeaponId: null,
+      }),
     );
   } catch {
     // Ignore storage quota errors
@@ -262,12 +257,14 @@ function saveCustomPhoneState(): void {
 }
 
 if (typeof window !== 'undefined') {
-  hydrateVaultPayhipOnce();
   hydrateCustomPhoneOnce();
 }
 
 export function getCustomMarketplaceSnapshot(): CustomPhoneMarketplaceState {
-  return cachedCustomPhoneState;
+  return {
+    ...cachedCustomPhoneState,
+    unlockedIds: cachedState.ownedProductIds,
+  };
 }
 
 export function addCustomMarketplaceSkin(
@@ -279,7 +276,7 @@ export function addCustomMarketplaceSkin(
   };
   saveCustomPhoneState();
   notify();
-  return cachedCustomPhoneState;
+  return getCustomMarketplaceSnapshot();
 }
 
 export function attachCustomMarketplaceCheckout(
@@ -295,132 +292,100 @@ export function attachCustomMarketplaceCheckout(
   };
   saveCustomPhoneState();
   notify();
-  return cachedCustomPhoneState;
+  return getCustomMarketplaceSnapshot();
 }
 
-export function unlockCustomMarketplaceSkin(skinId: string): CustomPhoneMarketplaceState {
-  if (!cachedCustomPhoneState.unlockedIds.includes(skinId)) {
-    cachedCustomPhoneState = {
-      ...cachedCustomPhoneState,
-      unlockedIds: [...cachedCustomPhoneState.unlockedIds, skinId],
-    };
-    saveCustomPhoneState();
-    notify();
-  }
-  return cachedCustomPhoneState;
+export function unlockCustomMarketplaceSkin(_skinId: string): CustomPhoneMarketplaceState {
+  void _skinId;
+  // Entitlement unlocks happen strictly server-side via Payhip webhooks.
+  void refreshStorefront().catch(() => {});
+  return getCustomMarketplaceSnapshot();
 }
 
 export function equipCustomMarketplaceSkin(
   skin: CustomPhoneSkinRecord,
 ): CustomPhoneMarketplaceState {
+  // Only allow equipping items owned on the authenticated server account or free preview packs
+  const isOwnedOnServer =
+    skin.freeByDefault || cachedState.ownedProductIds.includes(skin.id);
+  if (!isOwnedOnServer) {
+    return getCustomMarketplaceSnapshot();
+  }
   if (skin.category === 'backpack') {
-    const nextId =
-      cachedCustomPhoneState.equippedBackpackId === skin.id ? null : skin.id;
+    const nextId = cachedCustomPhoneState.equippedBackpackId === skin.id ? null : skin.id;
     cachedCustomPhoneState = {
       ...cachedCustomPhoneState,
       equippedBackpackId: nextId,
     };
-    cachedVaultState = {
-      ...cachedVaultState,
-      preferVaultBackpack: false,
-      backpackSource: nextId ? 'custom_phone' : 'exchange',
-    };
-  } else {
-    const nextId =
-      cachedCustomPhoneState.equippedWeaponId === skin.id ? null : skin.id;
+  } else if (skin.category === 'weapon') {
+    const nextId = cachedCustomPhoneState.equippedWeaponId === skin.id ? null : skin.id;
     cachedCustomPhoneState = {
       ...cachedCustomPhoneState,
       equippedWeaponId: nextId,
     };
-    cachedVaultState = {
-      ...cachedVaultState,
-      preferVaultWeapon: false,
-      weaponSource: nextId ? 'custom_phone' : 'exchange',
-    };
   }
-  saveCustomPhoneState();
-  saveVaultPayhipState();
   notify();
-  return cachedCustomPhoneState;
+  return getCustomMarketplaceSnapshot();
 }
 
 export function getVaultPayhipSnapshot(): VaultPayhipState {
-  return cachedVaultState;
+  // Derive weapon & backpack equip & ownership authoritatively from server storefront state
+  const equippedWeaponFromServer =
+    Object.values(cachedState.equippedGunSkinsByClass).find(Boolean) ?? null;
+
+  return {
+    unlockedIds: Array.from(
+      new Set(['vault_backpack_explorer', ...cachedState.ownedProductIds]),
+    ),
+    equippedBackpackId: cachedState.equippedBackpackSkinId,
+    equippedWeaponId: equippedWeaponFromServer,
+    customPayhipUrls: {},
+    preferVaultBackpack: Boolean(cachedState.equippedBackpackSkinId),
+    preferVaultWeapon: Boolean(equippedWeaponFromServer),
+    backpackSource: 'exchange',
+    weaponSource: 'exchange',
+  };
 }
 
 export function getVaultCatalogItems(): SkinCatalogItem[] {
-  const baseItems = VAULT_PAYHIP_CATALOG.map((item) => ({
-    ...item,
-    payhipUrl: cachedVaultState.customPayhipUrls[item.id] ?? item.payhipUrl,
-  }));
-  const existingIds = new Set(baseItems.map((it) => it.id));
-  const exchangeMapped = cachedState.products
-    .filter((p) => !existingIds.has(p.id))
-    .map((p) => {
-      const converted = toBackpackSkinCatalogItem(p);
-      return {
-        ...converted,
-        payhipUrl: cachedVaultState.customPayhipUrls[converted.id] ?? converted.payhipUrl,
-      };
-    });
-  return [...baseItems, ...exchangeMapped];
+  const sourceProducts = cachedState.products;
+  if (sourceProducts.length === 0) {
+    return VAULT_PAYHIP_CATALOG;
+  }
+  const serverMapped = sourceProducts.map((p) => toBackpackSkinCatalogItem(p));
+  const seenIds = new Set(serverMapped.map((it) => it.id));
+  const fallbacks = VAULT_PAYHIP_CATALOG.filter((it) => !seenIds.has(it.id));
+  return [...serverMapped, ...fallbacks];
 }
 
-export function unlockVaultPayhipItem(itemId: string): VaultPayhipState {
-  if (!cachedVaultState.unlockedIds.includes(itemId)) {
-    cachedVaultState = {
-      ...cachedVaultState,
-      unlockedIds: [...cachedVaultState.unlockedIds, itemId],
-    };
-    saveVaultPayhipState();
-    notify();
-  }
-  return cachedVaultState;
+export function unlockVaultPayhipItem(_itemId: string): VaultPayhipState {
+  void _itemId;
+  // Paid items can NEVER be unlocked client-side; always sync from verified server account.
+  void refreshStorefront().catch(() => {});
+  return getVaultPayhipSnapshot();
 }
 
 export function equipVaultPayhipItem(item: SkinCatalogItem): VaultPayhipState {
-  if (item.category === 'backpack') {
-    const nextId =
-      cachedVaultState.equippedBackpackId === item.id && cachedVaultState.preferVaultBackpack
-        ? null
-        : item.id;
-    cachedVaultState = {
-      ...cachedVaultState,
-      equippedBackpackId: nextId,
-      preferVaultBackpack: Boolean(nextId),
-      backpackSource: nextId ? 'vault' : 'exchange',
-    };
-  } else {
-    const nextId =
-      cachedVaultState.equippedWeaponId === item.id && cachedVaultState.preferVaultWeapon
-        ? null
-        : item.id;
-    cachedVaultState = {
-      ...cachedVaultState,
-      equippedWeaponId: nextId,
-      preferVaultWeapon: Boolean(nextId),
-      weaponSource: nextId ? 'vault' : 'exchange',
-    };
-  }
-  saveVaultPayhipState();
-  notify();
-  return cachedVaultState;
+  const isEquipped =
+    item.category === 'backpack'
+      ? cachedState.equippedBackpackSkinId === item.id
+      : Object.values(cachedState.equippedGunSkinsByClass).includes(item.id);
+  void equipExchangeProduct(item.id, isEquipped ? 'unequip' : 'equip');
+  return getVaultPayhipSnapshot();
 }
 
 export function updateVaultItemPayhipEmbed(
-  itemId: string,
-  checkoutUrl: string,
+  _itemId: string,
+  _checkoutUrl: string,
 ): VaultPayhipState {
-  cachedVaultState = {
-    ...cachedVaultState,
-    customPayhipUrls: {
-      ...cachedVaultState.customPayhipUrls,
-      [itemId]: checkoutUrl,
-    },
-  };
-  saveVaultPayhipState();
-  notify();
-  return cachedVaultState;
+  void _itemId;
+  void _checkoutUrl;
+  return getVaultPayhipSnapshot();
+}
+
+function isProductOwnedByActiveAccount(prod: ExchangeProduct): boolean {
+  if (prod.freeByDefault) return true;
+  return cachedState.authenticated && cachedState.ownedProductIds.includes(prod.id);
 }
 
 export function getEquippedGunSkinForWeapon(
@@ -428,92 +393,59 @@ export function getEquippedGunSkinForWeapon(
 ): ExchangeProduct | null {
   const wc = getWeaponClassForItem(itemId);
   if (!wc) return null;
-  if (cachedVaultState.weaponSource === 'custom_phone' && cachedCustomPhoneState.equippedWeaponId) {
-    const customSkin = cachedCustomPhoneState.skins.find(
-      (s) => s.id === cachedCustomPhoneState.equippedWeaponId && s.category === 'weapon',
-    );
-    if (customSkin) {
-      return toExchangeProductFromSkinCatalogItem(customSkin);
+
+  if (cachedState.authenticated) {
+    const skinId = cachedState.equippedGunSkinsByClass[wc];
+    if (skinId) {
+      const prod = getExchangeItemById(skinId);
+      if (prod && isProductOwnedByActiveAccount(prod)) {
+        return prod;
+      }
     }
   }
-  if (cachedVaultState.preferVaultWeapon && cachedVaultState.equippedWeaponId) {
-    const vaultSkin = getVaultCatalogItems().find(
-      (it) => it.id === cachedVaultState.equippedWeaponId && it.category === 'weapon',
-    );
-    if (vaultSkin) {
-      return toExchangeProductFromSkinCatalogItem(vaultSkin);
-    }
-  }
-  const skinId = cachedState.equippedGunSkinsByClass[wc];
-  if (skinId) {
-    const prod = getExchangeItemById(skinId);
-    if (prod) return prod;
-  }
+
   if (cachedCustomPhoneState.equippedWeaponId) {
     const customSkin = cachedCustomPhoneState.skins.find(
       (s) => s.id === cachedCustomPhoneState.equippedWeaponId && s.category === 'weapon',
     );
-    if (customSkin) {
+    if (
+      customSkin &&
+      (customSkin.freeByDefault ||
+        (cachedState.authenticated && cachedState.ownedProductIds.includes(customSkin.id)))
+    ) {
       return toExchangeProductFromSkinCatalogItem(customSkin);
     }
   }
-  if (cachedVaultState.equippedWeaponId) {
-    const vaultSkin = getVaultCatalogItems().find(
-      (it) => it.id === cachedVaultState.equippedWeaponId && it.category === 'weapon',
-    );
-    if (vaultSkin) {
-      return toExchangeProductFromSkinCatalogItem(vaultSkin);
-    }
-  }
+
   return null;
 }
 
 export function getEquippedBackpackSkin(): ExchangeProduct | null {
-  if (cachedVaultState.backpackSource === 'custom_phone' && cachedCustomPhoneState.equippedBackpackId) {
-    const customPack = cachedCustomPhoneState.skins.find(
-      (s) => s.id === cachedCustomPhoneState.equippedBackpackId && s.category === 'backpack',
-    );
-    if (customPack) {
-      return toExchangeProductFromSkinCatalogItem(customPack);
-    }
-  }
-  if (cachedVaultState.preferVaultBackpack && cachedVaultState.equippedBackpackId) {
-    const vaultPack = getVaultCatalogItems().find(
-      (it) => it.id === cachedVaultState.equippedBackpackId && it.category === 'backpack',
-    );
-    if (vaultPack) {
-      return toExchangeProductFromSkinCatalogItem(vaultPack);
-    }
-  }
   if (cachedState.equippedBackpackSkinId) {
     const prod = getExchangeItemById(cachedState.equippedBackpackSkinId);
-    if (prod) return prod;
+    if (prod && isProductOwnedByActiveAccount(prod)) {
+      return prod;
+    }
   }
+
   if (cachedCustomPhoneState.equippedBackpackId) {
     const customPack = cachedCustomPhoneState.skins.find(
       (s) => s.id === cachedCustomPhoneState.equippedBackpackId && s.category === 'backpack',
     );
-    if (customPack) {
+    if (
+      customPack &&
+      (customPack.freeByDefault ||
+        (cachedState.authenticated && cachedState.ownedProductIds.includes(customPack.id)))
+    ) {
       return toExchangeProductFromSkinCatalogItem(customPack);
     }
   }
-  if (cachedVaultState.equippedBackpackId) {
-    const vaultPack = getVaultCatalogItems().find(
-      (it) => it.id === cachedVaultState.equippedBackpackId && it.category === 'backpack',
-    );
-    if (vaultPack) {
-      return toExchangeProductFromSkinCatalogItem(vaultPack);
-    }
-  }
+
   return null;
 }
 
 export async function refreshStorefront(): Promise<ExchangeStorefrontState> {
-  const playerId = getOrCreatePlayerId();
-  const res = await fetch(
-    `/api/exchange/storefront?playerId=${encodeURIComponent(playerId)}`,
-    { cache: 'no-store' },
-  );
+  const res = await fetch('/api/exchange/storefront', { cache: 'no-store' });
   if (!res.ok) {
     throw new Error('Failed to load Survival Island Exchange storefront.');
   }
@@ -527,19 +459,173 @@ export async function refreshStorefront(): Promise<ExchangeStorefrontState> {
   return cachedState;
 }
 
-export async function purchaseExchangeProduct(productId: string): Promise<{
-  ok: boolean;
-  error?: string;
-  insufficientFunds?: boolean;
-}> {
-  const playerId = getOrCreatePlayerId();
-  const res = await fetch('/api/exchange/purchase', {
+// ---- Player Account Authentication Client ----
+
+export async function loginPlayerAccount(
+  email: string,
+  password: string,
+): Promise<{ ok: boolean; account?: PlayerProfileSummary; error?: string }> {
+  const res = await fetch('/api/exchange/auth', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ playerId, productId }),
+    body: JSON.stringify({ mode: 'login', email, password }),
   });
   const data = (await res.json()) as {
     ok?: boolean;
+    account?: PlayerProfileSummary;
+    error?: string;
+  };
+  if (!res.ok || !data.ok) {
+    return { ok: false, error: data.error || 'Sign in failed.' };
+  }
+  await refreshStorefront();
+  return { ok: true, account: data.account };
+}
+
+export async function registerPlayerAccount(
+  email: string,
+  password: string,
+  username?: string,
+): Promise<{ ok: boolean; account?: PlayerProfileSummary; error?: string }> {
+  const res = await fetch('/api/exchange/auth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'register', email, password, username }),
+  });
+  const data = (await res.json()) as {
+    ok?: boolean;
+    account?: PlayerProfileSummary;
+    error?: string;
+  };
+  if (!res.ok || !data.ok) {
+    return { ok: false, error: data.error || 'Registration failed.' };
+  }
+  await refreshStorefront();
+  return { ok: true, account: data.account };
+}
+
+export async function logoutPlayerAccount(): Promise<void> {
+  await fetch('/api/exchange/auth', { method: 'DELETE' });
+  cachedCustomPhoneState = {
+    ...cachedCustomPhoneState,
+    equippedBackpackId: null,
+    equippedWeaponId: null,
+  };
+  await refreshStorefront();
+}
+
+// ---- Payhip Checkout & Automatic Verification Polling ----
+
+export async function createPayhipCheckout(productId: string): Promise<{
+  ok: boolean;
+  authRequired?: boolean;
+  checkoutId?: string;
+  checkoutUrl?: string;
+  status?: PayhipPurchaseStatus;
+  statusMessage?: string;
+  error?: string;
+}> {
+  const res = await fetch('/api/exchange/payhip/checkout', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ productId }),
+  });
+  const data = (await res.json()) as {
+    ok?: boolean;
+    authRequired?: boolean;
+    checkoutId?: string;
+    checkoutUrl?: string;
+    status?: PayhipPurchaseStatus;
+    statusMessage?: string;
+    error?: string;
+  };
+  if (!res.ok || !data.ok) {
+    return {
+      ok: false,
+      authRequired: Boolean(data.authRequired),
+      error: data.error || 'Unable to start Payhip checkout.',
+    };
+  }
+  return {
+    ok: true,
+    checkoutId: data.checkoutId,
+    checkoutUrl: data.checkoutUrl,
+    status: data.status,
+    statusMessage: data.statusMessage,
+  };
+}
+
+export async function pollPayhipCheckoutStatus(checkoutId: string): Promise<{
+  ok: boolean;
+  status?: PayhipPurchaseStatus;
+  statusMessage?: string;
+  delivered?: boolean;
+  owned?: boolean;
+  error?: string;
+}> {
+  const res = await fetch(
+    `/api/exchange/payhip/status?checkoutId=${encodeURIComponent(checkoutId)}`,
+    { cache: 'no-store' },
+  );
+  const data = (await res.json()) as {
+    ok?: boolean;
+    status?: PayhipPurchaseStatus;
+    statusMessage?: string;
+    delivered?: boolean;
+    owned?: boolean;
+    error?: string;
+  };
+  if (!res.ok || !data.ok) {
+    return { ok: false, error: data.error || 'Failed to check payment status.' };
+  }
+  if (data.delivered || data.status === 'delivered' || data.status === 'refunded') {
+    await refreshStorefront();
+  }
+  return {
+    ok: true,
+    status: data.status,
+    statusMessage: data.statusMessage,
+    delivered: Boolean(data.delivered),
+    owned: Boolean(data.owned),
+  };
+}
+
+export async function markPayhipCheckoutPending(checkoutId: string): Promise<{
+  ok: boolean;
+  status?: PayhipPurchaseStatus;
+  statusMessage?: string;
+}> {
+  const res = await fetch('/api/exchange/payhip/status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ checkoutId }),
+  });
+  const data = (await res.json()) as {
+    ok?: boolean;
+    status?: PayhipPurchaseStatus;
+    statusMessage?: string;
+  };
+  return {
+    ok: Boolean(res.ok && data.ok),
+    status: data.status,
+    statusMessage: data.statusMessage,
+  };
+}
+
+export async function purchaseExchangeProduct(productId: string): Promise<{
+  ok: boolean;
+  authRequired?: boolean;
+  error?: string;
+  insufficientFunds?: boolean;
+}> {
+  const res = await fetch('/api/exchange/purchase', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ productId }),
+  });
+  const data = (await res.json()) as {
+    ok?: boolean;
+    authRequired?: boolean;
     error?: string;
     insufficientFunds?: boolean;
   };
@@ -547,6 +633,7 @@ export async function purchaseExchangeProduct(productId: string): Promise<{
   if (!res.ok || !data.ok) {
     return {
       ok: false,
+      authRequired: Boolean(data.authRequired),
       error: data.error || 'Purchase could not be completed.',
       insufficientFunds: Boolean(data.insufficientFunds),
     };
@@ -557,52 +644,42 @@ export async function purchaseExchangeProduct(productId: string): Promise<{
 export async function equipExchangeProduct(
   productId: string,
   action: 'equip' | 'unequip',
-): Promise<{ ok: boolean; error?: string }> {
-  const playerId = getOrCreatePlayerId();
+): Promise<{ ok: boolean; authRequired?: boolean; error?: string }> {
   const res = await fetch('/api/exchange/equip', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ playerId, productId, action }),
+    body: JSON.stringify({ productId, action }),
   });
-  const data = (await res.json()) as { ok?: boolean; error?: string };
-  const targetProd = getExchangeItemById(productId);
-  if (res.ok && data.ok && targetProd) {
-    if (targetProd.category === 'backpack_skin') {
-      cachedVaultState = {
-        ...cachedVaultState,
-        preferVaultBackpack: false,
-        backpackSource: 'exchange',
-      };
-      saveVaultPayhipState();
-    } else if (targetProd.category === 'gun_skin') {
-      cachedVaultState = {
-        ...cachedVaultState,
-        preferVaultWeapon: false,
-        weaponSource: 'exchange',
-      };
-      saveVaultPayhipState();
-    }
-  }
+  const data = (await res.json()) as {
+    ok?: boolean;
+    authRequired?: boolean;
+    error?: string;
+  };
   await refreshStorefront();
   if (!res.ok || !data.ok) {
-    return { ok: false, error: data.error || 'Could not update equipped cosmetic.' };
+    return {
+      ok: false,
+      authRequired: Boolean(data.authRequired),
+      error: data.error || 'Could not update equipped cosmetic.',
+    };
   }
   return { ok: true };
 }
 
 export async function requestCoinPackageCheckout(packageId: string): Promise<{
   ok: boolean;
+  authRequired?: boolean;
   providerRequired?: boolean;
   message: string;
 }> {
-  const playerId = getOrCreatePlayerId();
   const res = await fetch('/api/exchange/coins/checkout', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ playerId, packageId }),
+    body: JSON.stringify({ packageId }),
   });
   const data = (await res.json()) as {
     ok?: boolean;
+    authRequired?: boolean;
     providerRequired?: boolean;
     message?: string;
     error?: string;
@@ -610,6 +687,7 @@ export async function requestCoinPackageCheckout(packageId: string): Promise<{
   await refreshStorefront();
   return {
     ok: Boolean(res.ok && data.ok),
+    authRequired: Boolean(data.authRequired),
     providerRequired: Boolean(data.providerRequired),
     message:
       data.message ||

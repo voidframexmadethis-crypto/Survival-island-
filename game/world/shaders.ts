@@ -170,33 +170,43 @@ ${
         `#include <color_fragment>
 if (uShaderQuality >= 0.5) {
   vec3 siN = normalize(vSiWorldNormal);
-  vec3 siView = normalize(cameraPosition - vSiWorldPos);
+  vec3 siCamVec = cameraPosition - vSiWorldPos;
+  float siDistSq = dot(siCamVec, siCamVec);
+  vec3 siView = siCamVec * inversesqrt(max(0.0001, siDistSq));
+  float siNearDetail = siDistSq < (uShaderQuality >= 1.5 ? 16900.0 : 8100.0) ? 1.0 : 0.0;
   ${
     mode === 'terrain'
       ? `
-  // Crisp multi-scale micro-grain, coastal wind ripples, valley AO, meadow soil mottling & glistening wet shoreline
-  float macroTex = siNoise(vSiWorldPos.xz * 0.14);
-  float midTex = siNoise(vSiWorldPos.xz * 1.15);
-  float fineTex = siNoise(vSiWorldPos.xz * 4.8);
-  float rippleBand = 0.5 + 0.5 * sin(vSiWorldPos.x * 2.3 + vSiWorldPos.z * 0.95 + macroTex * 4.2);
-  float sandElevMask = 1.0 - smoothstep(1.2, 4.4, max(0.0, vSiWorldPos.y));
-  float meadowMask = smoothstep(2.0, 4.2, vSiWorldPos.y) * smoothstep(0.55, 0.88, siN.y);
-  float soilMottle = smoothstep(0.54, 0.78, siNoise(vSiWorldPos.xz * 0.38)) * meadowMask;
   float slopeUp = clamp(siN.y, 0.0, 1.0);
   float valleyAo = mix(0.74, 1.09, smoothstep(0.32, 0.96, slopeUp));
-  float detailMod = 0.88 + macroTex * 0.12 + midTex * 0.08 + fineTex * 0.06 + (rippleBand - 0.5) * 0.06 * sandElevMask;
-  diffuseColor.rgb *= valleyAo * detailMod;
-  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.56, 0.48, 0.34), soilMottle * 0.52);
+  if (siNearDetail > 0.5) {
+    // Crisp multi-scale micro-grain, coastal wind ripples, valley AO, meadow soil mottling & glistening wet shoreline
+    float macroTex = siNoise(vSiWorldPos.xz * 0.14);
+    float midTex = siNoise(vSiWorldPos.xz * 1.15);
+    float fineTex = siNoise(vSiWorldPos.xz * 4.8);
+    float rippleBand = 0.5 + 0.5 * sin(vSiWorldPos.x * 2.3 + vSiWorldPos.z * 0.95 + macroTex * 4.2);
+    float sandElevMask = 1.0 - smoothstep(1.2, 4.4, max(0.0, vSiWorldPos.y));
+    float meadowMask = smoothstep(2.0, 4.2, vSiWorldPos.y) * smoothstep(0.55, 0.88, siN.y);
+    float soilMottle = smoothstep(0.54, 0.78, siNoise(vSiWorldPos.xz * 0.38)) * meadowMask;
+    float detailMod = 0.88 + macroTex * 0.12 + midTex * 0.08 + fineTex * 0.06 + (rippleBand - 0.5) * 0.06 * sandElevMask;
+    diffuseColor.rgb *= valleyAo * detailMod;
+    diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.56, 0.48, 0.34), soilMottle * 0.52);
+  } else {
+    diffuseColor.rgb *= valleyAo * 0.98;
+  }
   float swashColor = 0.24 * sin(uShaderTime * 1.45 - vSiWorldPos.x * 0.08 + vSiWorldPos.z * 0.05);
   float shoreWet = (1.0 - smoothstep(-0.04, 1.35 + swashColor, max(-0.1, vSiWorldPos.y))) * smoothstep(-0.5, 0.02, vSiWorldPos.y);
   diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.42, 0.40, 0.38), clamp(shoreWet, 0.0, 1.0) * 0.84);
   `
       : mode === 'foliage'
         ? `
-  // Rich foliage depth: deep shaded interior underside + bright sunlit chartreuse-olive crown & grass tips
-  float leafVar = siNoise(vSiWorldPos.xz * 0.85 + vSiWorldPos.y * 0.6) * 0.62 + siNoise(vSiWorldPos.xz * 2.4 + vSiWorldPos.y * 1.7) * 0.38;
   float canopyAo = mix(0.50, 1.18, clamp(siN.y * 0.5 + 0.54, 0.0, 1.0));
-  diffuseColor.rgb *= canopyAo * (0.86 + leafVar * 0.28);
+  if (siNearDetail > 0.5) {
+    float leafVar = siNoise(vSiWorldPos.xz * 0.85 + vSiWorldPos.y * 0.6) * 0.62 + siNoise(vSiWorldPos.xz * 2.4 + vSiWorldPos.y * 1.7) * 0.38;
+    diffuseColor.rgb *= canopyAo * (0.86 + leafVar * 0.28);
+  } else {
+    diffuseColor.rgb *= canopyAo;
+  }
   float sunFront = max(0.0, dot(siN, uShaderSunDir));
   float backLight = pow(max(0.0, dot(siView, -uShaderSunDir)), 1.55) * (0.45 + 0.55 * max(0.0, siN.y * 0.5 + 0.5));
   float transStrength = (backLight * 0.92 + sunFront * 0.28) * uShaderDaylight * (uShaderQuality >= 1.5 ? 0.90 : 0.64);
@@ -204,22 +214,28 @@ if (uShaderQuality >= 0.5) {
   `
         : mode === 'rock'
           ? `
-  // Stratified rock bands, mineral grain, crevice AO, mossy hillside tops & wet volcanic shoreline darkening
-  float strata = 0.5 + 0.5 * sin(vSiWorldPos.y * 2.6 + siNoise(vSiWorldPos.xz * 0.45) * 3.2);
-  float rockGrain = siNoise(vSiWorldPos.xz * 1.9 + vSiWorldPos.y * 1.5);
   float rockAo = mix(0.68, 1.06, clamp(vSiLocalY * 0.45 + 0.55, 0.0, 1.0));
-  diffuseColor.rgb *= rockAo * (0.82 + rockGrain * 0.24 + strata * 0.07);
-  float mossMask = smoothstep(0.58, 0.92, siN.y) * smoothstep(0.9, 2.0, vSiWorldPos.y) * (1.0 - smoothstep(10.0, 16.0, vSiWorldPos.y));
-  float mossPatch = smoothstep(0.38, 0.70, siNoise(vSiWorldPos.xz * 0.72));
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.24, 0.42, 0.14), mossMask * mossPatch * 0.72);
+  if (siNearDetail > 0.5) {
+    float strata = 0.5 + 0.5 * sin(vSiWorldPos.y * 2.6 + siNoise(vSiWorldPos.xz * 0.45) * 3.2);
+    float rockGrain = siNoise(vSiWorldPos.xz * 1.9 + vSiWorldPos.y * 1.5);
+    diffuseColor.rgb *= rockAo * (0.82 + rockGrain * 0.24 + strata * 0.07);
+    float mossMask = smoothstep(0.58, 0.92, siN.y) * smoothstep(0.9, 2.0, vSiWorldPos.y) * (1.0 - smoothstep(10.0, 16.0, vSiWorldPos.y));
+    float mossPatch = smoothstep(0.38, 0.70, siNoise(vSiWorldPos.xz * 0.72));
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.24, 0.42, 0.14), mossMask * mossPatch * 0.72);
+  } else {
+    diffuseColor.rgb *= rockAo * 0.96;
+  }
   float rockShoreWet = 1.0 - smoothstep(0.1, 1.55, max(0.0, vSiWorldPos.y));
   diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.36, 0.37, 0.40), clamp(rockShoreWet, 0.0, 1.0) * 0.78);
   `
           : `
-  // Bark / wood base contact AO + vertical fiber grain
-  float woodGrain = siNoise(vec2(vSiWorldPos.x * 1.5 + vSiWorldPos.z * 1.5, vSiWorldPos.y * 2.8));
   float contactAo = mix(0.66, 1.05, smoothstep(-0.2, 1.2, vSiLocalY));
-  diffuseColor.rgb *= contactAo * (0.88 + woodGrain * 0.22);
+  if (siNearDetail > 0.5) {
+    float woodGrain = siNoise(vec2(vSiWorldPos.x * 1.5 + vSiWorldPos.z * 1.5, vSiWorldPos.y * 2.8));
+    diffuseColor.rgb *= contactAo * (0.88 + woodGrain * 0.22);
+  } else {
+    diffuseColor.rgb *= contactAo * 0.98;
+  }
   `
   }
 }

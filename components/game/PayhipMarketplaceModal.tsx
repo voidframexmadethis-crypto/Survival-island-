@@ -8,6 +8,16 @@ import {
   SkinCatalogItem,
   toExchangeProductFromSkinCatalogItem,
 } from '@/game/data/exchangeCatalog';
+import {
+  PayhipPurchaseStatus,
+  createPayhipCheckout,
+  getExchangeStateSnapshot,
+  markPayhipCheckoutPending,
+  pollPayhipCheckoutStatus,
+  refreshStorefront,
+  subscribeExchangeState,
+} from '@/game/systems/exchangeManager';
+import { PlayerAccountAuthPanel } from './PlayerAccountAuthPanel';
 
 export interface MarketplaceProps {
   isOpen: boolean;
@@ -117,20 +127,17 @@ export const PayhipMarketplaceModal: React.FC<MarketplaceProps> = ({
   unlockedIds,
   equippedBackpackId,
   equippedWeaponId,
-  onUnlockItem,
   onEquipItem,
-  onUpdateItemPayhipEmbed,
   onClose,
 }) => {
   const [selectedId, setSelectedId] = useState<string>(items[0]?.id ?? '');
   const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
-  const [embedDraftOverride, setEmbedDraftOverride] = useState<{
-    itemId: string;
-    value: string;
-  } | null>(null);
-  const [showCreatorEmbedBar, setShowCreatorEmbedBar] = useState<boolean>(false);
-  const [unlockKeyInput, setUnlockKeyInput] = useState<string>('');
+  const [activeCheckoutId, setActiveCheckoutId] = useState<string | null>(null);
+  const [purchaseStatus, setPurchaseStatus] = useState<PayhipPurchaseStatus | null>(null);
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
+  const [startingCheckout, setStartingCheckout] = useState<boolean>(false);
+  const [showAuthPrompt, setShowAuthPrompt] = useState<boolean>(false);
+  const [storeSnapshot, setStoreSnapshot] = useState(() => getExchangeStateSnapshot());
   const [webglUnavailable, setWebglUnavailable] = useState<boolean>(false);
 
   const previewMountRef = useRef<HTMLDivElement | null>(null);
@@ -138,15 +145,54 @@ export const PayhipMarketplaceModal: React.FC<MarketplaceProps> = ({
   const lastPointerXRef = useRef<number>(0);
   const yawOffsetRef = useRef<number>(Math.PI * 0.82);
 
+  useEffect(() => {
+    const unsub = subscribeExchangeState(() => {
+      setStoreSnapshot({ ...getExchangeStateSnapshot() });
+    });
+    if (isOpen) {
+      void refreshStorefront().catch(() => {});
+    }
+    return unsub;
+  }, [isOpen]);
+
+  // Poll server Payhip checkout verification status until terminal delivered/failed/refunded state
+  useEffect(() => {
+    if (!isOpen || !activeCheckoutId) return;
+    let cancelled = false;
+    const poll = async () => {
+      const res = await pollPayhipCheckoutStatus(activeCheckoutId);
+      if (cancelled || !res.ok) return;
+      if (res.status) setPurchaseStatus(res.status);
+      if (res.status === 'delivered' || res.delivered) {
+        setCheckoutUrl(null);
+        setActiveCheckoutId(null);
+        setStatusBanner('Payment successful — Item delivered successfully');
+      } else if (res.status === 'failed') {
+        setCheckoutUrl(null);
+        setActiveCheckoutId(null);
+        setStatusBanner('Payment unsuccessful');
+      } else if (res.status === 'refunded') {
+        setCheckoutUrl(null);
+        setActiveCheckoutId(null);
+        setStatusBanner('Payment refunded — entitlement revoked.');
+      } else if (res.statusMessage) {
+        setStatusBanner(res.statusMessage);
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => {
+      void poll();
+    }, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [isOpen, activeCheckoutId]);
+
   const selectedItem = useMemo(
     () => items.find((it) => it.id === selectedId) ?? items[0] ?? null,
     [items, selectedId],
   );
-
-  const embedPasteDraft =
-    embedDraftOverride && embedDraftOverride.itemId === selectedItem?.id
-      ? embedDraftOverride.value
-      : (selectedItem?.payhipUrl ?? '');
 
   // Lightweight 3D turntable preview (only runs while modal is open, zero leaks)
   useEffect(() => {
@@ -186,7 +232,6 @@ export const PayhipMarketplaceModal: React.FC<MarketplaceProps> = ({
       selectedItem.category === 'weapon'
         ? buildWeaponTurntableMesh(selectedItem)
         : buildSculptedBackpackMesh(selectedItem);
-    // Angle slightly so both the back pattern and shoulder straps are visible
     yawOffsetRef.current = Math.PI * 0.82;
     built.group.rotation.y = yawOffsetRef.current;
     scene.add(built.group);
@@ -218,57 +263,78 @@ export const PayhipMarketplaceModal: React.FC<MarketplaceProps> = ({
 
   if (!isOpen || !selectedItem) return null;
 
+  const effectiveUnlocked = Array.from(
+    new Set([...unlockedIds, ...storeSnapshot.ownedProductIds]),
+  );
   const isFree =
-    selectedItem.priceLabel.toLowerCase() === 'free' || selectedItem.priceLabel === '$0';
-  const isUnlocked = isFree || unlockedIds.includes(selectedItem.id);
+    Boolean(selectedItem.freeByDefault) ||
+    selectedItem.priceLabel.toLowerCase() === 'free' ||
+    selectedItem.priceLabel === '$0';
+  const isOwned = isFree || effectiveUnlocked.includes(selectedItem.id);
   const isEquipped =
     selectedItem.category === 'backpack'
-      ? equippedBackpackId === selectedItem.id
-      : equippedWeaponId === selectedItem.id;
+      ? (storeSnapshot.equippedBackpackSkinId ?? equippedBackpackId) === selectedItem.id
+      : selectedItem.category === 'cosmetic'
+        ? storeSnapshot.equippedCosmeticIds.includes(selectedItem.id)
+        : Object.values(storeSnapshot.equippedGunSkinsByClass).includes(selectedItem.id) ||
+          equippedWeaponId === selectedItem.id;
 
   const handleSelectItem = (item: SkinCatalogItem) => {
     setSelectedId(item.id);
-    setEmbedDraftOverride(null);
     setCheckoutUrl(null);
+    setActiveCheckoutId(null);
+    setPurchaseStatus(null);
     setStatusBanner(null);
   };
 
-  const handleOpenEmbeddedCheckout = () => {
-    const resolved = extractPayhipCheckoutUrl(embedPasteDraft || selectedItem.payhipUrl);
-    if (!resolved) {
-      setStatusBanner('Paste a valid https://payhip.com/b/... link or embed snippet first.');
+  const handleBuyWithPayhip = async () => {
+    if (!storeSnapshot.authenticated) {
+      setShowAuthPrompt(true);
+      setStatusBanner('Sign in to your Survival Island account to complete Payhip checkout.');
       return;
     }
-    setCheckoutUrl(resolved);
-    setStatusBanner(null);
-  };
 
-  const handleApplyPastedEmbed = () => {
-    const resolved = extractPayhipCheckoutUrl(embedPasteDraft);
-    if (!resolved) {
-      setStatusBanner('Could not find a valid https://payhip.com/... link in your pasted code.');
+    setStartingCheckout(true);
+    setStatusBanner('Waiting for payment confirmation');
+    setPurchaseStatus('waiting_confirmation');
+
+    const res = await createPayhipCheckout(selectedItem.id);
+    setStartingCheckout(false);
+
+    if (!res.ok || !res.checkoutUrl || !res.checkoutId) {
+      if (res.authRequired) setShowAuthPrompt(true);
+      setPurchaseStatus('failed');
+      setStatusBanner(res.error || 'Payment unsuccessful');
       return;
     }
-    onUpdateItemPayhipEmbed?.(selectedItem.id, resolved);
-    setEmbedDraftOverride({ itemId: selectedItem.id, value: resolved });
-    setCheckoutUrl(resolved);
-    setStatusBanner('Payhip embedded checkout updated for this item.');
+
+    setActiveCheckoutId(res.checkoutId);
+    setCheckoutUrl(res.checkoutUrl);
+    setPurchaseStatus(res.status || 'waiting_confirmation');
+    setStatusBanner(res.statusMessage || 'Waiting for payment confirmation');
   };
 
-  const handleVerifyUnlockCode = () => {
-    const entered = unlockKeyInput.trim().toUpperCase();
-    const expected = (selectedItem.unlockCode || 'SAVAGE-UNLOCK').toUpperCase();
-    if (!entered) return;
-
-    if (entered === expected || entered.startsWith('PAYHIP-')) {
-      onUnlockItem(selectedItem.id);
-      onEquipItem(selectedItem);
-      setUnlockKeyInput('');
-      setCheckoutUrl(null);
-      setStatusBanner(`${selectedItem.name} unlocked and equipped!`);
-    } else {
-      setStatusBanner('Invalid license code. Check your Payhip receipt and try again.');
+  const handleReturnFromCheckout = async () => {
+    setCheckoutUrl(null);
+    if (activeCheckoutId) {
+      const pendingRes = await markPayhipCheckoutPending(activeCheckoutId);
+      setPurchaseStatus(pendingRes.status || 'pending_verification');
+      setStatusBanner(pendingRes.statusMessage || 'Purchase pending verification');
     }
+  };
+
+  const handleEquipClick = async () => {
+    if (!isFree && !storeSnapshot.authenticated) {
+      setShowAuthPrompt(true);
+      setStatusBanner('Sign in to equip account-owned cosmetics.');
+      return;
+    }
+    onEquipItem(selectedItem);
+    setStatusBanner(
+      isEquipped
+        ? `Unequipped ${selectedItem.name}.`
+        : `${selectedItem.name} equipped on character!`,
+    );
   };
 
   return (
@@ -284,54 +350,36 @@ export const PayhipMarketplaceModal: React.FC<MarketplaceProps> = ({
               Vault Store
             </span>
             <h2 className="text-base font-extrabold tracking-wide sm:text-lg">
-              3D Backpacks &amp; Weapon Skins
+              3D Backpacks, Weapon Skins &amp; Cosmetics
             </h2>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setShowCreatorEmbedBar((v) => !v)}
-              className="rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-xs font-semibold text-zinc-200 hover:bg-zinc-700"
-            >
-              {showCreatorEmbedBar ? 'Hide Payhip Embed Setup' : 'Paste Payhip Embed'}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs font-bold text-zinc-200 hover:bg-red-600 hover:text-white"
-            >
-              Close
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs font-bold text-zinc-200 hover:bg-red-600 hover:text-white"
+          >
+            Close
+          </button>
         </div>
 
-        {/* Creator Payhip Embed Paste Bar */}
-        {showCreatorEmbedBar && (
-          <div className="border-b border-zinc-800 bg-zinc-900/70 px-4 py-3">
-            <label className="mb-1 block text-xs font-bold uppercase tracking-wider text-amber-400">
-              Paste Payhip Product Link or Embed Code (Single-Link Free &amp; Paid Variants Supported)
-            </label>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <input
-                type="text"
-                value={embedPasteDraft}
-                onChange={(e) =>
-                  setEmbedDraftOverride({ itemId: selectedItem.id, value: e.target.value })
-                }
-                placeholder="Paste https://payhip.com/b/your-id or Payhip embed HTML..."
-                className="flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-white placeholder-zinc-500 focus:border-amber-400 focus:outline-none"
-              />
-              <button
-                type="button"
-                onClick={handleApplyPastedEmbed}
-                className="rounded-lg bg-amber-500 px-4 py-2 text-xs font-black uppercase text-black hover:bg-amber-400"
-              >
-                Load Checkout
-              </button>
-            </div>
-          </div>
-        )}
+        {/* Account Bar */}
+        <div className="border-b border-zinc-800 bg-zinc-900/60 px-4 py-2.5">
+          <PlayerAccountAuthPanel
+            authenticated={storeSnapshot.authenticated}
+            account={storeSnapshot.account}
+            compact={!showAuthPrompt}
+            promptMessage={
+              showAuthPrompt
+                ? 'Sign in or create an account so your Payhip purchases deliver automatically and stay unlocked everywhere.'
+                : null
+            }
+            onAuthenticated={() => {
+              setShowAuthPrompt(false);
+              setStatusBanner(null);
+            }}
+          />
+        </div>
 
         {/* Main Body: Catalog List + 3D Turntable / Embedded Checkout */}
         <div className="grid flex-1 grid-cols-1 overflow-y-auto md:grid-cols-12">
@@ -340,8 +388,9 @@ export const PayhipMarketplaceModal: React.FC<MarketplaceProps> = ({
             <div className="space-y-2">
               {items.map((item) => {
                 const active = item.id === selectedItem.id;
-                const owned =
-                  item.priceLabel.toLowerCase() === 'free' || unlockedIds.includes(item.id);
+                const itemFree =
+                  Boolean(item.freeByDefault) || item.priceLabel.toLowerCase() === 'free';
+                const owned = itemFree || effectiveUnlocked.includes(item.id);
                 return (
                   <button
                     key={item.id}
@@ -356,7 +405,10 @@ export const PayhipMarketplaceModal: React.FC<MarketplaceProps> = ({
                     <div>
                       <div className="text-xs font-extrabold text-white">{item.name}</div>
                       <div className="mt-0.5 text-[11px] uppercase tracking-wider text-zinc-400">
-                        {item.category} · {owned ? 'Unlocked' : item.priceLabel}
+                        {item.category} ·{' '}
+                        <span className={owned ? 'text-emerald-400 font-bold' : ''}>
+                          {owned ? 'Owned' : item.priceLabel}
+                        </span>
                       </div>
                     </div>
                     <span
@@ -369,7 +421,7 @@ export const PayhipMarketplaceModal: React.FC<MarketplaceProps> = ({
             </div>
           </div>
 
-          {/* Right 3D Preview & In-App Payhip Checkout */}
+          {/* Right 3D Preview & Embedded Payhip Checkout */}
           <div className="flex flex-col justify-between p-4 md:col-span-8">
             {!checkoutUrl ? (
               <>
@@ -377,6 +429,14 @@ export const PayhipMarketplaceModal: React.FC<MarketplaceProps> = ({
                   <div className="absolute left-3 top-3 rounded-md bg-black/70 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-amber-400">
                     Live 3D Preview · Drag/Spin
                   </div>
+                  {selectedItem.productImageUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={selectedItem.productImageUrl}
+                      alt={selectedItem.name}
+                      className="mb-2 h-20 rounded-lg border border-zinc-800 object-contain"
+                    />
+                  )}
                   {webglUnavailable ? (
                     <div className="flex h-56 w-full flex-col items-center justify-center gap-2 sm:h-64">
                       <div
@@ -418,9 +478,16 @@ export const PayhipMarketplaceModal: React.FC<MarketplaceProps> = ({
                     />
                   )}
                   <div className="mt-2 text-center">
-                    <h3 className="text-lg font-black text-white">{selectedItem.name}</h3>
+                    <div className="flex items-center justify-center gap-2">
+                      <h3 className="text-lg font-black text-white">{selectedItem.name}</h3>
+                      {isOwned && (
+                        <span className="rounded bg-emerald-600/25 border border-emerald-500/60 px-2 py-0.5 text-[10px] font-black uppercase text-emerald-300">
+                          OWNED
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-zinc-400">
-                      Equips directly onto your character in 3rd-person view
+                      Delivered automatically upon Payhip payment confirmation
                     </p>
                   </div>
                 </div>
@@ -428,64 +495,58 @@ export const PayhipMarketplaceModal: React.FC<MarketplaceProps> = ({
                 {/* Action / Purchase Bar */}
                 <div className="mt-4 flex flex-col gap-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    {isUnlocked ? (
+                    {isOwned ? (
                       <button
                         type="button"
-                        onClick={() => onEquipItem(selectedItem)}
+                        onClick={handleEquipClick}
                         className={`flex-1 rounded-xl px-4 py-3 text-sm font-black uppercase tracking-wide ${
                           isEquipped
                             ? 'bg-emerald-600 text-white'
                             : 'bg-amber-500 text-black hover:bg-amber-400'
                         }`}
                       >
-                        {isEquipped ? 'Equipped on Character' : 'Equip 3D Skin Now'}
+                        {isEquipped ? 'Unequip Skin' : 'Equip Skin Now'}
                       </button>
                     ) : (
                       <button
                         type="button"
-                        onClick={handleOpenEmbeddedCheckout}
-                        className="flex-1 rounded-xl bg-amber-500 px-4 py-3 text-sm font-black uppercase tracking-wide text-black hover:bg-amber-400"
+                        disabled={startingCheckout}
+                        onClick={handleBuyWithPayhip}
+                        className="flex-1 rounded-xl bg-amber-500 px-4 py-3 text-sm font-black uppercase tracking-wide text-black hover:bg-amber-400 disabled:opacity-50"
                       >
-                        Buy / Claim via Payhip ({selectedItem.priceLabel})
+                        {startingCheckout
+                          ? 'Preparing Payhip Checkout...'
+                          : `Buy via Payhip (${selectedItem.priceLabel})`}
                       </button>
                     )}
                   </div>
-
-                  {/* License / Receipt Unlock Input */}
-                  {!isUnlocked && (
-                    <div className="flex flex-col gap-2 rounded-xl border border-zinc-800 bg-zinc-900/70 p-3 sm:flex-row">
-                      <input
-                        type="text"
-                        value={unlockKeyInput}
-                        onChange={(e) => setUnlockKeyInput(e.target.value)}
-                        placeholder="Enter Payhip receipt / unlock key..."
-                        className="flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-white placeholder-zinc-500 focus:border-amber-400 focus:outline-none"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleVerifyUnlockCode}
-                        className="rounded-lg bg-zinc-800 px-4 py-2 text-xs font-bold uppercase text-amber-400 hover:bg-zinc-700"
-                      >
-                        Unlock &amp; Equip
-                      </button>
-                    </div>
-                  )}
                 </div>
               </>
             ) : (
               /* Embedded Payhip Checkout Frame Inside the App */
               <div className="flex h-full flex-col">
-                <div className="mb-2 flex items-center justify-between">
+                <div className="mb-2 flex items-center justify-between gap-2">
                   <span className="text-xs font-bold text-amber-400">
-                    Secure Payhip Checkout · {selectedItem.name}
+                    Payhip Checkout · {selectedItem.name} ({selectedItem.priceLabel})
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => setCheckoutUrl(null)}
-                    className="rounded-lg bg-zinc-800 px-3 py-1 text-xs font-bold text-zinc-200 hover:bg-zinc-700"
-                  >
-                    ← Back to 3D Preview
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {activeCheckoutId && (
+                      <button
+                        type="button"
+                        onClick={() => void pollPayhipCheckoutStatus(activeCheckoutId)}
+                        className="rounded-lg bg-amber-500/20 border border-amber-500/50 px-2.5 py-1 text-xs font-bold text-amber-200 hover:bg-amber-500/30"
+                      >
+                        Verify Status
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleReturnFromCheckout}
+                      className="rounded-lg bg-zinc-800 px-3 py-1 text-xs font-bold text-zinc-200 hover:bg-zinc-700"
+                    >
+                      ← Back to Preview
+                    </button>
+                  </div>
                 </div>
                 <iframe
                   title={`Payhip Checkout - ${selectedItem.name}`}
@@ -497,7 +558,15 @@ export const PayhipMarketplaceModal: React.FC<MarketplaceProps> = ({
             )}
 
             {statusBanner && (
-              <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-300">
+              <div
+                className={`mt-3 rounded-lg border px-3 py-2 text-xs font-semibold ${
+                  purchaseStatus === 'delivered' || purchaseStatus === 'paid'
+                    ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
+                    : purchaseStatus === 'failed' || purchaseStatus === 'refunded'
+                      ? 'border-red-500/50 bg-red-500/15 text-red-300'
+                      : 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+                }`}
+              >
                 {statusBanner}
               </div>
             )}

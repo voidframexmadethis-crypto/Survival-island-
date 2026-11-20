@@ -65,6 +65,11 @@ interface ProductFormState {
   weaponClass: GunWeaponClass;
   rarity: ExchangeRarity;
   price: string;
+  realMoneyAmount: string;
+  realMoneyCurrency: string;
+  payhipProductId: string;
+  payhipUrl: string;
+  partialRefundPolicy: 'revoke' | 'keep';
   status: PublicationStatus;
   featured: boolean;
   newArrival: boolean;
@@ -98,6 +103,11 @@ const EMPTY_PRODUCT_FORM: ProductFormState = {
   weaponClass: 'assault_rifle',
   rarity: 'common',
   price: '0',
+  realMoneyAmount: '',
+  realMoneyCurrency: 'USD',
+  payhipProductId: '',
+  payhipUrl: '',
+  partialRefundPolicy: 'revoke',
   status: 'draft',
   featured: false,
   newArrival: false,
@@ -227,6 +237,13 @@ export function ExchangeAdminPanel({ onStorefrontUpdated }: ExchangeAdminPanelPr
     weaponClass: productForm.category === 'gun_skin' ? productForm.weaponClass : undefined,
     rarity: productForm.rarity,
     price: Math.max(0, Math.round(Number(productForm.price) || 0)),
+    realMoneyAmount: productForm.realMoneyAmount.trim()
+      ? Math.max(0, Number(productForm.realMoneyAmount) || 0)
+      : null,
+    realMoneyCurrency: productForm.realMoneyCurrency.trim().toUpperCase() || 'USD',
+    payhipProductId: productForm.payhipProductId.trim() || null,
+    payhipUrl: productForm.payhipUrl.trim() || null,
+    partialRefundPolicy: productForm.partialRefundPolicy,
     status: statusOverride || productForm.status,
     featured: productForm.featured,
     newArrival: productForm.newArrival,
@@ -284,6 +301,14 @@ export function ExchangeAdminPanel({ onStorefrontUpdated }: ExchangeAdminPanelPr
       weaponClass: p.weaponClass || 'assault_rifle',
       rarity: p.rarity,
       price: String(p.price),
+      realMoneyAmount:
+        p.realMoneyAmount !== undefined && p.realMoneyAmount !== null
+          ? String(p.realMoneyAmount)
+          : '',
+      realMoneyCurrency: p.realMoneyCurrency || 'USD',
+      payhipProductId: p.payhipProductId || '',
+      payhipUrl: p.payhipUrl || '',
+      partialRefundPolicy: p.partialRefundPolicy || 'revoke',
       status: p.status,
       featured: p.featured,
       newArrival: p.newArrival,
@@ -545,7 +570,7 @@ export function ExchangeAdminPanel({ onStorefrontUpdated }: ExchangeAdminPanelPr
 
                 <div>
                   <label className="block text-xs font-semibold text-stone-300 mb-1">
-                    Product Category * (Only 2 Categories Allowed)
+                    Product Category *
                   </label>
                   <select
                     value={productForm.category}
@@ -559,6 +584,7 @@ export function ExchangeAdminPanel({ onStorefrontUpdated }: ExchangeAdminPanelPr
                   >
                     <option value="gun_skin">Gun Skins</option>
                     <option value="backpack_skin">Backpack Skins</option>
+                    <option value="cosmetic">Cosmetics</option>
                   </select>
                 </div>
 
@@ -642,6 +668,72 @@ export function ExchangeAdminPanel({ onStorefrontUpdated }: ExchangeAdminPanelPr
                     <option value="published">Published (Live in Store)</option>
                     <option value="unpublished">Unpublished (Hidden, Owners Keep It)</option>
                   </select>
+                </div>
+
+                {/* Payhip Direct Checkout & Automatic Delivery Config */}
+                <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-4 gap-3 rounded-xl border border-amber-500/30 bg-stone-950/75 p-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-emerald-300 mb-1">
+                      Payhip Price (Real Money)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={productForm.realMoneyAmount}
+                      onChange={(e) =>
+                        setProductForm((p) => ({ ...p, realMoneyAmount: e.target.value }))
+                      }
+                      placeholder="e.g. 3.99"
+                      className="w-full px-3 py-2 rounded-lg bg-stone-900 border border-stone-700 text-xs font-mono text-stone-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-stone-300 mb-1">
+                      Payhip Product ID
+                    </label>
+                    <input
+                      type="text"
+                      value={productForm.payhipProductId}
+                      onChange={(e) =>
+                        setProductForm((p) => ({ ...p, payhipProductId: e.target.value }))
+                      }
+                      placeholder="e.g. 2804256"
+                      className="w-full px-3 py-2 rounded-lg bg-stone-900 border border-stone-700 text-xs text-stone-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-stone-300 mb-1">
+                      Payhip Checkout URL
+                    </label>
+                    <input
+                      type="url"
+                      value={productForm.payhipUrl}
+                      onChange={(e) =>
+                        setProductForm((p) => ({ ...p, payhipUrl: e.target.value }))
+                      }
+                      placeholder="https://payhip.com/b/..."
+                      className="w-full px-3 py-2 rounded-lg bg-stone-900 border border-stone-700 text-xs text-stone-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-stone-300 mb-1">
+                      Partial Refund Policy
+                    </label>
+                    <select
+                      value={productForm.partialRefundPolicy}
+                      onChange={(e) =>
+                        setProductForm((p) => ({
+                          ...p,
+                          partialRefundPolicy: e.target.value as 'revoke' | 'keep',
+                        }))
+                      }
+                      className="w-full px-3 py-2 rounded-lg bg-stone-900 border border-stone-700 text-xs text-stone-100"
+                    >
+                      <option value="revoke">Revoke Item Entitlement</option>
+                      <option value="keep">Keep Item on Partial Refund</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div className="md:col-span-2">
@@ -1050,9 +1142,8 @@ export function ExchangeAdminPanel({ onStorefrontUpdated }: ExchangeAdminPanelPr
               </div>
               {catalog?.paymentProvider.configured ? (
                 <p className="text-emerald-200/90">
-                  Real-money coin checkout is connected via {catalog.paymentProvider.provider}.
-                  Verified payments credit SI Coins automatically through{' '}
-                  <code className="text-amber-300">/api/exchange/coins/webhook</code>.
+                  Payhip checkout and automatic item fulfillment are connected via{' '}
+                  <code className="text-amber-300">/api/payhip/webhook</code>.
                 </p>
               ) : (
                 <p className="text-stone-400 leading-relaxed">

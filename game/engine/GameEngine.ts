@@ -628,6 +628,8 @@ export class GameEngine {
     return Math.max(getTerrainHeight(x, z), getWaterLevelAt(x, z));
   };
   private consecutiveSlowSeconds = 0;
+  private consecutiveFastSeconds = 0;
+  private autoFpsRestoreCooldown = 0;
   private effectiveShadowsEnabled = true;
   private effectiveShadowMapSize = 1024;
   private effectiveShadowExtent = 64;
@@ -636,6 +638,8 @@ export class GameEngine {
   private effectiveMaxDrawDistance = 205;
   private effectiveFogMult = 1.0;
   private shaderQualityTier = 1;
+  private oceanDetailLevel = 1.0;
+  private maxActivePointLights = 6;
   private nodeHitShakeTimers = new Map<string, number>();
   private _sunDirScratch = new THREE.Vector3(0.4, 0.85, 0.35);
 
@@ -953,8 +957,17 @@ export class GameEngine {
 
   // Dynamic Projectiles, Pickups & Pooled VFX (Zero-GC)
   private arrows: ArrowProjectile[] = [];
+  private arrowEntryPool: ArrowProjectile[] = [];
   private arrowMeshPool: THREE.Mesh[] = [];
   private bulletMeshPool: THREE.Mesh[] = [];
+  private debrisEntryPool: {
+    mesh: THREE.Mesh;
+    pos: THREE.Vector3;
+    vel: THREE.Vector3;
+    life: number;
+  }[] = [];
+  private pickupMeshPool = new Map<ItemId, THREE.Group[]>();
+  private readonly rainCount = 340;
   private arrowGeo = new THREE.CylinderGeometry(0.025, 0.025, 0.85, 5);
   private arrowMat = new THREE.MeshStandardMaterial({ color: 0xe7e5e4 });
   private bulletGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.42, 6);
@@ -1229,7 +1242,9 @@ export class GameEngine {
       this.isSoftwareGl ? 1 : this.isTouchDevice ? 1.5 : 2,
     );
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = this.isTouchDevice
+      ? THREE.PCFShadowMap
+      : THREE.PCFSoftShadowMap;
     this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.needsUpdate = !this.isSoftwareGl;
     this.renderer.setSize(
@@ -1316,7 +1331,12 @@ export class GameEngine {
     this.flatWorld = buildFlatWorld(this.scene, this.renderer);
     this.flatWorld.setVisible(false);
     this.coasterRuntime = new RollerCoasterRuntime(this.scene);
-    this.realisticOcean = new RealisticOcean(this.scene);
+    this.realisticOcean = new RealisticOcean(
+      this.scene,
+      6400,
+      6400,
+      this.isTouchDevice ? 64 : 72,
+    );
     this.realisticOcean.buildShoreDepthTexture(getTerrainHeight);
     this.world.oceanMesh.visible = false;
     this.world.resourceNodes.forEach((n) => this.nodeById.set(n.id, n));
@@ -2029,6 +2049,8 @@ export class GameEngine {
     this.fpsDisplayFrames = 0;
     this.fpsDisplayAccumMs = 0;
     this.consecutiveSlowSeconds = 0;
+    this.consecutiveFastSeconds = 0;
+    this.autoFpsRestoreCooldown = 0;
   }
 
   private cullPlacedObjectsByDistance(cx: number, cz: number, maxDist: number): void {
@@ -2059,7 +2081,7 @@ export class GameEngine {
     this.worldQueue.clear();
     if (this.currentDimension === 'overworld' && this.worldType === 'island') {
       const cullDist = Math.min(this.effectiveMaxDrawDistance, 220);
-      this.world.cullWorldByDistance(0, 0, cullDist);
+      this.world.cullWorldByDistance(0, 0, cullDist, undefined, this.maxActivePointLights);
       this.cullPlacedObjectsByDistance(0, 0, cullDist);
     }
     this.shadowLastCamX = NaN;
@@ -2071,7 +2093,7 @@ export class GameEngine {
     this.worldQueue.clear();
     if (this.currentDimension === 'overworld' && this.worldType === 'island') {
       const cullDist = Math.max(this.effectiveMaxDrawDistance, 210);
-      this.world.cullWorldByDistance(0, 740, cullDist);
+      this.world.cullWorldByDistance(0, 740, cullDist, undefined, this.maxActivePointLights);
       this.cullPlacedObjectsByDistance(0, 740, cullDist);
     }
     this.shadowLastCamX = NaN;
@@ -2082,7 +2104,13 @@ export class GameEngine {
     if (!this.world) return;
     this.worldQueue.clear();
     if (this.currentDimension === 'overworld' && this.worldType === 'island') {
-      this.world.cullWorldByDistance(this.playerX, this.playerZ, this.effectiveMaxDrawDistance);
+      this.world.cullWorldByDistance(
+        this.playerX,
+        this.playerZ,
+        this.effectiveMaxDrawDistance,
+        undefined,
+        this.maxActivePointLights,
+      );
       this.cullPlacedObjectsByDistance(this.playerX, this.playerZ, this.effectiveMaxDrawDistance);
     }
     this.shadowLastCamX = NaN;
@@ -2124,6 +2152,8 @@ export class GameEngine {
     this.sound.configure(settings);
     this.autoFpsTier = 0;
     this.consecutiveSlowSeconds = 0;
+    this.consecutiveFastSeconds = 0;
+    this.autoFpsRestoreCooldown = 0;
     this.fpsSampleTimer = 0;
     this.fpsSampleFrames = 0;
     this.fpsSampleAccumMs = 0;
@@ -2138,49 +2168,59 @@ export class GameEngine {
       this.settings.graphicsQuality,
     );
 
+    // Tier 0: Full preset quality; Tier 1: Keep shadows ON with tighter frustum & lower DPR/ocean shader LOD;
+    // Tier 2: Disable dynamic shadows (shadow discs activate cleanly), DPR=1, reduced ocean/particle load;
+    // Tier 3: Minimum shader & light floor while preserving horizon landmarks (>= 160m unless user chose 'near')
     let shadowsOn =
       this.settings.shadowsEnabled !== false &&
       preset !== 'low' &&
       !this.isSoftwareGl;
-    if (this.autoFpsTier >= 1) {
+    if (this.autoFpsTier >= 2) {
       shadowsOn = false;
     }
 
     const shadowMapSize =
-      preset === 'ultra'
+      preset === 'ultra' && this.autoFpsTier === 0
         ? 2048
         : 1024;
-    const shadowHalfExtent =
+    let shadowHalfExtent =
       preset === 'ultra'
         ? 84
         : preset === 'high'
           ? this.isTouchDevice
-            ? 52
+            ? 46
             : 64
           : preset === 'medium'
-            ? 48
-            : 40;
+            ? this.isTouchDevice
+              ? 40
+              : 48
+            : 36;
+    if (this.autoFpsTier >= 1) {
+      shadowHalfExtent = Math.min(shadowHalfExtent, 34);
+    }
     const shadowFar =
-      preset === 'ultra'
+      preset === 'ultra' && this.autoFpsTier === 0
         ? 280
-        : preset === 'high'
+        : preset === 'high' && this.autoFpsTier === 0
           ? 220
-          : preset === 'medium'
-            ? 190
-            : 160;
-    const shadowRadius = this.isTouchDevice
-      ? 1.5
-      : preset === 'ultra'
-        ? 3
-        : 2;
+          : 185;
+    const shadowRadius =
+      this.autoFpsTier >= 1 || this.isTouchDevice
+        ? 1.0
+        : preset === 'ultra'
+          ? 3
+          : 2;
+
     let dpr = 1;
     if (!this.isSoftwareGl) {
       const nativeDpr = window.devicePixelRatio || 1;
       if (this.autoFpsTier >= 2 || preset === 'low') {
         dpr = 1;
+      } else if (this.autoFpsTier === 1) {
+        dpr = this.isTouchDevice ? Math.min(nativeDpr, 1.05) : Math.min(nativeDpr, 1.25);
       } else if (this.isTouchDevice) {
-        dpr = Math.min(nativeDpr, 1.25);
-      } else if (this.autoFpsTier >= 1 || preset === 'medium' || preset === 'high') {
+        dpr = Math.min(nativeDpr, preset === 'ultra' || preset === 'high' ? 1.25 : 1.15);
+      } else if (preset === 'medium' || preset === 'high') {
         dpr = Math.min(nativeDpr, 1.5);
       } else {
         dpr = Math.min(nativeDpr, 1.75);
@@ -2192,42 +2232,86 @@ export class GameEngine {
       preset !== 'low' &&
       !this.isSoftwareGl;
     const particlesOn = this.settings.particlesEnabled !== false;
-    this.effectiveParticleScale = !particlesOn
+    let particleScale = !particlesOn
       ? 0
-      : this.autoFpsTier >= 2 || preset === 'low'
+      : preset === 'low'
         ? 0.5
         : preset === 'medium'
           ? 0.8
           : preset === 'ultra'
             ? 1.25
             : 1.0;
+    if (this.autoFpsTier === 1) particleScale *= 0.85;
+    else if (this.autoFpsTier === 2) particleScale *= 0.6;
+    else if (this.autoFpsTier >= 3) particleScale *= 0.4;
+    this.effectiveParticleScale = particleScale;
 
-    this.shaderQualityTier =
-      this.isSoftwareGl || this.autoFpsTier >= 2 || preset === 'low'
+    let baseShaderTier =
+      this.isSoftwareGl || preset === 'low'
         ? 0
         : preset === 'ultra'
           ? 2.5
           : preset === 'high'
             ? 2
             : 1;
+    if (this.autoFpsTier === 1) baseShaderTier = Math.min(baseShaderTier, 1);
+    else if (this.autoFpsTier === 2) baseShaderTier = Math.min(baseShaderTier, 0.5);
+    else if (this.autoFpsTier >= 3) baseShaderTier = 0;
+    this.shaderQualityTier = baseShaderTier;
 
-    let distTier =
+    this.oceanDetailLevel =
+      this.isSoftwareGl || preset === 'low' || this.autoFpsTier >= 3
+        ? 0.35
+        : this.autoFpsTier === 2
+          ? 0.48
+          : this.autoFpsTier === 1
+            ? 0.65
+            : this.isTouchDevice
+              ? 0.85
+              : 1.0;
+    this.realisticOcean?.setDetailLevel(this.oceanDetailLevel);
+
+    this.maxActivePointLights =
+      this.isSoftwareGl || this.autoFpsTier >= 3
+        ? 1
+        : this.autoFpsTier === 2
+          ? 2
+          : this.autoFpsTier === 1
+            ? this.isTouchDevice
+              ? 3
+              : 4
+            : this.isTouchDevice
+              ? 4
+              : 6;
+
+    const userDistTier =
       this.settings.drawDistance ??
       (preset === 'high' ? 'far' : preset === 'low' ? 'near' : 'medium');
-    if (this.autoFpsTier >= 3) {
-      distTier = 'near';
+    let cullDist = userDistTier === 'near' ? 135 : userDistTier === 'far' ? 310 : 215;
+    if (this.isTouchDevice && userDistTier === 'far') {
+      cullDist = 250;
     }
-
-    const cullDist = distTier === 'near' ? 135 : distTier === 'far' ? 320 : 215;
-    const camFar = distTier === 'near' ? 240 : distTier === 'far' ? 460 : 340;
-    this.effectiveFogMult = distTier === 'near' ? 1.35 : distTier === 'far' ? 0.78 : 0.95;
+    if (this.autoFpsTier >= 3 && userDistTier !== 'near') {
+      // Trim only modestly so distant hills & landmarks never vanish leaving an empty island
+      cullDist = Math.max(165, Math.round(cullDist * 0.78));
+    } else if (this.autoFpsTier === 2 && userDistTier === 'far') {
+      cullDist = 205;
+    }
+    const camFar =
+      cullDist <= 145
+        ? 250
+        : cullDist >= 260
+          ? 440
+          : 340;
+    this.effectiveFogMult =
+      userDistTier === 'near' ? 1.32 : userDistTier === 'far' ? 0.78 : 0.95;
     this.effectiveMaxDrawDistance = cullDist;
     this.effectiveShadowsEnabled = shadowsOn;
     this.effectiveShadowExtent = shadowHalfExtent;
     this.effectiveWaterReflections = waterRefl;
 
     dpr = Math.min(dpr, 2);
-    if (this.renderer.getPixelRatio() !== dpr) {
+    if (Math.abs(this.renderer.getPixelRatio() - dpr) > 0.01) {
       this.renderer.setPixelRatio(dpr);
     }
     this.renderer.shadowMap.enabled = shadowsOn;
@@ -2251,7 +2335,9 @@ export class GameEngine {
           (this.sunLight.shadow.map as unknown) = null;
         }
       }
-      this.renderer.shadowMap.needsUpdate = true;
+      if (shadowsOn) {
+        this.renderer.shadowMap.needsUpdate = true;
+      }
     }
 
     if (this.camera.far !== camFar) {
@@ -2281,6 +2367,7 @@ export class GameEngine {
     });
 
     for (const [vid, vh] of this.vehicleMeshes.entries()) {
+      vh.root.userData.vShadowCast = undefined;
       applyRealisticMeshLightingPass(vh.root, {
         shadowsEnabled: shadowsOn,
         envMapIntensity: 1.0,
@@ -5542,7 +5629,7 @@ export class GameEngine {
       match.quantity -= 1;
     } else {
       match.collected = true;
-      this.scene.remove(match.mesh);
+      this.recyclePickupMesh(match.itemId, match.mesh);
       this.pickups.splice(matchIdx, 1);
     }
 
@@ -7205,29 +7292,38 @@ export class GameEngine {
   private fireArrow(): void {
     _probeEuler.set(this.camPitch, this.camYaw, 0, 'YXZ');
     _vec3A.set(0, 0, -1).applyEuler(_probeEuler);
-    const start = new THREE.Vector3(
-      this.playerX + _vec3A.x * 0.6,
-      this.playerY + this.currentEyeHeight - 0.1,
-      this.playerZ + _vec3A.z * 0.6,
-    );
+    const sx = this.playerX + _vec3A.x * 0.6;
+    const sy = this.playerY + this.currentEyeHeight - 0.1;
+    const sz = this.playerZ + _vec3A.z * 0.6;
     const mesh =
       this.arrowMeshPool.pop() ?? new THREE.Mesh(this.arrowGeo, this.arrowMat);
     mesh.rotation.set(Math.PI / 2, 0, 0);
-    mesh.position.copy(start);
+    mesh.position.set(sx, sy, sz);
     mesh.visible = true;
     this.scene.add(mesh);
 
-    this.arrows.push({
-      mesh,
-      pos: start,
-      vel: new THREE.Vector3(
-        _vec3A.x * 28,
-        _vec3A.y * 28 + 2.2,
-        _vec3A.z * 28,
-      ),
-      life: 2.5,
-      damage: 38,
-    });
+    const entry = this.arrowEntryPool.pop();
+    if (entry) {
+      entry.mesh = mesh;
+      entry.pos.set(sx, sy, sz);
+      entry.vel.set(_vec3A.x * 28, _vec3A.y * 28 + 2.2, _vec3A.z * 28);
+      entry.life = 2.5;
+      entry.damage = 38;
+      entry.isBullet = false;
+      this.arrows.push(entry);
+    } else {
+      this.arrows.push({
+        mesh,
+        pos: new THREE.Vector3(sx, sy, sz),
+        vel: new THREE.Vector3(
+          _vec3A.x * 28,
+          _vec3A.y * 28 + 2.2,
+          _vec3A.z * 28,
+        ),
+        life: 2.5,
+        damage: 38,
+      });
+    }
   }
 
   private cancelReload(): void {
@@ -7455,18 +7551,33 @@ export class GameEngine {
       bulletMesh.visible = true;
       this.scene.add(bulletMesh);
 
-      this.arrows.push({
-        mesh: bulletMesh,
-        pos: new THREE.Vector3(sx, sy, sz),
-        vel: new THREE.Vector3(
+      const entry = this.arrowEntryPool.pop();
+      if (entry) {
+        entry.mesh = bulletMesh;
+        entry.pos.set(sx, sy, sz);
+        entry.vel.set(
           _vec3D.x * spec.muzzleSpeed,
           _vec3D.y * spec.muzzleSpeed,
           _vec3D.z * spec.muzzleSpeed,
-        ),
-        life: bulletLife,
-        damage: spec.damage,
-        isBullet: true,
-      });
+        );
+        entry.life = bulletLife;
+        entry.damage = spec.damage;
+        entry.isBullet = true;
+        this.arrows.push(entry);
+      } else {
+        this.arrows.push({
+          mesh: bulletMesh,
+          pos: new THREE.Vector3(sx, sy, sz),
+          vel: new THREE.Vector3(
+            _vec3D.x * spec.muzzleSpeed,
+            _vec3D.y * spec.muzzleSpeed,
+            _vec3D.z * spec.muzzleSpeed,
+          ),
+          life: bulletLife,
+          damage: spec.damage,
+          isBullet: true,
+        });
+      }
     }
 
     this.p2p?.broadcast({
@@ -7653,12 +7764,20 @@ export class GameEngine {
   private clearPickups(): void {
     this.pickups.forEach((p) => {
       this.scene.remove(p.mesh);
+      this.disposeObject3D(p.mesh);
     });
     this.pickups = [];
+    this.pickupMeshPool.forEach((meshes) => {
+      for (const m of meshes) {
+        this.disposeObject3D(m);
+      }
+    });
+    this.pickupMeshPool.clear();
     for (const dp of this.debrisProjectiles) {
+      dp.mesh.visible = false;
       this.scene.remove(dp.mesh);
-      dp.mesh.geometry.dispose();
-      (dp.mesh.material as THREE.Material).dispose();
+      if (this.debrisMeshPool.length < 18) this.debrisMeshPool.push(dp.mesh);
+      if (this.debrisEntryPool.length < 18) this.debrisEntryPool.push(dp);
     }
     this.debrisProjectiles = [];
     this.caveCeilingRespawnTimers.clear();
@@ -7678,6 +7797,21 @@ export class GameEngine {
     }
   }
 
+  private recyclePickupMesh(itemId: ItemId, mesh: THREE.Group): void {
+    mesh.visible = false;
+    this.scene.remove(mesh);
+    let pool = this.pickupMeshPool.get(itemId);
+    if (!pool) {
+      pool = [];
+      this.pickupMeshPool.set(itemId, pool);
+    }
+    if (pool.length < 12) {
+      pool.push(mesh);
+    } else {
+      this.disposeObject3D(mesh);
+    }
+  }
+
   private spawnPickup(
     itemId: ItemId,
     quantity: number,
@@ -7691,13 +7825,18 @@ export class GameEngine {
   ): void {
     if (this.pickups.length >= 64) {
       const oldest = this.pickups.shift();
-      if (oldest) this.scene.remove(oldest.mesh);
+      if (oldest) this.recyclePickupMesh(oldest.itemId, oldest.mesh);
     }
     const terrainH = getTerrainHeight(x, z);
     const deckH = this.getStructuralSurfaceY(x, z, (startY ?? terrainH) + 1.5);
     const y = Math.max(OCEAN_LEVEL + 0.08, terrainH, deckH);
     const initialY = startY !== undefined && startY > y + 0.25 ? startY : y + 0.04;
-    const mesh = createPickupMesh(itemId, this.world.woodTex);
+    const pool = this.pickupMeshPool.get(itemId);
+    const mesh =
+      pool && pool.length > 0
+        ? (pool.pop() as THREE.Group)
+        : createPickupMesh(itemId, this.world.woodTex);
+    mesh.visible = true;
     mesh.position.set(x, initialY, z);
     mesh.rotation.y = Math.random() * Math.PI * 2;
     this.scene.add(mesh);
@@ -7753,7 +7892,7 @@ export class GameEngine {
     if (p.collected) return;
     p.collected = true;
     this.pickups.splice(idx, 1);
-    this.scene.remove(p.mesh);
+    this.recyclePickupMesh(p.itemId, p.mesh);
 
     this.sound.playPickup();
     this.addItem(p.itemId, p.quantity, false);
@@ -8837,7 +8976,11 @@ export class GameEngine {
         fogColor: _fogScratchColor,
         fogDensity,
         daylight,
-        reflectionStrength: this.effectiveWaterReflections ? 1.0 : 0.2,
+        reflectionStrength: this.effectiveWaterReflections
+          ? this.autoFpsTier >= 2
+            ? 0.58
+            : 1.0
+          : 0.2,
       });
     }
     _zenithScratchColor
@@ -8859,11 +9002,15 @@ export class GameEngine {
     });
 
     if (this.worldType === 'island') {
-      // Tint ocean & freshwater palette with day-night lighting
-      if (this.world.oceanMesh.material instanceof THREE.MeshStandardMaterial) {
+      // Skip updating hidden legacy oceanMesh when RealisticOcean renders
+      if (this.world.oceanMesh.visible && this.world.oceanMesh.material instanceof THREE.MeshStandardMaterial) {
         this.world.oceanMesh.material.color
           .setHex(0x052838)
           .lerp(_oceanDayColor, daylight);
+        if (this.world.oceanMesh.material.normalMap) {
+          this.world.oceanMesh.material.normalMap.offset.x += dt * 0.025;
+          this.world.oceanMesh.material.normalMap.offset.y += dt * 0.018;
+        }
       }
       if (this.world.lakeMesh.material instanceof THREE.MeshStandardMaterial) {
         this.world.lakeMesh.material.color
@@ -8874,34 +9021,33 @@ export class GameEngine {
       // Drifting 3D clouds
       this.world.cloudsGroup.rotation.y += dt * 0.006;
 
-      // Waterfall shimmer & ocean normal drift
-      if (
-        this.world.oceanMesh.material instanceof THREE.MeshStandardMaterial &&
-        this.world.oceanMesh.material.normalMap
-      ) {
-        this.world.oceanMesh.material.normalMap.offset.x += dt * 0.025;
-        this.world.oceanMesh.material.normalMap.offset.y += dt * 0.018;
-      }
       if (this.world.waterfallShaderMat) {
         this.world.waterfallShaderMat.uniforms.uTime.value = this.elapsed;
       }
-      this.world.waterfallStreams.forEach((wf, idx) => {
-        wf.scale.x = 0.96 + Math.sin(this.elapsed * 6 + idx) * 0.04;
-      });
+      const wfStreams = this.world.waterfallStreams;
+      for (let wi = 0; wi < wfStreams.length; wi++) {
+        wfStreams[wi].scale.x = 0.96 + Math.sin(this.elapsed * 6 + wi) * 0.04;
+      }
       this.world.waterfallFoam.scale.setScalar(
         0.95 + Math.sin(this.elapsed * 5) * 0.12,
       );
     }
 
-    // Rain particle drop animation (disabled on title menu for steady 60+ FPS)
+    // Rain particle drop animation (disabled on title menu & scaled cleanly by particle profile)
+    const activeRainCount = Math.max(
+      0,
+      Math.min(this.rainCount, Math.round(this.rainCount * Math.min(1, this.effectiveParticleScale))),
+    );
     const showRain =
       this.mode !== 'menu' &&
       !isFlat &&
+      activeRainCount > 0 &&
       (this.weather === 'rain' ||
         this.weather === 'storm' ||
         this.cinematicActive);
     this.rainPoints.visible = showRain;
     if (showRain) {
+      this.rainGeo.setDrawRange(0, activeRainCount);
       const center = this.cinematicActive
         ? this.shipModel.position
         : this.camera.position;
@@ -8909,7 +9055,8 @@ export class GameEngine {
       const posAttr = this.rainGeo.attributes.position as THREE.BufferAttribute;
       const arr = posAttr.array as Float32Array;
       const fallDelta = (this.weather === 'storm' || this.cinematicActive ? 24 : 18) * dt;
-      for (let i = 1; i < arr.length; i += 3) {
+      const maxRainIdx = activeRainCount * 3;
+      for (let i = 1; i < maxRainIdx; i += 3) {
         let ry = arr[i] - fallDelta;
         if (ry < 0) ry = 18;
         arr[i] = ry;
@@ -10131,12 +10278,10 @@ export class GameEngine {
       const mesh =
         this.debrisMeshPool.pop() ?? new THREE.Mesh(this.debrisGeo, this.debrisMat);
       mesh.scale.setScalar(0.9 + (i % 2) * 0.3);
-      const pos = new THREE.Vector3(
-        _probeOrigin.x + _probeDir.x * 0.8 + (Math.random() - 0.5) * 0.32,
-        _probeOrigin.y + _probeDir.y * 0.8 + (Math.random() - 0.5) * 0.22,
-        _probeOrigin.z + _probeDir.z * 0.8 + (Math.random() - 0.5) * 0.32,
-      );
-      mesh.position.copy(pos);
+      const px = _probeOrigin.x + _probeDir.x * 0.8 + (Math.random() - 0.5) * 0.32;
+      const py = _probeOrigin.y + _probeDir.y * 0.8 + (Math.random() - 0.5) * 0.22;
+      const pz = _probeOrigin.z + _probeDir.z * 0.8 + (Math.random() - 0.5) * 0.32;
+      mesh.position.set(px, py, pz);
       mesh.visible = true;
       this.scene.add(mesh);
 
@@ -10148,12 +10293,21 @@ export class GameEngine {
         .add(_vec3D.set(sx, sy, sz))
         .normalize()
         .multiplyScalar(17.5);
-      this.debrisProjectiles.push({
-        mesh,
-        pos,
-        vel: new THREE.Vector3(vel.x, vel.y, vel.z),
-        life: 0.95,
-      });
+      const pooledDebris = this.debrisEntryPool.pop();
+      if (pooledDebris) {
+        pooledDebris.mesh = mesh;
+        pooledDebris.pos.set(px, py, pz);
+        pooledDebris.vel.set(vel.x, vel.y, vel.z);
+        pooledDebris.life = 0.95;
+        this.debrisProjectiles.push(pooledDebris);
+      } else {
+        this.debrisProjectiles.push({
+          mesh,
+          pos: new THREE.Vector3(px, py, pz),
+          vel: new THREE.Vector3(vel.x, vel.y, vel.z),
+          life: 0.95,
+        });
+      }
     }
 
     if (!blindedAny) {
@@ -11891,8 +12045,7 @@ export class GameEngine {
       }
       p.life -= dt;
       if (p.life <= 0) {
-        this.scene.remove(p.mesh);
-        this.disposeObject3D(p.mesh);
+        this.recyclePickupMesh(p.itemId, p.mesh);
         this.pickups.splice(i, 1);
         continue;
       }
@@ -12095,6 +12248,7 @@ export class GameEngine {
         } else {
           if (this.arrowMeshPool.length < 16) this.arrowMeshPool.push(a.mesh);
         }
+        if (this.arrowEntryPool.length < 48) this.arrowEntryPool.push(a);
         this.arrows.splice(i, 1);
       }
     }
@@ -12161,6 +12315,7 @@ export class GameEngine {
         dp.mesh.visible = false;
         this.scene.remove(dp.mesh);
         if (this.debrisMeshPool.length < 18) this.debrisMeshPool.push(dp.mesh);
+        if (this.debrisEntryPool.length < 18) this.debrisEntryPool.push(dp);
         this.debrisProjectiles.splice(i, 1);
       }
     }
@@ -13290,14 +13445,13 @@ export class GameEngine {
       this.fpsDisplayAccumMs = 0;
     }
 
-    // Dynamic Auto-FPS Guard: detects sustained GPU bottlenecks and steps down GPU load cleanly
+    // Bi-Directional Adaptive Auto-FPS Guard: steps down GPU load cleanly under sustained frame pressure and restores quality when performance recovers
     if (
       this.mode === 'playing' &&
       !this.gameOver &&
       !this.cinematicActive &&
       !this.isSoftwareGl &&
-      this.settings.dynamicAutoFps !== false &&
-      this.autoFpsTier < 3
+      this.settings.dynamicAutoFps !== false
     ) {
       const clampedMs = Math.min(100, Math.max(1, rawFrameMs));
       this.fpsSampleAccumMs += clampedMs;
@@ -13305,26 +13459,58 @@ export class GameEngine {
       this.fpsSampleTimer += frameTime;
       if (this.fpsSampleTimer >= 1.0) {
         const avgMs = this.fpsSampleAccumMs / Math.max(1, this.fpsSampleFrames);
-        if (avgMs > 24.0) {
-          this.consecutiveSlowSeconds += 1;
-        } else {
-          this.consecutiveSlowSeconds = 0;
-        }
         this.fpsSampleTimer = 0;
         this.fpsSampleFrames = 0;
         this.fpsSampleAccumMs = 0;
 
-        if (this.consecutiveSlowSeconds >= 2) {
-          this.consecutiveSlowSeconds = 0;
-          this.autoFpsTier = Math.min(3, this.autoFpsTier + 1);
-          this.applyGraphicsProfile();
-          const msg =
-            this.autoFpsTier === 1
-              ? 'Auto-FPS Guard: Disabled dynamic shadows to sustain smooth FPS'
-              : this.autoFpsTier === 2
-                ? 'Auto-FPS Guard: Reduced resolution & particles to sustain smooth FPS'
-                : 'Auto-FPS Guard: Shortened draw distance to sustain smooth FPS';
-          this.toast(msg, 'info');
+        if (this.autoFpsRestoreCooldown > 0) {
+          this.autoFpsRestoreCooldown = Math.max(0, this.autoFpsRestoreCooldown - 1);
+        }
+
+        let steppedDown = false;
+        if (this.autoFpsTier < 3) {
+          if (avgMs > 20.8) {
+            this.consecutiveSlowSeconds += avgMs > 32.0 ? 2 : 1;
+          } else {
+            this.consecutiveSlowSeconds = 0;
+          }
+
+          if (this.consecutiveSlowSeconds >= 2) {
+            this.consecutiveSlowSeconds = 0;
+            this.consecutiveFastSeconds = 0;
+            this.autoFpsRestoreCooldown = 14;
+            this.autoFpsTier = Math.min(3, this.autoFpsTier + 1);
+            this.applyGraphicsProfile();
+            steppedDown = true;
+            const msg =
+              this.autoFpsTier === 1
+                ? 'Auto-FPS Guard: Tightened shadow range & resolution to hold 60 FPS'
+                : this.autoFpsTier === 2
+                  ? 'Auto-FPS Guard: Disabled dynamic shadows to sustain smooth FPS'
+                  : 'Auto-FPS Guard: Trimmed shader & particle detail for smooth FPS';
+            this.toast(msg, 'info');
+          }
+        }
+
+        if (!steppedDown && this.autoFpsTier > 0 && this.autoFpsRestoreCooldown <= 0) {
+          if (avgMs <= 18.0) {
+            this.consecutiveFastSeconds += 1;
+          } else if (avgMs > 19.6) {
+            this.consecutiveFastSeconds = 0;
+          }
+          if (this.consecutiveFastSeconds >= 5) {
+            this.consecutiveFastSeconds = 0;
+            this.consecutiveSlowSeconds = 0;
+            this.autoFpsRestoreCooldown = 8;
+            this.autoFpsTier = Math.max(0, this.autoFpsTier - 1);
+            this.applyGraphicsProfile();
+            this.toast(
+              this.autoFpsTier === 0
+                ? 'Auto-FPS Guard: Restored full visual quality'
+                : 'Auto-FPS Guard: Restored higher visual quality',
+              'info',
+            );
+          }
         }
       }
     }
@@ -13417,7 +13603,7 @@ export class GameEngine {
           if (inOverworld) {
             this.updateStructuralAndTerrainSystems(dt);
             this.updateKineticNetwork(dt);
-            this.coasterRuntime?.update(dt);
+            this.coasterRuntime?.update(dt, this.playerX, this.playerZ);
           }
           this.updateVehicles(dt);
           this.updateBuildPreview();
@@ -13488,6 +13674,7 @@ export class GameEngine {
                 this.playerZ,
                 maxDist,
                 this.worldQueue,
+                this.maxActivePointLights,
               );
             }
             for (let i = 0; i < this.structures.length; i++) {
@@ -14682,13 +14869,15 @@ export class GameEngine {
   private disposeObject3D(root: THREE.Object3D): void {
     root.traverse((obj) => {
       if (obj instanceof THREE.Mesh) {
-        obj.geometry?.dispose();
+        if (obj.geometry && !obj.geometry.userData?.sharedAsset) {
+          obj.geometry.dispose();
+        }
         const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
         for (const m of mats) {
-          if (!m) continue;
+          if (!m || m.userData?.sharedAsset) continue;
           const std = m as THREE.MeshStandardMaterial;
-          if (std.map) std.map.dispose();
-          if (std.emissiveMap) std.emissiveMap.dispose();
+          if (std.map && !std.map.userData?.sharedAsset) std.map.dispose();
+          if (std.emissiveMap && !std.emissiveMap.userData?.sharedAsset) std.emissiveMap.dispose();
           m.dispose();
         }
       }
@@ -16737,8 +16926,11 @@ export class GameEngine {
     }
 
     const maxDrawSq = this.effectiveMaxDrawDistance * this.effectiveMaxDrawDistance;
-    const detailDistSq = 55 * 55;
+    const detailDistSq = this.autoFpsTier >= 2 ? 32 * 32 : 44 * 44;
+    const shadowMargin = this.effectiveShadowExtent + 10;
+    const shadowDistSq = shadowMargin * shadowMargin;
     const underglowLightMaxSq = 20 * 20;
+    const maxUnderLights = this.autoFpsTier >= 2 ? 1 : 2;
     let activeUnderLightsShown = 0;
 
     for (const v of this.vehicles) {
@@ -16797,6 +16989,17 @@ export class GameEngine {
       if (!handles.root.visible) {
         if (handles.underglowLight) handles.underglowLight.visible = false;
         continue;
+      }
+
+      const castVehicleShadow =
+        this.effectiveShadowsEnabled && (isActive || distVSq <= shadowDistSq);
+      if (handles.root.userData.vShadowCast !== castVehicleShadow) {
+        handles.root.userData.vShadowCast = castVehicleShadow;
+        handles.root.traverse((child) => {
+          if (child instanceof THREE.Mesh && !child.userData.noShadowCast) {
+            child.castShadow = castVehicleShadow;
+          }
+        });
       }
 
       handles.root.position.set(v.x, v.y, v.z);
@@ -17103,7 +17306,8 @@ export class GameEngine {
       if (handles.underglowLight) {
         const allowPointLight =
           underOn &&
-          (isActive || (distVSq <= underglowLightMaxSq && activeUnderLightsShown < 2));
+          (isActive ||
+            (distVSq <= underglowLightMaxSq && activeUnderLightsShown < maxUnderLights));
         handles.underglowLight.visible = allowPointLight;
         if (allowPointLight) {
           activeUnderLightsShown += 1;

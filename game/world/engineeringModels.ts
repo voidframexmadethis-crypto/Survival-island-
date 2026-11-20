@@ -549,6 +549,12 @@ function getSharedShowroomAssets(): SharedShowroomAssets {
     }),
     bevelArchCache: new Map(),
   };
+  cachedShowroomAssets.tireMat.userData = { sharedAsset: true };
+  cachedShowroomAssets.rotorMat.userData = { sharedAsset: true };
+  cachedShowroomAssets.caliperLimeMat.userData = { sharedAsset: true };
+  cachedShowroomAssets.caliperRedMat.userData = { sharedAsset: true };
+  cachedShowroomAssets.caliperOrangeMat.userData = { sharedAsset: true };
+  cachedShowroomAssets.whitewallMat.userData = { sharedAsset: true };
   return cachedShowroomAssets;
 }
 
@@ -613,6 +619,7 @@ function getFlaredWheelArchGeo(
   geo.rotateY(Math.PI / 2);
   geo.translate(-depth * 0.5, 0, 0);
   ensureGeometryHasUv(geo);
+  geo.userData.sharedAsset = true;
   assets.bevelArchCache.set(key, geo);
   return geo;
 }
@@ -2821,10 +2828,16 @@ export function createModularVehicleMesh(
   ]);
   root.traverse((obj) => {
     if (obj instanceof THREE.Mesh) {
-      if (noShadowSet.has(obj) || obj.userData.noShadowCast) {
+      const mat = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+      const isTransparentOrGlow = Boolean(mat && (mat as THREE.Material).transparent);
+      if (obj.geometry && !obj.geometry.boundingSphere) {
+        obj.geometry.computeBoundingSphere();
+      }
+      const smallPart = (obj.geometry?.boundingSphere?.radius ?? 1) < 0.24;
+      if (noShadowSet.has(obj) || obj.userData.noShadowCast || isTransparentOrGlow || smallPart) {
         obj.userData.noShadowCast = true;
         obj.castShadow = false;
-        obj.receiveShadow = false;
+        obj.receiveShadow = !isTransparentOrGlow && !noShadowSet.has(obj);
       } else {
         obj.castShadow = true;
         obj.receiveShadow = true;
@@ -2856,13 +2869,15 @@ export function buildRealisticTahoeRig(spec: GarageVehicleSpec): BuiltVehicleRig
     dispose: () => {
       handles.root.traverse((obj) => {
         if (obj instanceof THREE.Mesh) {
-          obj.geometry?.dispose();
+          if (obj.geometry && !obj.geometry.userData?.sharedAsset) {
+            obj.geometry.dispose();
+          }
           const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
           for (const m of mats) {
-            if (!m) continue;
+            if (!m || m.userData?.sharedAsset) continue;
             const std = m as THREE.MeshStandardMaterial;
-            if (std.map) std.map.dispose();
-            if (std.emissiveMap) std.emissiveMap.dispose();
+            if (std.map && !std.map.userData?.sharedAsset) std.map.dispose();
+            if (std.emissiveMap && !std.emissiveMap.userData?.sharedAsset) std.emissiveMap.dispose();
             m.dispose();
           }
         }

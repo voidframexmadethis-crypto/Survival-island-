@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { ItemId } from '../types';
 
-export type ExchangeCategory = 'gun_skin' | 'backpack_skin';
+export type ExchangeCategory = 'gun_skin' | 'backpack_skin' | 'cosmetic';
+
+export type PartialRefundPolicy = 'revoke' | 'keep';
 
 export type ExchangeRarity = 'common' | 'rare' | 'epic' | 'legendary' | 'exclusive';
 
@@ -66,6 +68,14 @@ export interface ExchangeProduct {
   /** Optional uploaded 3D model (.glb / .gltf data URL or asset URL) */
   model3dUrl?: string | null;
   model3dFileName?: string | null;
+  /** Payhip product integration metadata (server-verified webhooks match these IDs) */
+  payhipProductId?: string | null;
+  payhipProductKey?: string | null;
+  payhipUrl?: string | null;
+  realMoneyAmount?: number | null;
+  realMoneyCurrency?: string;
+  partialRefundPolicy?: PartialRefundPolicy;
+  freeByDefault?: boolean;
   /** Visual styling used for procedural 3D fallback & in-game weapon/backpack finish */
   visual: CosmeticVisualSpec;
   createdAt: number;
@@ -94,7 +104,12 @@ export interface ExchangeTransaction {
     | 'cosmetic_purchase'
     | 'coin_checkout_pending'
     | 'coin_purchase_verified'
-    | 'coin_purchase_failed';
+    | 'coin_purchase_failed'
+    | 'payhip_checkout_created'
+    | 'payhip_paid'
+    | 'payhip_refunded'
+    | 'payhip_partial_refund'
+    | 'payhip_failed';
   playerId: string;
   itemId?: string;
   itemName?: string;
@@ -102,7 +117,7 @@ export interface ExchangeTransaction {
   coinDelta: number;
   realMoneyAmount?: number;
   currency?: string;
-  status: 'completed' | 'pending_provider' | 'failed';
+  status: 'completed' | 'pending_provider' | 'failed' | 'refunded';
   provider?: string;
   providerReference?: string;
   createdAt: number;
@@ -112,6 +127,7 @@ export interface ExchangeTransaction {
 export const CATEGORY_LABELS: Record<ExchangeCategory, string> = {
   gun_skin: 'Gun Skins',
   backpack_skin: 'Backpack Skins',
+  cosmetic: 'Cosmetics',
 };
 
 export const WEAPON_CLASS_LABELS: Record<GunWeaponClass, string> = {
@@ -197,7 +213,179 @@ export const DEFAULT_VISUAL_SPEC: CosmeticVisualSpec = {
  * No sample products, no premade skins, no placeholder packages.
  * Every product and coin package is created and managed exclusively by the owner.
  */
-export const DEFAULT_EXCHANGE_CATALOG: ExchangeProduct[] = [];
+export const DEFAULT_EXCHANGE_CATALOG: ExchangeProduct[] = [
+  {
+    id: 'vault_backpack_explorer',
+    name: 'Ranger Olive Pack',
+    description: 'Tactical woodland explorer backpack included free for every survivor.',
+    category: 'backpack_skin',
+    compatibleWeapons: [],
+    compatibleLabel: 'All Tactical Backpacks',
+    rarity: 'common',
+    price: 0,
+    realMoneyAmount: 0,
+    realMoneyCurrency: 'USD',
+    partialRefundPolicy: 'revoke',
+    freeByDefault: true,
+    status: 'published',
+    featured: true,
+    newArrival: false,
+    bestSeller: false,
+    visual: {
+      primaryHex: '#3f6212',
+      secondaryHex: '#1a2e05',
+      accentHex: '#d97706',
+      metalness: 0.25,
+      roughness: 0.6,
+      pattern: 'camo_woodland',
+    },
+    createdAt: 1700000000000,
+    updatedAt: 1700000000000,
+    publishedAt: 1700000000000,
+  },
+  {
+    id: 'vault_backpack_cyber_neon',
+    name: 'Cyber Volt Rig',
+    description: 'Electric cyan & obsidian tactical backpack rig delivered automatically via Payhip.',
+    category: 'backpack_skin',
+    compatibleWeapons: [],
+    compatibleLabel: 'All Tactical Backpacks',
+    rarity: 'epic',
+    price: 0,
+    realMoneyAmount: 2.99,
+    realMoneyCurrency: 'USD',
+    payhipProductId: 'vault_backpack_cyber_neon',
+    payhipProductKey: 'cyber-volt-rig',
+    payhipUrl: 'https://payhip.com/b/cyber-volt-rig',
+    partialRefundPolicy: 'revoke',
+    status: 'published',
+    featured: true,
+    newArrival: true,
+    bestSeller: false,
+    visual: {
+      primaryHex: '#0f172a',
+      secondaryHex: '#0284c7',
+      accentHex: '#22d3ee',
+      emissiveHex: '#22d3ee',
+      metalness: 0.4,
+      roughness: 0.42,
+      pattern: 'futuristic_grid',
+    },
+    createdAt: 1700000000000,
+    updatedAt: 1700000000000,
+    publishedAt: 1700000000000,
+  },
+  {
+    id: 'vault_backpack_royal_carbon',
+    name: 'Obsidian Gold Carbon Pack',
+    description: 'Carbon weave & 24k gold trim expedition pack with Payhip instant fulfillment.',
+    category: 'backpack_skin',
+    compatibleWeapons: [],
+    compatibleLabel: 'All Tactical Backpacks',
+    rarity: 'legendary',
+    price: 0,
+    realMoneyAmount: 4.99,
+    realMoneyCurrency: 'USD',
+    payhipProductId: 'vault_backpack_royal_carbon',
+    payhipProductKey: 'obsidian-gold-pack',
+    payhipUrl: 'https://payhip.com/b/obsidian-gold-pack',
+    partialRefundPolicy: 'revoke',
+    status: 'published',
+    featured: true,
+    newArrival: false,
+    bestSeller: true,
+    visual: {
+      primaryHex: '#18181b',
+      secondaryHex: '#27272a',
+      accentHex: '#f59e0b',
+      metalness: 0.65,
+      roughness: 0.32,
+      pattern: 'royal_gold',
+    },
+    createdAt: 1700000000000,
+    updatedAt: 1700000000000,
+    publishedAt: 1700000000000,
+  },
+  {
+    id: 'vault_weapon_gold_carbon',
+    name: 'Savage Gold-Carbon Finish',
+    description: 'Signature forged carbon and gold weapon finish unlocked automatically via Payhip.',
+    category: 'gun_skin',
+    weaponClass: 'assault_rifle',
+    compatibleWeapons: [
+      ...WEAPON_CLASS_COMPATIBLE_ITEMS.assault_rifle,
+      ...WEAPON_CLASS_COMPATIBLE_ITEMS.smg,
+      ...WEAPON_CLASS_COMPATIBLE_ITEMS.shotgun,
+      ...WEAPON_CLASS_COMPATIBLE_ITEMS.sniper_rifle,
+      ...WEAPON_CLASS_COMPATIBLE_ITEMS.pistol,
+      ...WEAPON_CLASS_COMPATIBLE_ITEMS.lmg,
+    ],
+    compatibleLabel: 'All Firearms',
+    rarity: 'legendary',
+    price: 0,
+    realMoneyAmount: 3.99,
+    realMoneyCurrency: 'USD',
+    payhipProductId: 'vault_weapon_gold_carbon',
+    payhipProductKey: 'savage-gold-carbon',
+    payhipUrl: 'https://payhip.com/b/savage-gold-carbon',
+    partialRefundPolicy: 'revoke',
+    status: 'published',
+    featured: true,
+    newArrival: false,
+    bestSeller: true,
+    visual: {
+      primaryHex: '#18181b',
+      secondaryHex: '#27272a',
+      accentHex: '#facc15',
+      metalness: 0.68,
+      roughness: 0.3,
+      pattern: 'royal_gold',
+    },
+    createdAt: 1700000000000,
+    updatedAt: 1700000000000,
+    publishedAt: 1700000000000,
+  },
+  {
+    id: 'vault_weapon_neon_pulse',
+    name: 'Cobalt Voltage Finish',
+    description: 'High-voltage cobalt tactical weapon finish unlocked automatically via Payhip.',
+    category: 'gun_skin',
+    weaponClass: 'smg',
+    compatibleWeapons: [
+      ...WEAPON_CLASS_COMPATIBLE_ITEMS.assault_rifle,
+      ...WEAPON_CLASS_COMPATIBLE_ITEMS.smg,
+      ...WEAPON_CLASS_COMPATIBLE_ITEMS.shotgun,
+      ...WEAPON_CLASS_COMPATIBLE_ITEMS.sniper_rifle,
+      ...WEAPON_CLASS_COMPATIBLE_ITEMS.pistol,
+      ...WEAPON_CLASS_COMPATIBLE_ITEMS.lmg,
+    ],
+    compatibleLabel: 'All Firearms',
+    rarity: 'epic',
+    price: 0,
+    realMoneyAmount: 2.49,
+    realMoneyCurrency: 'USD',
+    payhipProductId: 'vault_weapon_neon_pulse',
+    payhipProductKey: 'cobalt-voltage',
+    payhipUrl: 'https://payhip.com/b/cobalt-voltage',
+    partialRefundPolicy: 'revoke',
+    status: 'published',
+    featured: true,
+    newArrival: true,
+    bestSeller: false,
+    visual: {
+      primaryHex: '#0f172a',
+      secondaryHex: '#1d4ed8',
+      accentHex: '#38bdf8',
+      emissiveHex: '#38bdf8',
+      metalness: 0.45,
+      roughness: 0.4,
+      pattern: 'futuristic_grid',
+    },
+    createdAt: 1700000000000,
+    updatedAt: 1700000000000,
+    publishedAt: 1700000000000,
+  },
+];
 export const DEFAULT_COIN_PACKAGES: CoinPackage[] = [];
 
 export function getWeaponClassForItem(itemId: ItemId | null): GunWeaponClass | null {
@@ -381,10 +569,16 @@ export function getCosmeticPatternTexture(
 export interface SkinCatalogItem {
   id: string;
   name: string;
-  category: 'backpack' | 'weapon';
+  category: 'backpack' | 'weapon' | 'cosmetic';
   priceLabel: string; // e.g. "Free" or "$2.99"
   payhipUrl: string;
-  unlockCode?: string;
+  payhipProductId?: string | null;
+  payhipProductKey?: string | null;
+  realMoneyAmount?: number | null;
+  realMoneyCurrency?: string;
+  freeByDefault?: boolean;
+  productImageUrl?: string | null;
+  model3dUrl?: string | null;
   primaryHex: string;
   secondaryHex: string;
   accentHex: string;
@@ -402,12 +596,32 @@ export function toBackpackSkinCatalogItem(item: ExchangeProduct): SkinCatalogIte
           ? 'gold_carbon'
           : 'solid';
 
+  const priceLabel = item.freeByDefault
+    ? 'Free'
+    : item.realMoneyAmount && item.realMoneyAmount > 0
+      ? formatCurrencyPrice(item.realMoneyAmount, item.realMoneyCurrency || 'USD')
+      : item.price > 0
+        ? `${item.price} SI`
+        : 'Free';
+
   return {
     id: item.id,
     name: item.name,
-    category: item.category === 'gun_skin' ? 'weapon' : 'backpack',
-    priceLabel: item.price <= 0 ? 'Free' : `${item.price} SI`,
-    payhipUrl: '',
+    category:
+      item.category === 'gun_skin'
+        ? 'weapon'
+        : item.category === 'cosmetic'
+          ? 'cosmetic'
+          : 'backpack',
+    priceLabel,
+    payhipUrl: item.payhipUrl || '',
+    payhipProductId: item.payhipProductId ?? null,
+    payhipProductKey: item.payhipProductKey ?? null,
+    realMoneyAmount: item.realMoneyAmount ?? null,
+    realMoneyCurrency: item.realMoneyCurrency || 'USD',
+    freeByDefault: Boolean(item.freeByDefault),
+    productImageUrl: item.productImageUrl ?? item.previewImageUrl ?? null,
+    model3dUrl: item.model3dUrl ?? null,
     primaryHex: item.visual.primaryHex,
     secondaryHex: item.visual.secondaryHex,
     accentHex: item.visual.accentHex,
@@ -422,6 +636,7 @@ export const VAULT_PAYHIP_CATALOG: SkinCatalogItem[] = [
     category: 'backpack',
     priceLabel: 'Free',
     payhipUrl: '',
+    freeByDefault: true,
     primaryHex: '#3f6212',
     secondaryHex: '#1a2e05',
     accentHex: '#d97706',
@@ -432,8 +647,11 @@ export const VAULT_PAYHIP_CATALOG: SkinCatalogItem[] = [
     name: 'Cyber Volt Rig',
     category: 'backpack',
     priceLabel: '$2.99',
-    payhipUrl: '',
-    unlockCode: 'SAVAGE-UNLOCK',
+    payhipUrl: 'https://payhip.com/b/cyber-volt-rig',
+    payhipProductId: 'vault_backpack_cyber_neon',
+    payhipProductKey: 'cyber-volt-rig',
+    realMoneyAmount: 2.99,
+    realMoneyCurrency: 'USD',
     primaryHex: '#0f172a',
     secondaryHex: '#0284c7',
     accentHex: '#22d3ee',
@@ -444,8 +662,11 @@ export const VAULT_PAYHIP_CATALOG: SkinCatalogItem[] = [
     name: 'Obsidian Gold Carbon Pack',
     category: 'backpack',
     priceLabel: '$4.99',
-    payhipUrl: '',
-    unlockCode: 'SAVAGE-UNLOCK',
+    payhipUrl: 'https://payhip.com/b/obsidian-gold-pack',
+    payhipProductId: 'vault_backpack_royal_carbon',
+    payhipProductKey: 'obsidian-gold-pack',
+    realMoneyAmount: 4.99,
+    realMoneyCurrency: 'USD',
     primaryHex: '#18181b',
     secondaryHex: '#27272a',
     accentHex: '#f59e0b',
@@ -456,8 +677,11 @@ export const VAULT_PAYHIP_CATALOG: SkinCatalogItem[] = [
     name: 'Savage Gold-Carbon Finish',
     category: 'weapon',
     priceLabel: '$3.99',
-    payhipUrl: '',
-    unlockCode: 'SAVAGE-UNLOCK',
+    payhipUrl: 'https://payhip.com/b/savage-gold-carbon',
+    payhipProductId: 'vault_weapon_gold_carbon',
+    payhipProductKey: 'savage-gold-carbon',
+    realMoneyAmount: 3.99,
+    realMoneyCurrency: 'USD',
     primaryHex: '#18181b',
     secondaryHex: '#27272a',
     accentHex: '#facc15',
@@ -468,8 +692,11 @@ export const VAULT_PAYHIP_CATALOG: SkinCatalogItem[] = [
     name: 'Cobalt Voltage Finish',
     category: 'weapon',
     priceLabel: '$2.49',
-    payhipUrl: '',
-    unlockCode: 'SAVAGE-UNLOCK',
+    payhipUrl: 'https://payhip.com/b/cobalt-voltage',
+    payhipProductId: 'vault_weapon_neon_pulse',
+    payhipProductKey: 'cobalt-voltage',
+    realMoneyAmount: 2.49,
+    realMoneyCurrency: 'USD',
     primaryHex: '#0f172a',
     secondaryHex: '#1d4ed8',
     accentHex: '#38bdf8',
@@ -502,17 +729,36 @@ export function toExchangeProductFromSkinCatalogItem(
     id: skin.id,
     name: skin.name,
     description: 'Custom 3D cosmetic finish.',
-    category: skin.category === 'weapon' ? 'gun_skin' : 'backpack_skin',
+    category:
+      skin.category === 'weapon'
+        ? 'gun_skin'
+        : skin.category === 'cosmetic'
+          ? 'cosmetic'
+          : 'backpack_skin',
     compatibleWeapons: skin.category === 'weapon' ? allWeaponClasses : [],
-    compatibleLabel: skin.category === 'weapon' ? 'All Firearms' : 'Explorer Backpack',
+    compatibleLabel:
+      skin.category === 'weapon'
+        ? 'All Firearms'
+        : skin.category === 'cosmetic'
+          ? 'Character Cosmetic'
+          : 'Explorer Backpack',
     rarity: skin.pattern === 'gold_carbon' ? 'legendary' : skin.pattern === 'neon_stripes' ? 'epic' : 'rare',
     price: 0,
+    realMoneyAmount: skin.realMoneyAmount ?? null,
+    realMoneyCurrency: skin.realMoneyCurrency || 'USD',
+    payhipProductId: skin.payhipProductId ?? null,
+    payhipProductKey: skin.payhipProductKey ?? null,
+    payhipUrl: skin.payhipUrl || null,
+    partialRefundPolicy: 'revoke',
+    freeByDefault: Boolean(skin.freeByDefault),
     status: 'published',
     featured: true,
     newArrival: false,
     bestSeller: false,
-    productImageUrl: skin.mediaKind === 'image' ? skin.mediaDataUrl ?? null : null,
-    model3dUrl: skin.mediaKind === 'glb' ? skin.mediaDataUrl ?? null : null,
+    productImageUrl:
+      skin.mediaKind === 'image' ? skin.mediaDataUrl ?? null : skin.productImageUrl ?? null,
+    model3dUrl:
+      skin.mediaKind === 'glb' ? skin.mediaDataUrl ?? null : skin.model3dUrl ?? null,
     visual: {
       primaryHex: skin.primaryHex,
       secondaryHex: skin.secondaryHex,

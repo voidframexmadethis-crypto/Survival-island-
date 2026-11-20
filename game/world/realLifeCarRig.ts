@@ -143,41 +143,55 @@ export function buildSilhouetteGeometry(archetype: VehicleArchetype): THREE.Extr
   return ensureGeometryHasUv(geo) as THREE.ExtrudeGeometry;
 }
 
+const _liveryTextureCache = new Map<string, THREE.CanvasTexture>();
+
 function createLiveryTexture(
   title: string,
   badge: string | undefined,
   accentColor: string,
 ): THREE.CanvasTexture | null {
   if (typeof document === 'undefined') return null;
+  const isTouch = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches;
+  const w = isTouch ? 512 : 768;
+  const h = isTouch ? 256 : 384;
+  const cacheKey = `${title}|${badge ?? ''}|${accentColor}|${w}`;
+  const cached = _liveryTextureCache.get(cacheKey);
+  if (cached) return cached;
+
   const canvas = document.createElement('canvas');
-  canvas.width = 1024;
-  canvas.height = 512;
+  canvas.width = w;
+  canvas.height = h;
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
 
+  const scale = w / 1024;
+  ctx.scale(scale, scale);
+
   ctx.fillStyle = '#11141b';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, 1024, 512);
 
   ctx.fillStyle = accentColor;
-  ctx.fillRect(0, 336, canvas.width, 26);
+  ctx.fillRect(0, 336, 1024, 26);
 
   ctx.fillStyle = '#ffffff';
   ctx.font = '900 66px Impact, Arial Black, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText(title.toUpperCase(), canvas.width / 2, 165);
+  ctx.fillText(title.toUpperCase(), 512, 165);
 
   if (badge) {
     ctx.fillStyle = accentColor;
-    ctx.fillRect(canvas.width / 2 - 220, 205, 440, 92);
+    ctx.fillRect(512 - 220, 205, 440, 92);
     ctx.fillStyle = '#ffffff';
     ctx.font = '900 54px Impact, Arial Black, sans-serif';
-    ctx.fillText(badge.toUpperCase(), canvas.width / 2, 270);
+    ctx.fillText(badge.toUpperCase(), 512, 270);
   }
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 4;
+  tex.anisotropy = isTouch ? 2 : 4;
+  tex.userData = { sharedAsset: true };
   tex.needsUpdate = true;
+  _liveryTextureCache.set(cacheKey, tex);
   return tex;
 }
 
@@ -234,11 +248,10 @@ export function buildRealLifeCarRig(config: GarageCarVisualConfig): RealLifeCarR
     metalness: 0.86,
     roughness: 0.28,
   });
-  const caliperMat = new THREE.MeshPhysicalMaterial({
+  const caliperMat = new THREE.MeshStandardMaterial({
     color: config.archetype === 'mclaren' ? '#f97316' : config.archetype === 'cadillac' ? '#a3e635' : '#ef4444',
-    metalness: 0.45,
-    roughness: 0.22,
-    clearcoat: 0.85,
+    metalness: 0.62,
+    roughness: 0.18,
   });
   const subBoxMat = new THREE.MeshStandardMaterial({
     color: '#0c0d10',
@@ -414,7 +427,6 @@ export function buildRealLifeCarRig(config: GarageCarVisualConfig): RealLifeCarR
     rightSide.rotation.y = Math.PI / 2;
 
     bodyGroup.add(leftSide, rightSide);
-    if (tex) disposables.push(tex);
     disposables.push(liveryMat, planeGeo);
   }
 
@@ -549,6 +561,23 @@ export function buildRealLifeCarRig(config: GarageCarVisualConfig): RealLifeCarR
     spokeGeo,
     hubCapGeo,
   );
+
+  // Prune shadow casting on small interior/trim/glass/spoke/brake sub-meshes so only hull + tires cast shadows
+  bodyMesh.userData.isVehicleShadowHull = true;
+  root.traverse((obj) => {
+    if (obj instanceof THREE.Mesh && !obj.userData.isVehicleShadowHull) {
+      obj.userData.noShadowCast = true;
+      obj.castShadow = false;
+    }
+  });
+  for (const w of wheels) {
+    const firstChild = w.children[0];
+    if (firstChild instanceof THREE.Mesh) {
+      firstChild.userData.noShadowCast = false;
+      firstChild.userData.isVehicleShadowHull = true;
+      firstChild.castShadow = true;
+    }
+  }
 
   return {
     root,

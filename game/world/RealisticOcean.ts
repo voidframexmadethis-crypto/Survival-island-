@@ -29,13 +29,14 @@ export class RealisticOcean {
   constructor(
     private scene: THREE.Scene,
     private width = 6400,
-    private height = 6400
+    private height = 6400,
+    segments = 72
   ) {
     this.geometry = new THREE.PlaneGeometry(
       width,
       height,
-      96,
-      96
+      segments,
+      segments
     );
 
     const fallbackData = new Uint8Array([0, 0, 0, 255]);
@@ -67,6 +68,7 @@ export class RealisticOcean {
         uFogDensity: { value: 0.0034 },
         uDaylight: { value: 1.0 },
         uReflectionStrength: { value: 1.0 },
+        uDetailLevel: { value: 1.0 },
         uShoreHeightTex: { value: fallbackTex },
         uHasShoreTex: { value: 0.0 },
       },
@@ -126,6 +128,7 @@ export class RealisticOcean {
         uniform float uFogDensity;
         uniform float uDaylight;
         uniform float uReflectionStrength;
+        uniform float uDetailLevel;
         uniform sampler2D uShoreHeightTex;
         uniform float uHasShoreTex;
 
@@ -149,25 +152,40 @@ export class RealisticOcean {
           );
         }
 
-        vec3 computeWaveNormal(vec2 xz, float t) {
+        vec3 computeWaveNormal(vec2 xz, float t, float viewDist) {
+          float distAtten = 1.0 - smoothstep(95.0, 235.0, viewDist);
+          float detailLod = distAtten * uDetailLevel;
+          if (detailLod <= 0.04) {
+            return normalize(vWaveNormal);
+          }
+
           vec2 p1 = xz * 0.38 + vec2(t * 0.32, -t * 0.24);
           vec2 p2 = xz * 0.92 + vec2(-t * 0.41, t * 0.29);
-          vec2 p3 = xz * 2.15 + vec2(t * 0.55, t * 0.38);
 
           float e = 0.14;
-          float hC = wNoise(p1) * 0.55 + wNoise(p2) * 0.32 + wNoise(p3) * 0.16;
-          float hX = wNoise(p1 + vec2(e, 0.0)) * 0.55 + wNoise(p2 + vec2(e, 0.0)) * 0.32 + wNoise(p3 + vec2(e, 0.0)) * 0.16;
-          float hZ = wNoise(p1 + vec2(0.0, e)) * 0.55 + wNoise(p2 + vec2(0.0, e)) * 0.32 + wNoise(p3 + vec2(0.0, e)) * 0.16;
+          float hC = wNoise(p1) * 0.55 + wNoise(p2) * 0.32;
+          float hX = wNoise(p1 + vec2(e, 0.0)) * 0.55 + wNoise(p2 + vec2(e, 0.0)) * 0.32;
+          float hZ = wNoise(p1 + vec2(0.0, e)) * 0.55 + wNoise(p2 + vec2(0.0, e)) * 0.32;
+
+          if (detailLod > 0.56) {
+            vec2 p3 = xz * 2.15 + vec2(t * 0.55, t * 0.38);
+            hC += wNoise(p3) * 0.16;
+            hX += wNoise(p3 + vec2(e, 0.0)) * 0.16;
+            hZ += wNoise(p3 + vec2(0.0, e)) * 0.16;
+          }
 
           vec2 grad = vec2(hX - hC, hZ - hC) / e;
           float s1 = sin(xz.x * 1.35 + xz.y * 0.55 + t * 2.5);
           float s2 = cos(xz.y * 1.65 - xz.x * 0.45 - t * 2.1);
           grad += vec2(s1, s2) * 0.11;
 
-          return normalize(vWaveNormal + vec3(-grad.x, 0.0, -grad.y) * (0.28 + 0.40 * uReflectionStrength));
+          return normalize(vWaveNormal + vec3(-grad.x, 0.0, -grad.y) * (0.28 + 0.40 * uReflectionStrength) * detailLod);
         }
 
         void main() {
+          vec3 camDelta = cameraPosition - vWorldPos;
+          float viewDist = length(camDelta);
+
           // Sample island shore height map when inside island bounds [-960, 960]
           float waterDepth = 4.5;
           if (uHasShoreTex > 0.5) {
@@ -188,8 +206,8 @@ export class RealisticOcean {
           float shallowMask = 1.0 - smoothstep(0.05, 1.9, waterDepth);
           vec3 waterColor = mix(waterBody, mix(sandSeabedTint, waterBody, 0.62), shallowMask * 0.66);
 
-          vec3 N = computeWaveNormal(vWorldPos.xz, uTime);
-          vec3 V = normalize(cameraPosition - vWorldPos);
+          vec3 N = computeWaveNormal(vWorldPos.xz, uTime, viewDist);
+          vec3 V = camDelta / max(0.001, viewDist);
           vec3 L = normalize(uSunDirection);
           vec3 H = normalize(L + V);
 
@@ -216,21 +234,26 @@ export class RealisticOcean {
           waterColor += uSunColor * specRibbon * 0.56 * uReflectionStrength * uDaylight;
           waterColor += uSunColor * specSheen * 0.19 * uReflectionStrength * uDaylight;
 
-          // Animated lacy shoreline surf foam where water meets sandy shore + gentle open-water crest foam
-          float surfNoise = wNoise(vWorldPos.xz * 0.82 - vec2(uTime * 0.44, uTime * 0.36));
-          float surfLace = wNoise(vWorldPos.xz * 2.35 + vec2(uTime * 0.25, -uTime * 0.18));
-          float shoreWave1 = 0.5 + 0.5 * sin(waterDepth * 10.8 - uTime * 2.55 + surfNoise * 3.4);
-          float shoreWave2 = 0.5 + 0.5 * sin(waterDepth * 17.5 - uTime * 3.15 + surfLace * 2.6);
+          // Animated lacy shoreline surf foam where water meets sandy shore + near-field crest foam
           float shallowBand = 1.0 - smoothstep(0.02, 0.92, waterDepth);
-          float shoreFoam = shallowBand * smoothstep(0.28, 0.80, surfNoise * 0.65 + surfLace * 0.25 + shoreWave1 * 0.40 + shoreWave2 * 0.24);
-          float edgeSurge = (1.0 - smoothstep(0.0, 0.24, waterDepth)) * smoothstep(0.25, 0.70, surfLace);
-          float crestFoam = smoothstep(0.48, 0.76, abs(vWave)) * smoothstep(0.42, 0.78, surfNoise) * 0.34;
-          float totalFoam = clamp(shoreFoam * 0.92 + edgeSurge * 0.80 + crestFoam, 0.0, 1.0);
-          vec3 foamColor = mix(vec3(0.45, 0.54, 0.65), mix(vec3(0.98, 0.99, 1.0), uSunColor, 0.28), uDaylight);
-          waterColor = mix(waterColor, foamColor, totalFoam * 0.84);
+          float totalFoam = 0.0;
+          if (shallowBand > 0.01 || (viewDist < 200.0 && uDetailLevel > 0.42)) {
+            float surfNoise = wNoise(vWorldPos.xz * 0.82 - vec2(uTime * 0.44, uTime * 0.36));
+            float surfLace = (viewDist < 135.0 && uDetailLevel > 0.52)
+              ? wNoise(vWorldPos.xz * 2.35 + vec2(uTime * 0.25, -uTime * 0.18))
+              : surfNoise;
+            float shoreWave1 = 0.5 + 0.5 * sin(waterDepth * 10.8 - uTime * 2.55 + surfNoise * 3.4);
+            float shoreWave2 = 0.5 + 0.5 * sin(waterDepth * 17.5 - uTime * 3.15 + surfLace * 2.6);
+            float shoreFoam = shallowBand * smoothstep(0.28, 0.80, surfNoise * 0.65 + surfLace * 0.25 + shoreWave1 * 0.40 + shoreWave2 * 0.24);
+            float edgeSurge = (1.0 - smoothstep(0.0, 0.24, waterDepth)) * smoothstep(0.25, 0.70, surfLace);
+            float crestFade = 1.0 - smoothstep(90.0, 200.0, viewDist);
+            float crestFoam = smoothstep(0.48, 0.76, abs(vWave)) * smoothstep(0.42, 0.78, surfNoise) * 0.34 * crestFade;
+            totalFoam = clamp(shoreFoam * 0.92 + edgeSurge * 0.80 + crestFoam, 0.0, 1.0);
+            vec3 foamColor = mix(vec3(0.45, 0.54, 0.65), mix(vec3(0.98, 0.99, 1.0), uSunColor, 0.28), uDaylight);
+            waterColor = mix(waterColor, foamColor, totalFoam * 0.84);
+          }
 
           // Exponential horizon fog matching scene.fog
-          float viewDist = length(cameraPosition - vWorldPos);
           float fogFactor = 1.0 - exp(-uFogDensity * uFogDensity * viewDist * viewDist);
           waterColor = mix(waterColor, uFogColor, clamp(fogFactor, 0.0, 1.0));
 
@@ -295,6 +318,10 @@ export class RealisticOcean {
 
   setVisible(visible: boolean): void {
     this.water.visible = visible;
+  }
+
+  setDetailLevel(detail: number): void {
+    this.material.uniforms.uDetailLevel.value = THREE.MathUtils.clamp(detail, 0.25, 1.0);
   }
 
   setEnvironment(params: {

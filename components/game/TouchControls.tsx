@@ -126,7 +126,7 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
     const effectiveY = mag > maxRadius ? (rawY / mag) * maxRadius : rawY;
     const tiltX = (-effectiveY / maxRadius) * 16;
     const tiltY = (effectiveX / maxRadius) * 16;
-    knob.style.transform = `perspective(180px) translate(${effectiveX.toFixed(1)}px, ${effectiveY.toFixed(1)}px) rotateX(${tiltX.toFixed(1)}deg) rotateY(${tiltY.toFixed(1)}deg)`;
+    knob.style.transform = `perspective(180px) translate3d(${effectiveX.toFixed(1)}px, ${effectiveY.toFixed(1)}px, 0) rotateX(${tiltX.toFixed(1)}deg) rotateY(${tiltY.toFixed(1)}deg)`;
     const isDeflected = mag > 2;
     if (isDeflected !== knobDeflectedRef.current) {
       knobDeflectedRef.current = isDeflected;

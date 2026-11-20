@@ -17,9 +17,13 @@ export async function POST(req: NextRequest) {
     if (!body.name || !String(body.name).trim()) {
       return NextResponse.json({ ok: false, error: 'Product name is required.' }, { status: 400 });
     }
-    if (body.category !== 'gun_skin' && body.category !== 'backpack_skin') {
+    if (
+      body.category !== 'gun_skin' &&
+      body.category !== 'backpack_skin' &&
+      body.category !== 'cosmetic'
+    ) {
       return NextResponse.json(
-        { ok: false, error: 'Category must be Gun Skins or Backpack Skins.' },
+        { ok: false, error: 'Category must be Gun Skins, Backpack Skins, or Cosmetics.' },
         { status: 400 },
       );
     }

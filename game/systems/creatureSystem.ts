@@ -1288,6 +1288,7 @@ export class CreatureManager {
   private rigPool = new Map<CreatureSpecies, CreatureRig[]>();
   private sightingsScratch: TrackedSighting[] = [];
   private sightingEmitTimer = 0;
+  private updateFrameParity = 0;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -2296,6 +2297,7 @@ export class CreatureManager {
     const stealthMult =
       (0.36 + 0.84 * playerVisibility) *
       (playerCrouching ? 0.68 : playerSprinting ? 1.18 : 1.0);
+    this.updateFrameParity = (this.updateFrameParity + 1) & 1;
     let nocturnalActiveCount = 0;
 
     for (let i = 0; i < this.creatures.length; i++) {
@@ -2405,6 +2407,21 @@ export class CreatureManager {
         c.rig.shadowDisc.visible = false;
         continue;
       }
+
+      // Stagger far (>48m) ambient creatures to 30Hz (accumulated 2x dt) while keeping close/mounted/aggro creatures at full 60Hz
+      const isFarAmbient =
+        distSqP > 2304 &&
+        !c.mounted &&
+        !c.tamed &&
+        c.state !== 'chase' &&
+        c.state !== 'flee' &&
+        c.state !== 'takeoff' &&
+        c.state !== 'swoop';
+      if (isFarAmbient && ((i + this.updateFrameParity) & 1) !== 0) {
+        this.setRigShadow(c, false);
+        continue;
+      }
+      const stepDt = isFarAmbient ? dt * 2 : dt;
       const distToPlayer = Math.sqrt(distSqP);
 
       this.setRigShadow(c, this.shadowsEnabled && distToPlayer < 32);
@@ -2475,7 +2492,7 @@ export class CreatureManager {
             wings[wi].rotation.z = (wi === 0 ? 1 : -1) * flapBase;
           }
         }
-        c.callCooldown -= dt;
+        c.callCooldown -= stepDt;
         if (c.callCooldown <= 0) {
           c.callCooldown = isBee ? 14 + Math.random() * 12 : 9 + Math.random() * 10;
           if (distToPlayer < 26) onCreatureCall(c.species, distToPlayer);
@@ -2523,7 +2540,7 @@ export class CreatureManager {
             timestamp: elapsed,
           });
         }
-        c.callCooldown -= dt;
+        c.callCooldown -= stepDt;
         if (c.callCooldown <= 0) {
           c.callCooldown = 12 + Math.random() * 14;
           if (distSoarer < 55) onCreatureCall(c.species, distSoarer);
@@ -2534,7 +2551,7 @@ export class CreatureManager {
       // Birds & Toucans circling overhead, swooping onto unclaimed carcasses, pecking & startling off
       if (c.species === 'bird' || c.species === 'toucan') {
         if ((c.startledTimer ?? 0) > 0) {
-          c.startledTimer = Math.max(0, (c.startledTimer ?? 0) - dt);
+          c.startledTimer = Math.max(0, (c.startledTimer ?? 0) - stepDt);
         }
 
         const distPlayerBird = distToPlayer;
@@ -2543,13 +2560,18 @@ export class CreatureManager {
         let targetCarcass: ScavengerCarcassTarget | undefined;
         if ((c.startledTimer ?? 0) <= 0 && carcasses.length > 0) {
           if (c.feedCarcassId) {
-            targetCarcass = carcasses.find(
-              (kc) =>
+            for (let ki = 0; ki < carcasses.length; ki++) {
+              const kc = carcasses[ki];
+              if (
                 kc.id === c.feedCarcassId &&
                 kc.remainingDrops > 0 &&
                 kc.owner !== 'player' &&
-                !kc.collected,
-            );
+                !kc.collected
+              ) {
+                targetCarcass = kc;
+                break;
+              }
+            }
           }
           if (!targetCarcass) {
             let bestDist = 95;
@@ -2584,9 +2606,9 @@ export class CreatureManager {
           const awayLen = Math.hypot(awayX, awayZ) || 1;
           const nx = awayX / awayLen;
           const nz = awayZ / awayLen;
-          c.x += nx * 10.5 * dt;
-          c.z += nz * 10.5 * dt;
-          c.y += 8.2 * dt;
+          c.x += nx * 10.5 * stepDt;
+          c.z += nz * 10.5 * stepDt;
+          c.y += 8.2 * stepDt;
           c.yaw = Math.atan2(nx, nz);
           c.rig.body.rotation.x = -0.45;
           c.rig.head.rotation.x = 0.05;
@@ -2622,12 +2644,12 @@ export class CreatureManager {
             if (horizDist > 0.18) {
               const nx = dx / horizDist;
               const nz = dz / horizDist;
-              c.x += nx * Math.min(horizDist, speed * dt);
-              c.z += nz * Math.min(horizDist, speed * dt);
+              c.x += nx * Math.min(horizDist, speed * stepDt);
+              c.z += nz * Math.min(horizDist, speed * stepDt);
               c.yaw = Math.atan2(nx, nz);
             }
             const targetHeight = landY + Math.min(18, horizDist * 0.65);
-            c.y = THREE.MathUtils.damp(c.y, targetHeight, horizDist < 3 ? 6.5 : 3.2, dt);
+            c.y = THREE.MathUtils.damp(c.y, targetHeight, horizDist < 3 ? 6.5 : 3.2, stepDt);
             const flaring = horizDist < 3.5 && c.y < landY + 2.4;
             c.rig.body.rotation.x = flaring ? -0.35 : Math.min(0.45, horizDist * 0.04);
             c.rig.head.rotation.x = 0.1;
@@ -2672,7 +2694,7 @@ export class CreatureManager {
               }
             }
 
-            c.feedTimer = (c.feedTimer ?? 1.8) - dt;
+            c.feedTimer = (c.feedTimer ?? 1.8) - stepDt;
             if ((c.feedTimer ?? 0) <= 0) {
               c.feedTimer = 1.9 + Math.random() * 0.85;
               onCarcassScavenged?.(
@@ -2696,7 +2718,7 @@ export class CreatureManager {
             c.y,
             22 + Math.sin(elapsed * 0.8 + i) * 2.5,
             2.2,
-            dt,
+            stepDt,
           );
           c.rig.body.rotation.x = 0;
           c.rig.head.rotation.x = 0;
@@ -2775,7 +2797,7 @@ export class CreatureManager {
         }
 
         if (c.species === 'dolphin' && c.leaping) {
-          c.leapPhase += dt * 3.8;
+          c.leapPhase += stepDt * 3.8;
           const arc = Math.sin(c.leapPhase);
           c.y = OCEAN_LEVEL - 0.15 + Math.max(-0.2, arc * 2.4);
           c.rig.body.rotation.x = -Math.cos(c.leapPhase) * 0.55;
@@ -2805,19 +2827,19 @@ export class CreatureManager {
         continue;
       }
 
-      if (c.attackCooldown > 0) c.attackCooldown -= dt;
-      if (c.provokedTimer > 0) c.provokedTimer -= dt;
-      if (c.snaredTimer > 0) c.snaredTimer -= dt;
+      if (c.attackCooldown > 0) c.attackCooldown -= stepDt;
+      if (c.provokedTimer > 0) c.provokedTimer -= stepDt;
+      if (c.snaredTimer > 0) c.snaredTimer -= stepDt;
       if (c.blindTimer > 0) {
-        c.blindTimer = Math.max(0, c.blindTimer - dt);
+        c.blindTimer = Math.max(0, c.blindTimer - stepDt);
         c.rig.head.rotation.y = Math.sin(elapsed * 16 + i) * 0.65;
         c.rig.head.rotation.z = Math.cos(elapsed * 13 + i) * 0.28;
         c.rig.body.rotation.x = -0.14;
-        if (c.stunTimer > 0) c.stunTimer = Math.max(0, c.stunTimer - dt);
+        if (c.stunTimer > 0) c.stunTimer = Math.max(0, c.stunTimer - stepDt);
         continue;
       }
       if (c.stunTimer > 0) {
-        c.stunTimer = Math.max(0, c.stunTimer - dt);
+        c.stunTimer = Math.max(0, c.stunTimer - stepDt);
         c.rig.head.rotation.z = Math.sin(elapsed * 18) * 0.24;
         c.rig.body.rotation.x = 0.08;
         continue;
@@ -2825,7 +2847,7 @@ export class CreatureManager {
         c.rig.head.rotation.z = 0;
       }
 
-      c.callCooldown -= dt;
+      c.callCooldown -= stepDt;
       if (c.callCooldown <= 0) {
         c.callCooldown = 10 + Math.random() * 14;
         if (distToPlayer < 45 && c.state !== 'sleep') {
@@ -2838,7 +2860,7 @@ export class CreatureManager {
         c.spec.temperament === 'apex_predator' || c.spec.temperament === 'pack_predator';
       let inDarkCanopy = false;
       if (isPredator) {
-        c.biomeCheckTimer = (c.biomeCheckTimer ?? 0) - dt;
+        c.biomeCheckTimer = (c.biomeCheckTimer ?? 0) - stepDt;
         if (c.biomeCheckTimer <= 0) {
           c.biomeCheckTimer = 0.9;
           c.cachedInDarkCanopy = getBiomeAt(c.x, c.z) === 'dark_forest';
@@ -2864,7 +2886,7 @@ export class CreatureManager {
           c.targetX = playerX;
           c.targetZ = playerZ;
           if (c.species === 'evoker' && distToPlayer < 16) {
-            c.summonCooldown = (c.summonCooldown ?? 3.5) - dt;
+            c.summonCooldown = (c.summonCooldown ?? 3.5) - stepDt;
             if (c.summonCooldown <= 0) {
               let activeVexes = 0;
               for (let vi = 0; vi < this.creatures.length; vi++) {
@@ -2940,14 +2962,19 @@ export class CreatureManager {
       if (isCarnivoreScavenger && c.state !== 'chase' && carcasses.length > 0) {
         const scentRange = c.species === 'wild_boar' ? 40 : 62;
         if (c.feedCarcassId) {
-          feedCarcass = carcasses.find(
-            (kc) =>
+          for (let ki = 0; ki < carcasses.length; ki++) {
+            const kc = carcasses[ki];
+            if (
               kc.id === c.feedCarcassId &&
               kc.remainingDrops > 0 &&
               kc.owner !== 'player' &&
               !kc.collected &&
-              Math.hypot(kc.x - c.x, kc.z - c.z) < scentRange + 15,
-          );
+              Math.hypot(kc.x - c.x, kc.z - c.z) < scentRange + 15
+            ) {
+              feedCarcass = kc;
+              break;
+            }
+          }
         }
         if (!feedCarcass) {
           let bestScavDist = scentRange;
@@ -2980,7 +3007,7 @@ export class CreatureManager {
           c.rig.head.rotation.y = scanYaw;
           c.rig.head.rotation.z = Math.sin(elapsed * 0.9) * 0.08;
           c.rig.body.rotation.x = Math.sin(elapsed * 2.2) * 0.025;
-          c.callCooldown -= dt;
+          c.callCooldown -= stepDt;
           if (c.callCooldown <= 0) {
             c.callCooldown = 9 + Math.random() * 11;
             if (distToPlayer < 45) onCreatureCall('great_horned_owl', distToPlayer);
@@ -2994,7 +3021,7 @@ export class CreatureManager {
         let diff = lookYaw - c.yaw;
         while (diff > Math.PI) diff -= Math.PI * 2;
         while (diff < -Math.PI) diff += Math.PI * 2;
-        c.yaw += diff * Math.min(1, dt * 3.5);
+        c.yaw += diff * Math.min(1, stepDt * 3.5);
 
         c.rig.root.position.set(c.x, c.y, c.z);
         c.rig.root.rotation.y = c.yaw;
@@ -3051,9 +3078,9 @@ export class CreatureManager {
           let diff = desiredYaw - c.yaw;
           while (diff > Math.PI) diff -= Math.PI * 2;
           while (diff < -Math.PI) diff += Math.PI * 2;
-          c.yaw += diff * Math.min(1, dt * 6);
+          c.yaw += diff * Math.min(1, stepDt * 6);
 
-          c.feedTimer = (c.feedTimer ?? 1.8) - dt;
+          c.feedTimer = (c.feedTimer ?? 1.8) - stepDt;
           if ((c.feedTimer ?? 0) <= 0) {
             c.feedTimer = c.species === 'trex' ? 2.2 : 2.6 + Math.random() * 0.7;
             onCarcassScavenged?.(
@@ -3066,7 +3093,7 @@ export class CreatureManager {
       } else {
         c.feedCarcassId = undefined;
         if (c.state === 'feed') c.state = 'wander';
-        c.stateTimer -= dt;
+        c.stateTimer -= stepDt;
         const distTarget = Math.hypot(c.targetX - c.x, c.targetZ - c.z);
         if (c.stateTimer <= 0 || distTarget < 1.8) {
           if (
@@ -3117,8 +3144,8 @@ export class CreatureManager {
         } else if (dist > 0.3) {
           const nx = dx / dist;
           const nz = dz / dist;
-          const candidateX = c.x + nx * moveSpeed * dt;
-          const candidateZ = c.z + nz * moveSpeed * dt;
+          const candidateX = c.x + nx * moveSpeed * stepDt;
+          const candidateZ = c.z + nz * moveSpeed * stepDt;
           const nextTerrain = getTerrainHeight(candidateX, candidateZ);
           const insideHillHouse =
             Math.abs(candidateX - (HILL_HOUSE_POS.x - 0.3)) < 6.2 &&
@@ -3128,7 +3155,7 @@ export class CreatureManager {
             c.x = candidateX;
             c.z = candidateZ;
             movedThisStep = true;
-            c.stepAccum += moveSpeed * dt;
+            c.stepAccum += moveSpeed * stepDt;
             if (c.stepAccum > 2.6) {
               c.stepAccum = 0;
               this.spawnFootprint(c);
@@ -3142,7 +3169,7 @@ export class CreatureManager {
           let diff = desiredYaw - c.yaw;
           while (diff > Math.PI) diff -= Math.PI * 2;
           while (diff < -Math.PI) diff += Math.PI * 2;
-          c.yaw += diff * Math.min(1, dt * 6);
+          c.yaw += diff * Math.min(1, stepDt * 6);
         }
       }
 

@@ -199,6 +199,7 @@ export interface WorldHandles {
     pz: number,
     maxDist: number,
     budgetQueue?: FrameBudgetQueue,
+    maxActivePointLights?: number,
   ) => void;
   dispose: () => void;
 }
@@ -6438,11 +6439,15 @@ gl_Position = projectionMatrix * mvPosition;`,
     }
   });
 
+  const bestLightIdx: number[] = [];
+  const bestLightDistSq: number[] = [];
+
   const cullWorldByDistance = (
     px: number,
     pz: number,
     maxDist: number,
     budgetQueue?: FrameBudgetQueue,
+    maxActivePointLights = 6,
   ): void => {
     const chunkRange = Math.min(maxDist + 85, 335);
     const chunkRangeSq = chunkRange * chunkRange;
@@ -6455,15 +6460,41 @@ gl_Position = projectionMatrix * mvPosition;`,
         fc.mesh.visible = showChunk;
       }
     }
+
+    const lightCap = Math.max(0, maxActivePointLights);
+    bestLightIdx.length = 0;
+    bestLightDistSq.length = 0;
     for (let i = 0; i < cullablePointLights.length; i++) {
       const pl = cullablePointLights[i];
+      if (pl.light.visible) pl.light.visible = false;
+      if (lightCap === 0) continue;
       const dx = pl.wx - px;
       const dz = pl.wz - pz;
-      const showLight = dx * dx + dz * dz <= pl.maxRangeSq;
-      if (pl.light.visible !== showLight) {
-        pl.light.visible = showLight;
+      const dSq = dx * dx + dz * dz;
+      if (dSq > pl.maxRangeSq) continue;
+
+      if (bestLightIdx.length < lightCap) {
+        bestLightIdx.push(i);
+        bestLightDistSq.push(dSq);
+      } else {
+        let worstPos = 0;
+        let worstDist = bestLightDistSq[0];
+        for (let k = 1; k < bestLightDistSq.length; k++) {
+          if (bestLightDistSq[k] > worstDist) {
+            worstDist = bestLightDistSq[k];
+            worstPos = k;
+          }
+        }
+        if (dSq < worstDist) {
+          bestLightIdx[worstPos] = i;
+          bestLightDistSq[worstPos] = dSq;
+        }
       }
     }
+    for (let k = 0; k < bestLightIdx.length; k++) {
+      cullablePointLights[bestLightIdx[k]].light.visible = true;
+    }
+
     for (let i = 0; i < cullableLandmarks.length; i++) {
       const entry = cullableLandmarks[i];
       const dx = entry.cx - px;

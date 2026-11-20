@@ -82,11 +82,17 @@ function cloneNode(n: TrackNode): SavedCoasterNode {
   };
 }
 
+const _coasterRight = new THREE.Vector3();
+const _coasterUp = new THREE.Vector3();
+const _coasterFwd = new THREE.Vector3();
+const _coasterPos = new THREE.Vector3();
+const _coasterBasis = new THREE.Matrix4();
+
 function makeBasisMatrix(sample: TrackSample): THREE.Matrix4 {
-  const right = new THREE.Vector3(sample.right.x, sample.right.y, sample.right.z).normalize();
-  const up = new THREE.Vector3(sample.up.x, sample.up.y, sample.up.z).normalize();
-  const fwd = new THREE.Vector3(sample.tangent.x, sample.tangent.y, sample.tangent.z).normalize();
-  return new THREE.Matrix4().makeBasis(right, up, fwd);
+  _coasterRight.set(sample.right.x, sample.right.y, sample.right.z).normalize();
+  _coasterUp.set(sample.up.x, sample.up.y, sample.up.z).normalize();
+  _coasterFwd.set(sample.tangent.x, sample.tangent.y, sample.tangent.z).normalize();
+  return _coasterBasis.makeBasis(_coasterRight, _coasterUp, _coasterFwd);
 }
 
 function mergeNormalizedParts(parts: THREE.BufferGeometry[]): THREE.BufferGeometry | null {
@@ -863,18 +869,19 @@ export class RollerCoasterRuntime {
       const sample = this.sampleAtDistance(entry.samples, carDist);
       if (!sample) continue;
 
-      const pos = new THREE.Vector3(sample.position.x, sample.position.y, sample.position.z);
-      const up = new THREE.Vector3(sample.up.x, sample.up.y, sample.up.z).normalize();
+      _coasterPos.set(sample.position.x, sample.position.y, sample.position.z);
+      _coasterUp.set(sample.up.x, sample.up.y, sample.up.z).normalize();
       const basis = makeBasisMatrix(sample);
 
       const verticalOffset = isInverted ? 0.95 : 0.12;
-      car.position.copy(pos).addScaledVector(up, verticalOffset);
+      car.position.copy(_coasterPos).addScaledVector(_coasterUp, verticalOffset);
       car.quaternion.setFromRotationMatrix(basis);
     }
   }
 
-  public update(dt: number): void {
+  public update(dt: number, playerX?: number, playerZ?: number): void {
     let anyMoved = false;
+    const hasCoords = typeof playerX === 'number' && typeof playerZ === 'number';
     for (const entry of this.coasters.values()) {
       if (!entry.running || entry.samples.length < 2) continue;
       const total = entry.samples[entry.samples.length - 1].distance;
@@ -894,7 +901,15 @@ export class RollerCoasterRuntime {
         }
       }
 
-      this.syncTrainCarsTransform(entry);
+      if (hasCoords) {
+        const dx = entry.stationPos.x - playerX;
+        const dz = entry.stationPos.z - playerZ;
+        if (dx * dx + dz * dz <= 290 * 290) {
+          this.syncTrainCarsTransform(entry);
+        }
+      } else {
+        this.syncTrainCarsTransform(entry);
+      }
       anyMoved = true;
     }
     if (anyMoved) {
