@@ -9,6 +9,7 @@ import {
   StructuralBlockKind,
 } from '../types';
 import {
+  applySafeStandardMaps,
   createBisonFurTexture,
   createChestnutHorseTexture,
   createCrocodileScaleTexture,
@@ -221,11 +222,11 @@ export function createSkyCelestialBodies(): SkyCelestialHandles {
 
       float sFbm(vec2 p) {
         float sum = 0.0;
-        float amp = 0.5;
-        for (int i = 0; i < 4; i++) {
+        float amp = 0.52;
+        for (int i = 0; i < 3; i++) {
           sum += amp * sNoise(p);
-          p *= 2.04;
-          amp *= 0.5;
+          p *= 2.08;
+          amp *= 0.48;
         }
         return sum;
       }
@@ -233,36 +234,60 @@ export function createSkyCelestialBodies(): SkyCelestialHandles {
       void main() {
         vec3 dir = normalize(vLocalDir);
         float elev = clamp(dir.y, -0.25, 1.0);
-        float zenithT = pow(clamp(elev, 0.0, 1.0), 0.58);
+        float zenithT = pow(clamp(elev, 0.0, 1.0), 0.52);
 
-        // Deep azure zenith smoothly fading into crisp atmospheric horizon
-        vec3 sky = mix(uHorizonColor, uZenithColor, zenithT);
+        // Cobalt zenith fading into warm golden atmospheric horizon
+        vec3 horizonGlowColor = mix(
+          uHorizonColor,
+          mix(vec3(1.0, 0.64, 0.28), vec3(1.0, 0.80, 0.44), 0.45),
+          clamp(uTwilight * 0.88 + (1.0 - smoothstep(0.0, 0.26, elev)) * 0.28 * uDaylight, 0.0, 0.92)
+        );
+        vec3 sky = mix(horizonGlowColor, uZenithColor, zenithT);
 
-        // Mie solar scattering & horizon golden-hour warm glow
+        // Rich golden-hour Mie solar scattering, horizon amber band & solar core
         vec3 sunDir = normalize(uSunDirection);
         float sunCos = max(0.0, dot(dir, sunDir));
-        float sunHalo = pow(sunCos, 6.0) * 0.28 + pow(sunCos, 42.0) * 0.52;
-        float sunDisc = smoothstep(0.9978, 0.9994, sunCos);
+        float wideScatter = pow(sunCos, 3.2) * (0.28 + uTwilight * 0.42);
+        float midHalo = pow(sunCos, 16.0) * (0.38 + uTwilight * 0.52);
+        float tightCorona = pow(sunCos, 96.0) * 1.15;
+        float sunDisc = smoothstep(0.9974, 0.9993, sunCos);
+        float horizonSunMask = exp(-abs(elev - max(0.02, sunDir.y)) * 6.5) * pow(sunCos, 2.2);
         float sunVisible = smoothstep(-0.08, 0.12, sunDir.y) * uDaylight * uWeatherDim;
-        sky += uSunColor * (sunHalo * (0.65 + uTwilight * 0.75) + sunDisc * 1.65) * sunVisible;
 
-        // Soft layered cumulus cloud deck in upper sky dome
-        if (elev > 0.03) {
-          vec2 cloudUv = dir.xz / (elev + 0.24) * 1.35 + vec2(uTime * 0.0085, uTime * 0.004);
+        vec3 amberGlow = mix(uSunColor, vec3(1.0, 0.62, 0.18), clamp(uTwilight * 0.8 + 0.2, 0.0, 1.0));
+        sky += amberGlow * (wideScatter + horizonSunMask * (0.32 + uTwilight * 0.52)) * sunVisible;
+        sky += uSunColor * (midHalo + tightCorona + sunDisc * 2.2) * sunVisible;
+
+        // Dramatic two-tone golden-hour cumulus clouds (dark slate bellies + amber sunlit rims)
+        if (elev > 0.025) {
+          vec2 cloudUv = dir.xz / (elev + 0.22) * 1.42 + vec2(uTime * 0.0085, uTime * 0.004);
           float c1 = sFbm(cloudUv);
-          float c2 = sFbm(cloudUv * 2.15 - vec2(uTime * 0.005, 0.0));
-          float cloudDensity = smoothstep(0.48 - (1.0 - uWeatherDim) * 0.22, 0.78, c1 * 0.72 + c2 * 0.28);
-          float horizonFade = smoothstep(0.03, 0.22, elev);
-          float cloudSelfShade = clamp(0.68 + (c2 - 0.45) * 0.55 + sunCos * 0.25, 0.42, 1.15);
-          vec3 cloudBase = mix(vec3(0.22, 0.28, 0.38), vec3(0.96, 0.98, 1.0), uDaylight);
-          cloudBase *= mix(0.62, 1.0, uWeatherDim) * cloudSelfShade;
-          cloudBase += uSunColor * pow(sunCos, 8.0) * 0.34 * uDaylight;
-          sky = mix(sky, cloudBase, cloudDensity * horizonFade * (0.48 + 0.35 * uDaylight));
+          float c2 = sFbm(cloudUv * 2.35 - vec2(uTime * 0.005, 0.0));
+          float shape = c1 * 0.72 + c2 * 0.28;
+          float cloudDensity = smoothstep(0.45 - (1.0 - uWeatherDim) * 0.22, 0.76, shape);
+          float horizonFade = smoothstep(0.025, 0.20, elev);
+
+          float rimFactor = smoothstep(0.46, 0.72, shape) * (0.35 + 0.65 * pow(sunCos, 2.5));
+          vec3 cloudShadowCol = mix(
+            vec3(0.14, 0.18, 0.28),
+            mix(vec3(0.32, 0.36, 0.46), vec3(0.46, 0.32, 0.28), uTwilight),
+            uDaylight
+          );
+          vec3 cloudLitCol = mix(
+            vec3(0.42, 0.48, 0.58),
+            mix(vec3(0.98, 0.95, 0.90), vec3(1.0, 0.72, 0.36), clamp(uTwilight * 0.85 + pow(sunCos, 2.0) * 0.45, 0.0, 1.0)),
+            uDaylight
+          );
+          vec3 cloudBase = mix(cloudShadowCol, cloudLitCol, clamp(rimFactor + 0.25 * c2, 0.0, 1.0));
+          cloudBase *= mix(0.62, 1.0, uWeatherDim);
+          cloudBase += amberGlow * pow(sunCos, 6.0) * (0.55 + uTwilight * 0.65) * sunVisible;
+
+          sky = mix(sky, cloudBase, cloudDensity * horizonFade * (0.56 + 0.32 * uDaylight));
         }
 
         // Below-horizon atmospheric haze match
         float belowHorizon = smoothstep(0.02, -0.14, elev);
-        sky = mix(sky, uHorizonColor * 0.92, belowHorizon);
+        sky = mix(sky, mix(uHorizonColor, amberGlow, uTwilight * 0.35) * 0.9, belowHorizon);
 
         gl_FragColor = vec4(sky, 1.0);
       }
@@ -349,17 +374,22 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
   const root = new THREE.Group();
   const fpPbr = getFirstPersonPbrTextures();
 
-  const skinMat = new THREE.MeshStandardMaterial({ color: 0xc98d62, roughness: 0.62 });
+  const skinMat = new THREE.MeshStandardMaterial({
+    color: 0xc98a5f,
+    roughness: 0.42,
+    metalness: 0.04,
+    envMapIntensity: 1.15,
+  });
   const gloveMat = new THREE.MeshStandardMaterial({
-    color: 0xbac0c8,
+    color: 0x9fa6b2,
     map: fpPbr.glove.map,
     normalMap: fpPbr.glove.normalMap,
-    normalScale: new THREE.Vector2(1.0, 1.0),
+    normalScale: new THREE.Vector2(1.25, 1.25),
     roughnessMap: fpPbr.glove.roughnessMap,
-    roughness: 0.94,
-    metalness: 0.08,
+    roughness: 0.88,
+    metalness: 0.12,
   });
-  const sleeveMat = new THREE.MeshStandardMaterial({ color: 0x4b5539, roughness: 0.86 });
+  const sleeveMat = new THREE.MeshStandardMaterial({ color: 0x3f4931, roughness: 0.86 });
   const woodMat = new THREE.MeshStandardMaterial({ color: 0x6b4423, roughness: 0.85 });
   const stoneMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.5, metalness: 0.25 });
 
@@ -505,63 +535,93 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
   knifeBlade.visible = false;
   toolGroup.add(knifeBlade);
 
-  // 3D Realistic Survival Sidearm (Gun) with brushed gunmetal PBR maps, slide serrations & stippled grip
+  // 3D Realistic Tactical Survival Sidearm (Gun) with worn gunmetal PBR, Picatinny rail, ejection port & tritium sights
   const gunMesh = new THREE.Group();
   gunMesh.position.set(0, 0.02, -0.06);
   const gunSteelMat = new THREE.MeshStandardMaterial({
-    color: 0xd4dae2,
+    color: 0xcbd2dc,
     map: fpPbr.gunmetal.map,
     normalMap: fpPbr.gunmetal.normalMap,
-    normalScale: new THREE.Vector2(0.9, 0.9),
+    normalScale: new THREE.Vector2(1.18, 1.18),
     roughnessMap: fpPbr.gunmetal.roughnessMap,
-    roughness: 0.92,
-    metalness: 0.86,
-    envMapIntensity: 1.35,
+    roughness: 0.88,
+    metalness: 0.9,
+    envMapIntensity: 1.55,
   });
   const gunGripMat = new THREE.MeshStandardMaterial({
-    color: 0xb8aca4,
+    color: 0x9ca0a6,
     map: fpPbr.grip.map,
     normalMap: fpPbr.grip.normalMap,
-    normalScale: new THREE.Vector2(1.15, 1.15),
+    normalScale: new THREE.Vector2(1.25, 1.25),
     roughnessMap: fpPbr.grip.roughnessMap,
-    roughness: 0.95,
-    metalness: 0.12,
+    roughness: 0.92,
+    metalness: 0.18,
   });
   const chromeMat = new THREE.MeshStandardMaterial({
-    color: 0xcbd5e1,
+    color: 0xdbe2eb,
     normalMap: fpPbr.gunmetal.normalMap,
-    normalScale: new THREE.Vector2(0.45, 0.45),
+    normalScale: new THREE.Vector2(0.55, 0.55),
     roughnessMap: fpPbr.gunmetal.roughnessMap,
-    roughness: 0.7,
-    metalness: 0.92,
-    envMapIntensity: 1.45,
+    roughness: 0.52,
+    metalness: 0.95,
+    envMapIntensity: 1.65,
   });
 
-  const slide = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.052, 0.245), gunSteelMat);
-  slide.position.set(0, 0.066, -0.062);
+  const slide = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.052, 0.255), gunSteelMat);
+  slide.position.set(0, 0.066, -0.064);
   slide.castShadow = true;
   gunMesh.add(slide);
 
-  const lowerFrame = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.024, 0.21), gunGripMat);
-  lowerFrame.position.set(0, 0.036, -0.055);
+  // Upper machined slide bevel & dustcover shroud
+  const slideCrown = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.01, 0.242), gunSteelMat);
+  slideCrown.position.set(0, 0.094, -0.062);
+  gunMesh.add(slideCrown);
+
+  // Machined Picatinny top rail ribs
+  for (let pr = 0; pr < 7; pr++) {
+    const rib = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.006, 0.008), gunSteelMat);
+    rib.position.set(0, 0.101, 0.01 - pr * 0.022);
+    gunMesh.add(rib);
+  }
+
+  // Polished steel ejection port & extractor accent
+  const ejectionPort = new THREE.Mesh(new THREE.BoxGeometry(0.0455, 0.018, 0.048), chromeMat);
+  ejectionPort.position.set(0.002, 0.078, -0.055);
+  gunMesh.add(ejectionPort);
+
+  const lowerFrame = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.026, 0.22), gunGripMat);
+  lowerFrame.position.set(0, 0.036, -0.058);
   gunMesh.add(lowerFrame);
 
-  // Machined rear slide serrations
-  for (let sr = 0; sr < 5; sr++) {
-    const notch = new THREE.Mesh(new THREE.BoxGeometry(0.0445, 0.036, 0.005), chromeMat);
-    notch.position.set(0, 0.066, 0.018 + sr * 0.009);
+  // Underbarrel tactical light / laser housing
+  const underRailMount = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.024, 0.075), gunSteelMat);
+  underRailMount.position.set(0, 0.014, -0.145);
+  const underLens = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.006, 10), chromeMat);
+  underLens.rotation.x = Math.PI / 2;
+  underLens.position.set(0, 0.014, -0.184);
+  gunMesh.add(underRailMount, underLens);
+
+  // Machined rear & front slide serrations
+  for (let sr = 0; sr < 6; sr++) {
+    const notch = new THREE.Mesh(new THREE.BoxGeometry(0.0465, 0.036, 0.005), chromeMat);
+    notch.position.set(0, 0.066, 0.016 + sr * 0.009);
     gunMesh.add(notch);
+  }
+  for (let sf = 0; sf < 4; sf++) {
+    const fNotch = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.032, 0.0045), chromeMat);
+    fNotch.position.set(0, 0.066, -0.145 - sf * 0.009);
+    gunMesh.add(fNotch);
   }
 
   const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.017, 0.22, 12), chromeMat);
   barrel.rotation.x = Math.PI / 2;
-  barrel.position.set(0, 0.065, -0.19);
+  barrel.position.set(0, 0.065, -0.195);
   barrel.castShadow = true;
   gunMesh.add(barrel);
 
-  const muzzleTip = new THREE.Mesh(new THREE.CylinderGeometry(0.019, 0.019, 0.036, 12), gunSteelMat);
+  const muzzleTip = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.042, 12), gunSteelMat);
   muzzleTip.rotation.x = Math.PI / 2;
-  muzzleTip.position.set(0, 0.065, -0.305);
+  muzzleTip.position.set(0, 0.065, -0.308);
   gunMesh.add(muzzleTip);
 
   const grip = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.13, 0.062), gunGripMat);
@@ -578,11 +638,23 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
   trigger.position.set(0, 0.026, -0.038);
   gunMesh.add(triggerGuard, trigger);
 
+  // Iron sights with subtle tritium 3-dot inserts (MeshBasicMaterial skips cosmetic skin overrides)
   const frontSight = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.016, 0.012), chromeMat);
-  frontSight.position.set(0, 0.098, -0.285);
-  const rearSight = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.014, 0.01), gunSteelMat);
-  rearSight.position.set(0, 0.098, 0.045);
-  gunMesh.add(frontSight, rearSight);
+  frontSight.position.set(0, 0.104, -0.285);
+  const frontSightDot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.0024, 6, 6),
+    new THREE.MeshBasicMaterial({ color: 0x4ade80 }),
+  );
+  frontSightDot.position.set(0, 0.107, -0.278);
+
+  const rearSight = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.014, 0.012), gunSteelMat);
+  rearSight.position.set(0, 0.103, 0.046);
+  const rearDotMat = new THREE.MeshBasicMaterial({ color: 0xfbbf24 });
+  const rearDotL = new THREE.Mesh(new THREE.SphereGeometry(0.002, 6, 6), rearDotMat);
+  rearDotL.position.set(-0.009, 0.105, 0.0525);
+  const rearDotR = new THREE.Mesh(new THREE.SphereGeometry(0.002, 6, 6), rearDotMat);
+  rearDotR.position.set(0.009, 0.105, 0.0525);
+  gunMesh.add(frontSight, frontSightDot, rearSight, rearDotL, rearDotR);
 
   gunMesh.traverse((obj) => {
     if (obj instanceof THREE.Mesh) {
@@ -5486,7 +5558,7 @@ export function applyBackpackSkinToPlayerHandle(
         child.material.map
       ) {
         if (imgTex) {
-          child.material.map = imgTex;
+          applySafeStandardMaps(child.material, { map: imgTex });
           child.material.color.set('#ffffff');
         }
         child.material.metalness = skin.visual.metalness;

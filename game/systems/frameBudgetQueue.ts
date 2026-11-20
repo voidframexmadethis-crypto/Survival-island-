@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { SmoothPlayerCameraRig } from './playerCameraRig';
 
 export interface FrameWatchState {
   lastTimeMs: number;
@@ -230,3 +231,37 @@ export class ZeroAllocCameraFollower {
   }
 }
 
+export interface GameStartPayload {
+  spawnX: number;
+  spawnZ: number;
+  spawnYaw: number;
+  sampleGroundY: (x: number, z: number) => number;
+  isThirdPerson?: boolean;
+}
+
+/**
+ * Resets player, camera, and modal state cleanly every time a game starts or restarts.
+ */
+export function resetGameSession(
+  playerPos: THREE.Vector3,
+  playerYawRef: { value: number },
+  camera: THREE.PerspectiveCamera,
+  cameraRig: SmoothPlayerCameraRig,
+  payload: GameStartPayload,
+): MasterRuntimeState {
+  const runtime = createMasterRuntimeState(
+    typeof performance !== 'undefined' ? performance.now() : 0,
+  );
+  const groundY = payload.sampleGroundY(payload.spawnX, payload.spawnZ);
+
+  playerPos.set(payload.spawnX, groundY, payload.spawnZ);
+  playerYawRef.value = payload.spawnYaw;
+
+  cameraRig.yaw = payload.spawnYaw;
+  cameraRig.pitch = 0.08;
+  cameraRig.mode = payload.isThirdPerson === false ? 'first_person' : 'third_person';
+  runtime.isThirdPerson = cameraRig.mode === 'third_person';
+
+  cameraRig.update(camera, playerPos, false, 0.016, payload.sampleGroundY, true);
+  return runtime;
+}

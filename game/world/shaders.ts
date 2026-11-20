@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 
+export { ensureGeometryHasUv, applySafeStandardMaps } from './textures';
+
 export type ShaderSurfaceMode = 'terrain' | 'foliage' | 'rock' | 'wood';
 
 export interface EnvironmentShaderUniforms {
@@ -118,6 +120,7 @@ vSiWorldNormal = normalize(mat3(modelMatrix) * siNorm);
       .replace(
         '#include <common>',
         `#include <common>
+uniform float uShaderTime;
 uniform vec3 uShaderSunDir;
 uniform vec3 uShaderSunColor;
 uniform vec3 uShaderSkyColor;
@@ -149,10 +152,16 @@ float siNoise(vec2 p) {
 ${
   mode === 'terrain'
     ? `if (uShaderQuality >= 0.5) {
-  float shoreWetMask = (1.0 - smoothstep(0.0, 1.15, max(0.0, vSiWorldPos.y))) * smoothstep(-0.35, 0.08, vSiWorldPos.y);
-  roughnessFactor = mix(roughnessFactor, 0.16, clamp(shoreWetMask, 0.0, 1.0) * 0.78);
+  float swash = 0.22 * sin(uShaderTime * 1.45 - vSiWorldPos.x * 0.08 + vSiWorldPos.z * 0.05);
+  float shoreWetMask = (1.0 - smoothstep(-0.05, 1.25 + swash, max(-0.1, vSiWorldPos.y))) * smoothstep(-0.45, 0.04, vSiWorldPos.y);
+  roughnessFactor = mix(roughnessFactor, 0.07, clamp(shoreWetMask, 0.0, 1.0) * 0.92);
 }`
-    : ''
+    : mode === 'rock'
+      ? `if (uShaderQuality >= 0.5) {
+  float rockWet = 1.0 - smoothstep(0.15, 1.45, max(0.0, vSiWorldPos.y));
+  roughnessFactor = mix(roughnessFactor, 0.16, clamp(rockWet, 0.0, 1.0) * 0.78);
+}`
+      : ''
 }
 `,
       )
@@ -168,41 +177,44 @@ if (uShaderQuality >= 0.5) {
   // Crisp multi-scale micro-grain, coastal wind ripples, valley AO & glistening wet shoreline
   float macroTex = siNoise(vSiWorldPos.xz * 0.14);
   float midTex = siNoise(vSiWorldPos.xz * 1.15);
-  float fineTex = siNoise(vSiWorldPos.xz * 4.6);
+  float fineTex = siNoise(vSiWorldPos.xz * 4.8);
   float rippleBand = 0.5 + 0.5 * sin(vSiWorldPos.x * 2.3 + vSiWorldPos.z * 0.95 + macroTex * 4.2);
   float sandElevMask = 1.0 - smoothstep(1.2, 4.4, max(0.0, vSiWorldPos.y));
   float slopeUp = clamp(siN.y, 0.0, 1.0);
-  float valleyAo = mix(0.80, 1.06, smoothstep(0.32, 0.96, slopeUp));
-  float detailMod = 0.90 + macroTex * 0.10 + midTex * 0.06 + fineTex * 0.04 + (rippleBand - 0.5) * 0.045 * sandElevMask;
+  float valleyAo = mix(0.78, 1.06, smoothstep(0.32, 0.96, slopeUp));
+  float detailMod = 0.90 + macroTex * 0.11 + midTex * 0.07 + fineTex * 0.05 + (rippleBand - 0.5) * 0.055 * sandElevMask;
   diffuseColor.rgb *= valleyAo * detailMod;
-  float shoreWet = 1.0 - smoothstep(0.0, 0.95, max(0.0, vSiWorldPos.y));
-  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.58, 0.60, 0.65), shoreWet * 0.65);
+  float swashColor = 0.22 * sin(uShaderTime * 1.45 - vSiWorldPos.x * 0.08 + vSiWorldPos.z * 0.05);
+  float shoreWet = (1.0 - smoothstep(-0.05, 1.18 + swashColor, max(-0.1, vSiWorldPos.y))) * smoothstep(-0.5, 0.02, vSiWorldPos.y);
+  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.50, 0.48, 0.46), clamp(shoreWet, 0.0, 1.0) * 0.78);
   `
       : mode === 'foliage'
         ? `
-  // Rich foliage depth: darkened inner canopy underside + warm sunlit leaf translucency
+  // Rich foliage depth: darkened inner canopy underside + warm golden sunlit leaf translucency
   float leafVar = siNoise(vSiWorldPos.xz * 0.85 + vSiWorldPos.y * 0.6) * 0.65 + siNoise(vSiWorldPos.xz * 2.4 + vSiWorldPos.y * 1.7) * 0.35;
-  float canopyAo = mix(0.68, 1.08, clamp(siN.y * 0.5 + 0.52, 0.0, 1.0));
-  diffuseColor.rgb *= canopyAo * (0.89 + leafVar * 0.20);
-  float backLight = pow(max(0.0, dot(siView, -uShaderSunDir)), 2.0) * (0.35 + 0.65 * max(0.0, siN.y * 0.5 + 0.5));
-  diffuseColor.rgb += uShaderSunColor * diffuseColor.rgb * backLight * uShaderDaylight * (uShaderQuality >= 1.5 ? 0.60 : 0.42);
+  float canopyAo = mix(0.64, 1.10, clamp(siN.y * 0.5 + 0.52, 0.0, 1.0));
+  diffuseColor.rgb *= canopyAo * (0.89 + leafVar * 0.22);
+  float backLight = pow(max(0.0, dot(siView, -uShaderSunDir)), 1.8) * (0.38 + 0.62 * max(0.0, siN.y * 0.5 + 0.5));
+  diffuseColor.rgb += uShaderSunColor * diffuseColor.rgb * backLight * uShaderDaylight * (uShaderQuality >= 1.5 ? 0.72 : 0.48);
   `
         : mode === 'rock'
           ? `
-  // Stratified rock bands, high-frequency mineral grain, crevice AO & mossy tops
+  // Stratified rock bands, mineral grain, crevice AO, mossy tops & wet volcanic shoreline darkening
   float strata = 0.5 + 0.5 * sin(vSiWorldPos.y * 2.6 + siNoise(vSiWorldPos.xz * 0.45) * 3.2);
   float rockGrain = siNoise(vSiWorldPos.xz * 1.9 + vSiWorldPos.y * 1.5);
-  float rockAo = mix(0.74, 1.06, clamp(vSiLocalY * 0.45 + 0.55, 0.0, 1.0));
-  diffuseColor.rgb *= rockAo * (0.84 + rockGrain * 0.22 + strata * 0.06);
-  float mossMask = smoothstep(0.62, 0.94, siN.y) * smoothstep(0.6, 1.6, vSiWorldPos.y) * (1.0 - smoothstep(10.0, 16.0, vSiWorldPos.y));
+  float rockAo = mix(0.72, 1.06, clamp(vSiLocalY * 0.45 + 0.55, 0.0, 1.0));
+  diffuseColor.rgb *= rockAo * (0.82 + rockGrain * 0.24 + strata * 0.07);
+  float mossMask = smoothstep(0.62, 0.94, siN.y) * smoothstep(0.9, 2.0, vSiWorldPos.y) * (1.0 - smoothstep(10.0, 16.0, vSiWorldPos.y));
   float mossPatch = smoothstep(0.42, 0.72, siNoise(vSiWorldPos.xz * 0.72));
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.24, 0.36, 0.16), mossMask * mossPatch * 0.58);
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.20, 0.35, 0.14), mossMask * mossPatch * 0.62);
+  float rockShoreWet = 1.0 - smoothstep(0.1, 1.35, max(0.0, vSiWorldPos.y));
+  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.46, 0.47, 0.50), clamp(rockShoreWet, 0.0, 1.0) * 0.65);
   `
           : `
   // Bark / wood base contact AO + vertical fiber grain
   float woodGrain = siNoise(vec2(vSiWorldPos.x * 1.5 + vSiWorldPos.z * 1.5, vSiWorldPos.y * 2.8));
-  float contactAo = mix(0.72, 1.04, smoothstep(-0.2, 1.2, vSiLocalY));
-  diffuseColor.rgb *= contactAo * (0.89 + woodGrain * 0.18);
+  float contactAo = mix(0.68, 1.04, smoothstep(-0.2, 1.2, vSiLocalY));
+  diffuseColor.rgb *= contactAo * (0.88 + woodGrain * 0.20);
   `
   }
 }
@@ -213,11 +225,24 @@ if (uShaderQuality >= 0.5) {
         `if (uShaderQuality >= 0.5) {
   vec3 siNEnd = normalize(vSiWorldNormal);
   vec3 siViewEnd = normalize(cameraPosition - vSiWorldPos);
-  // Subtle sky hemisphere bounce & golden-hour rim lift so night/shadows stay sculpted
   float skyFill = clamp(siNEnd.y * 0.5 + 0.5, 0.0, 1.0);
-  float fresnelRim = pow(1.0 - max(0.0, dot(siNEnd, siViewEnd)), 3.5);
+  float fresnelRim = pow(1.0 - max(0.0, dot(siNEnd, siViewEnd)), 3.4);
   gl_FragColor.rgb += uShaderSkyColor * (0.015 + 0.025 * skyFill) * (0.35 + 0.65 * uShaderDaylight);
-  gl_FragColor.rgb += uShaderSunColor * fresnelRim * uShaderDaylight * ${(mode === 'foliage' ? 0.075 : 0.045).toFixed(3)};
+  gl_FragColor.rgb += uShaderSunColor * fresnelRim * uShaderDaylight * ${(mode === 'foliage' ? 0.095 : 0.052).toFixed(3)};
+  ${
+    mode === 'terrain'
+      ? `
+  // Mirror-like golden-hour sun path sheen across wet shoreline sand
+  float shoreGlintMask = (1.0 - smoothstep(0.0, 1.15, max(0.0, vSiWorldPos.y))) * smoothstep(-0.25, 0.04, vSiWorldPos.y);
+  if (shoreGlintMask > 0.01) {
+    vec3 wetHalf = normalize(uShaderSunDir + siViewEnd);
+    float wetSpec = pow(max(0.0, dot(siNEnd, wetHalf)), 42.0);
+    float wetFresnel = 0.15 + 0.85 * pow(1.0 - max(0.0, dot(siNEnd, siViewEnd)), 3.0);
+    gl_FragColor.rgb += uShaderSunColor * wetSpec * wetFresnel * shoreGlintMask * uShaderDaylight * 0.58;
+  }
+  `
+      : ''
+  }
 }
 #include <dithering_fragment>`,
       );

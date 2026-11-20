@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { applySafeStandardMaps, ensureGeometryHasUv } from './textures';
 
 export interface RealisticLightingRig {
   sunlight: THREE.DirectionalLight;
@@ -16,6 +17,9 @@ export interface RealisticLightingOptions {
   exposure?: number;
   applyMeshPass?: boolean;
 }
+
+const isValidTexture = (t: unknown): boolean =>
+  t instanceof THREE.Texture && Boolean((t as THREE.Texture).isTexture);
 
 export function applyRealisticMeshLightingPass(
   root: THREE.Object3D,
@@ -41,11 +45,34 @@ export function applyRealisticMeshLightingPass(
       ? object.material
       : [object.material];
 
+    let usesTextureMaps = false;
     for (const material of materials) {
       if (
         material instanceof THREE.MeshStandardMaterial ||
         material instanceof THREE.MeshPhysicalMaterial
       ) {
+        if (
+          (material.map && !isValidTexture(material.map)) ||
+          (material.bumpMap && !isValidTexture(material.bumpMap)) ||
+          (material.normalMap && !isValidTexture(material.normalMap)) ||
+          (material.roughnessMap && !isValidTexture(material.roughnessMap))
+        ) {
+          applySafeStandardMaps(material, {
+            map: material.map,
+            bumpMap: material.bumpMap,
+            bumpScale: material.bumpScale,
+            normalMap: material.normalMap,
+            roughnessMap: material.roughnessMap,
+          });
+        }
+        if (
+          material.map ||
+          material.bumpMap ||
+          material.normalMap ||
+          material.roughnessMap
+        ) {
+          usesTextureMaps = true;
+        }
         if (!object.userData?.preserveEnvMapIntensity) {
           if (Math.abs(material.envMapIntensity - envMapIntensity) > 0.001) {
             material.envMapIntensity = envMapIntensity;
@@ -53,6 +80,10 @@ export function applyRealisticMeshLightingPass(
           }
         }
       }
+    }
+
+    if (usesTextureMaps && object.geometry instanceof THREE.BufferGeometry) {
+      ensureGeometryHasUv(object.geometry);
     }
   });
 }
@@ -116,3 +147,24 @@ export function enableRealisticIslandLighting(
 
   return { sunlight, ambient, skyFill };
 }
+
+/**
+ * Applies warm golden-hour lighting tuned for shoreline water and tropical foliage.
+ */
+export function applyGoldenHourLighting(scene: THREE.Scene): void {
+  const existingSun = scene.getObjectByName('goldenHourSun');
+  const existingHemi = scene.getObjectByName('goldenHourHemi');
+  if (existingSun) scene.remove(existingSun);
+  if (existingHemi) scene.remove(existingHemi);
+
+  const hemi = new THREE.HemisphereLight('#ffd599', '#1e3a4c', 1.15);
+  hemi.name = 'goldenHourHemi';
+
+  const sun = new THREE.DirectionalLight('#ff9e44', 2.4);
+  sun.name = 'goldenHourSun';
+  sun.position.set(-45, 22, -60);
+
+  scene.add(hemi, sun);
+  scene.fog = new THREE.FogExp2('#e8a86b', 0.0045);
+}
+

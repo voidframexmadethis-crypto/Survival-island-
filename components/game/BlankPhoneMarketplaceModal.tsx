@@ -4,7 +4,75 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { buildSculptedBackpackMesh, SkinCatalogItem } from '@/game/data/exchangeCatalog';
+import { applySafeStandardMaps, ensureGeometryHasUv } from '@/game/world/textures';
 import { extractPayhipCheckoutUrl } from './PayhipMarketplaceModal';
+
+function buildSculptedWeaponPreviewMesh(item: SkinCatalogItem): {
+  group: THREE.Group;
+  dispose: () => void;
+} {
+  const group = new THREE.Group();
+  const disposables: Array<{ dispose: () => void }> = [];
+
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color: item.primaryHex || '#1e293b',
+    roughness: 0.36,
+    metalness: 0.72,
+  });
+  const trimMat = new THREE.MeshStandardMaterial({
+    color: item.secondaryHex || '#0f172a',
+    roughness: 0.48,
+    metalness: 0.55,
+  });
+  const accentMat = new THREE.MeshStandardMaterial({
+    color: item.accentHex || '#f59e0b',
+    roughness: 0.28,
+    metalness: 0.85,
+  });
+  disposables.push(bodyMat, trimMat, accentMat);
+
+  const receiverGeo = new THREE.BoxGeometry(0.56, 0.14, 0.11);
+  const receiver = new THREE.Mesh(receiverGeo, bodyMat);
+  receiver.name = 'sculpted_weapon_main';
+
+  const barrelGeo = new THREE.CylinderGeometry(0.024, 0.028, 0.44, 12);
+  barrelGeo.rotateZ(Math.PI / 2);
+  const barrel = new THREE.Mesh(barrelGeo, trimMat);
+  barrel.position.set(0.46, 0.02, 0);
+
+  const shroudGeo = new THREE.BoxGeometry(0.26, 0.09, 0.09);
+  const shroud = new THREE.Mesh(shroudGeo, bodyMat);
+  shroud.position.set(0.32, 0.02, 0);
+  shroud.name = 'sculpted_weapon_shroud';
+
+  const stockGeo = new THREE.BoxGeometry(0.28, 0.12, 0.09);
+  const stock = new THREE.Mesh(stockGeo, trimMat);
+  stock.position.set(-0.38, -0.02, 0);
+
+  const gripGeo = new THREE.BoxGeometry(0.075, 0.18, 0.07);
+  const grip = new THREE.Mesh(gripGeo, trimMat);
+  grip.position.set(-0.14, -0.14, 0);
+  grip.rotation.z = -0.25;
+
+  const magGeo = new THREE.BoxGeometry(0.085, 0.21, 0.065);
+  const mag = new THREE.Mesh(magGeo, accentMat);
+  mag.position.set(0.08, -0.15, 0);
+  mag.rotation.z = 0.16;
+
+  const opticGeo = new THREE.BoxGeometry(0.16, 0.055, 0.065);
+  const optic = new THREE.Mesh(opticGeo, accentMat);
+  optic.position.set(0.0, 0.1, 0);
+
+  group.add(receiver, barrel, shroud, stock, grip, mag, optic);
+  disposables.push(receiverGeo, barrelGeo, shroudGeo, stockGeo, gripGeo, magGeo, opticGeo);
+
+  return {
+    group,
+    dispose: () => {
+      for (const d of disposables) d.dispose();
+    },
+  };
+}
 
 export interface CustomMarketplaceSkin extends SkinCatalogItem {
   mediaDataUrl?: string;
@@ -117,19 +185,45 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
 
     const attachSculptedFallback = () => {
       if (disposed) return;
-      rig = buildSculptedBackpackMesh(selectedSkin);
+      rig =
+        selectedSkin.category === 'weapon'
+          ? buildSculptedWeaponPreviewMesh(selectedSkin)
+          : buildSculptedBackpackMesh(selectedSkin);
       if (selectedSkin.mediaDataUrl && selectedSkin.mediaKind === 'image') {
         const loader = new THREE.TextureLoader();
-        uploadedTex = loader.load(selectedSkin.mediaDataUrl);
-        uploadedTex.colorSpace = THREE.SRGBColorSpace;
-        rig.group.traverse((obj) => {
-          if (obj instanceof THREE.Mesh && obj.material instanceof THREE.MeshStandardMaterial) {
-            if (obj.material.map) {
-              obj.material.map = uploadedTex;
-              obj.material.needsUpdate = true;
+        uploadedTex = loader.load(
+          selectedSkin.mediaDataUrl,
+          (loaded) => {
+            if (disposed) {
+              loaded.dispose();
+              return;
             }
-          }
-        });
+            loaded.colorSpace = THREE.SRGBColorSpace;
+            loaded.needsUpdate = true;
+            rig?.group.traverse((obj) => {
+              if (obj instanceof THREE.Mesh && obj.material instanceof THREE.MeshStandardMaterial) {
+                const isPrimarySurface =
+                  obj.material.map !== null ||
+                  obj.name === 'sculpted_backpack_main' ||
+                  obj.name === 'sculpted_weapon_main' ||
+                  obj.name === 'sculpted_weapon_shroud';
+                if (isPrimarySurface) {
+                  if (obj.geometry instanceof THREE.BufferGeometry) {
+                    ensureGeometryHasUv(obj.geometry);
+                  }
+                  obj.material.color.set('#ffffff');
+                  applySafeStandardMaps(obj.material, { map: loaded });
+                }
+              }
+            });
+          },
+          undefined,
+          () => {
+            if (!disposed) {
+              setStatusMsg('Could not decode uploaded image texture — using solid skin finish.');
+            }
+          },
+        );
       }
       pivot.add(rig.group);
     };
@@ -299,8 +393,8 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
             <button
               type="button"
               onClick={() => {
-                fileInputRef.current?.click();
                 setActiveTool('upload_skin');
+                fileInputRef.current?.click();
               }}
               className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500 text-xl font-black text-black hover:bg-emerald-400"
               title="Upload Gun or Backpack Skin from Phone"

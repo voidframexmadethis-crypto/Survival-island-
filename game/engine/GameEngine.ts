@@ -105,7 +105,11 @@ import {
   isMobileOrTouchClient,
   normalizeGraphicsPreset,
 } from '../systems/saveManager';
-import { updateShaderEnvironment } from '../world/shaders';
+import {
+  applySafeStandardMaps,
+  ensureGeometryHasUv,
+  updateShaderEnvironment,
+} from '../world/shaders';
 import {
   P2PMultiplayerManager,
   P2PPacket,
@@ -122,6 +126,7 @@ import {
   createMasterRuntimeState,
   getRendererLoadSnapshot,
   openExclusiveModal,
+  resetGameSession,
   stepClampedFrame,
   stepMasterFrame,
 } from '../systems/frameBudgetQueue';
@@ -327,25 +332,25 @@ const _scratchScale = new THREE.Vector3(1, 1, 1);
 const _scratchMat4 = new THREE.Matrix4();
 const _zeroMat4 = new THREE.Matrix4().makeScale(0, 0, 0);
 const _scratchColorA = new THREE.Color();
-const _skyColor = new THREE.Color(0x87b9dc);
-const _fogDayColor = new THREE.Color(0xb6cbd5);
-const _fogScratchColor = new THREE.Color(0xb6cbd5);
+const _skyColor = new THREE.Color(0x6db0dc);
+const _fogDayColor = new THREE.Color(0xc5d2d8);
+const _fogScratchColor = new THREE.Color(0xc5d2d8);
 const _nightSky = new THREE.Color(0x060b16);
-const _dawnSky = new THREE.Color(0xe76f51);
-const _duskSky = new THREE.Color(0xf4a261);
-const _daySky = new THREE.Color(0x87b9dc);
-const _zenithDaySky = new THREE.Color(0x1e5cae);
+const _dawnSky = new THREE.Color(0xf08543);
+const _duskSky = new THREE.Color(0xf69a4a);
+const _daySky = new THREE.Color(0x6db0dc);
+const _zenithDaySky = new THREE.Color(0x164ea0);
 const _zenithNightSky = new THREE.Color(0x040712);
-const _zenithScratchColor = new THREE.Color(0x1e5cae);
-const _horizonScratchColor = new THREE.Color(0x8ec8ea);
+const _zenithScratchColor = new THREE.Color(0x164ea0);
+const _horizonScratchColor = new THREE.Color(0x9ecbe6);
 const _stormSky = new THREE.Color(0x334155);
 const _stormDeepSky = new THREE.Color(0x1e293b);
 const _lightningSky = new THREE.Color(0xe2e8f0);
-const _sunOrangeColor = new THREE.Color(0xf97316);
+const _sunOrangeColor = new THREE.Color(0xfb8b24);
 const _hemiDayColor = new THREE.Color(0xd9edff);
-const _hemiTwilightColor = new THREE.Color(0xfda4af);
+const _hemiTwilightColor = new THREE.Color(0xfdba74);
 const _hemiGroundDayColor = new THREE.Color(0x46513a);
-const _hemiGroundTwilightColor = new THREE.Color(0x543822);
+const _hemiGroundTwilightColor = new THREE.Color(0x5e3c24);
 const _skyFillDayColor = new THREE.Color(0xa5cfff);
 const _oceanDayColor = new THREE.Color(0x0b7285);
 const _lakeDayColor = new THREE.Color(0x14b8a6);
@@ -569,9 +574,13 @@ export class GameEngine {
   private fpsSampleAccumMs = 0;
   private lastFramePerfMs = 0;
   private frameWatch: FrameWatchState = createFrameWatchState();
-  private masterRuntime: MasterRuntimeState = createMasterRuntimeState();
+  private masterRuntime: MasterRuntimeState = {
+    ...createMasterRuntimeState(),
+    isThirdPerson: false,
+  };
   private playerCameraRig = new SmoothPlayerCameraRig();
   private _chaseTargetScratch = new THREE.Vector3();
+  private _sessionYawRef = { value: 0 };
   private localPlayerHandle: RemotePlayerMeshHandle | null = null;
   private localAppliedBackpackSkinId: string | null | undefined = undefined;
   private localAppliedGunSkinId: string | null | undefined = undefined;
@@ -804,7 +813,7 @@ export class GameEngine {
     temperatureC: 37.0,
   };
   private dayCount = 1;
-  private timeOfDay = 0.36;
+  private timeOfDay = 0.305;
   private inventory: InventorySlot[] = [];
   private backpackCompartments: BackpackCompartmentEntry[] = [];
   private hotbarItemIds: (ItemId | null)[] = [
@@ -1109,6 +1118,7 @@ export class GameEngine {
     this.settings = settings;
     this.callbacks = callbacks;
     this.sound.configure(settings);
+    this.playerCameraRig.mode = 'first_person';
 
     this.initScene();
     this.initMultiplayerAndMods();
@@ -1163,9 +1173,11 @@ export class GameEngine {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.06;
-    // Cap DPR cleanly on mobile for sharp edges without frame drops
+    // Cap DPR cleanly for sharp edges while holding steady 60 FPS
     this.renderer.setPixelRatio(
-      this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2),
+      this.isSoftwareGl
+        ? 1
+        : Math.min(window.devicePixelRatio || 1, this.isTouchDevice ? 1.25 : 1.5),
     );
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -1633,7 +1645,9 @@ export class GameEngine {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setPixelRatio(
-      this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2),
+      this.isSoftwareGl
+        ? 1
+        : Math.min(window.devicePixelRatio || 1, this.isTouchDevice ? 1.25 : 1.5),
     );
     this.renderer.setSize(w, h);
   };
@@ -1999,10 +2013,12 @@ export class GameEngine {
       const nativeDpr = window.devicePixelRatio || 1;
       if (this.autoFpsTier >= 2 || preset === 'low') {
         dpr = 1;
-      } else if (this.autoFpsTier >= 1 || preset === 'medium') {
+      } else if (this.isTouchDevice) {
+        dpr = Math.min(nativeDpr, 1.25);
+      } else if (this.autoFpsTier >= 1 || preset === 'medium' || preset === 'high') {
         dpr = Math.min(nativeDpr, 1.5);
       } else {
-        dpr = Math.min(nativeDpr, 2);
+        dpr = Math.min(nativeDpr, 1.75);
       }
     }
 
@@ -3255,6 +3271,7 @@ export class GameEngine {
       (options?.worldName || (nextWorldType === 'flat' ? 'Flat Park Grounds' : 'Survival Island')).trim() ||
       (nextWorldType === 'flat' ? 'Flat Park Grounds' : 'Survival Island');
     this.gameMode = nextMode;
+    this.clearTransitAndElevatorState();
     this.ridingCoasterId = null;
     this.currentDimension = 'overworld';
     if (this.activeDimensionWorld) {
@@ -3267,13 +3284,26 @@ export class GameEngine {
     this.structureManager?.resetCleared();
 
     if (nextWorldType === 'flat') {
-      this.playerX = FLAT_PLAYER_SPAWN.x;
-      this.playerZ = FLAT_PLAYER_SPAWN.z;
-      this.playerY = FLAT_GROUND_Y;
-      this.playerVelY = 0;
       this.camYaw = 0;
       this.camPitch = -0.05;
-      this.playerYaw = this.camYaw + Math.PI;
+      this.masterRuntime = resetGameSession(
+        this._chaseTargetScratch,
+        this._sessionYawRef,
+        this.camera,
+        this.playerCameraRig,
+        {
+          spawnX: FLAT_PLAYER_SPAWN.x,
+          spawnZ: FLAT_PLAYER_SPAWN.z,
+          spawnYaw: this.camYaw + Math.PI,
+          sampleGroundY: () => FLAT_GROUND_Y,
+          isThirdPerson: this.playerCameraRig.mode === 'third_person',
+        },
+      );
+      this.playerX = this._chaseTargetScratch.x;
+      this.playerY = this._chaseTargetScratch.y;
+      this.playerZ = this._chaseTargetScratch.z;
+      this.playerYaw = this._sessionYawRef.value;
+      this.playerVelY = 0;
       this.snapPlayerCamera();
       this.isCrouching = false;
       this.touchCrouch = false;
@@ -3380,17 +3410,31 @@ export class GameEngine {
         '#ef4444',
       );
 
+      this.applyExchangeCosmetics(true);
       this.emitHud();
       return;
     }
 
-    this.playerX = PLAYER_SPAWN.x;
-    this.playerZ = PLAYER_SPAWN.z;
-    this.playerY = getTerrainHeight(this.playerX, this.playerZ);
-    this.playerVelY = 0;
     this.camYaw = 0.12;
     this.camPitch = -0.05;
-    this.playerYaw = this.camYaw + Math.PI;
+    this.masterRuntime = resetGameSession(
+      this._chaseTargetScratch,
+      this._sessionYawRef,
+      this.camera,
+      this.playerCameraRig,
+      {
+        spawnX: PLAYER_SPAWN.x,
+        spawnZ: PLAYER_SPAWN.z,
+        spawnYaw: this.camYaw + Math.PI,
+        sampleGroundY: getTerrainHeight,
+        isThirdPerson: this.playerCameraRig.mode === 'third_person',
+      },
+    );
+    this.playerX = this._chaseTargetScratch.x;
+    this.playerY = this._chaseTargetScratch.y;
+    this.playerZ = this._chaseTargetScratch.z;
+    this.playerYaw = this._sessionYawRef.value;
+    this.playerVelY = 0;
     this.snapPlayerCamera();
     this.isCrouching = false;
     this.touchCrouch = false;
@@ -3408,7 +3452,7 @@ export class GameEngine {
       temperatureC: 37.0,
     };
     this.dayCount = 1;
-    this.timeOfDay = 0.36;
+    this.timeOfDay = 0.305;
     this.lastIsNight = false;
     this.playerVisibility = 1.0;
     this.nocturnalActiveCount = 0;
@@ -3619,7 +3663,33 @@ export class GameEngine {
       this.creatures.spawnGuardianBosses();
     }
     this.ensurePlayerHasGun(true);
+    this.applyExchangeCosmetics(true);
     this.emitHud();
+  }
+
+  private clearTransitAndElevatorState(): void {
+    this.activeVehicleId = null;
+    this.mountedCreatureId = null;
+    this.vehicleInteriorCamera = false;
+    this.vehicleForwardSpeed = 0;
+    this.vehicleAltitudeVel = 0;
+    this.vehicleAscendHold = false;
+    this.vehicleDescendHold = false;
+    this.vehicleVisualPitch = 0;
+    this.vehicleVisualRoll = 0;
+    this.hydraulicMode = 'level';
+    this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
+    this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
+    this.trunkBassPulse = 0;
+    this.chestThumpPulse = 0;
+    this.elevatorLiftActive = false;
+    this.elevatorSummonedVehicleId = null;
+    this.elevatorTargetCar = null;
+    this.elevatorLiftProgress = 0;
+    this.elevatorSteamAccum = 0;
+    this.autoParkJobs.clear();
+    this.sound.stopTrunkBass();
+    CABIN_BASS_AND_FIRST_PERSON.setCameraMode('CHASE');
   }
 
   private ensurePremadeShelterDryingRack(): void {
@@ -3660,6 +3730,7 @@ export class GameEngine {
       loadedWorldType,
       save.gameMode || (loadedWorldType === 'flat' ? 'sandbox' : 'survival'),
     );
+    this.clearTransitAndElevatorState();
     this.ridingCoasterId = null;
     this.currentDimension = 'overworld';
     if (this.activeDimensionWorld) {
@@ -3668,10 +3739,24 @@ export class GameEngine {
     }
     this.applyWorldEnvironment(loadedWorldType, loadedSurface);
 
+    this.masterRuntime = resetGameSession(
+      this._chaseTargetScratch,
+      this._sessionYawRef,
+      this.camera,
+      this.playerCameraRig,
+      {
+        spawnX: save.player.x,
+        spawnZ: save.player.z,
+        spawnYaw: save.player.yaw,
+        sampleGroundY: () => save.player.y,
+        isThirdPerson: this.playerCameraRig.mode === 'third_person',
+      },
+    );
     this.playerX = save.player.x;
     this.playerY = save.player.y;
     this.playerZ = save.player.z;
     this.playerYaw = save.player.yaw;
+    this.playerVelY = 0;
     this.camYaw = this.playerYaw - Math.PI;
     this.camPitch = save.player.pitch ?? -0.05;
     this.snapPlayerCamera();
@@ -3980,10 +4065,12 @@ export class GameEngine {
     this.structureManager?.importClearedIds(
       loadedWorldType === 'island' ? save.clearedStructureIds : [],
     );
+    this.applyExchangeCosmetics(true);
     this.emitHud();
   }
 
   public respawnPlayer(): void {
+    this.clearTransitAndElevatorState();
     this.seatedState = null;
     this.ridingCoasterId = null;
     if (this.worldType === 'flat') {
@@ -3999,6 +4086,7 @@ export class GameEngine {
       this.vitals.temperatureC = 37.0;
       this.gameOver = false;
       this.gameOverReason = '';
+      this.snapPlayerCamera();
       this.toast('Returned to Flat Park Plaza.', 'info');
       this.emitHud();
       return;
@@ -4017,11 +4105,13 @@ export class GameEngine {
     this.vitals.temperatureC = 37.0;
     this.gameOver = false;
     this.gameOverReason = '';
+    this.snapPlayerCamera();
     this.toast(
       campBed ? 'Woke up back at your camp shelter.' : 'Washed back onto the beach.',
       'info',
     );
     this.ensurePlayerHasGun(true);
+    this.applyExchangeCosmetics(true);
   }
 
   /**
@@ -8362,9 +8452,9 @@ export class GameEngine {
       ? this.shipModel.position.z
       : this.playerZ;
     this.skyBodies.group.position.set(centerX, 0, centerZ);
-    this.skyBodies.sunMesh.position.set(sunCos * 210, sunElev * 195, -80);
+    this.skyBodies.sunMesh.position.set(sunCos * 210, sunElev * 195, -90);
     this.skyBodies.sunMesh.visible = sunElev > -0.15 && !this.cinematicActive;
-    this.skyBodies.moonMesh.position.set(-sunCos * 210, -sunElev * 195, 80);
+    this.skyBodies.moonMesh.position.set(-sunCos * 210, -sunElev * 195, 90);
     this.skyBodies.moonMesh.visible = sunElev < 0.15 && !this.cinematicActive;
 
     // Texel-snap sun shadow camera around active focal point to eliminate shadow edge shimmer
@@ -8374,9 +8464,9 @@ export class GameEngine {
       (this.effectiveShadowExtent * 2) / Math.max(512, this.effectiveShadowMapSize);
     const snappedX = Math.round(focusX / texelStep) * texelStep;
     const snappedZ = Math.round(focusZ / texelStep) * texelStep;
-    const sunOffX = sunCos * 80;
-    const sunOffY = Math.max(18, sunElev * 120);
-    const sunOffZ = 50;
+    const sunOffX = sunCos * 86;
+    const sunOffY = Math.max(18, sunElev * 118);
+    const sunOffZ = -52;
     this.sunLight.position.set(snappedX + sunOffX, sunOffY, snappedZ + sunOffZ);
     this.sunLight.target.position.set(snappedX, 0, snappedZ);
     this.sunLight.target.updateMatrixWorld();
@@ -8414,13 +8504,13 @@ export class GameEngine {
     this.skyBodies.skyDome.visible = true;
 
     const daylight = THREE.MathUtils.clamp((sunElev + 0.16) / 0.65, 0, 1);
-    const twilight = Math.max(0, 1 - Math.abs(sunElev - 0.04) * 4.2);
+    const twilight = Math.max(0, 1 - Math.abs(sunElev - 0.14) * 2.6);
     const isMorning = this.timeOfDay < 0.5;
 
     _skyColor
       .copy(_nightSky)
       .lerp(_daySky, daylight)
-      .lerp(isMorning ? _dawnSky : _duskSky, twilight * 0.62);
+      .lerp(isMorning ? _dawnSky : _duskSky, twilight * 0.58);
 
     if (this.weather === 'overcast') {
       _skyColor.lerp(_stormSky, 0.45);
@@ -8574,8 +8664,11 @@ export class GameEngine {
         this.world.oceanMesh.material.normalMap.offset.x += dt * 0.025;
         this.world.oceanMesh.material.normalMap.offset.y += dt * 0.018;
       }
+      if (this.world.waterfallShaderMat) {
+        this.world.waterfallShaderMat.uniforms.uTime.value = this.elapsed;
+      }
       this.world.waterfallStreams.forEach((wf, idx) => {
-        wf.scale.x = 0.92 + Math.sin(this.elapsed * 8 + idx) * 0.08;
+        wf.scale.x = 0.96 + Math.sin(this.elapsed * 6 + idx) * 0.04;
       });
       this.world.waterfallFoam.scale.setScalar(
         0.95 + Math.sin(this.elapsed * 5) * 0.12,
@@ -11965,12 +12058,17 @@ export class GameEngine {
       this.localAppliedGunSkinId = nextGunSkinKey;
       const gunMat = h.heldGunMesh.material;
       if (gunMat instanceof THREE.MeshStandardMaterial) {
+        if (h.heldGunMesh.geometry instanceof THREE.BufferGeometry) {
+          ensureGeometryHasUv(h.heldGunMesh.geometry);
+        }
         if (gunSkin && gunSkin.category === 'gun_skin') {
           const imgTex = getCosmeticImageTexture(gunSkin.productImageUrl);
           gunMat.color.set(imgTex ? '#ffffff' : gunSkin.visual.primaryHex);
           gunMat.metalness = gunSkin.visual.metalness;
           gunMat.roughness = gunSkin.visual.roughness;
-          gunMat.map = imgTex || getCosmeticPatternTexture(gunSkin.visual);
+          applySafeStandardMaps(gunMat, {
+            map: imgTex || getCosmeticPatternTexture(gunSkin.visual),
+          });
           if (gunSkin.visual.emissiveHex) {
             gunMat.emissive.set(gunSkin.visual.emissiveHex);
             gunMat.emissiveIntensity = 0.28;
@@ -11982,11 +12080,10 @@ export class GameEngine {
           gunMat.color.set(0x1e293b);
           gunMat.metalness = 0.78;
           gunMat.roughness = 0.3;
-          gunMat.map = null;
+          applySafeStandardMaps(gunMat, { map: null });
           gunMat.emissive.set(0x000000);
           gunMat.emissiveIntensity = 0;
         }
-        gunMat.needsUpdate = true;
       }
     }
 
@@ -12202,10 +12299,18 @@ export class GameEngine {
         const fwdZ = -Math.cos(this.camYaw);
         const cx = c.x - fwdX * chaseDist;
         const cz = c.z - fwdZ * chaseDist;
-        const groundAtCam = Math.max(getTerrainHeight(cx, cz), getWaterLevelAt(cx, cz));
+        const groundAtCam = this._groundSampleFn(cx, cz);
         const lift = THREE.MathUtils.clamp(2.8 - this.camPitch * 3.5, 1.2, 7.5);
         const cy = Math.max(groundAtCam + 0.8, c.y + lift);
-        this.camera.position.set(cx, cy, cz);
+        _vec3A.set(cx, cy, cz);
+        if (this.camera.position.distanceToSquared(_vec3A) > 144) {
+          this.camera.position.copy(_vec3A);
+        } else {
+          this.camera.position.lerp(
+            _vec3A,
+            1 - Math.exp(-DEFAULT_PLAYER_CAMERA_CONFIG.followResponsiveness * dt),
+          );
+        }
         this.camera.lookAt(c.x, c.y + (c.species === 'trex' ? 2.4 : 1.4), c.z);
         return;
       }
@@ -18297,7 +18402,7 @@ export class GameEngine {
         );
         mat.metalness = gunSkin.visual.metalness;
         mat.roughness = gunSkin.visual.roughness;
-        mat.map = useAccent ? null : tex;
+        applySafeStandardMaps(mat, { map: useAccent ? null : tex });
         if (gunSkin.visual.emissiveHex && useAccent) {
           mat.emissive.set(gunSkin.visual.emissiveHex);
           mat.emissiveIntensity = 0.45;
@@ -18322,13 +18427,14 @@ export class GameEngine {
         mat.color.setHex(orig.color);
         mat.metalness = orig.metalness;
         mat.roughness = orig.roughness;
-        mat.map = orig.map;
-        mat.normalMap = orig.normalMap;
-        mat.roughnessMap = orig.roughnessMap;
+        applySafeStandardMaps(mat, {
+          map: orig.map,
+          normalMap: orig.normalMap,
+          roughnessMap: orig.roughnessMap,
+        });
         mat.emissive.setHex(orig.emissive);
         mat.emissiveIntensity = orig.emissiveIntensity;
       }
-      mat.needsUpdate = true;
       meshIdx += 1;
     });
   }

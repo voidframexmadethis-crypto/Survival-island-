@@ -621,27 +621,37 @@ export function createGunmetalTextureSet(anisotropy = 4): PbrTextureSet {
 
   for (let y = 0; y < size; y++) {
     const v = y / size;
-    // Horizontal brushed machining lines + fine parkerized grain
+    // Horizontal brushed machining lines + crisp slide serration & chamfer edge wear
     const brushBand = fastHash2D(0, y, 811);
     const serration =
-      v > 0.72 && v < 0.95 ? Math.sin(v * 90 * Math.PI * 2) * 0.35 : 0;
+      v > 0.72 && v < 0.95 ? Math.sin(v * 90 * Math.PI * 2) * 0.38 : 0;
     for (let x = 0; x < size; x++) {
       const u = x / size;
       const micro = fastHash2D(x, y, 823);
-      const streak = periodicSmoothNoise(u * 0.15, v * 4.0, 16, 829);
+      const streak = periodicSmoothNoise(u * 0.18, v * 4.5, 16, 829);
+      const scratch = micro > 0.985 ? 0.24 : 0;
       const edgeWear =
-        Math.abs(u - 0.5) > 0.44 || Math.abs(v - 0.5) > 0.44 ? 0.25 : 0;
+        Math.abs(u - 0.5) > 0.43 || Math.abs(v - 0.5) > 0.43 ? 0.34 : 0;
       const hVal = Math.max(
         0,
-        Math.min(1, 0.5 + (brushBand - 0.5) * 0.22 + (micro - 0.5) * 0.18 + serration),
+        Math.min(
+          1,
+          0.5 + (brushBand - 0.5) * 0.24 + (micro - 0.5) * 0.2 + serration + scratch,
+        ),
       );
       heights[y * size + x] = hVal;
 
-      const base = 62 + streak * 24 + (brushBand - 0.5) * 14 + (micro - 0.5) * 10 + edgeWear * 48;
+      const base =
+        54 +
+        streak * 28 +
+        (brushBand - 0.5) * 18 +
+        (micro - 0.5) * 12 +
+        edgeWear * 62 +
+        scratch * 52;
       const idx = (y * size + x) * 4;
       d[idx] = clamp255(base * 0.95);
       d[idx + 1] = clamp255(base * 0.98);
-      d[idx + 2] = clamp255(base * 1.04);
+      d[idx + 2] = clamp255(base * 1.05);
       d[idx + 3] = 255;
     }
   }
@@ -656,7 +666,7 @@ export function createGunmetalTextureSet(anisotropy = 4): PbrTextureSet {
   const normalMap = createTangentNormalTextureFromHeights(
     heights,
     size,
-    1.9,
+    2.35,
     1,
     1,
     anisotropy,
@@ -664,8 +674,8 @@ export function createGunmetalTextureSet(anisotropy = 4): PbrTextureSet {
   const roughnessMap = createRoughnessTextureFromHeights(
     heights,
     size,
-    0.22,
-    0.48,
+    0.18,
+    0.46,
     true,
     1,
     1,
@@ -1524,4 +1534,59 @@ export function createRealisticSurfaceMaterial(options: {
   };
 }
 
+/**
+ * Ensures a BufferGeometry has a valid `uv` attribute so textured
+ * MeshStandardMaterials compile cleanly in WebGL.
+ */
+export function ensureGeometryHasUv(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
+  if (!geometry.getAttribute('uv')) {
+    const pos = geometry.getAttribute('position');
+    if (pos) {
+      const count = pos.count;
+      const uvs = new Float32Array(count * 2);
+      for (let i = 0; i < count; i++) {
+        uvs[i * 2] = pos.getX(i) * 0.25;
+        uvs[i * 2 + 1] = pos.getZ(i) * 0.25;
+      }
+      geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    }
+  }
+  return geometry;
+}
 
+/**
+ * Safely attaches color/bump/normal/roughness maps to a MeshStandardMaterial without
+ * triggering WebGL fragment shader compilation errors.
+ */
+export function applySafeStandardMaps(
+  material: THREE.MeshStandardMaterial,
+  options: {
+    map?: THREE.Texture | null;
+    bumpMap?: THREE.Texture | null;
+    bumpScale?: number;
+    normalMap?: THREE.Texture | null;
+    roughnessMap?: THREE.Texture | null;
+  },
+): THREE.MeshStandardMaterial {
+  const isValidTex = (t: unknown): t is THREE.Texture =>
+    t instanceof THREE.Texture && Boolean((t as THREE.Texture).isTexture);
+
+  if (options.map !== undefined) {
+    material.map = isValidTex(options.map) ? options.map : null;
+  }
+  if (options.bumpMap !== undefined) {
+    material.bumpMap = isValidTex(options.bumpMap) ? options.bumpMap : null;
+    if (typeof options.bumpScale === 'number' && Number.isFinite(options.bumpScale)) {
+      material.bumpScale = options.bumpScale;
+    }
+  }
+  if (options.normalMap !== undefined) {
+    material.normalMap = isValidTex(options.normalMap) ? options.normalMap : null;
+  }
+  if (options.roughnessMap !== undefined) {
+    material.roughnessMap = isValidTex(options.roughnessMap) ? options.roughnessMap : null;
+  }
+
+  material.needsUpdate = true;
+  return material;
+}

@@ -110,7 +110,11 @@ import {
   createFarmerNpcModel,
   createHilltopHouse,
 } from './models';
-import { enhanceSurfaceMaterial } from './shaders';
+import {
+  applySafeStandardMaps,
+  enhanceSurfaceMaterial,
+  ensureGeometryHasUv,
+} from './shaders';
 
 export interface CaveCeilingCluster {
   id: string;
@@ -155,6 +159,7 @@ export interface WorldHandles {
   oceanMesh: THREE.Mesh;
   lakeMesh: THREE.Mesh;
   waterfallStreams: THREE.Mesh[];
+  waterfallShaderMat?: THREE.ShaderMaterial;
   waterfallFoam: THREE.Mesh;
   cloudsGroup: THREE.Group;
   woodTex: THREE.CanvasTexture;
@@ -426,17 +431,21 @@ export function buildIslandWorld(
   terrainGeo.computeVertexNormals();
 
   const terrainMat = enhanceSurfaceMaterial(
-    new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      map: groundTex,
-      normalMap: groundNormalTex,
-      normalScale: new THREE.Vector2(0.85, 0.85),
-      roughnessMap: groundRoughnessTex,
-      roughness: 1.0,
-      metalness: 0.03,
-    }),
+    applySafeStandardMaps(
+      new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 1.0,
+        metalness: 0.03,
+      }),
+      {
+        map: groundTex,
+        normalMap: groundNormalTex,
+        roughnessMap: groundRoughnessTex,
+      },
+    ),
     'terrain',
   );
+  terrainMat.normalScale.set(0.85, 0.85);
   const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
   terrainMesh.receiveShadow = true;
   overworldGroup.add(terrainMesh);
@@ -533,30 +542,154 @@ export function buildIslandWorld(
     }
   });
 
-  // 4. Waterfall at Northern Mountain Shelf
+  // 4. Scenic Waterfall Cliff at Northern Mountain Shelf (scrolling shader cascade + mossy buttresses + plunge pool)
   const waterfallStreams: THREE.Mesh[] = [];
-  const wfMat = new THREE.MeshStandardMaterial({
-    color: 0xa5f3fc,
-    emissive: 0x0e7490,
-    emissiveIntensity: 0.25,
-    roughness: 0.2,
+  const waterfallShaderMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0.0 },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        vec3 pos = position;
+        // Gentle cascade bow outward as water plunges over cliff lip
+        float fallCurve = sin((1.0 - uv.y) * 1.35) * 0.55;
+        pos.z += fallCurve;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime;
+      varying vec2 vUv;
+
+      float wfHash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+      }
+      float wfNoise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        return mix(
+          mix(wfHash(i), wfHash(i + vec2(1.0, 0.0)), f.x),
+          mix(wfHash(i + vec2(0.0, 1.0)), wfHash(i + vec2(1.0, 1.0)), f.x),
+          f.y
+        );
+      }
+
+      void main() {
+        vec2 flowUv1 = vec2(vUv.x * 7.5, vUv.y * 3.8 + uTime * 2.15);
+        vec2 flowUv2 = vec2(vUv.x * 13.0 + 2.4, vUv.y * 6.5 + uTime * 3.15);
+        float streak1 = wfNoise(flowUv1);
+        float streak2 = wfNoise(flowUv2);
+        float streaks = streak1 * 0.6 + streak2 * 0.4;
+
+        float edgeFade = smoothstep(0.0, 0.14, vUv.x) * smoothstep(1.0, 0.86, vUv.x);
+        float lipFoam = smoothstep(0.76, 1.0, vUv.y) * 0.45;
+        float splashMist = smoothstep(0.24, 0.0, vUv.y) * 0.72;
+        float whitewater = smoothstep(0.42, 0.82, streaks + lipFoam + splashMist);
+
+        vec3 waterCol = vec3(0.16, 0.72, 0.78);
+        vec3 foamCol = vec3(0.95, 0.99, 1.0);
+        vec3 col = mix(waterCol, foamCol, clamp(whitewater * 0.92, 0.0, 1.0));
+        float alpha = clamp((0.52 + whitewater * 0.44) * edgeFade, 0.0, 0.94);
+        if (alpha < 0.04) discard;
+        gl_FragColor = vec4(col, alpha);
+      }
+    `,
     transparent: true,
-    opacity: 0.84,
+    depthWrite: false,
+    side: THREE.DoubleSide,
   });
+
+  // Flanking dark mossy cliffside buttresses framing the waterfall cascade
+  const wfCliffRockMat = enhanceSurfaceMaterial(
+    new THREE.MeshStandardMaterial({
+      color: 0x454a42,
+      map: rockTex,
+      normalMap: rockNormalTex,
+      normalScale: new THREE.Vector2(1.25, 1.25),
+      roughnessMap: rockRoughnessTex,
+      roughness: 0.92,
+    }),
+    'rock',
+  );
+  const wfButtressGeo = new THREE.DodecahedronGeometry(1, 1);
+  const wfCliffSpecs: [number, number, number, number, number, number, number][] = [
+    [-4.8, 7.2, 0.8, 3.2, 5.6, 2.8, 0.3],
+    [4.8, 7.1, 0.9, 3.1, 5.5, 2.9, -0.4],
+    [-6.6, 5.4, 2.2, 2.6, 3.8, 2.4, 0.8],
+    [6.5, 5.3, 2.4, 2.7, 3.9, 2.5, -0.7],
+    [0.0, 12.6, -1.1, 4.8, 2.6, 3.0, 0.15],
+  ];
+  wfCliffSpecs.forEach(([ox, cy, oz, sx, sy, sz, rotY]) => {
+    const crag = new THREE.Mesh(wfButtressGeo, wfCliffRockMat);
+    crag.position.set(WATERFALL_POS.x + ox, cy, WATERFALL_POS.z + oz);
+    crag.scale.set(sx, sy, sz);
+    crag.rotation.set(0.12, rotY, ox < 0 ? 0.15 : -0.15);
+    crag.castShadow = true;
+    crag.receiveShadow = true;
+    crag.updateMatrix();
+    crag.matrixAutoUpdate = false;
+    overworldGroup.add(crag);
+  });
+
   for (let i = 0; i < 3; i++) {
-    const stream = new THREE.Mesh(new THREE.BoxGeometry(2.6, 11.5, 0.65), wfMat);
-    stream.position.set(WATERFALL_POS.x + (i - 1) * 1.4, 8.0, WATERFALL_POS.z + 1.8);
-    stream.rotation.x = 0.28;
+    const stream = new THREE.Mesh(new THREE.PlaneGeometry(3.15, 12.2, 2, 10), waterfallShaderMat);
+    stream.position.set(WATERFALL_POS.x + (i - 1) * 1.45, 8.15, WATERFALL_POS.z + 2.0 + (i % 2) * 0.22);
+    stream.rotation.x = -0.24;
+    stream.renderOrder = 2;
     overworldGroup.add(stream);
     waterfallStreams.push(stream);
   }
+
+  // Emerald plunge pool + layered mist clouds at waterfall base
+  const plungePoolMat = new THREE.MeshStandardMaterial({
+    color: 0x0f766e,
+    normalMap: waterNormalTex,
+    normalScale: new THREE.Vector2(0.4, 0.4),
+    roughness: 0.1,
+    metalness: 0.2,
+    transparent: true,
+    opacity: 0.86,
+  });
+  const plungePool = new THREE.Mesh(new THREE.CircleGeometry(5.6, 24), plungePoolMat);
+  plungePool.rotation.x = -Math.PI / 2;
+  plungePool.position.set(WATERFALL_POS.x, 2.63, WATERFALL_POS.z + 4.4);
+  plungePool.userData.noShadowCast = true;
+  plungePool.userData.preserveEnvMapIntensity = true;
+  plungePool.updateMatrix();
+  plungePool.matrixAutoUpdate = false;
+  overworldGroup.add(plungePool);
+
+  const wfMistMat = new THREE.MeshBasicMaterial({
+    color: 0xf0fdfa,
+    transparent: true,
+    opacity: 0.34,
+    depthWrite: false,
+  });
+  const wfMistGeo = new THREE.SphereGeometry(1.0, 10, 8);
+  for (let m = 0; m < 4; m++) {
+    const mist = new THREE.Mesh(wfMistGeo, wfMistMat);
+    mist.position.set(
+      WATERFALL_POS.x + (m - 1.5) * 1.85,
+      3.15 + (m % 2) * 0.45,
+      WATERFALL_POS.z + 3.55 + (m % 2) * 0.65,
+    );
+    mist.scale.set(2.2, 1.1, 1.9);
+    mist.updateMatrix();
+    mist.matrixAutoUpdate = false;
+    overworldGroup.add(mist);
+  }
+
   const waterfallFoam = new THREE.Mesh(
-    new THREE.RingGeometry(1.4, 4.4, 20),
+    new THREE.RingGeometry(1.1, 4.7, 24),
     new THREE.MeshBasicMaterial({
-      color: 0xecfeff,
+      color: 0xf0fdfa,
       transparent: true,
-      opacity: 0.65,
+      opacity: 0.72,
       side: THREE.DoubleSide,
+      depthWrite: false,
     }),
   );
   waterfallFoam.rotation.x = -Math.PI / 2;
@@ -1873,27 +2006,38 @@ export function buildIslandWorld(
 
       const crown = new THREE.Group();
       crown.position.set(curX, curY, 0);
-      for (let c = 0; c < 3; c++) {
+      for (let c = 0; c < 5; c++) {
         const coco = new THREE.Mesh(gSphere7, coconutMat);
-        coco.scale.setScalar(0.14);
-        const ca = (c / 3) * Math.PI * 2;
-        coco.position.set(Math.cos(ca) * 0.24, -0.18, Math.sin(ca) * 0.24);
+        coco.scale.set(0.145, 0.165, 0.145);
+        const ca = (c / 5) * Math.PI * 2 + 0.3;
+        coco.position.set(Math.cos(ca) * 0.24, -0.18 - (c % 2) * 0.08, Math.sin(ca) * 0.24);
         crown.add(coco);
       }
-      for (let f = 0; f < 7; f++) {
-        const a = (f / 7) * Math.PI * 2;
+      for (let f = 0; f < 9; f++) {
+        const a = (f / 9) * Math.PI * 2 + (nodeRand() - 0.5) * 0.12;
         const frondGroup = new THREE.Group();
         frondGroup.rotation.y = a;
+        const liftPitch = f % 2 === 0 ? 0.14 : -0.04;
         const innerFrond = new THREE.Mesh(gCone5, palmLeafMat);
-        innerFrond.scale.set(0.32, 1.75, 0.32);
-        innerFrond.rotation.z = -Math.PI / 2.6;
-        innerFrond.position.set(0.8, 0.14, 0);
+        innerFrond.scale.set(0.38, 1.9, 0.18);
+        innerFrond.rotation.z = -Math.PI / 2.65 + liftPitch;
+        innerFrond.position.set(0.86, 0.18 + liftPitch * 0.5, 0);
         innerFrond.castShadow = false;
         const tipFrond = new THREE.Mesh(gCone5, palmLeafMat);
-        tipFrond.scale.set(0.24, 1.35, 0.24);
-        tipFrond.rotation.z = -Math.PI / 1.75;
-        tipFrond.position.set(1.9, -0.22, 0);
-        frondGroup.add(innerFrond, tipFrond);
+        tipFrond.scale.set(0.30, 1.55, 0.14);
+        tipFrond.rotation.z = -Math.PI / 1.62 + liftPitch * 0.4;
+        tipFrond.position.set(2.05, -0.22 + liftPitch * 0.6, 0);
+        tipFrond.castShadow = false;
+        // Layered side frond leaflets for lush silhouette without extra materials
+        const sideLeafA = new THREE.Mesh(gCone5, palmLeafMat);
+        sideLeafA.scale.set(0.16, 0.85, 0.12);
+        sideLeafA.rotation.set(0.35, 0.25, -Math.PI / 2.1);
+        sideLeafA.position.set(1.25, 0.06, 0.18);
+        const sideLeafB = new THREE.Mesh(gCone5, palmLeafMat);
+        sideLeafB.scale.set(0.16, 0.85, 0.12);
+        sideLeafB.rotation.set(-0.35, -0.25, -Math.PI / 2.1);
+        sideLeafB.position.set(1.25, 0.06, -0.18);
+        frondGroup.add(innerFrond, tipFrond, sideLeafA, sideLeafB);
         crown.add(frondGroup);
       }
       felledPivot.add(crown);
@@ -5034,6 +5178,7 @@ export function buildIslandWorld(
   const grassBladeGeo = registerGeometry(new THREE.BufferGeometry());
   grassBladeGeo.setAttribute('position', new THREE.BufferAttribute(grassPositions, 3));
   grassBladeGeo.setAttribute('color', new THREE.BufferAttribute(grassColors, 3));
+  ensureGeometryHasUv(grassBladeGeo);
   grassBladeGeo.computeVertexNormals();
 
   const ambientGrassMat = registerMaterial(
@@ -5180,6 +5325,160 @@ export function buildIslandWorld(
   pebbleInstanced.computeBoundingSphere();
   overworldGroup.add(pebbleInstanced);
 
+  // 10b. Instanced Dark Volcanic Shoreline Boulders & Crimson Tropical Hibiscus Bushes (3 total draw calls)
+  const volcanicShoreBoulderMat = registerMaterial(
+    enhanceSurfaceMaterial(
+      applySafeStandardMaps(
+        new THREE.MeshStandardMaterial({
+          color: 0x3f3c38,
+          roughness: 0.92,
+        }),
+        {
+          map: rockTex,
+          normalMap: rockNormalTex,
+          roughnessMap: rockRoughnessTex,
+        },
+      ),
+      'rock',
+    ),
+  );
+  volcanicShoreBoulderMat.normalScale.set(1.25, 1.25);
+  const shoreBoulderCount = 140;
+  const shoreBoulderInstanced = new THREE.InstancedMesh(
+    gDodec1,
+    volcanicShoreBoulderMat,
+    shoreBoulderCount,
+  );
+  shoreBoulderInstanced.castShadow = false;
+  shoreBoulderInstanced.receiveShadow = true;
+  shoreBoulderInstanced.userData.noShadowCast = true;
+
+  const hibiscusLeafMat = registerMaterial(
+    enhanceSurfaceMaterial(
+      applySafeStandardMaps(
+        new THREE.MeshStandardMaterial({
+          color: 0x266d2e,
+          roughness: 0.72,
+        }),
+        {
+          map: leafTex,
+          normalMap: leafNormalTex,
+        },
+      ),
+      'foliage',
+      0.06,
+    ),
+  );
+  hibiscusLeafMat.normalScale.set(0.85, 0.85);
+  const hibiscusFlowerMat = registerMaterial(
+    enhanceSurfaceMaterial(
+      new THREE.MeshStandardMaterial({
+        color: 0xdc2626,
+        emissive: 0x7f1d1d,
+        emissiveIntensity: 0.12,
+        roughness: 0.55,
+      }),
+      'foliage',
+      0.04,
+    ),
+  );
+  const hibiscusBushCount = 95;
+  const hibiscusLeafInstanced = new THREE.InstancedMesh(
+    gSphere7,
+    hibiscusLeafMat,
+    hibiscusBushCount,
+  );
+  hibiscusLeafInstanced.castShadow = false;
+  hibiscusLeafInstanced.receiveShadow = true;
+  hibiscusLeafInstanced.userData.noShadowCast = true;
+
+  const hibiscusFlowerInstanced = new THREE.InstancedMesh(
+    gDodec0,
+    hibiscusFlowerMat,
+    hibiscusBushCount * 3,
+  );
+  hibiscusFlowerInstanced.castShadow = false;
+  hibiscusFlowerInstanced.userData.noShadowCast = true;
+
+  let sbPlaced = 0;
+  let hbPlaced = 0;
+  let hfPlaced = 0;
+  for (let i = 0; i < 4200 && (sbPlaced < shoreBoulderCount || hbPlaced < hibiscusBushCount); i++) {
+    const a = rand() * Math.PI * 2;
+    const rad = 18 + Math.sqrt(rand()) * 210;
+    const bx = Math.cos(a) * rad;
+    const bz = Math.sin(a) * rad;
+    const by = getTerrainHeight(bx, bz);
+    const bBiome = getBiomeAt(bx, bz);
+    if (Math.hypot(bx - PLAYER_SPAWN.x, bz - PLAYER_SPAWN.z) < 5.5) continue;
+    if (Math.hypot(bx - HILL_HOUSE_POS.x, bz - HILL_HOUSE_POS.z) < 16.5) continue;
+    if (Math.hypot(bx - VEHICLE_GARAGE_POS.x, bz - VEHICLE_GARAGE_POS.z) < 18.5) continue;
+
+    if (sbPlaced < shoreBoulderCount && bBiome === 'beach' && by >= -0.35 && by <= 1.45) {
+      dummy.position.set(bx, by - 0.14, bz);
+      dummy.rotation.set(rand() * 0.4, rand() * Math.PI * 2, rand() * 0.4);
+      const s = 0.65 + rand() * 0.95;
+      dummy.scale.set(s * (1.2 + rand() * 0.45), s * (0.48 + rand() * 0.25), s * (1.1 + rand() * 0.4));
+      dummy.updateMatrix();
+      shoreBoulderInstanced.setMatrixAt(sbPlaced++, dummy.matrix);
+    } else if (
+      hbPlaced < hibiscusBushCount &&
+      (bBiome === 'beach' || bBiome === 'jungle' || bBiome === 'sparse_jungle' || bBiome === 'flower_forest') &&
+      by >= 1.15 &&
+      by <= 5.2
+    ) {
+      const bScale = 0.72 + rand() * 0.58;
+      dummy.position.set(bx, by + 0.34 * bScale, bz);
+      dummy.rotation.set((rand() - 0.5) * 0.2, rand() * Math.PI * 2, (rand() - 0.5) * 0.2);
+      dummy.scale.set(bScale * 1.18, bScale * 0.78, bScale * 1.12);
+      dummy.updateMatrix();
+      hibiscusLeafInstanced.setMatrixAt(hbPlaced, dummy.matrix);
+      tintColor.setHex(0x287830).offsetHSL((rand() - 0.5) * 0.03, 0.05, (rand() - 0.5) * 0.06);
+      hibiscusLeafInstanced.setColorAt(hbPlaced, tintColor);
+
+      for (let f = 0; f < 3; f++) {
+        const fa = (f / 3) * Math.PI * 2 + rand() * 0.8;
+        const fr = (0.42 + rand() * 0.32) * bScale;
+        dummy.position.set(
+          bx + Math.cos(fa) * fr,
+          by + (0.58 + rand() * 0.22) * bScale,
+          bz + Math.sin(fa) * fr,
+        );
+        dummy.rotation.set(rand(), rand(), rand());
+        const fs = (0.11 + rand() * 0.05) * bScale;
+        dummy.scale.set(fs * 1.25, fs * 0.72, fs * 1.25);
+        dummy.updateMatrix();
+        hibiscusFlowerInstanced.setMatrixAt(hfPlaced, dummy.matrix);
+        tintColor.setHex(f === 2 ? 0xf43f5e : 0xdc2626).offsetHSL((rand() - 0.5) * 0.02, 0, (rand() - 0.5) * 0.06);
+        hibiscusFlowerInstanced.setColorAt(hfPlaced, tintColor);
+        hfPlaced++;
+      }
+      hbPlaced++;
+    }
+  }
+  shoreBoulderInstanced.count = sbPlaced;
+  shoreBoulderInstanced.instanceMatrix.needsUpdate = true;
+  shoreBoulderInstanced.computeBoundingSphere();
+  shoreBoulderInstanced.updateMatrix();
+  shoreBoulderInstanced.matrixAutoUpdate = false;
+  overworldGroup.add(shoreBoulderInstanced);
+
+  hibiscusLeafInstanced.count = hbPlaced;
+  hibiscusLeafInstanced.instanceMatrix.needsUpdate = true;
+  if (hibiscusLeafInstanced.instanceColor) hibiscusLeafInstanced.instanceColor.needsUpdate = true;
+  hibiscusLeafInstanced.computeBoundingSphere();
+  hibiscusLeafInstanced.updateMatrix();
+  hibiscusLeafInstanced.matrixAutoUpdate = false;
+  overworldGroup.add(hibiscusLeafInstanced);
+
+  hibiscusFlowerInstanced.count = hfPlaced;
+  hibiscusFlowerInstanced.instanceMatrix.needsUpdate = true;
+  if (hibiscusFlowerInstanced.instanceColor) hibiscusFlowerInstanced.instanceColor.needsUpdate = true;
+  hibiscusFlowerInstanced.computeBoundingSphere();
+  hibiscusFlowerInstanced.updateMatrix();
+  hibiscusFlowerInstanced.matrixAutoUpdate = false;
+  overworldGroup.add(hibiscusFlowerInstanced);
+
   // Finalize all batched InstancedMeshes with bounding spheres for accurate frustum culling
   for (const [key, entry] of batchRegistry.entries()) {
     if (entry.matrices.length === 0) continue;
@@ -5249,6 +5548,9 @@ export function buildIslandWorld(
     waterfallFoam,
     grassInstanced,
     pebbleInstanced,
+    shoreBoulderInstanced,
+    hibiscusLeafInstanced,
+    hibiscusFlowerInstanced,
     ...waterfallStreams,
   ]);
   const cullableLandmarks: {
@@ -5444,6 +5746,7 @@ export function buildIslandWorld(
     oceanMesh,
     lakeMesh,
     waterfallStreams,
+    waterfallShaderMat,
     waterfallFoam,
     cloudsGroup,
     woodTex,
