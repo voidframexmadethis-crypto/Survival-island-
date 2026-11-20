@@ -30,8 +30,8 @@ export class RealisticOcean {
     this.geometry = new THREE.PlaneGeometry(
       width,
       height,
-      96,
-      96
+      64,
+      64
     );
 
     this.material = new THREE.ShaderMaterial({

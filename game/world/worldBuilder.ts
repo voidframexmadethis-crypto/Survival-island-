@@ -5180,12 +5180,41 @@ export function buildIslandWorld(
     }
   }
 
+  const cullablePointLights: {
+    light: THREE.PointLight;
+    wx: number;
+    wz: number;
+    maxRangeSq: number;
+  }[] = [];
+  const tmpLightWorldPos = new THREE.Vector3();
+  overworldGroup.traverse((obj) => {
+    if (obj instanceof THREE.PointLight) {
+      obj.getWorldPosition(tmpLightWorldPos);
+      const effectiveRange = Math.max(24, (obj.distance || 14) + 18);
+      cullablePointLights.push({
+        light: obj,
+        wx: tmpLightWorldPos.x,
+        wz: tmpLightWorldPos.z,
+        maxRangeSq: effectiveRange * effectiveRange,
+      });
+    }
+  });
+
   const cullWorldByDistance = (
     px: number,
     pz: number,
     maxDist: number,
     budgetQueue?: FrameBudgetQueue,
   ): void => {
+    for (let i = 0; i < cullablePointLights.length; i++) {
+      const pl = cullablePointLights[i];
+      const dx = pl.wx - px;
+      const dz = pl.wz - pz;
+      const showLight = dx * dx + dz * dz <= pl.maxRangeSq;
+      if (pl.light.visible !== showLight) {
+        pl.light.visible = showLight;
+      }
+    }
     for (let i = 0; i < cullableLandmarks.length; i++) {
       const entry = cullableLandmarks[i];
       const dx = entry.cx - px;

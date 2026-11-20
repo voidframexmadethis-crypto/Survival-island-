@@ -3,6 +3,7 @@ import * as THREE from 'three';
 export interface UndergroundElevatorHandles {
   root: THREE.Group;
   platformGroup: THREE.Group;
+  computerGroup: THREE.Group;
   ramMeshes: THREE.Mesh[];
   beaconMat: THREE.MeshStandardMaterial;
   kioskScreenMat: THREE.MeshStandardMaterial;
@@ -229,6 +230,7 @@ export function buildUndergroundCarElevator(): UndergroundElevatorHandles {
   // 6. Standing High-Tech Garage Vault Computer Station (Dual Monitors + Keyboard Deck + AI Core)
   const computerGroup = new THREE.Group();
   computerGroup.position.set(-collarW * 0.5 - 1.15, 0, collarL * 0.5 - 1.2);
+  computerGroup.userData.isElevatorComputer = true;
 
   // Heavy brushed-steel computer desk pedestal
   const deskBase = new THREE.Mesh(
@@ -302,6 +304,7 @@ export function buildUndergroundCarElevator(): UndergroundElevatorHandles {
   return {
     root,
     platformGroup,
+    computerGroup,
     ramMeshes,
     beaconMat,
     kioskScreenMat,

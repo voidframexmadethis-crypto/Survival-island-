@@ -219,6 +219,7 @@ import {
   SNOWY_WOODLAND_POS,
   SWAMP_POS,
   TAIGA_VILLAGE_POS,
+  UNDERGROUND_ELEVATOR_KIOSK_POS,
   UNDERGROUND_ELEVATOR_POS,
   VEHICLE_GARAGE_POS,
   WHEATFIELD_POS,
@@ -249,9 +250,13 @@ import {
   buildSpacePlanetArena,
 } from '../world/saturnRocketModel';
 import {
+  createGarageDanceState,
   ELEVATOR_EXOTIC_LIFT,
   ELEVATOR_VOICE_COMPUTER,
   ExoticElevatorCar,
+  GarageDanceState,
+  resolveElevatorCarQuery,
+  stepGarageHydraulicsDance,
   VAULT_COMPUTER_VOICE,
 } from '../systems/undergroundElevator';
 import {
@@ -325,6 +330,8 @@ const _lakeDayColor = new THREE.Color(0x14b8a6);
 const FOG_GRID_SIZE = 32;
 const FOG_WORLD_SPAN = 1760;
 const MAX_POOLED_PARTICLES = 192;
+const ELEVATOR_TERMINAL_INTERACT_RADIUS_SQ = 3.2 * 3.2; // 3.2m radius around elevator computer terminal
+const VEHICLE_INTERACT_RADIUS_SQ = 4.0 * 4.0; // 4.0m radius for nearby vehicles
 
 interface ArrowProjectile {
   mesh: THREE.Mesh;
@@ -1005,6 +1012,7 @@ export class GameEngine {
   private hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
   private trunkBassPulse = 0;
   private chestThumpPulse = 0;
+  private vehicleDanceStates = new Map<string, GarageDanceState>();
 
   // Creature Taming & Mounting & Sandbox
   private mountedCreatureId: string | null = null;
@@ -1424,9 +1432,10 @@ export class GameEngine {
   private setupInputs(): void {
     window.addEventListener('resize', this.onResize);
     window.addEventListener('keydown', this.onKeyDown);
-    window.addEventListener('keyup', this.onKeyUp);
+    window.addEventListener('keyup', this.onKeyUp, true);
     window.addEventListener('wheel', this.onWheel, { passive: true });
     window.addEventListener('blur', this.onWindowBlur);
+    window.addEventListener('pagehide', this.onWindowBlur);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
     this.renderer.domElement.addEventListener('pointerdown', this.onCanvasPointerDown);
   }
@@ -1434,18 +1443,52 @@ export class GameEngine {
   private onCanvasPointerDown = (e: PointerEvent): void => {
     if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
     if (e.button !== 0) return;
-    // Raycast against any nearby or active vehicle's 3D interior console buttons (Droptop, Rim Lights, Lift)!
+
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    this._tapNdc.set(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+
+    // 1. HIGHEST PRIORITY: Car Elevator Computer Terminal (never cascade to nearby vehicles)
+    const kioskGroup = this.world?.undergroundElevator?.computerGroup;
+    if (
+      kioskGroup &&
+      !this.inSpacePlanet &&
+      this.currentDimension === 'overworld' &&
+      !this.activeVehicleId
+    ) {
+      const kx = UNDERGROUND_ELEVATOR_KIOSK_POS.x - this.playerX;
+      const kz = UNDERGROUND_ELEVATOR_KIOSK_POS.z - this.playerZ;
+      if (kx * kx + kz * kz <= 8.5 * 8.5) {
+        _raycaster.setFromCamera(this._tapNdc, this.camera);
+        _raycaster.far = 7.5;
+        const kioskHits = _raycaster.intersectObject(kioskGroup, true);
+        if (kioskHits.length > 0) {
+          this.openUndergroundElevator();
+          return;
+        }
+      }
+    }
+
+    // If standing directly at the Elevator Computer Terminal on foot, block car console raycasts
+    if (!this.activeVehicleId && this.isNearElevatorTerminal()) {
+      return;
+    }
+
+    // 2. LOWER PRIORITY: Raycast nearby or active vehicle's 3D interior console buttons (Droptop, Rim Lights, Lift)
     const buttonMeshes: THREE.Object3D[] = [];
     const buttonActionMap = new Map<
       THREE.Object3D,
       { vehicleId: string; action: 'droptop' | 'rim_light' | 'lift' }
     >();
     for (const v of this.vehicles) {
-      const dist =
-        v.id === this.activeVehicleId
-          ? 0
-          : Math.hypot(v.x - this.playerX, v.z - this.playerZ);
-      if (dist > 6.5) continue;
+      const dx = v.x - this.playerX;
+      const dz = v.z - this.playerZ;
+      if (v.id !== this.activeVehicleId && dx * dx + dz * dz > VEHICLE_INTERACT_RADIUS_SQ) {
+        continue;
+      }
       const handles = this.vehicleMeshes.get(v.id);
       if (!handles) continue;
       if (
@@ -1475,12 +1518,6 @@ export class GameEngine {
     }
     if (buttonMeshes.length === 0) return;
 
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
-    this._tapNdc.set(
-      ((e.clientX - rect.left) / rect.width) * 2 - 1,
-      -((e.clientY - rect.top) / rect.height) * 2 + 1,
-    );
     _raycaster.setFromCamera(this._tapNdc, this.camera);
     _raycaster.far = 7.5;
     const hits = _raycaster.intersectObjects(buttonMeshes, true);
@@ -1536,6 +1573,10 @@ export class GameEngine {
     this.joyX = 0;
     this.joyY = 0;
     this.touchSprint = false;
+    this.touchFlyAscend = false;
+    this.touchFlyDescend = false;
+    this.vehicleAscendHold = false;
+    this.vehicleDescendHold = false;
     this.isAiming = false;
     this.gamepadGas = 0;
     this.gamepadBrake = 0;
@@ -1552,6 +1593,15 @@ export class GameEngine {
   };
 
   private onKeyDown = (e: KeyboardEvent): void => {
+    const activeEl = document.activeElement as HTMLElement | null;
+    if (
+      activeEl &&
+      (activeEl.tagName === 'INPUT' ||
+        activeEl.tagName === 'TEXTAREA' ||
+        activeEl.isContentEditable)
+    ) {
+      return;
+    }
     this.keys[e.code] = true;
     const keyLower = e.key ? e.key.toLowerCase() : '';
     if (keyLower) this.keys[`key_${keyLower}`] = true;
@@ -1778,53 +1828,41 @@ export class GameEngine {
     const shadowMapSize =
       preset === 'ultra'
         ? 2048
-        : preset === 'high'
-          ? this.isTouchDevice
-            ? 1024
-            : 2048
-          : preset === 'medium'
-            ? 1024
-            : 512;
+        : 1024;
     const shadowHalfExtent =
       preset === 'ultra'
-        ? 120
+        ? 84
         : preset === 'high'
           ? this.isTouchDevice
-            ? 56
-            : 100
+            ? 52
+            : 64
           : preset === 'medium'
-            ? this.isTouchDevice
-              ? 52
-              : 64
-            : 44;
+            ? 48
+            : 40;
     const shadowFar =
       preset === 'ultra'
-        ? 350
+        ? 280
         : preset === 'high'
-          ? this.isTouchDevice
-            ? 240
-            : 300
+          ? 220
           : preset === 'medium'
-            ? 220
-            : 170;
+            ? 190
+            : 160;
     const shadowRadius = this.isTouchDevice
-      ? Math.min(2, preset === 'low' ? 1 : 2)
+      ? 1.5
       : preset === 'ultra'
-        ? 5
-        : preset === 'high'
-          ? 4
-          : preset === 'medium'
-            ? 3
-            : 2;
+        ? 3
+        : 2;
     let dpr = 1;
     if (!this.isSoftwareGl) {
       const nativeDpr = window.devicePixelRatio || 1;
       if (this.autoFpsTier >= 2 || preset === 'low') {
         dpr = 1;
-      } else if (this.isTouchDevice || preset === 'medium') {
-        dpr = Math.min(nativeDpr, 1.5);
+      } else if (this.autoFpsTier >= 1 || this.isTouchDevice || preset === 'medium') {
+        dpr = Math.min(nativeDpr, 1.25);
+      } else if (preset === 'ultra') {
+        dpr = Math.min(nativeDpr, 1.75);
       } else {
-        dpr = Math.min(nativeDpr, 2);
+        dpr = Math.min(nativeDpr, 1.5);
       }
     }
 
@@ -5723,6 +5761,13 @@ export class GameEngine {
       return;
     }
 
+    // 1. HIGHEST PRIORITY: Car Elevator Computer Terminal (hard stop, never cascade to nearby vehicles)
+    if (!this.activeVehicleId && this.isNearElevatorTerminal()) {
+      this.openUndergroundElevator();
+      this.actionCooldown = 0.4;
+      return;
+    }
+
     // Prioritize Shipwreck Chests, Base Armory Chest & Vehicle Garage Bench regardless of held tool/gun
     const near = this.nearbyInteraction;
     if (near && near.kind === 'shipwreck') {
@@ -8309,7 +8354,9 @@ export class GameEngine {
       this.lightningFlash * 0.35;
 
     this.renderer.toneMappingExposure = 0.96 + daylight * 0.19;
-    this.nightVisionLight.intensity = (1 - daylight) * 0.62;
+    const nvIntensity = (1 - daylight) * 0.62;
+    this.nightVisionLight.intensity = nvIntensity;
+    this.nightVisionLight.visible = nvIntensity > 0.02;
 
     // Sync RealisticOcean & custom surface shaders during both menu and active gameplay
     updateShaderEnvironment(
@@ -10437,26 +10484,55 @@ export class GameEngine {
     }
 
     // 8. BARE HANDS: Full world interaction scan
+    // 8-PRIORITY: Underground Car Elevator Computer Terminal strictly outranks nearby vehicles
+    if (this.isNearElevatorTerminal()) {
+      const kx = UNDERGROUND_ELEVATOR_KIOSK_POS.x - this.playerX;
+      const kz = UNDERGROUND_ELEVATOR_KIOSK_POS.z - this.playerZ;
+      const dKiosk = Math.hypot(kx, kz);
+      if (!this.elevatorTerminalGreeted) {
+        this.elevatorTerminalGreeted = true;
+        ELEVATOR_VOICE_COMPUTER.onApproachTerminal((line) => {
+          this.toast(line, 'discovery');
+        });
+      }
+      return {
+        id: 'underground_elevator',
+        label: 'Use Garage Elevator Computer (AI Voice · 15 Exotics)',
+        sublabel: 'Ask the Vault Computer to preview & lift your exotic car to the surface',
+        kind: 'underground_elevator',
+        actionCategory: 'use',
+        distance: dKiosk,
+        targetX: UNDERGROUND_ELEVATOR_KIOSK_POS.x,
+        targetY: this.playerY,
+        targetZ: UNDERGROUND_ELEVATOR_KIOSK_POS.z,
+      };
+    }
+
     let best: NearbyInteraction | null = null;
     let bestDist = 4.8;
 
-    // 8A. Nearby Modular Vehicles (Pilot / Drive / Sail / Fly)
+    // 8A. Nearby Modular Vehicles (Pilot / Drive / Sail / Fly) — strictly lower priority than Elevator Computer
     for (const v of this.vehicles) {
-      const d = Math.hypot(v.x - this.playerX, v.z - this.playerZ);
-      if (d < 4.5 && Math.abs(v.y - this.playerY) < 3.6 && d < bestDist) {
-        bestDist = d;
-        const specs = this.getVehicleSpecs(v);
-        best = {
-          id: v.id,
-          label: `Pilot ${v.name}`,
-          sublabel: `${specs.craftClass} · Fuel ${Math.round(v.fuel)}% · HP ${Math.round(v.hp)}/${v.maxHp}`,
-          kind: 'modular_vehicle',
-          actionCategory: 'use',
-          distance: d,
-          targetX: v.x,
-          targetY: v.y,
-          targetZ: v.z,
-        };
+      const vx = v.x - this.playerX;
+      const vz = v.z - this.playerZ;
+      const distSq = vx * vx + vz * vz;
+      if (distSq <= VEHICLE_INTERACT_RADIUS_SQ && Math.abs(v.y - this.playerY) < 3.6) {
+        const d = Math.sqrt(distSq);
+        if (d < bestDist) {
+          bestDist = d;
+          const specs = this.getVehicleSpecs(v);
+          best = {
+            id: v.id,
+            label: `Pilot ${v.name}`,
+            sublabel: `${specs.craftClass} · Fuel ${Math.round(v.fuel)}% · HP ${Math.round(v.hp)}/${v.maxHp}`,
+            kind: 'modular_vehicle',
+            actionCategory: 'use',
+            distance: d,
+            targetX: v.x,
+            targetY: v.y,
+            targetZ: v.z,
+          };
+        }
       }
     }
     // 8A2. Nearby Mounts & Creatures
@@ -12072,6 +12148,9 @@ export class GameEngine {
           highClearance:
             av.preset === 'donk' ||
             ((av.suspensionOffset ?? 0) >= 0.32 && (av.wheelScale ?? 1) >= 1.3),
+          hydraulicsDanceEnabled: Boolean(av.hydraulicsDanceEnabled),
+          hasSubwooferWall:
+            av.preset === 'chevy_tahoe' || av.preset === 'chevy_2000_sub',
           cargoUsed: av.cargoItems.reduce((s, c) => s + c.quantity, 0),
           cargoCapacity: specs.cargoCapacity,
         };
@@ -12449,7 +12528,7 @@ export class GameEngine {
       this.fpsSampleTimer += frameTime;
       if (this.fpsSampleTimer >= 1.0) {
         const avgMs = this.fpsSampleAccumMs / Math.max(1, this.fpsSampleFrames);
-        if (avgMs > 28.0) {
+        if (avgMs > 24.0) {
           this.consecutiveSlowSeconds += 1;
         } else {
           this.consecutiveSlowSeconds = 0;
@@ -12458,7 +12537,7 @@ export class GameEngine {
         this.fpsSampleFrames = 0;
         this.fpsSampleAccumMs = 0;
 
-        if (this.consecutiveSlowSeconds >= 4) {
+        if (this.consecutiveSlowSeconds >= 2) {
           this.consecutiveSlowSeconds = 0;
           this.autoFpsTier = Math.min(3, this.autoFpsTier + 1);
           this.applyGraphicsProfile();
@@ -12474,17 +12553,9 @@ export class GameEngine {
     }
 
     const frameStart = performance.now();
-    // Smooth clamped step per display frame (eliminates 0-step/2-step VSync micro-stutter on 60Hz+ screens)
+    // Single clamped simulation step per frame (prevents double-simulation CPU spiral when <45 FPS)
     const simDt = Math.max(frameTime, 0.001);
-    if (simDt > 0.022) {
-      const halfDt = simDt * 0.5;
-      this.updateSimulation(halfDt, frameStart);
-      if (performance.now() - frameStart < FREEZE_SHIELD.maxFrameMs) {
-        this.updateSimulation(halfDt, frameStart);
-      }
-    } else {
-      this.updateSimulation(simDt, frameStart);
-    }
+    this.updateSimulation(simDt, frameStart);
 
     // 3. Only run non-essential biome/vine/prop wake-ups if time remains in the Freeze-Shield frame budget
     if (performance.now() - frameStart < FREEZE_SHIELD.maxFrameMs) {
@@ -12791,7 +12862,7 @@ export class GameEngine {
         this.nocturnalActiveCount = nocturnalActiveCount;
 
         this.hudSyncTimer += dt;
-        const hudInterval = 0.18;
+        const hudInterval = 0.25;
         if (this.hudSyncTimer >= hudInterval) {
           this.hudSyncTimer = 0;
           this.emitHud();
@@ -12857,6 +12928,11 @@ export class GameEngine {
     const hdx = this.playerX - HILL_HOUSE_POS.x;
     const hdz = this.playerZ - HILL_HOUSE_POS.z;
     const nearHillTv = hdx * hdx + hdz * hdz < 2304; // 48m
+    if (this.smartTv.tvGlowLight) {
+      this.smartTv.tvGlowLight.visible = Boolean(
+        this.smartTv.power && (nearHillTv || this.tvModalOpen),
+      );
+    }
     if (this.smartTvUpdateTimer >= 0.1 && (nearHillTv || this.tvModalOpen || this.smartTv.power)) {
       const tvDt = this.smartTvUpdateTimer;
       this.smartTvUpdateTimer = 0;
@@ -13859,10 +13935,13 @@ export class GameEngine {
     root.traverse((obj) => {
       if (obj instanceof THREE.Mesh) {
         obj.geometry?.dispose();
-        if (Array.isArray(obj.material)) {
-          obj.material.forEach((m) => m.dispose());
-        } else {
-          obj.material?.dispose();
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) {
+          if (!m) continue;
+          const std = m as THREE.MeshStandardMaterial;
+          if (std.map) std.map.dispose();
+          if (std.emissiveMap) std.emissiveMap.dispose();
+          m.dispose();
         }
       }
     });
@@ -14870,6 +14949,9 @@ export class GameEngine {
     this.vehicleAltitudeVel = 0;
     this.vehicleAscendHold = false;
     this.vehicleDescendHold = false;
+    this.joyX = 0;
+    this.joyY = 0;
+    this.touchSprint = false;
     this.vehicleVisualPitch = 0;
     this.vehicleVisualRoll = 0;
     this.gamepadGas = 0;
@@ -15358,6 +15440,62 @@ export class GameEngine {
     this.emitHud();
   }
 
+  public setVehicleHydraulicsDance(
+    enabled: boolean,
+    vehicleId?: string,
+  ): void {
+    const targetId = vehicleId ?? this.activeVehicleId;
+    if (!targetId) return;
+    const av = this.vehicles.find((x) => x.id === targetId);
+    if (!av || !this.vehicleHasHydraulics(av)) return;
+    this.sound.unlock();
+    av.hydraulicsDanceEnabled = enabled;
+    let dance = this.vehicleDanceStates.get(av.id);
+    if (!dance) {
+      dance = createGarageDanceState();
+      this.vehicleDanceStates.set(av.id, dance);
+    }
+    dance.enabled = enabled;
+    if (!enabled) {
+      dance.bassPulse = 0;
+      const vh = this.vehicleMeshes.get(av.id);
+      if (vh) {
+        const isTahoeShow =
+          av.preset === 'chevy_tahoe' || av.preset === 'chevy_2000_sub';
+        const baseBodyY = isTahoeShow
+          ? Math.max(0.075, 0.38 + (av.suspensionOffset ?? -0.3))
+          : Math.max(0.26, 0.38 + (av.suspensionOffset ?? 0));
+        stepGarageHydraulicsDance(
+          {
+            bodyGroup: vh.chassisGroup,
+            subCones: vh.subwooferCones ?? [],
+          },
+          dance,
+          0,
+          baseBodyY,
+        );
+      }
+    } else if (this.isOldSchoolVehicle(av) && !av.trunkBassEnabled) {
+      av.trunkBassEnabled = true;
+    }
+    this.sound.playHydraulicHop(enabled ? 'hop' : 'tilt');
+    this.toast(
+      enabled
+        ? `${av.name}: Hydraulics Dance Mode ON!`
+        : `${av.name}: Hydraulics Dance Mode OFF`,
+      enabled ? 'discovery' : 'info',
+    );
+    this.emitHud();
+  }
+
+  public toggleVehicleHydraulicsDance(vehicleId?: string): void {
+    const targetId = vehicleId ?? this.activeVehicleId;
+    if (!targetId) return;
+    const av = this.vehicles.find((x) => x.id === targetId);
+    if (!av) return;
+    this.setVehicleHydraulicsDance(!av.hydraulicsDanceEnabled, targetId);
+  }
+
   public toggleVehicleSlamLift(vehicleId?: string): void {
     const targetId = vehicleId ?? this.activeVehicleId;
     if (!targetId) return;
@@ -15843,7 +15981,9 @@ export class GameEngine {
     }
 
     const maxDrawSq = this.effectiveMaxDrawDistance * this.effectiveMaxDrawDistance;
-    const detailDistSq = 120 * 120;
+    const detailDistSq = 55 * 55;
+    const underglowLightMaxSq = 20 * 20;
+    let activeUnderLightsShown = 0;
 
     for (const v of this.vehicles) {
       const specs = this.getVehicleSpecs(v);
@@ -15898,10 +16038,15 @@ export class GameEngine {
       handles.root.visible =
         isActive ||
         (this.currentDimension === 'overworld' && distVSq <= maxDrawSq);
-      if (!handles.root.visible) continue;
+      if (!handles.root.visible) {
+        if (handles.underglowLight) handles.underglowLight.visible = false;
+        continue;
+      }
 
       handles.root.position.set(v.x, v.y, v.z);
-      handles.root.rotation.order = 'YXZ';
+      if (handles.root.rotation.order !== 'YXZ') {
+        handles.root.rotation.order = 'YXZ';
+      }
       if (isActive) {
         handles.root.rotation.set(
           this.vehicleVisualPitch,
@@ -15929,7 +16074,10 @@ export class GameEngine {
         shadowDisc.scale.set(s, 1, s);
       }
 
-      if (!isActive && !autoJob && distVSq > detailDistSq) continue;
+      if (!isActive && !autoJob && distVSq > detailDistSq) {
+        if (handles.underglowLight) handles.underglowLight.visible = false;
+        continue;
+      }
 
       // Base chassis ride height + 4-corner hydraulic heave/pitch/roll + SLAB/Tahoe sub-bass rattle
       const isTahoeShow =
@@ -15954,7 +16102,22 @@ export class GameEngine {
             ? 0.25 + 0.25 * Math.max(0, Math.sin(this.elapsed * 6.5))
             : 0;
 
-      if (isActive && activeHasHyd) {
+      const danceState = this.vehicleDanceStates.get(v.id);
+      if (danceState && (danceState.enabled || v.hydraulicsDanceEnabled)) {
+        danceState.enabled = Boolean(v.hydraulicsDanceEnabled);
+        stepGarageHydraulicsDance(
+          {
+            bodyGroup: handles.chassisGroup,
+            subCones: handles.subwooferCones ?? [],
+          },
+          danceState,
+          dt,
+          baseBodyY,
+        );
+        for (const wc of handles.wheelCorners) {
+          wc.obj.position.y = wc.baseY;
+        }
+      } else if (isActive && activeHasHyd) {
         const { fl, fr, rl, rr } = this.hydCorners;
         const avgHeave = (fl + fr + rl + rr) * 0.25;
         const hydPitch = activeIsDonk ? 0 : ((rl + rr) - (fl + fr)) * 0.21;
@@ -16105,10 +16268,10 @@ export class GameEngine {
       }
 
       if (handles.rimLightMaterials && handles.rimLightMaterials.length > 0) {
-        const rimGlowHex = new THREE.Color(v.rimLightColor || v.underglowColor || '#38bdf8');
+        _scratchColorA.set(v.rimLightColor || v.underglowColor || '#38bdf8');
         for (const rMat of handles.rimLightMaterials) {
-          rMat.color.copy(rimGlowHex);
-          rMat.emissive.copy(rimGlowHex);
+          rMat.color.copy(_scratchColorA);
+          rMat.emissive.copy(_scratchColorA);
           rMat.emissiveIntensity = rimMode === 'off' ? 0.02 : rimLightFactor * 2.9;
         }
       }
@@ -16182,9 +16345,16 @@ export class GameEngine {
             ? rimLightFactor * 0.95
             : showBassPulse;
       if (handles.underglowLight) {
-        handles.underglowLight.intensity = underOn
-          ? 1.85 + underPulse * 3.1
-          : 0;
+        const allowPointLight =
+          underOn &&
+          (isActive || (distVSq <= underglowLightMaxSq && activeUnderLightsShown < 2));
+        handles.underglowLight.visible = allowPointLight;
+        if (allowPointLight) {
+          activeUnderLightsShown += 1;
+          handles.underglowLight.intensity = 1.85 + underPulse * 3.1;
+        } else {
+          handles.underglowLight.intensity = 0;
+        }
       }
       if (handles.underglowMeshes) {
         for (const gm of handles.underglowMeshes) {
@@ -17018,10 +17188,41 @@ export class GameEngine {
       }
       this.nearbyInteraction = this.findNearbyInteraction();
       this.updateCamera();
+    } else if (cmd === '/dance' || cmd === 'dance') {
+      if (this.activeVehicleId) {
+        this.toggleVehicleHydraulicsDance(this.activeVehicleId);
+      } else {
+        const nearestHyd = this.vehicles.find(
+          (v) =>
+            this.vehicleHasHydraulics(v) &&
+            Math.hypot(v.x - this.playerX, v.z - this.playerZ) < 12,
+        );
+        if (nearestHyd) {
+          this.toggleVehicleHydraulicsDance(nearestHyd.id);
+        } else {
+          this.toast('Enter or stand near a hydraulic vehicle to toggle Dance Mode.', 'warning');
+        }
+      }
+      return;
+    } else if (cmd === '/summon' || cmd === '/bring' || cmd === '/car') {
+      const carQuery = parts.slice(1).join(' ').trim() || 'chevy tahoe';
+      const resolved = resolveElevatorCarQuery(carQuery);
+      if (resolved) {
+        this.summonCarFromUndergroundElevator(resolved.id);
+      } else {
+        this.toast(`Could not find vault vehicle matching "${carQuery}".`, 'warning');
+      }
+      return;
+    } else if (!cmd.startsWith('/') && resolveElevatorCarQuery(cmdStr)) {
+      const resolved = resolveElevatorCarQuery(cmdStr);
+      if (resolved) {
+        this.summonCarFromUndergroundElevator(resolved.id);
+        return;
+      }
     } else if (!cmd.startsWith('/') && this.teleportToBiome(cmdStr)) {
       return;
     } else {
-      this.toast(`Unknown command: ${cmd}. Available: /fly, /tp <biome>, /god, /spawn, /weather, /time, /gravity, /erosion, /tame, /mount, /clear`, 'warning');
+      this.toast(`Unknown command: ${cmd}. Available: /fly, /tp <biome>, /god, /spawn, /summon <car>, /dance, /weather, /time, /gravity, /erosion, /tame, /mount, /clear`, 'warning');
     }
     this.emitHud();
   }
@@ -18034,14 +18235,33 @@ export class GameEngine {
     this.emitHud();
   }
 
+  private isNearElevatorTerminal(): boolean {
+    if (this.inSpacePlanet || this.currentDimension !== 'overworld') return false;
+    const tx = UNDERGROUND_ELEVATOR_KIOSK_POS.x - this.playerX;
+    const tz = UNDERGROUND_ELEVATOR_KIOSK_POS.z - this.playerZ;
+    const ty =
+      getTerrainHeight(
+        UNDERGROUND_ELEVATOR_KIOSK_POS.x,
+        UNDERGROUND_ELEVATOR_KIOSK_POS.z,
+      ) - this.playerY;
+    return tx * tx + ty * ty + tz * tz <= ELEVATOR_TERMINAL_INTERACT_RADIUS_SQ;
+  }
+
   public openUndergroundElevator(): void {
     this.sound.unlock();
+    if (this.activeVehicleId) {
+      this.exitVehicle();
+    }
     this.callbacks.onOpenStation('underground_elevator');
     this.emitHud();
   }
 
-  public summonCarFromUndergroundElevator(carId: string): void {
-    const car = ELEVATOR_EXOTIC_LIFT.bringCarToSurface(carId);
+  public summonCarFromUndergroundElevator(carIdOrQuery: string): void {
+    const car =
+      ELEVATOR_EXOTIC_LIFT.bringCarToSurface(carIdOrQuery) ??
+      ELEVATOR_EXOTIC_LIFT.bringCarToSurface(
+        resolveElevatorCarQuery(carIdOrQuery)?.id,
+      );
     if (!car) return;
 
     this.sound.unlock();
@@ -18076,10 +18296,11 @@ export class GameEngine {
       UNDERGROUND_ELEVATOR_POS.x,
       UNDERGROUND_ELEVATOR_POS.z,
     );
+    const vehiclePreset: VehiclePresetKey = car.preset ?? 'sports_car';
     const vehicleId = `exotic_lift_${car.id}_${Date.now().toString(36)}`;
     const spawned = createVehicleFromPreset(
       vehicleId,
-      'sports_car',
+      vehiclePreset,
       UNDERGROUND_ELEVATOR_POS.x,
       groundY - 5.8,
       UNDERGROUND_ELEVATOR_POS.z,
@@ -18090,8 +18311,13 @@ export class GameEngine {
     spawned.rimColor = car.rimColor;
     spawned.underglowColor = car.underglowColor;
     spawned.turboBoost = car.turboBoost;
-    spawned.suspensionOffset = -0.12;
-    spawned.wheelScale = 0.9;
+    if (car.livery) {
+      spawned.livery = { ...car.livery };
+    }
+    if (vehiclePreset === 'sports_car') {
+      spawned.suspensionOffset = -0.12;
+      spawned.wheelScale = 0.9;
+    }
 
     this.vehicles.push(spawned);
     const handles = createModularVehicleMesh(spawned);
@@ -18731,9 +18957,10 @@ export class GameEngine {
     clearTimeout(this.frameId);
     window.removeEventListener('resize', this.onResize);
     window.removeEventListener('keydown', this.onKeyDown);
-    window.removeEventListener('keyup', this.onKeyUp);
+    window.removeEventListener('keyup', this.onKeyUp, true);
     window.removeEventListener('wheel', this.onWheel);
     window.removeEventListener('blur', this.onWindowBlur);
+    window.removeEventListener('pagehide', this.onWindowBlur);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.renderer.domElement.removeEventListener('pointerdown', this.onCanvasPointerDown);
 

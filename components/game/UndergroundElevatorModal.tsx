@@ -19,16 +19,22 @@ import {
   ExoticCarClass,
   ExoticElevatorCar,
   PlayerHonorific,
+  resolveElevatorCarQuery,
   VAULT_COMPUTER_VOICE,
 } from '@/game/systems/undergroundElevator';
+import { ElevatorCarPreview3D } from './ElevatorCarPreview3D';
 
 interface UndergroundElevatorModalProps {
+  isOpen?: boolean;
+  selectedElevatorVehicleId?: string;
+  onSelectElevatorVehicle?: (carId: string) => void;
   onClose: () => void;
   onBringCarToSurface: (carId: string) => void;
 }
 
 const CLASS_FILTERS: Array<'All' | ExoticCarClass> = [
   'All',
+  'Show & Hydraulics',
   'Modern Exotic',
   'Modern Hypercar',
   'Ultra Rare',
@@ -37,12 +43,16 @@ const CLASS_FILTERS: Array<'All' | ExoticCarClass> = [
 const HONORIFIC_OPTIONS: PlayerHonorific[] = ['Sir', "Ma'am", 'Friend'];
 
 export function UndergroundElevatorModal({
+  isOpen = true,
+  selectedElevatorVehicleId,
+  onSelectElevatorVehicle,
   onClose,
   onBringCarToSurface,
 }: UndergroundElevatorModalProps) {
-  const [selectedId, setSelectedId] = useState<string>(
+  const [internalSelectedId, setInternalSelectedId] = useState<string>(
     ELEVATOR_EXOTIC_LIFT.selectedCarId || ELEVATOR_EXOTIC_LIFT.cars[0].id,
   );
+  const selectedId = selectedElevatorVehicleId || internalSelectedId;
   const [filterClass, setFilterClass] = useState<'All' | ExoticCarClass>('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [honorific, setHonorific] = useState<PlayerHonorific>(() =>
@@ -60,6 +70,11 @@ export function UndergroundElevatorModal({
     ELEVATOR_VOICE_COMPUTER.onApproachTerminal((line) => setAiMessage(line));
   }, []);
 
+  const queryResolvedCar = useMemo(() => {
+    const q = searchQuery.trim();
+    return q ? resolveElevatorCarQuery(q) : null;
+  }, [searchQuery]);
+
   const filteredCars = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return ELEVATOR_EXOTIC_LIFT.cars.filter((c) => {
@@ -68,10 +83,12 @@ export function UndergroundElevatorModal({
         !q ||
         c.name.toLowerCase().includes(q) ||
         c.rarity.toLowerCase().includes(q) ||
-        c.class.toLowerCase().includes(q);
+        c.class.toLowerCase().includes(q) ||
+        c.aliases?.some((a) => q.includes(a) || a.includes(q)) ||
+        (queryResolvedCar ? c.id === queryResolvedCar.id : false);
       return classOk && searchOk;
     });
-  }, [filterClass, searchQuery]);
+  }, [filterClass, searchQuery, queryResolvedCar]);
 
   const selectedCar: ExoticElevatorCar = useMemo(() => {
     return (
@@ -99,7 +116,8 @@ export function UndergroundElevatorModal({
 
   const handleSelectPreview = (car: ExoticElevatorCar) => {
     ELEVATOR_EXOTIC_LIFT.selectForPreview(car.id);
-    setSelectedId(car.id);
+    setInternalSelectedId(car.id);
+    onSelectElevatorVehicle?.(car.id);
     ELEVATOR_VOICE_COMPUTER.onPreviewCar(car.name, (line) => setAiMessage(line));
   };
 
@@ -110,6 +128,8 @@ export function UndergroundElevatorModal({
     onBringCarToSurface(selectedCar.id);
     onClose();
   };
+
+  if (!isOpen) return null;
 
   return (
     <div
@@ -128,7 +148,7 @@ export function UndergroundElevatorModal({
                 UNDERGROUND GARAGE ELEVATOR COMPUTER · VOICE AI
               </div>
               <h2 className="text-base sm:text-lg font-black text-white truncate">
-                Subterranean Exotic Vault Terminal (15 Cars)
+                Subterranean Exotic &amp; Show Vault Terminal ({ELEVATOR_EXOTIC_LIFT.cars.length} Cars)
               </h2>
             </div>
           </div>
@@ -186,7 +206,7 @@ export function UndergroundElevatorModal({
         {/* AI Computer Voice Prompt Banner */}
         <div className="px-4 sm:px-6 py-2.5 bg-cyan-950/40 border-b border-cyan-500/25 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
-            <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse shrink-0" />
+            <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 shrink-0" />
             <p className="text-xs sm:text-sm font-semibold text-cyan-100 truncate">
               “{aiMessage}”
             </p>
@@ -229,57 +249,17 @@ export function UndergroundElevatorModal({
                 </span>
               </div>
 
-              {/* Showroom Turntable & Live Stylized Exotic Preview */}
-              <div className="relative h-44 sm:h-52 flex flex-col items-center justify-center">
-                <div
-                  className="absolute bottom-6 w-72 h-10 rounded-full blur-2xl opacity-60 transition-colors duration-300"
-                  style={{ backgroundColor: selectedCar.underglowColor }}
-                />
-                <div className="absolute bottom-4 w-[82%] h-10 rounded-[100%] border-2 border-cyan-400/45 bg-slate-900/90 shadow-inner" />
-
-                <div className="relative z-10 w-[86%] max-w-[360px] flex flex-col items-center">
-                  <div className="w-full flex justify-start pl-4 -mb-2">
-                    <div
-                      className="w-12 h-2 rounded-sm shadow"
-                      style={{ backgroundColor: selectedCar.accentColor }}
-                    />
-                  </div>
-                  <div className="w-[54%] h-11 rounded-t-[42px] border-t-2 border-x-2 border-white/25 bg-gradient-to-b from-sky-200/35 to-slate-950/90 translate-y-2 shadow-inner" />
+              {/* Showroom Turntable & Live Interactive 3D Vehicle Preview */}
+              <div className="relative rounded-xl border border-cyan-500/25 bg-gradient-to-b from-slate-900/90 via-slate-950 to-black overflow-hidden">
+                <ElevatorCarPreview3D car={selectedCar} />
+                {selectedCar.livery && (
                   <div
-                    className="relative w-full h-14 rounded-tl-[26px] rounded-tr-[44px] rounded-bl-xl rounded-br-2xl border border-white/25 shadow-2xl flex items-center justify-between px-4 transition-colors duration-300"
-                    style={{
-                      background: `linear-gradient(135deg, ${selectedCar.paintColor} 0%, ${selectedCar.paintColor}dd 65%, ${selectedCar.accentColor} 100%)`,
-                    }}
+                    className="pointer-events-none absolute top-2.5 right-2.5 px-2.5 py-0.5 rounded border border-white/25 text-[10px] font-black tracking-wider text-white uppercase shadow"
+                    style={{ backgroundColor: selectedCar.livery.accentColor }}
                   >
-                    <div className="w-4 h-2 rounded-full bg-red-500 shadow-[0_0_12px_#ef4444]" />
-                    <div
-                      className="w-24 h-3.5 rounded-full opacity-85 border border-white/20"
-                      style={{ backgroundColor: selectedCar.accentColor }}
-                    />
-                    <div className="w-6 h-2 rounded-full bg-cyan-200 shadow-[0_0_14px_#67e8f9]" />
+                    {selectedCar.livery.channelName} · {selectedCar.livery.ctaText}
                   </div>
-                  <div className="w-[78%] flex items-center justify-between -mt-5 px-2">
-                    {[0, 1].map((w) => (
-                      <div
-                        key={w}
-                        className="w-14 h-14 rounded-full bg-stone-950 border-[4px] border-stone-800 flex items-center justify-center shadow-xl"
-                      >
-                        <div
-                          className="w-9 h-9 rounded-full border-2 border-dashed flex items-center justify-center"
-                          style={{
-                            borderColor: selectedCar.rimColor,
-                            backgroundColor: '#1e293b',
-                          }}
-                        >
-                          <div
-                            className="w-3.5 h-3.5 rounded-full"
-                            style={{ backgroundColor: selectedCar.accentColor }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                )}
               </div>
 
               <div className="mt-3">
@@ -341,11 +321,52 @@ export function UndergroundElevatorModal({
               <input
                 type="text"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Type a car name (Bugatti, Ferrari, McLaren...)"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSearchQuery(val);
+                  const matched = resolveElevatorCarQuery(val);
+                  if (matched) {
+                    setFilterClass('All');
+                    setInternalSelectedId(matched.id);
+                    onSelectElevatorVehicle?.(matched.id);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && queryResolvedCar) {
+                    e.preventDefault();
+                    ELEVATOR_VOICE_COMPUTER.onConfirmBringUp(queryResolvedCar.name, (line) =>
+                      setAiMessage(line),
+                    );
+                    onBringCarToSurface(queryResolvedCar.id);
+                    onClose();
+                  }
+                }}
+                placeholder="Type car or command (Chevy Tahoe, Savage Life, Cadillac, Bugatti...)"
                 className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-white/15 text-xs sm:text-sm text-white placeholder:text-stone-500 focus:outline-none focus:border-cyan-400"
               />
             </div>
+
+            {queryResolvedCar && (
+              <button
+                type="button"
+                onClick={() => {
+                  handleSelectPreview(queryResolvedCar);
+                  ELEVATOR_VOICE_COMPUTER.onConfirmBringUp(queryResolvedCar.name, (line) =>
+                    setAiMessage(line),
+                  );
+                  onBringCarToSurface(queryResolvedCar.id);
+                  onClose();
+                }}
+                className="w-full px-3 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 text-left text-[11px] font-bold text-emerald-200 flex items-center justify-between gap-2 transition"
+              >
+                <span className="truncate">
+                  Instant Match: Bring up {queryResolvedCar.name}
+                </span>
+                <span className="text-[10px] uppercase tracking-wider text-emerald-300 shrink-0">
+                  Press Enter
+                </span>
+              </button>
+            )}
 
             <div className="flex flex-wrap gap-1.5">
               {CLASS_FILTERS.map((cls) => (

@@ -5,9 +5,142 @@ export type ElevatorLiftState =
   | 'READY';
 
 export type ExoticCarClass =
+  | 'Show & Hydraulics'
   | 'Modern Exotic'
   | 'Modern Hypercar'
   | 'Ultra Rare';
+
+export interface GarageVehicleLivery {
+  channelName: string;
+  ctaText: string;
+  accentColor: string;
+  bodyColor: string;
+}
+
+export interface GarageVehicleSpec {
+  id: string;
+  name: string;
+  aliases: string[];
+  modelType: 'cadillac' | 'chevy_tahoe' | 'lowrider' | 'donk' | 'slab' | 'sports';
+  supportsHydraulics: boolean;
+  hasSubwooferWall?: boolean;
+  livery?: GarageVehicleLivery;
+}
+
+export const GARAGE_VEHICLES: GarageVehicleSpec[] = [
+  {
+    id: 'cadillac-coupe',
+    name: 'Cadillac Coupe DeVille',
+    aliases: ['cadillac', 'coupe', 'deville', 'caddy', 'coupeville'],
+    modelType: 'cadillac',
+    supportsHydraulics: true,
+  },
+  {
+    id: 'chevy-tahoe-subwoofer',
+    name: 'Chevy Tahoe',
+    aliases: [
+      'chevy tahoe',
+      'tahoe',
+      'chevrolet tahoe',
+      'subwoofer tahoe',
+      'bass tahoe',
+      'savage life',
+      'savage life gaming',
+    ],
+    modelType: 'chevy_tahoe',
+    supportsHydraulics: true,
+    hasSubwooferWall: true,
+    livery: {
+      channelName: 'SAVAGE LIFE GAMING',
+      ctaText: 'SUBSCRIBE',
+      accentColor: '#ff2a55',
+      bodyColor: '#111318',
+    },
+  },
+];
+
+export function resolveGarageVehicleQuery(rawInput: string): GarageVehicleSpec | null {
+  const normalized = rawInput
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return null;
+
+  // 1. Exact name or alias match
+  for (const car of GARAGE_VEHICLES) {
+    if (car.name.toLowerCase() === normalized || car.aliases.includes(normalized)) {
+      return car;
+    }
+  }
+
+  // 2. Token / substring match (handles "bring up chevy tahoe" or "tahoe sub wall")
+  for (const car of GARAGE_VEHICLES) {
+    if (car.name.toLowerCase().includes(normalized) || normalized.includes(car.name.toLowerCase())) {
+      return car;
+    }
+    if (car.aliases.some((alias) => normalized.includes(alias) || alias.includes(normalized))) {
+      return car;
+    }
+  }
+
+  return null;
+}
+
+export interface GarageDanceState {
+  enabled: boolean;
+  phase: number;
+  bassPulse: number;
+}
+
+export function createGarageDanceState(): GarageDanceState {
+  return {
+    enabled: false,
+    phase: 0,
+    bassPulse: 0,
+  };
+}
+
+export function stepGarageHydraulicsDance(
+  rig: {
+    bodyGroup: { position: { y: number }; rotation: { x: number; z: number } };
+    subCones: Array<{ position: { z: number }; userData?: Record<string, unknown> }>;
+  },
+  dance: GarageDanceState,
+  dt: number,
+  baseBodyY = 0,
+): void {
+  if (!dance.enabled) {
+    // Cleanly reset transforms and skip work when dance mode is off
+    rig.bodyGroup.position.y = baseBodyY;
+    rig.bodyGroup.rotation.z = 0;
+    rig.bodyGroup.rotation.x = 0;
+    return;
+  }
+
+  dance.phase += dt * 7.5;
+  const hop = Math.abs(Math.sin(dance.phase)) * 0.18;
+  const tilt = Math.sin(dance.phase * 0.5) * 0.11;
+  const pitch = Math.cos(dance.phase) * 0.08;
+
+  rig.bodyGroup.position.y = baseBodyY + hop;
+  rig.bodyGroup.rotation.z = tilt;
+  rig.bodyGroup.rotation.x = pitch;
+
+  // Pulse behind-driver subwoofer cones when bass is playing
+  dance.bassPulse = Math.sin(dance.phase * 2) * 0.5 + 0.5;
+  for (let i = 0; i < rig.subCones.length; i++) {
+    const cone = rig.subCones[i];
+    const baseZ =
+      (cone.userData && typeof cone.userData.baseZ === 'number'
+        ? cone.userData.baseZ
+        : 0.36);
+    if (cone.userData) {
+      cone.userData.baseZ = baseZ;
+    }
+    cone.position.z = baseZ + dance.bassPulse * 0.045;
+  }
+}
 
 export interface ExoticElevatorCar {
   id: string;
@@ -24,14 +157,74 @@ export interface ExoticElevatorCar {
   engine: string;
   turboBoost: number;
   tagline: string;
+  preset?: 'sports_car' | 'chevy_tahoe' | 'cadillac_coupe_deville';
+  aliases?: string[];
+  supportsHydraulics?: boolean;
+  hasSubwooferWall?: boolean;
+  livery?: GarageVehicleLivery;
 }
 
 export const ELEVATOR_EXOTIC_LIFT = {
-  selectedCarId: 'mclaren_720s_lbw',
+  selectedCarId: 'chevy-tahoe-subwoofer',
   activeSurfaceCarId: null as string | null,
   liftState: 'IDLE' as ElevatorLiftState,
 
   cars: [
+    {
+      id: 'chevy-tahoe-subwoofer',
+      name: 'Chevy Tahoe',
+      rarity: 'Savage Life Show Truck',
+      class: 'Show & Hydraulics',
+      paintColor: '#111318',
+      accentColor: '#ff2a55',
+      rimColor: '#f8fafc',
+      underglowColor: '#38bdf8',
+      horsepower: 880,
+      zeroToSixty: '3.4s',
+      topSpeedMph: 165,
+      engine: '6.2L Supercharged V8 · 4-Subwoofer Wall (No Backseat)',
+      turboBoost: 1.56,
+      preset: 'chevy_tahoe',
+      aliases: [
+        'chevy tahoe',
+        'tahoe',
+        'chevrolet tahoe',
+        'subwoofer tahoe',
+        'bass tahoe',
+        'savage life',
+        'savage life gaming',
+      ],
+      supportsHydraulics: true,
+      hasSubwooferWall: true,
+      livery: {
+        channelName: 'SAVAGE LIFE GAMING',
+        ctaText: 'SUBSCRIBE',
+        accentColor: '#ff2a55',
+        bodyColor: '#111318',
+      },
+      tagline:
+        '3" slammed show Tahoe on 40" Forgiato 44 auto-spinners, Savage Life Gaming SUBSCRIBE livery, undercarriage glow & behind-driver sub wall (no backseat).',
+    },
+    {
+      id: 'cadillac-coupe',
+      name: 'Cadillac Coupe DeVille',
+      rarity: 'Droptop Show Classic',
+      class: 'Show & Hydraulics',
+      paintColor: '#f8fafc',
+      accentColor: '#facc15',
+      rimColor: '#f8fafc',
+      underglowColor: '#38bdf8',
+      horsepower: 620,
+      zeroToSixty: '4.1s',
+      topSpeedMph: 155,
+      engine: '472 cu in Big-Block V8 · Airbag & Coil-Over Hydraulics',
+      turboBoost: 1.44,
+      preset: 'cadillac_coupe_deville',
+      aliases: ['cadillac', 'coupe', 'deville', 'caddy', 'coupeville'],
+      supportsHydraulics: true,
+      tagline:
+        'Pearl-white convertible Coupe DeVille on 13" chrome spinners with power droptop and full airbag + coil-over hydraulics.',
+    },
     {
       id: 'mclaren_720s_lbw',
       name: 'McLaren 720S LB-Works',
@@ -274,8 +467,10 @@ export const ELEVATOR_EXOTIC_LIFT = {
     },
   ] as ExoticElevatorCar[],
 
-  selectForPreview(carId: string): ExoticElevatorCar | null {
-    const car = this.cars.find((c) => c.id === carId);
+  selectForPreview(carIdOrQuery: string): ExoticElevatorCar | null {
+    const car =
+      this.cars.find((c) => c.id === carIdOrQuery) ??
+      resolveElevatorCarQuery(carIdOrQuery);
     if (!car) return null;
     this.selectedCarId = car.id;
     this.liftState = 'PREVIEWING';
@@ -283,11 +478,13 @@ export const ELEVATOR_EXOTIC_LIFT = {
   },
 
   bringCarToSurface(
-    carId?: string,
+    carIdOrQuery?: string,
     onComplete: ((car: ExoticElevatorCar) => void) | null = null,
   ): ExoticElevatorCar | null {
-    const targetId = carId ?? this.selectedCarId;
-    const car = this.cars.find((c) => c.id === targetId);
+    const targetId = carIdOrQuery ?? this.selectedCarId;
+    const car =
+      this.cars.find((c) => c.id === targetId) ??
+      resolveElevatorCarQuery(targetId);
     if (!car) return null;
 
     this.selectedCarId = car.id;
@@ -305,6 +502,46 @@ export const ELEVATOR_EXOTIC_LIFT = {
     this.liftState = 'READY';
   },
 };
+
+export function resolveElevatorCarQuery(rawInput: string): ExoticElevatorCar | null {
+  const normalized = rawInput
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return null;
+
+  // 1. Check garage show/hydraulics alias resolver first (handles "bring up chevy tahoe", "tahoe sub wall", "savage life", "cadillac", etc.)
+  const garageMatch = resolveGarageVehicleQuery(normalized);
+  if (garageMatch) {
+    const found = ELEVATOR_EXOTIC_LIFT.cars.find((c) => c.id === garageMatch.id);
+    if (found) return found;
+  }
+
+  // 2. Exact id / name / alias match across full vault roster
+  for (const car of ELEVATOR_EXOTIC_LIFT.cars) {
+    if (
+      car.id.toLowerCase() === normalized ||
+      car.name.toLowerCase() === normalized ||
+      car.aliases?.includes(normalized)
+    ) {
+      return car;
+    }
+  }
+
+  // 3. Token / substring match across full vault roster
+  for (const car of ELEVATOR_EXOTIC_LIFT.cars) {
+    if (
+      car.name.toLowerCase().includes(normalized) ||
+      normalized.includes(car.name.toLowerCase()) ||
+      car.aliases?.some((a) => normalized.includes(a) || a.includes(normalized))
+    ) {
+      return car;
+    }
+  }
+
+  return null;
+}
 
 export type PlayerHonorific = 'Sir' | "Ma'am" | 'Friend';
 

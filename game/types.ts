@@ -379,6 +379,13 @@ export interface ModularVehicleData {
   underglowEnabled?: boolean;
   rimLightMode?: 'off' | 'solid' | 'blink' | 'music';
   rimLightColor?: string;
+  hydraulicsDanceEnabled?: boolean;
+  livery?: {
+    channelName: string;
+    ctaText: string;
+    accentColor: string;
+    bodyColor?: string;
+  };
   x: number;
   y: number;
   z: number;
@@ -468,6 +475,8 @@ export interface ActiveVehicleHudState {
   underglowColor?: string;
   slammedStance?: boolean;
   liftHeightInches?: number;
+  hydraulicsDanceEnabled?: boolean;
+  hasSubwooferWall?: boolean;
   highClearance: boolean;
   cargoUsed: number;
   cargoCapacity: number;

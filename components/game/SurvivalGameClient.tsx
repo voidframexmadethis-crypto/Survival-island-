@@ -162,6 +162,9 @@ export function SurvivalGameClient() {
   const [activeStationStructureId, setActiveStationStructureId] = useState<
     string | undefined
   >(undefined);
+  const [elevatorTargetVehicleId, setElevatorTargetVehicleId] = useState<string | undefined>(
+    undefined,
+  );
   const [settings, setSettings] = useState<GameSettings>(DEFAULT_SETTINGS);
   const [saveSlots, setSaveSlots] = useState<SaveSlotSummary[]>([]);
   const [latestSave, setLatestSave] = useState<SaveSlotSummary | null>(null);
@@ -330,6 +333,7 @@ export function SurvivalGameClient() {
     let animId = 0;
     const prevButtonStates = new Map<number, boolean>();
     let wasGamepadActive = false;
+    let wasGpStickNonZero = false;
 
     const hasConnectedGamepad = () => {
       const gps = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -398,18 +402,24 @@ export function SurvivalGameClient() {
           });
           engine.setAiming(false);
           engine.setGamepadDriveState(0, 0, false);
-          if (lastGpKnobRef.current.x !== 0 || lastGpKnobRef.current.y !== 0) {
+          if (wasGpStickNonZero || lastGpKnobRef.current.x !== 0 || lastGpKnobRef.current.y !== 0) {
+            wasGpStickNonZero = false;
             lastGpKnobRef.current = { x: 0, y: 0 };
             touchControlsRef.current?.setGamepadKnobOffset(0, 0);
             engine.setTouchJoystick(0, 0);
           }
         } else {
-          // Left Analog Stick (axes[0], axes[1]) with 0.15 deadzone
+          // Left Analog Stick (axes[0], axes[1]) with radial deadzone — never clobber touch when gamepad is idle
           const rawLx = activeGp.axes[0] ?? 0;
           const rawLy = activeGp.axes[1] ?? 0;
-          const lx = Math.abs(rawLx) > 0.15 ? rawLx : 0;
-          const ly = Math.abs(rawLy) > 0.15 ? rawLy : 0;
-          engine.setTouchJoystick(lx, -ly);
+          const lMag = Math.hypot(rawLx, rawLy);
+          const lx = lMag > 0.18 ? rawLx : 0;
+          const ly = lMag > 0.18 ? rawLy : 0;
+          const isGpStickNowNonZero = lx !== 0 || ly !== 0;
+          if (isGpStickNowNonZero || wasGpStickNonZero) {
+            engine.setTouchJoystick(lx, -ly);
+          }
+          wasGpStickNonZero = isGpStickNowNonZero;
 
           const knobX = lx * 48;
           const knobY = ly * 48;
@@ -425,8 +435,9 @@ export function SurvivalGameClient() {
           // Right Analog Stick (axes[2], axes[3]) smooth 360° camera look
           const rawRx = activeGp.axes[2] ?? 0;
           const rawRy = activeGp.axes[3] ?? 0;
-          const rx = Math.abs(rawRx) > 0.15 ? rawRx : 0;
-          const ry = Math.abs(rawRy) > 0.15 ? rawRy : 0;
+          const rMag = Math.hypot(rawRx, rawRy);
+          const rx = rMag > 0.18 ? rawRx : 0;
+          const ry = rMag > 0.18 ? rawRy : 0;
           if (rx !== 0 || ry !== 0) {
             engine.addCameraLookDelta(rx * 16, ry * 16, false);
           }
@@ -476,7 +487,10 @@ export function SurvivalGameClient() {
         }
       } else if (wasGamepadActive) {
         wasGamepadActive = false;
-        engine?.setTouchJoystick(0, 0);
+        if (wasGpStickNonZero) {
+          wasGpStickNonZero = false;
+          engine?.setTouchJoystick(0, 0);
+        }
         engine?.setAiming(false);
         engine?.setGamepadDriveState(0, 0, false);
         lastGpKnobRef.current = { x: 0, y: 0 };
@@ -546,6 +560,27 @@ export function SurvivalGameClient() {
       },
       onToast: pushToast,
       onOpenStation: (station, structureId) => {
+        if (station === 'underground_elevator') {
+          // Strictly clears any car menu and opens ONLY the elevator computer
+          setActiveStationStructureId(structureId);
+          setActiveModal('underground_elevator');
+          engine.setMode('paused');
+          return;
+        }
+        if (
+          station === 'vehicles' ||
+          station === 'car_radio' ||
+          station === 'vehicle_cargo'
+        ) {
+          // Block car menus if the elevator computer is currently active
+          setActiveModal((prev) => {
+            if (prev === 'underground_elevator') return prev;
+            setActiveStationStructureId(structureId);
+            engine.setMode('paused');
+            return station;
+          });
+          return;
+        }
         if (station === 'tv') {
           setTvPipDismissed(false);
           setTvViewMode('inline');
@@ -617,7 +652,14 @@ export function SurvivalGameClient() {
     }
   }, [screen, activeModal]);
 
-  // Reset camera look pointer & joysticks whenever window loses focus or tab hides
+  useEffect(() => {
+    if (stickMinimized) {
+      touchControlsRef.current?.resetTouchJoystick();
+      engineRef.current?.setTouchJoystick(0, 0);
+    }
+  }, [stickMinimized]);
+
+  // Reset camera look pointer & joysticks whenever window loses focus, tab hides, or pointer ends globally
   useEffect(() => {
     const clearAllSticks = () => {
       lookPointerId.current = null;
@@ -625,16 +667,49 @@ export function SurvivalGameClient() {
       touchControlsRef.current?.resetTouchJoystick();
       touchControlsRef.current?.setGamepadKnobOffset(0, 0);
       engineRef.current?.setTouchJoystick(0, 0);
+      engineRef.current?.setTouchFlyAscend(false);
+      engineRef.current?.setTouchFlyDescend(false);
       engineRef.current?.setGamepadDriveState(0, 0, false);
       engineRef.current?.setAiming(false);
+    };
+    const onGlobalPointerEnd = (e: PointerEvent) => {
+      if (lookPointerId.current === e.pointerId) {
+        lookPointerId.current = null;
+      }
+    };
+    const onGlobalPointerMove = (e: PointerEvent) => {
+      if (
+        lookPointerId.current === e.pointerId &&
+        e.pointerType === 'mouse' &&
+        e.buttons === 0
+      ) {
+        lookPointerId.current = null;
+      }
+    };
+    const onGlobalTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length === 0) {
+        lookPointerId.current = null;
+      }
     };
     const onVisibility = () => {
       if (document.hidden) clearAllSticks();
     };
     window.addEventListener('blur', clearAllSticks);
+    window.addEventListener('pagehide', clearAllSticks);
+    window.addEventListener('pointerup', onGlobalPointerEnd, true);
+    window.addEventListener('pointercancel', onGlobalPointerEnd, true);
+    window.addEventListener('pointermove', onGlobalPointerMove, true);
+    window.addEventListener('touchend', onGlobalTouchEnd, true);
+    window.addEventListener('touchcancel', onGlobalTouchEnd, true);
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       window.removeEventListener('blur', clearAllSticks);
+      window.removeEventListener('pagehide', clearAllSticks);
+      window.removeEventListener('pointerup', onGlobalPointerEnd, true);
+      window.removeEventListener('pointercancel', onGlobalPointerEnd, true);
+      window.removeEventListener('pointermove', onGlobalPointerMove, true);
+      window.removeEventListener('touchend', onGlobalTouchEnd, true);
+      window.removeEventListener('touchcancel', onGlobalTouchEnd, true);
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
@@ -831,21 +906,56 @@ export function SurvivalGameClient() {
     engineRef.current?.updateSettings(next);
   };
 
-  const openModal = useCallback((modal: ActiveModal, structureId?: string) => {
-    if (modal === 'tv') {
-      setTvPipDismissed(false);
-      setTvViewMode('inline');
-    }
-    if (modal === 'ecosystem_journal' && engineRef.current) {
-      setEcosystemSnapshot({ ...engineRef.current.ecosystem });
-    }
-    if (modal === 'dragon_sanctuary' && engineRef.current) {
-      setDragonsSnapshot(engineRef.current.getDragons());
-    }
+  const openElevatorComputer = useCallback((structureId?: string) => {
+    // Strictly clears any car menu and opens ONLY the elevator computer
     setActiveStationStructureId(structureId);
-    setActiveModal(modal);
+    setActiveModal('underground_elevator');
     engineRef.current?.setMode('paused');
   }, []);
+
+  const openVehicleMenu = useCallback(
+    (menu: 'vehicles' | 'car_radio' | 'vehicle_cargo', structureId?: string) => {
+      // Block car menus if the elevator computer is currently active
+      setActiveModal((prev) => {
+        if (prev === 'underground_elevator') return prev;
+        setActiveStationStructureId(structureId);
+        engineRef.current?.setMode('paused');
+        return menu;
+      });
+    },
+    [],
+  );
+
+  const openModal = useCallback(
+    (modal: ActiveModal, structureId?: string) => {
+      if (modal === 'underground_elevator') {
+        openElevatorComputer(structureId);
+        return;
+      }
+      if (
+        modal === 'vehicles' ||
+        modal === 'car_radio' ||
+        modal === 'vehicle_cargo'
+      ) {
+        openVehicleMenu(modal, structureId);
+        return;
+      }
+      if (modal === 'tv') {
+        setTvPipDismissed(false);
+        setTvViewMode('inline');
+      }
+      if (modal === 'ecosystem_journal' && engineRef.current) {
+        setEcosystemSnapshot({ ...engineRef.current.ecosystem });
+      }
+      if (modal === 'dragon_sanctuary' && engineRef.current) {
+        setDragonsSnapshot(engineRef.current.getDragons());
+      }
+      setActiveStationStructureId(structureId);
+      setActiveModal(modal);
+      engineRef.current?.setMode('paused');
+    },
+    [openElevatorComputer, openVehicleMenu],
+  );
 
   const handleTouchJoystickMove = useCallback((x: number, y: number) => {
     engineRef.current?.setTouchJoystick(x, y);
@@ -854,6 +964,7 @@ export function SurvivalGameClient() {
     engineRef.current?.addCameraLookDelta(dx, dy);
   }, []);
   const handleTouchAction = useCallback(() => {
+    if (activeModalRef.current !== null) return;
     engineRef.current?.triggerPrimaryAction();
   }, []);
   const handleTouchReload = useCallback(() => {
@@ -893,13 +1004,15 @@ export function SurvivalGameClient() {
     openModal('place');
   }, [openModal]);
 
-  const closeModal = () => {
+  const closeAllModals = useCallback(() => {
     setActiveModal(null);
     setActiveStationStructureId(undefined);
     if (screen === 'playing') {
       engineRef.current?.setMode('playing');
     }
-  };
+  }, [screen]);
+
+  const closeModal = closeAllModals;
 
   const showTouchControls =
     screen === 'playing' &&
@@ -1026,6 +1139,7 @@ export function SurvivalGameClient() {
               duration < 320 &&
               screen === 'playing' &&
               !activeModal &&
+              !activeModalRef.current &&
               !hud?.cinematicActive
             ) {
               engineRef.current?.triggerPrimaryAction();
@@ -1833,8 +1947,8 @@ export function SurvivalGameClient() {
               </div>
             )}
 
-            {/* Active Vehicle Driving HUD */}
-            {hud.activeVehicle && !activeModal && (
+            {/* Active Vehicle Driving HUD — Never renders when Elevator Computer or another modal is open */}
+            {hud.activeVehicle && !activeModal && activeModal !== 'underground_elevator' && (
               <div
                 id="car-hydraulics-deck"
                 onPointerDown={(e) => e.stopPropagation()}
@@ -2189,6 +2303,19 @@ export function SurvivalGameClient() {
                           >
                             Coil Bounce
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.toggleVehicleHydraulicsDance()}
+                            className={`min-h-[30px] px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
+                              hud.activeVehicle.hydraulicsDanceEnabled
+                                ? 'bg-pink-500 border-pink-200 text-white'
+                                : 'bg-stone-900 border-pink-400/50 text-pink-200 hover:bg-pink-950/60'
+                            }`}
+                          >
+                            {hud.activeVehicle.hydraulicsDanceEnabled
+                              ? 'Dance Mode ON'
+                              : 'Dance Mode'}
+                          </button>
                         </>
                       ) : hud.activeVehicle.hydraulicStyle === 'up_down_side' ? (
                         <>
@@ -2291,6 +2418,19 @@ export function SurvivalGameClient() {
                             }`}
                           >
                             Lock [X]
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.toggleVehicleHydraulicsDance()}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
+                              hud.activeVehicle.hydraulicsDanceEnabled
+                                ? 'bg-pink-500 border-pink-200 text-white'
+                                : 'bg-stone-900 border-pink-400/50 text-pink-200 hover:bg-pink-950/60'
+                            }`}
+                          >
+                            {hud.activeVehicle.hydraulicsDanceEnabled
+                              ? 'Dance Mode ON'
+                              : 'Dance Mode'}
                           </button>
                         </>
                       )}
@@ -3342,16 +3482,26 @@ export function SurvivalGameClient() {
         />
       )}
 
+      {/* Car Elevator Computer — Completely isolated from car hydraulics/top & car menus */}
       {activeModal === 'underground_elevator' && hud && (
         <UndergroundElevatorModal
-          onClose={closeModal}
+          isOpen={true}
+          selectedElevatorVehicleId={elevatorTargetVehicleId}
+          onSelectElevatorVehicle={(id) => {
+            // Only sets which car the lift moves; NEVER opens a car menu
+            setElevatorTargetVehicleId(id);
+          }}
+          onClose={closeAllModals}
           onBringCarToSurface={(carId) => {
             engineRef.current?.summonCarFromUndergroundElevator(carId);
           }}
         />
       )}
 
-      {activeModal === 'car_radio' && hud?.activeVehicle && (
+      {/* Car Radio & Vehicle Menus — Never render when elevator computer is open */}
+      {activeModal === 'car_radio' &&
+        hud?.activeVehicle &&
+        activeModal !== ('underground_elevator' as ActiveModal) && (
         <CarRadioModal
           car={{
             id: hud.activeVehicle.id,

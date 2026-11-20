@@ -17,6 +17,10 @@ export const HILL_HOUSE_Y = 8.4;
 export const VEHICLE_GARAGE_POS = { x: -52, z: 152 };
 export const VEHICLE_GARAGE_Y = 3.25;
 export const UNDERGROUND_ELEVATOR_POS = { x: -34, z: 152 };
+export const UNDERGROUND_ELEVATOR_KIOSK_POS = {
+  x: UNDERGROUND_ELEVATOR_POS.x - 5.45,
+  z: UNDERGROUND_ELEVATOR_POS.z + 4.1,
+};
 export const SATURN_ROCKET_POS = { x: -18, z: 164 };
 export const ISLAND_UFO_POS = { x: 40, z: -35 };
 export const SNOWY_WOODLAND_POS = { x: -42, z: -124 };

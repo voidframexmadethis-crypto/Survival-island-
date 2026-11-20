@@ -4,6 +4,27 @@ import {
   ModularVehicleData,
   VehicleModulePlacement,
 } from '../types';
+import { GarageVehicleSpec } from '../systems/undergroundElevator';
+import { createVehicleFromPreset } from '../systems/modularVehicle';
+import {
+  buildRealLifeCarRig,
+  buildSilhouetteGeometry,
+  GarageCarVisualConfig,
+  normalizeCarArchetype,
+  RealLifeCarRig,
+  VehicleArchetype,
+} from './realLifeCarRig';
+
+export {
+  buildRealLifeCarRig,
+  buildSilhouetteGeometry,
+  normalizeCarArchetype,
+};
+export type {
+  GarageCarVisualConfig,
+  RealLifeCarRig,
+  VehicleArchetype,
+};
 
 export interface KineticMeshHandles {
   root: THREE.Group;
@@ -1469,6 +1490,57 @@ function buildCustomStreetShowCar(
   }
 }
 
+export function createSavageLifeLiveryTexture(
+  channelName: string,
+  ctaText: string,
+  accentColor: string,
+  bodyColor = '#12151c',
+): THREE.CanvasTexture | null {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  // Base dark clearcoat background
+  ctx.fillStyle = bodyColor;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Racing / channel art accent stripes
+  ctx.fillStyle = accentColor;
+  ctx.fillRect(0, 340, canvas.width, 28);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 376, canvas.width, 10);
+
+  // Channel Name
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '900 68px Impact, Arial Black, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(channelName.toUpperCase(), canvas.width / 2, 165);
+
+  // Bold SUBSCRIBE callout badge
+  ctx.fillStyle = accentColor;
+  ctx.fillRect(canvas.width / 2 - 230, 205, 460, 96);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '900 58px Impact, Arial Black, sans-serif';
+  ctx.fillText(ctaText.toUpperCase(), canvas.width / 2, 274);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+export interface BuiltVehicleRig {
+  root: THREE.Group;
+  bodyGroup: THREE.Group;
+  wheels: THREE.Object3D[];
+  subCones: THREE.Mesh[];
+  dispose: () => void;
+}
+
 function buildChevyTahoeShowSuv(
   vehicle: ModularVehicleData,
   handles: ModularVehicleMeshHandles,
@@ -1477,8 +1549,20 @@ function buildChevyTahoeShowSuv(
   const wheelScale = vehicle.wheelScale ?? 1.42; // 40-inch Forgiato show wheels
   const susp = vehicle.suspensionOffset ?? -0.3; // Slammed 3 inches off the ground (0.08m)
 
+  const livery = vehicle.livery ?? (
+    vehicle.preset === 'chevy_tahoe'
+      ? {
+          channelName: 'SAVAGE LIFE GAMING',
+          ctaText: 'SUBSCRIBE',
+          accentColor: '#ff2a55',
+          bodyColor: vehicle.paintColor || '#111318',
+        }
+      : undefined
+  );
+  const paintColor = livery?.bodyColor || vehicle.paintColor || '#111318';
+
   const paintMat = new THREE.MeshPhysicalMaterial({
-    color: vehicle.paintColor || '#111827',
+    color: paintColor,
     metalness: 0.72,
     roughness: 0.14,
     clearcoat: 1.0,
@@ -1612,7 +1696,38 @@ function buildChevyTahoeShowSuv(
   rearLowerValance.position.set(0, 0.22, rearZ + 0.08);
   handles.chassisGroup.add(rearInnerTub, rearLowerValance);
 
-  // 4. MASSIVE PORTED SUBWOOFER WALL DIRECTLY BEHIND THE DRIVER SEAT!
+  // Exterior Side "SAVAGE LIFE GAMING" / "SUBSCRIBE" Livery Panels on Left & Right Body Sides
+  if (livery) {
+    const liveryTex = createSavageLifeLiveryTexture(
+      livery.channelName,
+      livery.ctaText,
+      livery.accentColor,
+      '#12151c',
+    );
+    const liveryMat = liveryTex
+      ? new THREE.MeshStandardMaterial({
+          map: liveryTex,
+          roughness: 0.22,
+          metalness: 0.2,
+          polygonOffset: true,
+          polygonOffsetFactor: -1,
+        })
+      : new THREE.MeshStandardMaterial({
+          color: livery.accentColor,
+          roughness: 0.3,
+          metalness: 0.3,
+        });
+    const liveryGeo = new THREE.PlaneGeometry(1.74, 0.44);
+    ([-1, 1] as const).forEach((side) => {
+      const decalPanel = new THREE.Mesh(liveryGeo, liveryMat);
+      decalPanel.position.set(side * 1.06, 0.56, -1.48);
+      decalPanel.rotation.y = side > 0 ? Math.PI / 2 : -Math.PI / 2;
+      decalPanel.userData.noShadowCast = true;
+      handles.chassisGroup.add(decalPanel);
+    });
+  }
+
+  // 4. MASSIVE PORTED SUBWOOFER WALL DIRECTLY BEHIND THE DRIVER SEAT (NO BACKSEAT)!
   const subGlowColor = new THREE.Color(vehicle.rimLightColor || vehicle.underglowColor || '#38bdf8');
   const subGlowMat = new THREE.MeshStandardMaterial({
     color: subGlowColor,
@@ -2235,6 +2350,8 @@ export function createModularVehicleMesh(
     vehicle.preset === 'cadillac_coupe_deville'
   ) {
     buildCustomStreetShowCar(vehicle, handles);
+  } else if (vehicle.preset === 'sports_car') {
+    buildExoticSupercarMesh(vehicle, handles);
   } else {
     const rimColor = vehicle.rimColor || '#d97706';
     const wheelScale = vehicle.wheelScale ?? 1.0;
@@ -2318,11 +2435,261 @@ export function createModularVehicleMesh(
     }
   }
 
+  const noShadowSet = new Set<THREE.Object3D>([
+    ...(handles.underglowMeshes ?? []),
+    ...(handles.rimLightMeshes ?? []),
+    ...(handles.subGlowMeshes ?? []),
+    ...(handles.subwooferCones ?? []),
+  ]);
   root.traverse((obj) => {
     if (obj instanceof THREE.Mesh) {
-      obj.castShadow = true;
-      obj.receiveShadow = true;
+      if (noShadowSet.has(obj) || obj.userData.noShadowCast) {
+        obj.userData.noShadowCast = true;
+        obj.castShadow = false;
+        obj.receiveShadow = false;
+      } else {
+        obj.castShadow = true;
+        obj.receiveShadow = true;
+      }
     }
   });
   return handles;
+}
+
+export function buildRealisticTahoeRig(spec: GarageVehicleSpec): BuiltVehicleRig {
+  const vehicle = createVehicleFromPreset(spec.id, 'chevy_tahoe', 0, 0, 0, 0);
+  vehicle.name = spec.name;
+  if (spec.livery) {
+    vehicle.paintColor = spec.livery.bodyColor;
+    vehicle.livery = { ...spec.livery };
+  }
+  const handles = createModularVehicleMesh(vehicle);
+  const subCones = (handles.subwooferCones ?? []).filter(
+    (obj): obj is THREE.Mesh => obj instanceof THREE.Mesh,
+  );
+  return {
+    root: handles.root,
+    bodyGroup: handles.chassisGroup,
+    wheels: handles.wheels,
+    subCones:
+      subCones.length > 0
+        ? subCones
+        : ((handles.subwooferCones ?? []) as unknown as THREE.Mesh[]),
+    dispose: () => {
+      handles.root.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry?.dispose();
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          for (const m of mats) {
+            if (!m) continue;
+            const std = m as THREE.MeshStandardMaterial;
+            if (std.map) std.map.dispose();
+            if (std.emissiveMap) std.emissiveMap.dispose();
+            m.dispose();
+          }
+        }
+      });
+    },
+  };
+}
+
+function buildExoticSupercarMesh(
+  vehicle: ModularVehicleData,
+  handles: ModularVehicleMeshHandles,
+): void {
+  const paintColor = vehicle.paintColor || '#f97316';
+  const rimColor = vehicle.rimColor || '#e2e8f0';
+  const wheelScale = vehicle.wheelScale ?? 0.92;
+  const baseWheelY = 0.36 * wheelScale;
+
+  handles.chassisGroup.position.y = Math.max(0.02, (vehicle.suspensionOffset ?? -0.1) + 0.14);
+
+  const paintMat = new THREE.MeshPhysicalMaterial({
+    color: paintColor,
+    metalness: 0.65,
+    roughness: 0.15,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.05,
+  });
+  const carbonMat = new THREE.MeshStandardMaterial({
+    color: 0x111827,
+    metalness: 0.55,
+    roughness: 0.32,
+  });
+  const chromeMat = new THREE.MeshStandardMaterial({
+    color: rimColor,
+    metalness: 0.92,
+    roughness: 0.14,
+  });
+  const glassMat = new THREE.MeshPhysicalMaterial({
+    color: 0x0b1420,
+    metalness: 0.14,
+    roughness: 0.06,
+    clearcoat: 1.0,
+    transparent: true,
+    opacity: 0.42,
+  });
+  const leatherMat = new THREE.MeshStandardMaterial({
+    color: 0x18181b,
+    roughness: 0.62,
+    metalness: 0.1,
+  });
+  const headlightMat = new THREE.MeshStandardMaterial({
+    color: 0xe0f2fe,
+    emissive: 0x7dd3fc,
+    emissiveIntensity: 1.7,
+  });
+  const taillightMat = new THREE.MeshStandardMaterial({
+    color: 0xef4444,
+    emissive: 0xdc2626,
+    emissiveIntensity: 1.5,
+  });
+
+  // Sculpted low-slung wedge supercar hull via ExtrudeGeometry
+  const hullGeo = buildSilhouetteGeometry('mclaren');
+  const hullMesh = new THREE.Mesh(hullGeo, paintMat);
+  hullMesh.position.y = -0.04;
+  handles.chassisGroup.add(hullMesh);
+
+  // Tinted canopy glass + dark engine louver deck
+  const canopy = new THREE.Mesh(new THREE.BoxGeometry(1.54, 0.26, 1.32), glassMat);
+  canopy.position.set(0, 0.92, -0.26);
+  const engineLouvers = new THREE.Mesh(new THREE.BoxGeometry(1.16, 0.06, 0.85), carbonMat);
+  engineLouvers.position.set(0, 0.9, -1.28);
+
+  // Carbon aero front splitter, side skirts & rear diffuser
+  const frontSplitter = new THREE.Mesh(new THREE.BoxGeometry(1.92, 0.07, 0.36), carbonMat);
+  frontSplitter.position.set(0, 0.28, 2.22);
+  const rearDiffuser = new THREE.Mesh(new THREE.BoxGeometry(1.88, 0.14, 0.28), carbonMat);
+  rearDiffuser.position.set(0, 0.32, -2.14);
+  [-0.92, 0.92].forEach((sx) => {
+    const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.09, 2.3), carbonMat);
+    skirt.position.set(sx, 0.28, 0.02);
+    handles.chassisGroup.add(skirt);
+  });
+
+  // Twin-pylon GT rear wing
+  const wingBlade = new THREE.Mesh(new THREE.BoxGeometry(1.94, 0.06, 0.34), paintMat);
+  wingBlade.position.set(0, 1.06, -1.98);
+  wingBlade.rotation.x = 0.12;
+  [-0.52, 0.52].forEach((px) => {
+    const pylon = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.26, 0.24), carbonMat);
+    pylon.position.set(px, 0.92, -1.94);
+    handles.chassisGroup.add(pylon);
+  });
+
+  // Headlights + Full-width rear LED tailbar + twin exhausts
+  [-0.64, 0.64].forEach((hx) => {
+    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.07, 0.08), headlightMat);
+    hl.position.set(hx, 0.48, 2.24);
+    handles.chassisGroup.add(hl);
+  });
+  const tailBar = new THREE.Mesh(new THREE.BoxGeometry(1.56, 0.06, 0.06), taillightMat);
+  tailBar.position.set(0, 0.7, -2.18);
+  [-0.22, 0.22].forEach((ex) => {
+    const exhaust = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.2, 10), chromeMat);
+    exhaust.rotation.x = Math.PI / 2;
+    exhaust.position.set(ex, 0.44, -2.2);
+    handles.chassisGroup.add(exhaust);
+  });
+
+  // Interior racing seats + steering wheel
+  [-0.4, 0.4].forEach((sx) => {
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.52, 0.46), leatherMat);
+    seat.position.set(sx, 0.52, -0.2);
+    seat.rotation.x = -0.18;
+    handles.chassisGroup.add(seat);
+  });
+  const helmWheel = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.024, 6, 16), carbonMat);
+  helmWheel.position.set(-0.4, 0.7, 0.28);
+  helmWheel.rotation.x = 0.42;
+  handles.helmWheel = helmWheel;
+
+  handles.chassisGroup.add(
+    canopy,
+    engineLouvers,
+    frontSplitter,
+    rearDiffuser,
+    wingBlade,
+    tailBar,
+    helmWheel,
+  );
+
+  // Hinged side doors
+  ([-1, 1] as const).forEach((side) => {
+    const doorPivot = new THREE.Group();
+    doorPivot.position.set(side * 0.9, 0.42, 0.55);
+    const doorSkin = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.42, 1.15), paintMat);
+    doorSkin.position.set(0, 0.18, -0.56);
+    const intakeVent = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.22, 0.42), carbonMat);
+    intakeVent.position.set(side * 0.015, 0.2, -0.92);
+    doorPivot.add(doorSkin, intakeVent);
+    handles.chassisGroup.add(doorPivot);
+    if (side < 0) handles.doorLeft = doorPivot;
+    else handles.doorRight = doorPivot;
+  });
+
+  // Hinged rear engine decklid / trunk
+  const deckHinge = new THREE.Group();
+  deckHinge.position.set(0, 0.86, -0.92);
+  const deckPanel = new THREE.Mesh(new THREE.BoxGeometry(1.12, 0.06, 0.92), carbonMat);
+  deckPanel.position.set(0, 0, -0.46);
+  deckHinge.add(deckPanel);
+  handles.chassisGroup.add(deckHinge);
+  handles.trunkLid = deckHinge;
+
+  // Exotic Undercarriage Neon Glow
+  const glowColor = new THREE.Color(vehicle.underglowColor || '#38bdf8');
+  const glowMat = new THREE.MeshStandardMaterial({
+    color: glowColor,
+    emissive: glowColor,
+    emissiveIntensity: 2.0,
+    roughness: 0.2,
+  });
+  const glowMeshes: THREE.Mesh[] = [];
+  [-0.84, 0.84].forEach((gx) => {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 3.3), glowMat);
+    bar.position.set(gx, 0.2, 0.04);
+    handles.chassisGroup.add(bar);
+    glowMeshes.push(bar);
+  });
+  const underLight = new THREE.PointLight(glowColor.getHex(), 1.8, 8.5, 1.4);
+  underLight.position.set(0, 0.22, 0.04);
+  handles.chassisGroup.add(underLight);
+  handles.underglowLight = underLight;
+  handles.underglowMeshes = glowMeshes;
+
+  // 4 Forged Supercar Wheels
+  const tireMat = new THREE.MeshStandardMaterial({ color: 0x131417, roughness: 0.86 });
+  const trackHalf = 0.94;
+  const corners: Array<{ corner: 'fl' | 'fr' | 'rl' | 'rr'; x: number; z: number; isFront: boolean }> = [
+    { corner: 'fl', x: -trackHalf, z: 1.38, isFront: true },
+    { corner: 'fr', x: trackHalf, z: 1.38, isFront: true },
+    { corner: 'rl', x: -trackHalf, z: -1.32, isFront: false },
+    { corner: 'rr', x: trackHalf, z: -1.32, isFront: false },
+  ];
+  const tireGeo = new THREE.CylinderGeometry(0.36 * wheelScale, 0.36 * wheelScale, 0.3, 22);
+  tireGeo.rotateZ(Math.PI / 2);
+  const rimGeo = new THREE.CylinderGeometry(0.24 * wheelScale, 0.24 * wheelScale, 0.32, 16);
+  rimGeo.rotateZ(Math.PI / 2);
+
+  for (const wc of corners) {
+    const cornerRoot = new THREE.Group();
+    cornerRoot.position.set(wc.x, baseWheelY, wc.z);
+    const steerPivot = new THREE.Group();
+    const spinGroup = new THREE.Group();
+    const tire = new THREE.Mesh(tireGeo, tireMat);
+    const rim = new THREE.Mesh(rimGeo, chromeMat);
+    spinGroup.add(tire, rim);
+    steerPivot.add(spinGroup);
+    cornerRoot.add(steerPivot);
+    handles.root.add(cornerRoot);
+    handles.wheels.push(spinGroup);
+    if (wc.isFront) handles.steerWheels.push(steerPivot);
+    handles.wheelCorners.push({
+      obj: cornerRoot,
+      corner: wc.corner,
+      baseY: baseWheelY,
+    });
+  }
 }

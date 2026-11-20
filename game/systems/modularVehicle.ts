@@ -456,7 +456,7 @@ export function createVehicleFromPreset(
     donk: '#0284c7',
     slab: '#9f1239',
     cadillac_coupe_deville: '#f8fafc',
-    chevy_tahoe: '#111827',
+    chevy_tahoe: '#111318',
     chevy_2000_sub: '#1d4ed8',
     steam_boat: '#0284c7',
     gyro_airship: '#eab308',
@@ -526,6 +526,14 @@ export function createVehicleFromPreset(
     underglowEnabled: preset === 'slab' || isTahoe || isChevySub,
     rimLightMode: hasLedRims ? 'blink' : 'off',
     rimLightColor: hasLedRims ? '#38bdf8' : undefined,
+    livery: isTahoe
+      ? {
+          channelName: 'SAVAGE LIFE GAMING',
+          ctaText: 'SUBSCRIBE',
+          accentColor: '#ff2a55',
+          bodyColor: '#111318',
+        }
+      : undefined,
     turboBoost:
       preset === 'sports_car'
         ? 1.35

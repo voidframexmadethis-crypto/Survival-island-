@@ -1286,6 +1286,8 @@ export class CreatureManager {
   private shadowsEnabled = true;
   private maxDrawDistance = 210;
   private rigPool = new Map<CreatureSpecies, CreatureRig[]>();
+  private sightingsScratch: TrackedSighting[] = [];
+  private sightingEmitTimer = 0;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -2287,7 +2289,9 @@ export class CreatureManager {
       }
     }
 
-    const sightings: TrackedSighting[] = [];
+    this.sightingsScratch.length = 0;
+    const sightings = this.sightingsScratch;
+    this.sightingEmitTimer += dt;
     // Combined stealth & visibility factor: crouching in darkness makes player much harder to spot
     const stealthMult =
       (0.36 + 0.84 * playerVisibility) *
@@ -2396,15 +2400,15 @@ export class CreatureManager {
       }
       if (!c.rig.root.visible) c.rig.root.visible = true;
 
-      if (distSqP > 14400 && !c.mounted && !c.tamed) {
+      if (distSqP > 7744 && !c.mounted && !c.tamed) {
         this.setRigShadow(c, false);
         c.rig.shadowDisc.visible = false;
         continue;
       }
       const distToPlayer = Math.sqrt(distSqP);
 
-      this.setRigShadow(c, this.shadowsEnabled && distToPlayer < 48);
-      c.rig.shadowDisc.visible = distToPlayer < 80;
+      this.setRigShadow(c, this.shadowsEnabled && distToPlayer < 32);
+      c.rig.shadowDisc.visible = distToPlayer < 64;
 
       // Predator & nocturnal owl eye-shine glows in the dark (crocodile eyes stay visible above murky water)
       if (c.rig.eyeGlowMat) {
@@ -3243,15 +3247,15 @@ export class CreatureManager {
     // Infinite Biome-Aware Wildlife Ecosystem: cleanly recycles distant/dead dynamic spawns & populates herds smoothly (staggered 1 per tick to prevent frame spikes)
     this.replenishTimer -= dt;
     if (this.replenishTimer <= 0) {
-      this.replenishTimer = 0.55;
+      this.replenishTimer = 0.9;
 
-      // 1. Prune distant (>135m) or expired dead untamed dynamic wildlife back into reusable rig pool
+      // 1. Prune distant (>115m) or expired dead untamed dynamic wildlife back into reusable rig pool
       for (let idx = this.creatures.length - 1; idx >= 0; idx--) {
         const dc = this.creatures[idx];
         if (!dc.id.startsWith('wild_') || dc.tamed || dc.mounted) continue;
         const ddx = dc.x - playerX;
         const ddz = dc.z - playerZ;
-        const farAway = ddx * ddx + ddz * ddz > 18225;
+        const farAway = ddx * ddx + ddz * ddz > 13225;
         const deadExpired = !dc.alive && dc.respawnTimer <= 0;
         if (farAway || deadExpired) {
           this.releaseWildRig(dc.species, dc.rig);
@@ -3269,7 +3273,7 @@ export class CreatureManager {
       }
 
       // Spawn at most 1 encounter (+1 companion herd mate) per tick to keep frame times flat
-      if (liveWildCount < 68) {
+      if (liveWildCount < 36) {
         for (let attempt = 0; attempt < 8; attempt++) {
           const angle = Math.random() * Math.PI * 2;
           const rad = 24 + Math.random() * 92;
@@ -3426,7 +3430,7 @@ export class CreatureManager {
           liveWildCount += 1;
 
           // Spawn a companion herd/pack mate nearby for social wild species (spread out by 6-12m)
-          if (HERD_SPECIES.has(chosen) && liveWildCount < 68 && Math.random() < 0.65) {
+          if (HERD_SPECIES.has(chosen) && liveWildCount < 36 && Math.random() < 0.65) {
             const mx = sx + (Math.random() - 0.5) * 12;
             const mz = sz + (Math.random() - 0.5) * 12;
             if (getTerrainHeight(mx, mz) > OCEAN_LEVEL + 0.3) {
@@ -3439,7 +3443,10 @@ export class CreatureManager {
       }
     }
 
-    onSightingUpdate(sightings);
+    if (this.sightingEmitTimer >= 0.4) {
+      this.sightingEmitTimer = 0;
+      onSightingUpdate(sightings.slice());
+    }
     return { nocturnalActiveCount };
   }
 }

@@ -90,10 +90,13 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
   const joyPadRef = useRef<HTMLDivElement | null>(null);
   const knobRef = useRef<HTMLDivElement | null>(null);
   const activePointerId = useRef<number | null>(null);
+  const activePointerType = useRef<string | null>(null);
   const joyCenter = useRef({ x: 0, y: 0 });
   const touchKnobRef = useRef({ x: 0, y: 0 });
   const gpKnobRef = useRef({ x: 0, y: 0 });
   const knobDeflectedRef = useRef(false);
+  const onJoystickMoveRef = useRef(onJoystickMove);
+  onJoystickMoveRef.current = onJoystickMove;
   const [isCompact, setIsCompact] = useState(false);
 
   useEffect(() => {
@@ -137,9 +140,10 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
     }
   }, [maxRadius]);
 
-  const resetJoystick = useCallback(() => {
+  const resetJoystick = useCallback((forceZero = false) => {
     const prevId = activePointerId.current;
     activePointerId.current = null;
+    activePointerType.current = null;
     if (prevId !== null && joyPadRef.current) {
       try {
         if (joyPadRef.current.hasPointerCapture(prevId)) {
@@ -154,10 +158,10 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
     touchKnobRef.current.x = 0;
     touchKnobRef.current.y = 0;
     syncKnobDom();
-    if (prevId !== null || hadTouchOffset) {
-      onJoystickMove(0, 0);
+    if (forceZero || prevId !== null || hadTouchOffset) {
+      onJoystickMoveRef.current(0, 0);
     }
-  }, [onJoystickMove, syncKnobDom]);
+  }, [syncKnobDom]);
 
   useImperativeHandle(
     ref,
@@ -168,7 +172,7 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
         syncKnobDom();
       },
       resetTouchJoystick() {
-        resetJoystick();
+        resetJoystick(true);
       },
     }),
     [syncKnobDom, resetJoystick],
@@ -176,36 +180,72 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
 
   useEffect(() => {
     if (!visible) {
-      resetJoystick();
+      resetJoystick(true);
       return;
     }
     syncKnobDom();
 
     const handleGlobalPointerEnd = (e: PointerEvent) => {
-      if (activePointerId.current === e.pointerId) {
-        resetJoystick();
+      if (activePointerId.current === null) return;
+      if (
+        activePointerId.current === e.pointerId ||
+        (activePointerType.current === 'mouse' && e.pointerType === 'mouse')
+      ) {
+        resetJoystick(true);
       }
     };
-    const handleGlobalBlur = () => {
-      resetJoystick();
+    const handleGlobalPointerMove = (e: PointerEvent) => {
+      if (activePointerId.current === null) return;
+      if (
+        e.pointerId === activePointerId.current &&
+        e.pointerType === 'mouse' &&
+        e.buttons === 0
+      ) {
+        resetJoystick(true);
+      }
+    };
+    const handleGlobalTouchEnd = (e: TouchEvent) => {
+      if (activePointerId.current === null) return;
+      if (activePointerType.current === 'touch' && e.touches.length === 0) {
+        resetJoystick(true);
+      }
+    };
+    const handleGlobalReset = () => {
+      if (
+        activePointerId.current !== null ||
+        touchKnobRef.current.x !== 0 ||
+        touchKnobRef.current.y !== 0
+      ) {
+        resetJoystick(true);
+      }
     };
     const handleVisibility = () => {
       if (document.hidden) {
-        resetJoystick();
+        handleGlobalReset();
       }
     };
 
     window.addEventListener('pointerup', handleGlobalPointerEnd, true);
     window.addEventListener('pointercancel', handleGlobalPointerEnd, true);
-    window.addEventListener('blur', handleGlobalBlur);
+    window.addEventListener('pointermove', handleGlobalPointerMove, true);
+    window.addEventListener('touchend', handleGlobalTouchEnd, true);
+    window.addEventListener('touchcancel', handleGlobalTouchEnd, true);
+    window.addEventListener('blur', handleGlobalReset);
+    window.addEventListener('pagehide', handleGlobalReset);
+    window.addEventListener('contextmenu', handleGlobalReset, true);
     document.addEventListener('visibilitychange', handleVisibility);
 
     return () => {
       window.removeEventListener('pointerup', handleGlobalPointerEnd, true);
       window.removeEventListener('pointercancel', handleGlobalPointerEnd, true);
-      window.removeEventListener('blur', handleGlobalBlur);
+      window.removeEventListener('pointermove', handleGlobalPointerMove, true);
+      window.removeEventListener('touchend', handleGlobalTouchEnd, true);
+      window.removeEventListener('touchcancel', handleGlobalTouchEnd, true);
+      window.removeEventListener('blur', handleGlobalReset);
+      window.removeEventListener('pagehide', handleGlobalReset);
+      window.removeEventListener('contextmenu', handleGlobalReset, true);
       document.removeEventListener('visibilitychange', handleVisibility);
-      resetJoystick();
+      resetJoystick(true);
     };
   }, [visible, syncKnobDom, resetJoystick]);
 
@@ -218,7 +258,7 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
         touchKnobRef.current.x = 0;
         touchKnobRef.current.y = 0;
         syncKnobDom();
-        onJoystickMove(0, 0);
+        onJoystickMoveRef.current(0, 0);
         return;
       }
       let clampedDx = dx;
@@ -230,29 +270,31 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
       touchKnobRef.current.x = clampedDx;
       touchKnobRef.current.y = clampedDy;
       syncKnobDom();
-      onJoystickMove(clampedDx / maxRadius, -clampedDy / maxRadius);
+      onJoystickMoveRef.current(clampedDx / maxRadius, -clampedDy / maxRadius);
     },
-    [maxRadius, onJoystickMove, syncKnobDom],
+    [maxRadius, syncKnobDom],
   );
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation();
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     const pad = joyPadRef.current;
-    if (!pad) return;
+    if (!pad || pad.offsetParent === null) return;
 
     // If a previous pointer stalled without firing pointerup, replace cleanly
     if (activePointerId.current !== null && activePointerId.current !== e.pointerId) {
-      resetJoystick();
+      resetJoystick(true);
     }
 
     const rect = pad.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
     joyCenter.current = {
       x: rect.left + rect.width / 2,
       y: rect.top + rect.height / 2,
     };
 
     activePointerId.current = e.pointerId;
+    activePointerType.current = e.pointerType || null;
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
@@ -264,8 +306,13 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (e.pointerId !== activePointerId.current) return;
+    const pad = joyPadRef.current;
+    if (!pad || pad.offsetParent === null) {
+      resetJoystick(true);
+      return;
+    }
     if (e.pointerType === 'mouse' && e.buttons === 0) {
-      resetJoystick();
+      resetJoystick(true);
       return;
     }
     e.stopPropagation();
@@ -273,9 +320,21 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
   }, [emitVectorFromClient, resetJoystick]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
-    if (e.pointerId !== activePointerId.current) return;
+    if (
+      activePointerId.current === null ||
+      (e.pointerId !== activePointerId.current &&
+        !(activePointerType.current === 'mouse' && e.pointerType === 'mouse'))
+    ) {
+      return;
+    }
     e.stopPropagation();
-    resetJoystick();
+    resetJoystick(true);
+  }, [resetJoystick]);
+
+  const handleLostCapture = useCallback((e: React.PointerEvent) => {
+    if (e.pointerId === activePointerId.current) {
+      resetJoystick(true);
+    }
   }, [resetJoystick]);
 
   if (!visible) return null;
@@ -418,11 +477,17 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
           <div
             ref={joyPadRef}
             className="relative w-26 h-26 sm:w-32 sm:h-32 shrink-0 rounded-full bg-stone-950/70 border-2 border-amber-500/40 flex items-center justify-center touch-surface shadow-2xl"
+            style={{ touchAction: 'none' }}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
-            onLostPointerCapture={handlePointerUp}
+            onLostPointerCapture={handleLostCapture}
+            onTouchCancel={() => resetJoystick(true)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              resetJoystick(true);
+            }}
           >
             <div
               ref={knobRef}
@@ -456,6 +521,8 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
                   }}
                   onPointerLeave={() => onFlyAscendChange(false)}
                   onPointerCancel={() => onFlyAscendChange(false)}
+                  onLostPointerCapture={() => onFlyAscendChange(false)}
+                  onContextMenu={(e) => e.preventDefault()}
                   className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border-2 flex items-center justify-center shadow-lg transition-colors touch-none ${
                     isFlying
                       ? 'bg-sky-500/90 border-sky-200 text-stone-950 active:bg-sky-300'
@@ -479,6 +546,8 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
                   }}
                   onPointerLeave={() => onFlyDescendChange(false)}
                   onPointerCancel={() => onFlyDescendChange(false)}
+                  onLostPointerCapture={() => onFlyDescendChange(false)}
+                  onContextMenu={(e) => e.preventDefault()}
                   className={`w-10 h-10 sm:w-11 sm:h-11 rounded-lg border-2 flex items-center justify-center shadow-lg transition-colors touch-none ${
                     isFlying
                       ? 'bg-sky-500/90 border-sky-200 text-stone-950 active:bg-sky-300'
@@ -504,7 +573,6 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
               }}
               onPointerDown={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
-              onKeyUp={(e) => e.stopPropagation()}
               className="flex items-center gap-1 bg-stone-950/92 border border-sky-500/50 rounded-lg px-1.5 py-1 shadow-xl"
             >
               <Navigation className="w-3.5 h-3.5 text-sky-400 shrink-0" />
@@ -513,7 +581,6 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
                 value={tpInput}
                 onChange={(e) => setTpInput(e.target.value)}
                 onKeyDown={(e) => e.stopPropagation()}
-                onKeyUp={(e) => e.stopPropagation()}
                 placeholder="TP biome..."
                 aria-label="Teleport to biome"
                 className="w-24 sm:w-32 bg-transparent text-[11px] sm:text-xs text-stone-100 placeholder:text-stone-400 focus:outline-none select-text"
