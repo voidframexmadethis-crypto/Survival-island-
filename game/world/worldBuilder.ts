@@ -6444,7 +6444,8 @@ gl_Position = projectionMatrix * mvPosition;`,
     maxDist: number,
     budgetQueue?: FrameBudgetQueue,
   ): void => {
-    const chunkRangeSq = (250 + 85) * (250 + 85);
+    const chunkRange = Math.min(maxDist + 85, 335);
+    const chunkRangeSq = chunkRange * chunkRange;
     for (let i = 0; i < foliageChunkEntries.length; i++) {
       const fc = foliageChunkEntries[i];
       const dx = fc.cx - px;

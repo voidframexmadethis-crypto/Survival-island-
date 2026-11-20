@@ -2440,8 +2440,8 @@ export class CreatureManager {
         }
       }
 
-      // Windblown Lion Mane Tuft Sway
-      if (c.rig.maneTufts && c.rig.maneTufts.length > 0) {
+      // Windblown Lion Mane Tuft Sway — LOD skip > 42m
+      if (distToPlayer < 42 && c.rig.maneTufts && c.rig.maneTufts.length > 0) {
         const tufts = c.rig.maneTufts;
         for (let ti = 0; ti < tufts.length; ti++) {
           const tuft = tufts[ti];
@@ -2513,7 +2513,7 @@ export class CreatureManager {
             wings[wi].rotation.z = (wi === 0 ? 1 : -1) * flap;
           }
         }
-        const distSoarer = Math.hypot(playerX - c.x, playerZ - c.z);
+        const distSoarer = distToPlayer;
         if (distSoarer < 65) {
           sightings.push({
             species: c.species,
@@ -2537,7 +2537,7 @@ export class CreatureManager {
           c.startledTimer = Math.max(0, (c.startledTimer ?? 0) - dt);
         }
 
-        const distPlayerBird = Math.hypot(playerX - c.x, playerZ - c.z);
+        const distPlayerBird = distToPlayer;
 
         // Locate nearest unclaimed carcass within 95m if not currently startled
         let targetCarcass: ScavengerCarcassTarget | undefined;
@@ -2866,12 +2866,16 @@ export class CreatureManager {
           if (c.species === 'evoker' && distToPlayer < 16) {
             c.summonCooldown = (c.summonCooldown ?? 3.5) - dt;
             if (c.summonCooldown <= 0) {
-              const activeVexes = this.creatures.filter(
-                (v) =>
-                  v.alive &&
-                  v.species === 'vex' &&
-                  Math.hypot(v.x - c.x, v.z - c.z) < 20,
-              ).length;
+              let activeVexes = 0;
+              for (let vi = 0; vi < this.creatures.length; vi++) {
+                const v = this.creatures[vi];
+                if (!v.alive || v.species !== 'vex') continue;
+                const vdx = v.x - c.x;
+                const vdz = v.z - c.z;
+                if (vdx * vdx + vdz * vdz < 400) {
+                  activeVexes += 1;
+                }
+              }
               if (activeVexes < 2) {
                 c.summonCooldown = 11;
                 const ang = Math.random() * Math.PI * 2;

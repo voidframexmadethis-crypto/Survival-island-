@@ -5,12 +5,15 @@ import {
   CheckCircle2,
   Circle,
   Eye,
+  Gamepad2,
   Gauge,
+  Keyboard,
   Play,
   RotateCcw,
   Save,
   Settings,
   Sliders,
+  Smartphone,
   Sparkles,
   Sun,
   Trash2,
@@ -656,3 +659,91 @@ export function PauseModal({
     </div>
   );
 }
+
+export function ControlsModal({ onClose }: { onClose: () => void }) {
+  const desktopRows: [string, string][] = [
+    ['Move / Strafe', 'W A S D or Arrow Keys'],
+    ['Look / Aim Camera', 'Click & Drag Mouse (or Right Stick)'],
+    ['Sprint / Crouch', 'Shift / C'],
+    ['Jump / Fly Ascend', 'Space (Double-Tap in Creative)'],
+    ['Primary Action / Fire / Chop', 'Left Click or Space'],
+    ['Interact / Board / Gather', 'E'],
+    ['Reload Firearm', 'R'],
+    ['Inventory / Crafting / Place', 'I or Tab · B · P'],
+    ['Island Map / Objectives', 'N · J'],
+    ['Realms Portal / Pause', 'U or G · Escape'],
+  ];
+
+  const mobileRows: [string, string][] = [
+    ['Move & Steer', 'Left Virtual Thumbstick'],
+    ['Look Around', 'Touch & Drag Anywhere on Screen'],
+    ['Action / Jump / Sprint', 'Right-Hand Touch Action Pads'],
+    ['Gamepad Support', 'Auto-Detected Xbox / PlayStation / MFi'],
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+      <div className="w-full max-w-xl rounded-2xl bg-stone-900 border border-stone-700/80 shadow-2xl overflow-hidden flex flex-col max-h-[88vh]">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-stone-800 shrink-0">
+          <div className="flex items-center gap-2.5">
+            <Gamepad2 className="w-5 h-5 text-emerald-400" />
+            <h2 className="font-display text-lg font-bold text-stone-100">
+              Expedition Controls
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200"
+            aria-label="Close Controls"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-5 overflow-y-auto survival-scroll space-y-5 text-sm">
+          <div className="rounded-xl bg-stone-950/75 border border-stone-800 p-4 space-y-3">
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-300">
+              <Keyboard className="w-4 h-4" />
+              <span>Desktop Keyboard &amp; Mouse</span>
+            </div>
+            <div className="divide-y divide-stone-800/80">
+              {desktopRows.map(([action, binding]) => (
+                <div
+                  key={action}
+                  className="py-2 flex items-center justify-between gap-3 text-xs"
+                >
+                  <span className="text-stone-300 font-medium">{action}</span>
+                  <span className="font-mono-tabular font-semibold text-amber-200 text-right">
+                    {binding}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-xl bg-stone-950/75 border border-stone-800 p-4 space-y-3">
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-300">
+              <Smartphone className="w-4 h-4" />
+              <span>Mobile Touch &amp; Controller</span>
+            </div>
+            <div className="divide-y divide-stone-800/80">
+              {mobileRows.map(([action, binding]) => (
+                <div
+                  key={action}
+                  className="py-2 flex items-center justify-between gap-3 text-xs"
+                >
+                  <span className="text-stone-300 font-medium">{action}</span>
+                  <span className="font-semibold text-emerald-200 text-right">
+                    {binding}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+

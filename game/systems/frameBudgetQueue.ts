@@ -268,3 +268,91 @@ export function resetGameSession(
   cameraRig.snapTo(camera, playerPos, false, payload.sampleGroundY);
   return runtime;
 }
+
+export interface StepHandlers {
+  onFixedStep: (fixedDt: number) => void;
+  onRender: (alpha: number, elapsedSeconds: number) => void;
+}
+
+export class Permanent60FpsController {
+  public static readonly TARGET_FPS = 60;
+  public static readonly FIXED_DT = 1 / 60;
+  public static readonly FRAME_BUDGET_MS = 1000 / 60;
+
+  private rafId: number | null = null;
+  private lastNowMs = 0;
+  private lastRenderMs = 0;
+  private accumulator = 0;
+  private elapsedSeconds = 0;
+  private running = false;
+
+  public resetTiming(): void {
+    const now = typeof performance !== 'undefined' ? performance.now() : 0;
+    this.lastNowMs = now;
+    this.lastRenderMs = now;
+    this.accumulator = 0;
+  }
+
+  public start(handlers: StepHandlers): void {
+    if (this.running) return;
+    if (typeof requestAnimationFrame === 'undefined') return;
+    this.running = true;
+    const now = typeof performance !== 'undefined' ? performance.now() : 0;
+    this.lastNowMs = now;
+    this.lastRenderMs = now;
+    this.accumulator = 0;
+
+    const tick = (currentMs: number) => {
+      if (!this.running) return;
+      this.rafId = requestAnimationFrame(tick);
+
+      if (typeof document !== 'undefined' && document.hidden) {
+        this.lastNowMs = currentMs;
+        this.lastRenderMs = currentMs;
+        this.accumulator = 0;
+        return;
+      }
+
+      // Pace render submissions to ~60 FPS (16.67ms)
+      const sinceLastRender = currentMs - this.lastRenderMs;
+      if (sinceLastRender < Permanent60FpsController.FRAME_BUDGET_MS * 0.92) {
+        return;
+      }
+
+      // Clamp frame delta to <= 0.05s so tab switches or hitches never spiral
+      const rawDt = Math.min((currentMs - this.lastNowMs) / 1000, 0.05);
+      this.lastNowMs = currentMs;
+      this.lastRenderMs = currentMs;
+
+      if (rawDt <= 0) return;
+
+      this.elapsedSeconds += rawDt;
+      this.accumulator += rawDt;
+
+      // Cap substeps per frame to 3 so heavy frames stay bounded
+      let substeps = 0;
+      while (this.accumulator >= Permanent60FpsController.FIXED_DT && substeps < 3) {
+        handlers.onFixedStep(Permanent60FpsController.FIXED_DT);
+        this.accumulator -= Permanent60FpsController.FIXED_DT;
+        substeps++;
+      }
+      if (substeps === 3 && this.accumulator > Permanent60FpsController.FIXED_DT) {
+        this.accumulator = Permanent60FpsController.FIXED_DT;
+      }
+
+      const alpha = this.accumulator / Permanent60FpsController.FIXED_DT;
+      handlers.onRender(alpha, this.elapsedSeconds);
+    };
+
+    this.rafId = requestAnimationFrame(tick);
+  }
+
+  public stop(): void {
+    this.running = false;
+    if (this.rafId !== null && typeof cancelAnimationFrame !== 'undefined') {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+  }
+}
+

@@ -107,6 +107,7 @@ import { InventoryModal } from './InventoryModal';
 import { IslandMapModal } from './IslandMapModal';
 import { ItemIcon } from './ItemIcon';
 import {
+  ControlsModal,
   MissionsModal,
   PauseModal,
   SettingsModal,
@@ -1277,6 +1278,16 @@ export function SurvivalGameClient() {
           onOpenExchange={() => setActiveModal('exchange')}
           onOpenMods={() => setActiveModal('mods')}
           onOpenSettings={() => setActiveModal('settings')}
+          onOpenControls={() => setActiveModal('controls')}
+          onOpenMap={() => setActiveModal('map')}
+          onOpenAchievements={() => setActiveModal('missions')}
+          onQuit={() => {
+            pushToast({
+              id: `quit_${Date.now()}`,
+              text: 'All island saves are stored locally — safe to close or choose a world to play.',
+              tone: 'info',
+            });
+          }}
         />
       )}
 
@@ -3562,6 +3573,10 @@ export function SurvivalGameClient() {
 
       {activeModal === 'missions' && hud && (
         <MissionsModal hud={hud} onClose={closeModal} />
+      )}
+
+      {activeModal === 'controls' && (
+        <ControlsModal onClose={closeModal} />
       )}
 
       {activeModal === 'vehicles' && hud && (

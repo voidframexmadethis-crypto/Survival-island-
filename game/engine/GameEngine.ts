@@ -120,6 +120,8 @@ import {
   FrameBudgetQueue,
   FrameWatchState,
   MasterRuntimeState,
+  Permanent60FpsController,
+  StepHandlers,
   canProcessGameplayInput,
   closeExclusiveModal,
   createFrameWatchState,
@@ -201,6 +203,7 @@ import {
   createKineticNodeMesh,
   createModularVehicleMesh,
 } from '../world/engineeringModels';
+import { StructureEntityKind } from '../world/structureEntityModels';
 import {
   HouseStationTarget,
   RemotePlayerMeshHandle,
@@ -246,6 +249,7 @@ import {
   UNDERGROUND_ELEVATOR_KIOSK_POS,
   UNDERGROUND_ELEVATOR_POS,
   VEHICLE_GARAGE_POS,
+  WATERFALL_POS,
   WHEATFIELD_POS,
   WOODLAND_MANSION_POS,
   exportSparseTerrainDeltas,
@@ -476,17 +480,6 @@ const FREEZE_SHIELD = {
   maxActiveVines: 120, // Hard cap so vine & extra ambient updates never snowball
 } as const;
 
-let _lastSpikeWarnMs = 0;
-function measure(label: string, fn: () => void): void {
-  const t0 = performance.now();
-  fn();
-  const elapsed = performance.now() - t0;
-  if (elapsed > 22 && t0 - _lastSpikeWarnMs > 2000) {
-    _lastSpikeWarnMs = t0;
-    console.warn(`FREEZE SPIKE [${label}]: ${elapsed.toFixed(1)} ms`);
-  }
-}
-
 export class GameEngine {
   private container: HTMLElement;
   private callbacks: EngineCallbacks;
@@ -547,16 +540,17 @@ export class GameEngine {
   private creatures!: CreatureManager;
   private structureManager!: StructureManager;
 
-  private frameId = 0;
+  private readonly fpsController = new Permanent60FpsController();
   private disposed = false;
   private rafPausedByVisibility = false;
   private clock = new THREE.Clock();
   private elapsed = 0;
   private hudSyncTimer = 0;
 
-  // Performance Engine & 60 FPS Cap + Smooth Clamped Substepping + 3.5ms FrameBudgetQueue
+  // Performance Engine & Locked 60 FPS Fixed-Step Loop + 3.5ms FrameBudgetQueue
   private ecosystemTickAccum = 0;
   private worldCullTimer = 0;
+  private pendingCameraDt = Permanent60FpsController.FIXED_DT;
   private shadowUpdateFrame = 0;
   private shadowLastCamX = NaN;
   private shadowLastCamY = NaN;
@@ -565,6 +559,42 @@ export class GameEngine {
   private shadowLastPitch = NaN;
   private worldQueue = new FrameBudgetQueue(3.5);
   private _scavengerTargetsScratch: ScavengerCarcassTarget[] = [];
+  private readonly _onCreatureDamage = (amount: number, sourceName: string) => {
+    this.applyPlayerDamage(amount, sourceName);
+  };
+  private readonly _onCreatureCall = (species: CreatureSpecies, dist: number) => {
+    this.sound.playCreatureCall(species, Math.max(0.2, 1 - dist / 50));
+  };
+  private readonly _onCreatureSightings = (sightings: TrackedSighting[]) => {
+    this.trackedSightings = sightings;
+  };
+  private readonly _onCarcassScavenged = (
+    carcassId: string,
+    species: CreatureSpecies,
+    displayName: string,
+  ) => {
+    this.handleCarcassScavenged(carcassId, species, displayName);
+  };
+  private readonly _structureCallbacks = {
+    onPlayerDamaged: (amount: number, sourceName: string) => {
+      this.applyPlayerDamage(amount, sourceName);
+    },
+    onEntityCall: (type: StructureEntityKind, dist: number) => {
+      if (type !== 'villager') {
+        const mapped: CreatureSpecies =
+          type === 'vindicator' || type === 'vex' ? 'pillager' : type;
+        this.sound.playCreatureCall(mapped, Math.max(0.2, 1 - dist / 50));
+      }
+    },
+    onStructureCleared: (site: StructureSite) => {
+      this.handleStructureCleared(site);
+    },
+  };
+  private readonly _stepHandlers: StepHandlers = {
+    onFixedStep: (fixedDt: number) => this.handleFixedStep(fixedDt),
+    onRender: (alpha: number, elapsedSeconds: number) =>
+      this.handleRender(alpha, elapsedSeconds),
+  };
   private currentFps = 60;
   private fpsDisplayTimer = 0;
   private fpsDisplayFrames = 0;
@@ -1144,9 +1174,10 @@ export class GameEngine {
     this.menuCameraSnapped = false;
     this.applyMenuCullImmediate();
     this.resetFrameTiming();
+    this.emitHud();
 
     this.clock.start();
-    this.tick();
+    this.fpsController.start(this._stepHandlers);
   }
 
   private createEmptyStats(): GameStats {
@@ -1658,25 +1689,14 @@ export class GameEngine {
     if (document.hidden) {
       this.clearMovementInputs();
       this.rafPausedByVisibility = true;
-      cancelAnimationFrame(this.frameId);
-      clearTimeout(this.frameId);
-      this.frameId = 0;
+      this.fpsController.stop();
       this.clock.stop();
     } else if (this.rafPausedByVisibility && !this.disposed) {
       this.rafPausedByVisibility = false;
       this.clock.start();
       this.clock.getDelta();
-      this.lastFramePerfMs = performance.now();
-      this.frameWatch.lastTimeMs = this.lastFramePerfMs;
-      this.masterRuntime.lastFrameMs = this.lastFramePerfMs;
-      this.fpsSampleTimer = 0;
-      this.fpsSampleFrames = 0;
-      this.fpsSampleAccumMs = 0;
-      if (this.isSoftwareGl) {
-        this.afterDraw(this.tick);
-      } else {
-        this.frameId = requestAnimationFrame(this.tick);
-      }
+      this.resetFrameTiming();
+      this.fpsController.start(this._stepHandlers);
     }
   };
 
@@ -2000,6 +2020,8 @@ export class GameEngine {
     this.frameWatch.lastTimeMs = now;
     this.masterRuntime.lastFrameMs = now;
     this.lastFramePerfMs = now;
+    this.pendingCameraDt = Permanent60FpsController.FIXED_DT;
+    this.fpsController.resetTiming();
     this.fpsSampleTimer = 0;
     this.fpsSampleFrames = 0;
     this.fpsSampleAccumMs = 0;
@@ -2204,6 +2226,7 @@ export class GameEngine {
     this.effectiveShadowExtent = shadowHalfExtent;
     this.effectiveWaterReflections = waterRefl;
 
+    dpr = Math.min(dpr, 2);
     if (this.renderer.getPixelRatio() !== dpr) {
       this.renderer.setPixelRatio(dpr);
     }
@@ -12395,13 +12418,28 @@ export class GameEngine {
       this.handsRig.root.visible = false;
       if (this.localPlayerHandle) this.localPlayerHandle.group.visible = false;
       const angle = this.menuOrbitAngle;
-      const r = this.worldType === 'flat' ? 68 : 92;
-      _vec3A.set(
-        Math.cos(angle) * r,
-        (this.worldType === 'flat' ? 22 : 28) + Math.sin(angle * 0.7) * 5,
-        Math.sin(angle) * r,
-      );
-      _vec3B.set(0, this.worldType === 'flat' ? 3 : 6, 0);
+      if (this.worldType === 'flat') {
+        const r = 68;
+        _vec3A.set(
+          Math.cos(angle) * r,
+          22 + Math.sin(angle * 0.7) * 5,
+          Math.sin(angle) * r,
+        );
+        _vec3B.set(0, 3, 0);
+      } else {
+        // Frame the tropical island bay, Azure Lake & Waterfall Cliff behind the main menu
+        const sway = Math.sin(angle * 0.45);
+        _vec3A.set(
+          LAKE_CENTER.x + 26 + sway * 18,
+          17.5 + Math.cos(angle * 0.35) * 2.5,
+          LAKE_CENTER.z + 36 + Math.cos(angle * 0.45) * 10,
+        );
+        _vec3B.set(
+          WATERFALL_POS.x - 6,
+          9.5,
+          (LAKE_CENTER.z + WATERFALL_POS.z) * 0.48,
+        );
+      }
       if (!this.menuCameraSnapped) {
         this.camera.position.copy(_vec3A);
         this.menuCameraSnapped = true;
@@ -13201,21 +13239,40 @@ export class GameEngine {
     });
   }
 
-  private tick = (nowArg?: number): void => {
+  private handleFixedStep(fixedDt: number): void {
     if (this.disposed || document.hidden || this.rafPausedByVisibility) return;
-    const nowPerf = typeof nowArg === 'number' && nowArg > 0 ? nowArg : performance.now();
-    const { dt: masterDt } = stepMasterFrame(this.masterRuntime, nowPerf);
-    const { dt: clampedDt, frameMs: rawFrameMs } = stepClampedFrame(this.frameWatch, nowPerf);
+
     this.masterRuntime.isInVehicle = Boolean(this.activeVehicleId);
     this.masterRuntime.activeVehicleId = this.activeVehicleId;
     if (this.activeVehicleId) {
-      const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
-      this.masterRuntime.activeVehicleName = av?.name ?? null;
+      let activeName: string | null = null;
+      for (let i = 0; i < this.vehicles.length; i++) {
+        if (this.vehicles[i].id === this.activeVehicleId) {
+          activeName = this.vehicles[i].name ?? null;
+          break;
+        }
+      }
+      this.masterRuntime.activeVehicleName = activeName;
     } else {
       this.masterRuntime.activeVehicleName = null;
     }
-    // Clamp frame delta to 0.033s so a hiccup never causes a huge position jump or spiral-of-death stutter
-    const frameTime = Math.min(clampedDt, masterDt, 0.033);
+
+    this.pendingCameraDt = Math.min(0.05, this.pendingCameraDt + fixedDt);
+    this.updateSimulation(fixedDt);
+  }
+
+  private handleRender(_alpha: number, _elapsedSeconds: number): void {
+    void _alpha;
+    void _elapsedSeconds;
+    if (this.disposed || document.hidden || this.rafPausedByVisibility) return;
+
+    const nowPerf = performance.now();
+    stepMasterFrame(this.masterRuntime, nowPerf);
+    const { dt: clampedDt, frameMs: rawFrameMs } = stepClampedFrame(
+      this.frameWatch,
+      nowPerf,
+    );
+    const frameTime = Math.min(clampedDt, 0.05);
     this.lastFramePerfMs = nowPerf;
 
     // Measure real device FPS and cap display cleanly at 60 FPS
@@ -13272,32 +13329,28 @@ export class GameEngine {
       }
     }
 
-    const frameStart = performance.now();
-    // Single clamped simulation step per frame (prevents double-simulation CPU spiral when <45 FPS)
-    const simDt = Math.max(frameTime, 0.001);
-    this.updateSimulation(simDt, frameStart);
+    this.lastSimDt = Math.min(
+      0.05,
+      Math.max(Permanent60FpsController.FIXED_DT, this.pendingCameraDt),
+    );
+    this.pendingCameraDt = 0;
 
-    // 3. Only run non-essential biome/vine/prop wake-ups if time remains in the Freeze-Shield frame budget
-    if (performance.now() - frameStart < FREEZE_SHIELD.maxFrameMs) {
-      measure('world_queue', () => this.worldQueue.flush());
+    // Flush queued sector/landmark wake-ups and ambient extras only within the frame budget
+    if (performance.now() - nowPerf < FREEZE_SHIELD.maxFrameMs) {
+      this.worldQueue.flush();
       if (this.mode === 'playing' && !this.cinematicActive) {
         this.updateVinesAndExtras(
-          Math.min(frameTime, FREEZE_SHIELD.maxDt),
+          Math.min(this.lastSimDt, FREEZE_SHIELD.maxDt),
           FREEZE_SHIELD.maxActiveVines,
         );
       }
     }
 
     this.renderScene();
+  }
 
-    if (this.isSoftwareGl) {
-      this.afterDraw(this.tick);
-    } else {
-      this.frameId = requestAnimationFrame(this.tick);
-    }
-  };
-
-  private updateSimulation(dt: number, frameStart: number): void {
+  private updateSimulation(dt: number): void {
+    const simStart = performance.now();
     this.lastSimDt = dt;
     this.elapsed += dt;
     if (this.mode === 'menu') {
@@ -13315,7 +13368,7 @@ export class GameEngine {
       !this.gameOver &&
       !this.cinematicActive;
     if (playerActive) {
-      measure('player', () => this.updatePlayer(dt));
+      this.updatePlayer(dt);
     }
 
     // 2. Run core simulation & world updates
@@ -13325,29 +13378,27 @@ export class GameEngine {
     if (this.mode === 'playing' || this.remotePlayers.size > 0 || this.p2p?.connected) {
       this.updateMultiplayer(dt);
     }
-    measure('weather_particles', () => {
-      this.updateWeatherAndAtmosphere(dt);
-      if (this.mode === 'playing' && !this.cinematicActive) {
-        this.ecosystemTickAccum += dt;
-        if (this.ecosystemTickAccum >= 1.2) {
-          const ecoDt = this.ecosystemTickAccum;
-          this.ecosystemTickAccum = 0;
-          this.ecosystem = simulateEcosystemTick(
-            this.ecosystem,
-            ecoDt,
-            this.weather,
-            { x: this.playerX, y: this.playerY, z: this.playerZ },
-          );
-        }
+    this.updateWeatherAndAtmosphere(dt);
+    if (this.mode === 'playing' && !this.cinematicActive) {
+      this.ecosystemTickAccum += dt;
+      if (this.ecosystemTickAccum >= 1.2) {
+        const ecoDt = this.ecosystemTickAccum;
+        this.ecosystemTickAccum = 0;
+        this.ecosystem = simulateEcosystemTick(
+          this.ecosystem,
+          ecoDt,
+          this.weather,
+          { x: this.playerX, y: this.playerY, z: this.playerZ },
+        );
       }
-      if (
-        this.realisticOcean &&
-        this.currentDimension === 'overworld' &&
-        this.worldType === 'island'
-      ) {
-        this.realisticOcean.update(dt);
-      }
-    });
+    }
+    if (
+      this.realisticOcean &&
+      this.currentDimension === 'overworld' &&
+      this.worldType === 'island'
+    ) {
+      this.realisticOcean.update(dt);
+    }
 
     const sunElev = Math.sin((this.timeOfDay - 0.25) * Math.PI * 2);
     const isNight = sunElev < -0.05;
@@ -13362,7 +13413,7 @@ export class GameEngine {
       } else {
         this.updateProjectilesAndResources(dt);
         const inOverworld = this.currentDimension === 'overworld';
-        measure('biomes_terrain', () => {
+        {
           if (inOverworld) {
             this.updateStructuralAndTerrainSystems(dt);
             this.updateKineticNetwork(dt);
@@ -13509,89 +13560,62 @@ export class GameEngine {
               );
             }
           }
-        });
+        }
 
         let nocturnalActiveCount = 0;
         if (inOverworld && this.worldType === 'island') {
-          measure('entities_ai', () => {
-            const scavengerTargets = this._scavengerTargetsScratch;
-            scavengerTargets.length = 0;
-            for (let i = 0; i < this.carcasses.length; i++) {
-              const c = this.carcasses[i];
-              if (
-                c.fallProgress >= 0.85 &&
-                canAnimalEatCarcass({
-                  id: c.id,
-                  x: c.x,
-                  z: c.z,
-                  owner: c.owner,
-                  collected: c.harvested,
-                })
-              ) {
-                let remDrops = 0;
-                for (let d = 0; d < c.drops.length; d++) {
-                  remDrops += Math.max(0, c.drops[d].quantity);
-                }
-                scavengerTargets.push({
-                  id: c.id,
-                  x: c.x,
-                  y: c.y,
-                  z: c.z,
-                  isDino: c.isDino,
-                  remainingDrops: remDrops,
-                  owner: c.owner,
-                  collected: c.harvested,
-                });
+          const scavengerTargets = this._scavengerTargetsScratch;
+          scavengerTargets.length = 0;
+          for (let i = 0; i < this.carcasses.length; i++) {
+            const c = this.carcasses[i];
+            if (
+              c.fallProgress >= 0.85 &&
+              canAnimalEatCarcass({
+                id: c.id,
+                x: c.x,
+                z: c.z,
+                owner: c.owner,
+                collected: c.harvested,
+              })
+            ) {
+              let remDrops = 0;
+              for (let d = 0; d < c.drops.length; d++) {
+                remDrops += Math.max(0, c.drops[d].quantity);
               }
+              scavengerTargets.push({
+                id: c.id,
+                x: c.x,
+                y: c.y,
+                z: c.z,
+                isDino: c.isDino,
+                remainingDrops: remDrops,
+                owner: c.owner,
+                collected: c.harvested,
+              });
             }
-            const creatureCycle = this.creatures.update(
-              dt,
-              this.elapsed,
-              this.playerX,
-              this.playerZ,
-              this.isSprinting,
-              this.isCrouching,
-              isNight,
-              this.playerVisibility,
-              (amount, sourceName) => {
-                this.applyPlayerDamage(amount, sourceName);
-              },
-              (species, dist) => {
-                this.sound.playCreatureCall(species, Math.max(0.2, 1 - dist / 50));
-              },
-              (sightings) => {
-                this.trackedSightings = sightings;
-              },
-              scavengerTargets,
-              (carcassId, species, displayName) => {
-                this.handleCarcassScavenged(carcassId, species, displayName);
-              },
-            );
-            nocturnalActiveCount = creatureCycle.nocturnalActiveCount;
+          }
+          const creatureCycle = this.creatures.update(
+            dt,
+            this.elapsed,
+            this.playerX,
+            this.playerZ,
+            this.isSprinting,
+            this.isCrouching,
+            isNight,
+            this.playerVisibility,
+            this._onCreatureDamage,
+            this._onCreatureCall,
+            this._onCreatureSightings,
+            scavengerTargets,
+            this._onCarcassScavenged,
+          );
+          nocturnalActiveCount = creatureCycle.nocturnalActiveCount;
 
-            this.structureManager.update(
-              { x: this.playerX, y: this.playerY, z: this.playerZ },
-              dt,
-              {
-                onPlayerDamaged: (amount, sourceName) => {
-                  this.applyPlayerDamage(amount, sourceName);
-                },
-                onEntityCall: (type, dist) => {
-                  if (type !== 'villager') {
-                    const mapped: CreatureSpecies =
-                      type === 'vindicator' ? 'pillager' : type;
-                    this.sound.playCreatureCall(
-                      mapped,
-                      Math.max(0.2, 1 - dist / 50),
-                    );
-                  }
-                },
-                onStructureCleared: (site) => {
-                  this.handleStructureCleared(site);
-                },
-              },
-            );
-          });
+          this.structureManager.update(
+            { x: this.playerX, y: this.playerY, z: this.playerZ },
+            dt,
+            this._structureCallbacks,
+          );
         }
         this.nocturnalActiveCount = nocturnalActiveCount;
 
@@ -13640,7 +13664,7 @@ export class GameEngine {
     if (
       this.mode !== 'playing' ||
       this.cinematicActive ||
-      performance.now() - frameStart >= FREEZE_SHIELD.maxFrameMs
+      performance.now() - simStart >= FREEZE_SHIELD.maxFrameMs
     ) {
       if (this.smartTv.tvGlowLight && this.mode !== 'playing') {
         this.smartTv.tvGlowLight.visible = false;
@@ -13860,28 +13884,7 @@ export class GameEngine {
         }
       }
     }
-    measure('render', () => this.renderer.render(this.scene, this.camera));
-  }
-
-  private afterDraw(cb: () => void): void {
-    const gl = this.renderer.getContext() as WebGL2RenderingContext;
-    if (gl && typeof gl.fenceSync === 'function') {
-      const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
-      gl.flush();
-      const poll = () => {
-        if (this.disposed) return;
-        const state = sync && gl.getSyncParameter(sync, gl.SYNC_STATUS);
-        if (state === gl.UNSIGNALED) {
-          this.frameId = window.setTimeout(poll, 5);
-        } else {
-          if (sync) gl.deleteSync(sync);
-          this.frameId = window.setTimeout(cb, 80);
-        }
-      };
-      this.frameId = window.setTimeout(poll, 5);
-    } else {
-      this.frameId = window.setTimeout(cb, 80);
-    }
+    this.renderer.render(this.scene, this.camera);
   }
 
   // =========================================================================
@@ -19754,8 +19757,7 @@ export class GameEngine {
 
   public dispose(): void {
     this.disposed = true;
-    cancelAnimationFrame(this.frameId);
-    clearTimeout(this.frameId);
+    this.fpsController.stop();
     window.removeEventListener('resize', this.onResize);
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp, true);

@@ -1151,6 +1151,7 @@ export type ActiveModal =
   | 'vehicle_cargo'
   | 'map'
   | 'missions'
+  | 'controls'
   | 'pause'
   | 'settings'
   | 'console'
