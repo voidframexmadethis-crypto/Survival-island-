@@ -1,5 +1,8 @@
 import * as THREE from 'three';
-import { SmoothPlayerCameraRig } from './playerCameraRig';
+import {
+  SmoothPlayerCameraRig,
+  ZeroStutterCameraController,
+} from './playerCameraRig';
 
 export interface FrameWatchState {
   lastTimeMs: number;
@@ -246,7 +249,7 @@ export function resetGameSession(
   playerPos: THREE.Vector3,
   playerYawRef: { value: number },
   camera: THREE.PerspectiveCamera,
-  cameraRig: SmoothPlayerCameraRig,
+  cameraRig: SmoothPlayerCameraRig | ZeroStutterCameraController,
   payload: GameStartPayload,
 ): MasterRuntimeState {
   const runtime = createMasterRuntimeState(
@@ -262,6 +265,6 @@ export function resetGameSession(
   cameraRig.mode = payload.isThirdPerson === false ? 'first_person' : 'third_person';
   runtime.isThirdPerson = cameraRig.mode === 'third_person';
 
-  cameraRig.update(camera, playerPos, false, 0.016, payload.sampleGroundY, true);
+  cameraRig.snapTo(camera, playerPos, false, payload.sampleGroundY);
   return runtime;
 }

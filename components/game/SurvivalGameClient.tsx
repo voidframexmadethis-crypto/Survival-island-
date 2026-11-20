@@ -1007,9 +1007,14 @@ export function SurvivalGameClient() {
   );
 
   const handleTouchJoystickMove = useCallback((x: number, y: number) => {
+    if (activeModalRef.current !== null) {
+      engineRef.current?.setTouchJoystick(0, 0);
+      return;
+    }
     engineRef.current?.setTouchJoystick(x, y);
   }, []);
   const handleTouchCameraDrag = useCallback((dx: number, dy: number) => {
+    if (activeModalRef.current !== null) return;
     engineRef.current?.addCameraLookDelta(dx, dy, true);
   }, []);
   const handleTouchAction = useCallback(() => {
@@ -1017,30 +1022,51 @@ export function SurvivalGameClient() {
     engineRef.current?.triggerPrimaryAction();
   }, []);
   const handleTouchReload = useCallback(() => {
+    if (activeModalRef.current !== null) return;
     engineRef.current?.reloadEquippedWeapon();
   }, []);
   const handleTouchJump = useCallback(() => {
+    if (activeModalRef.current !== null) return;
     engineRef.current?.triggerJump();
   }, []);
   const handleTouchKickDebris = useCallback(() => {
+    if (activeModalRef.current !== null) return;
     engineRef.current?.triggerDebrisKick();
   }, []);
   const handleTouchSprintToggle = useCallback((active: boolean) => {
+    if (activeModalRef.current !== null) {
+      engineRef.current?.setTouchSprint(false);
+      return;
+    }
     engineRef.current?.setTouchSprint(active);
   }, []);
   const handleTouchCrouchToggle = useCallback((active: boolean) => {
+    if (activeModalRef.current !== null) {
+      engineRef.current?.setTouchCrouch(false);
+      return;
+    }
     engineRef.current?.setTouchCrouch(active);
   }, []);
   const handleTouchFlightToggle = useCallback(() => {
+    if (activeModalRef.current !== null) return;
     engineRef.current?.togglePlayerFlight();
   }, []);
   const handleTouchFlyAscend = useCallback((active: boolean) => {
+    if (activeModalRef.current !== null) {
+      engineRef.current?.setTouchFlyAscend(false);
+      return;
+    }
     engineRef.current?.setTouchFlyAscend(active);
   }, []);
   const handleTouchFlyDescend = useCallback((active: boolean) => {
+    if (activeModalRef.current !== null) {
+      engineRef.current?.setTouchFlyDescend(false);
+      return;
+    }
     engineRef.current?.setTouchFlyDescend(active);
   }, []);
   const handleTouchTeleportBiome = useCallback((dest: string) => {
+    if (activeModalRef.current !== null) return;
     engineRef.current?.teleportToBiome(dest);
   }, []);
   const handleTouchOpenBackpack = useCallback(() => {
@@ -1382,9 +1408,9 @@ export function SurvivalGameClient() {
           )}
 
           {/* Top Bar: Compact Survival Vitals (Left), Slim Compass (Center), Menu/Exit (Right) */}
-          <div className="flex flex-nowrap items-start justify-between gap-1.5 sm:gap-2">
+          <div className="flex flex-nowrap items-start justify-between gap-2 sm:gap-3">
             {/* Top-Left Vitals / Flat World Park Tools Panel */}
-            <div className="pointer-events-auto rounded-lg bg-stone-950/90 border border-stone-700/80 p-1.5 sm:p-2.5 w-[184px] sm:w-[244px] space-y-1.5 shadow-lg">
+            <div className="pointer-events-auto rounded-lg bg-stone-950/90 border border-stone-700/80 p-1.5 sm:p-2.5 w-[164px] sm:w-[236px] space-y-1.5 shadow-lg shrink-0">
               <div className="flex items-center justify-between gap-1 text-[10px] sm:text-[11px] text-stone-300 pb-0.5 border-b border-stone-800">
                 <span className="font-semibold text-amber-300 truncate">
                   {hud.worldType === 'flat'
@@ -1394,12 +1420,12 @@ export function SurvivalGameClient() {
                 <span className="font-mono-tabular shrink-0 flex items-center gap-1.5">
                   <span
                     className={`flex items-center gap-0.5 font-bold ${
-                      (hud.fps ?? 60) >= 1500 ? 'text-emerald-400' : 'text-sky-300'
+                      (hud.fps ?? 60) >= 55 ? 'text-emerald-400' : 'text-sky-300'
                     }`}
-                    title="Locked 1500 FPS Engine"
+                    title="Frame Rate (60 FPS Cap)"
                   >
                     <Gauge className="w-3 h-3" />
-                    {Math.max(60, Math.min(1500, Math.round(hud.fps ?? 60)))} FPS
+                    {Math.min(60, Math.max(1, Math.round(hud.fps ?? 60)))} FPS
                   </span>
                   <span className="flex items-center gap-0.5">
                     {hud.worldType === 'flat' ? (
@@ -3131,7 +3157,10 @@ export function SurvivalGameClient() {
                     role="switch"
                     aria-checked={Boolean(hud.isFlying)}
                     aria-label="Toggle Flight"
-                    onClick={() => engineRef.current?.togglePlayerFlight()}
+                    onClick={() => {
+                      if (activeModalRef.current !== null) return;
+                      engineRef.current?.togglePlayerFlight();
+                    }}
                     className={`h-9 px-3 rounded-lg border-2 flex items-center gap-1.5 shadow-xl transition-colors ${
                       hud.isFlying
                         ? 'bg-sky-500 border-sky-200 text-stone-950'
@@ -3162,6 +3191,7 @@ export function SurvivalGameClient() {
                       title="Hold to Fly Higher"
                       onPointerDown={(e) => {
                         e.stopPropagation();
+                        if (activeModalRef.current !== null) return;
                         engineRef.current?.setTouchFlyAscend(true);
                       }}
                       onPointerUp={(e) => {
@@ -3184,6 +3214,7 @@ export function SurvivalGameClient() {
                       title="Hold to Fly Down"
                       onPointerDown={(e) => {
                         e.stopPropagation();
+                        if (activeModalRef.current !== null) return;
                         engineRef.current?.setTouchFlyDescend(true);
                       }}
                       onPointerUp={(e) => {
@@ -3207,6 +3238,7 @@ export function SurvivalGameClient() {
                     onSubmit={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
+                      if (activeModalRef.current !== null) return;
                       const dest = quickTpInput.trim();
                       if (!dest) return;
                       engineRef.current?.teleportToBiome(dest);
@@ -4201,18 +4233,18 @@ function CompassStrip({ playerYaw }: { playerYaw: number }) {
   }, markers[0]);
 
   return (
-    <div className="w-24 sm:w-44 rounded-lg bg-stone-950/85 border border-stone-700/80 px-2 py-1 flex flex-col items-center gap-0.5 shadow-lg overflow-hidden">
-      <div className="relative w-full h-3.5 overflow-hidden">
+    <div className="w-32 sm:w-48 rounded-lg bg-stone-950/85 border border-stone-700/80 px-2.5 py-1.5 flex flex-col items-center gap-0.5 shadow-lg overflow-hidden shrink-0">
+      <div className="relative w-full h-4 overflow-hidden">
         <div className="absolute left-1/2 top-0 bottom-0 w-px bg-amber-400/90 -translate-x-1/2 z-10" />
         {markers.map((m) => {
           const delta = ((m.deg - bearing + 540) % 360) - 180;
           if (Math.abs(delta) > 85) return null;
-          const pct = 50 + (delta / 85) * 48;
+          const pct = 8 + ((delta + 85) / 170) * 84;
           return (
             <span
               key={m.label}
               style={{ left: `${pct}%` }}
-              className={`absolute top-0 -translate-x-1/2 font-mono-tabular leading-3.5 ${
+              className={`absolute top-0 -translate-x-1/2 font-mono-tabular leading-4 whitespace-nowrap ${
                 m.major
                   ? m.label === 'N'
                     ? 'text-[10px] font-bold text-amber-400'
@@ -4225,7 +4257,7 @@ function CompassStrip({ playerYaw }: { playerYaw: number }) {
           );
         })}
       </div>
-      <div className="text-[9px] sm:text-[10px] font-mono-tabular text-stone-300 leading-none">
+      <div className="text-[9px] sm:text-[10px] font-mono-tabular tracking-wider text-stone-300 leading-none">
         {nearestCardinal.label} {String(Math.round(bearing)).padStart(3, '0')}°
       </div>
     </div>

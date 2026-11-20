@@ -96,6 +96,7 @@ import {
   createHayTexture,
   createLeafCanopyTexture,
   createLeafNormalTexture,
+  createLeafSprayTexture,
   createRealisticSurfaceMaterial,
   createRockNormalTexture,
   createRockRoughnessTexture,
@@ -103,6 +104,7 @@ import {
   createWaterNormalTexture,
   createWoodPlankNormalTexture,
   createWoodPlankTexture,
+  getPolishedConcretePbr,
 } from './textures';
 import {
   HouseStationTarget,
@@ -227,6 +229,7 @@ export function buildIslandWorld(
   const rockNormalTex = createRockNormalTexture(renderer);
   const rockRoughnessTex = createRockRoughnessTexture(renderer);
   const leafTex = createLeafCanopyTexture(renderer);
+  const leafSprayTex = createLeafSprayTexture(renderer);
   const leafNormalTex = createLeafNormalTexture(renderer);
   const waterNormalTex = createWaterNormalTexture(renderer);
   const woodTex = createWoodPlankTexture(renderer);
@@ -363,13 +366,16 @@ export function buildIslandWorld(
     } else if (onBeachPath || onExpPath) {
       c.setHex(0x8c7350); // worn dirt forest trail
     } else if (biome === 'grassland') {
-      c.setHex(0x7d9c3b);
+      const soilPatch = Math.sin(x * 0.17 + z * 0.13) * Math.cos(x * 0.09 - z * 0.19);
+      c.setHex(soilPatch > 0.56 ? 0x625a34 : rand() < 0.36 ? 0x5c8b2c : 0x76a634);
     } else if (biome === 'plains') {
-      c.setHex(0x68a33a);
+      const soilPatch = Math.sin(x * 0.15 - z * 0.14) * Math.cos(x * 0.11 + z * 0.16);
+      c.setHex(soilPatch > 0.58 ? 0x5d5634 : rand() < 0.38 ? 0x568e2e : 0x6ba638);
     } else if (biome === 'sunflower_plains') {
-      c.setHex(0x7eb036);
+      c.setHex(rand() < 0.35 ? 0x669630 : 0x7cb038);
     } else if (biome === 'meadow') {
-      c.setHex(0x4f9d4c);
+      const soilPatch = Math.sin(x * 0.19 + z * 0.11) * Math.cos(x * 0.13 - z * 0.17);
+      c.setHex(soilPatch > 0.60 ? 0x565032 : rand() < 0.4 ? 0x458b3c : 0x5aa344);
     } else if (biome === 'cherry_grove') {
       c.setHex(rand() < 0.35 ? 0xf9a8d4 : 0x6ba84f); // Lush grass dusted with fallen pink petals
     } else if (biome === 'snowy_plains' || biome === 'grove' || biome === 'snowy_slopes') {
@@ -405,15 +411,16 @@ export function buildIslandWorld(
     } else if (biome === 'pale_garden') {
       c.setHex(0x768079); // Pale moss floor
     } else if (biome === 'flower_forest') {
-      c.setHex(0x4b8f34);
+      c.setHex(rand() < 0.35 ? 0x4a822c : 0x5da134);
     } else if (biome === 'birch_forest') {
-      c.setHex(0x5b9135);
+      c.setHex(rand() < 0.35 ? 0x53842d : 0x689e38);
     } else if (biome === 'old_growth_birch_forest') {
       c.setHex(0x44782b);
     } else if (biome === 'jungle') {
       c.setHex(0x1e5c2a);
     } else if (biome === 'sparse_jungle') {
-      c.setHex(0x3e7e34);
+      const soilPatch = Math.sin(x * 0.16 + z * 0.14) * Math.cos(x * 0.10 - z * 0.18);
+      c.setHex(soilPatch > 0.54 ? 0x564c2e : rand() < 0.4 ? 0x4b7e28 : 0x639832);
     } else if (biome === 'bamboo_jungle') {
       c.setHex(rand() < 0.3 ? 0x614326 : 0x4a7f2b); // Jungle soil with Podzol patches
     } else {
@@ -585,14 +592,14 @@ export function buildIslandWorld(
         float streaks = streak1 * 0.6 + streak2 * 0.4;
 
         float edgeFade = smoothstep(0.0, 0.14, vUv.x) * smoothstep(1.0, 0.86, vUv.x);
-        float lipFoam = smoothstep(0.76, 1.0, vUv.y) * 0.45;
-        float splashMist = smoothstep(0.24, 0.0, vUv.y) * 0.72;
-        float whitewater = smoothstep(0.42, 0.82, streaks + lipFoam + splashMist);
+        float lipFoam = smoothstep(0.74, 1.0, vUv.y) * 0.52;
+        float splashMist = smoothstep(0.28, 0.0, vUv.y) * 0.80;
+        float whitewater = smoothstep(0.38, 0.78, streaks + lipFoam + splashMist);
 
-        vec3 waterCol = vec3(0.16, 0.72, 0.78);
-        vec3 foamCol = vec3(0.95, 0.99, 1.0);
-        vec3 col = mix(waterCol, foamCol, clamp(whitewater * 0.92, 0.0, 1.0));
-        float alpha = clamp((0.52 + whitewater * 0.44) * edgeFade, 0.0, 0.94);
+        vec3 waterCol = vec3(0.20, 0.78, 0.84);
+        vec3 foamCol = vec3(0.99, 0.99, 0.96);
+        vec3 col = mix(waterCol, foamCol, clamp(whitewater * 0.95, 0.0, 1.0));
+        float alpha = clamp((0.56 + whitewater * 0.42) * edgeFade, 0.0, 0.96);
         if (alpha < 0.04) discard;
         gl_FragColor = vec4(col, alpha);
       }
@@ -663,20 +670,20 @@ export function buildIslandWorld(
   overworldGroup.add(plungePool);
 
   const wfMistMat = new THREE.MeshBasicMaterial({
-    color: 0xf0fdfa,
+    color: 0xf8fafc,
     transparent: true,
-    opacity: 0.34,
+    opacity: 0.38,
     depthWrite: false,
   });
   const wfMistGeo = new THREE.SphereGeometry(1.0, 10, 8);
-  for (let m = 0; m < 4; m++) {
+  for (let m = 0; m < 5; m++) {
     const mist = new THREE.Mesh(wfMistGeo, wfMistMat);
     mist.position.set(
-      WATERFALL_POS.x + (m - 1.5) * 1.85,
-      3.15 + (m % 2) * 0.45,
-      WATERFALL_POS.z + 3.55 + (m % 2) * 0.65,
+      WATERFALL_POS.x + (m - 2) * 1.65,
+      3.18 + (m % 2) * 0.55,
+      WATERFALL_POS.z + 3.45 + (m % 2) * 0.8,
     );
-    mist.scale.set(2.2, 1.1, 1.9);
+    mist.scale.set(2.5, 1.25, 2.1);
     mist.updateMatrix();
     mist.matrixAutoUpdate = false;
     overworldGroup.add(mist);
@@ -710,6 +717,7 @@ export function buildIslandWorld(
     rockNormalTex,
     rockRoughnessTex,
     leafTex,
+    leafSprayTex,
     leafNormalTex,
     waterNormalTex,
     woodTex,
@@ -794,10 +802,12 @@ export function buildIslandWorld(
   const cloudsGroup = new THREE.Group();
   const cloudMat = registerMaterial(
     new THREE.MeshStandardMaterial({
-      color: 0xf8fafc,
+      color: 0xffffff,
+      emissive: 0xdbeafe,
+      emissiveIntensity: 0.24,
       roughness: 0.98,
       transparent: true,
-      opacity: 0.42,
+      opacity: 0.44,
       depthWrite: false,
     }),
   );
@@ -1870,6 +1880,37 @@ export function buildIslandWorld(
   const acaciaLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x7c8f38, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.75, 0.75), roughness: 0.78 }), 'foliage', 0.04));
   const mangroveTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x5c362c, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.94 }), 'wood'));
   const mangroveLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x3b6e2e, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 0.8 }), 'foliage', 0.036));
+  const makeLeafSprayMat = (colorHex: number, windAmp = 0.048) =>
+    registerMaterial(
+      enhanceSurfaceMaterial(
+        applySafeStandardMaps(
+          new THREE.MeshStandardMaterial({
+            color: colorHex,
+            roughness: 0.72,
+            alphaTest: 0.42,
+            side: THREE.DoubleSide,
+            vertexColors: true,
+          }),
+          {
+            map: leafSprayTex,
+            normalMap: leafNormalTex,
+          },
+        ),
+        'foliage',
+        windAmp,
+      ),
+    );
+  const oakSprayMat = makeLeafSprayMat(0x63a634, 0.048);
+  const darkOakSprayMat = makeLeafSprayMat(0x2f6824, 0.036);
+  const jungleSprayMat = makeLeafSprayMat(0x529b36, 0.046);
+  const rainforestSprayMat = makeLeafSprayMat(0x3f8f38, 0.048);
+  const banyanSprayMat = makeLeafSprayMat(0x3b8632, 0.04);
+  const birchSprayMat = makeLeafSprayMat(0x82c242, 0.052);
+  const paleOakSprayMat = makeLeafSprayMat(0x9ca69a, 0.025);
+  const cherrySprayMat = makeLeafSprayMat(0xf472b6, 0.032);
+  const cherryLightSprayMat = makeLeafSprayMat(0xfbcfe8, 0.032);
+  const acaciaSprayMat = makeLeafSprayMat(0x8ea33b, 0.04);
+  const mangroveSprayMat = makeLeafSprayMat(0x4c8532, 0.038);
   const cactusMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x2f7d32, roughness: 0.82 }));
   const blueOrchidMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0284c7, emissiveIntensity: 0.2, roughness: 0.55 }));
   const goldOreCrystalMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xca8a04, emissiveIntensity: 0.32, roughness: 0.22, metalness: 0.88 }));
@@ -1909,6 +1950,54 @@ export function buildIslandWorld(
   const gBox1 = registerGeometry(new THREE.BoxGeometry(1, 1, 1));
   const gCircle8 = registerGeometry(new THREE.CircleGeometry(1, 8));
 
+  // 3D volumetric botanical leaf-spray cluster geometry (4 intersecting arched foliage cards, 16 tris)
+  const gLeafSpray = (() => {
+    const cards = [
+      { rx: 0.16, ry: 0.0, rz: 0.0, yOff: 0.0, shade: 0.96 },
+      { rx: 0.16, ry: Math.PI / 3, rz: 0.08, yOff: 0.06, shade: 1.02 },
+      { rx: -0.16, ry: (Math.PI * 2) / 3, rz: -0.08, yOff: -0.04, shade: 0.92 },
+      { rx: Math.PI * 0.44, ry: 0.35, rz: 0.0, yOff: 0.18, shade: 1.08 },
+    ];
+    const verts: number[] = [];
+    const norms: number[] = [];
+    const uvs: number[] = [];
+    const cols: number[] = [];
+    const indices: number[] = [];
+    const q = new THREE.Euler();
+    const mat4 = new THREE.Matrix4();
+    const v = new THREE.Vector3();
+    const n = new THREE.Vector3();
+    let vBase = 0;
+    for (const c of cards) {
+      q.set(c.rx, c.ry, c.rz);
+      mat4.makeRotationFromEuler(q);
+      const pts: [number, number, number, number, number, number][] = [
+        [-0.78, -0.58, 0.04, 0, 0, 0.72],
+        [0.78, -0.58, 0.04, 1, 0, 0.72],
+        [0.78, 0.62, -0.06, 1, 1, 1.08],
+        [-0.78, 0.62, -0.06, 0, 1, 1.08],
+      ];
+      n.set(0, 0.38, 0.92).normalize().applyMatrix4(mat4);
+      for (const [px, py, pz, pu, pv, br] of pts) {
+        v.set(px, py, pz).applyMatrix4(mat4);
+        verts.push(v.x, v.y + c.yOff, v.z);
+        norms.push(n.x, Math.max(0.28, n.y), n.z);
+        uvs.push(pu, pv);
+        const s = br * c.shade;
+        cols.push(Math.min(1.15, s), Math.min(1.15, s * 1.02), Math.min(1.1, s * 0.92));
+      }
+      indices.push(vBase, vBase + 1, vBase + 2, vBase, vBase + 2, vBase + 3);
+      vBase += 4;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(norms, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+    geo.setIndex(indices);
+    return registerGeometry(geo);
+  })();
+
   interface NodeVisualMeta {
     kind: ResourceNodeKind;
     x: number;
@@ -1930,13 +2019,15 @@ export function buildIslandWorld(
     nodeRand: () => number,
   ) {
     for (let r = 0; r < count; r++) {
-      const a = (r / count) * Math.PI * 2 + nodeRand() * 0.35;
-      const root = new THREE.Mesh(gCylTaper6, trunkMat);
-      root.scale.set(0.22, height, 0.22);
-      root.position.set(Math.cos(a) * spread, height * 0.36, Math.sin(a) * spread);
-      root.rotation.z = Math.cos(a) * 0.55;
-      root.rotation.x = -Math.sin(a) * 0.55;
-      parent.add(root);
+      const a = (r / count) * Math.PI * 2 + (nodeRand() - 0.5) * 0.38;
+      const rootLen = height * (0.95 + nodeRand() * 0.35);
+      const rootMesh = new THREE.Mesh(gCylTaper6, trunkMat);
+      rootMesh.scale.set(0.23, rootLen, 0.23);
+      rootMesh.position.set(Math.cos(a) * spread * 1.18, rootLen * 0.30, Math.sin(a) * spread * 1.18);
+      rootMesh.rotation.z = Math.cos(a) * 0.78;
+      rootMesh.rotation.x = -Math.sin(a) * 0.78;
+      rootMesh.castShadow = shadowsEnabledState;
+      parent.add(rootMesh);
     }
   }
 
@@ -2117,6 +2208,19 @@ export function buildIslandWorld(
                       : isJungle
                         ? rainforestLeafMat
                         : jungleLeafMat;
+      const sprayMat = isDarkOak
+        ? darkOakSprayMat
+        : isOak
+          ? oakSprayMat
+          : isBanyan
+            ? banyanSprayMat
+            : isBirch
+              ? birchSprayMat
+              : isPaleOak
+                ? paleOakSprayMat
+                : isJungle
+                  ? rainforestSprayMat
+                  : jungleSprayMat;
       const baseR = isDarkOak
         ? 0.72
         : isMegaJungle
@@ -2132,33 +2236,33 @@ export function buildIslandWorld(
                   : isOldPine
                     ? 0.48
                     : isCedar || isSpruce || isOak
-                      ? 0.44
+                      ? 0.46
                       : isBirch
-                        ? 0.31
-                        : 0.46;
+                        ? 0.32
+                        : 0.48;
 
       const stumpMesh = new THREE.Group();
       addRootFlares(
         stumpMesh,
         tMat,
-        isBanyan || isJungle || isDarkOak ? 5 : 4,
-        baseR * 0.95,
-        0.85,
+        isBanyan || isJungle || isDarkOak || isOak ? 6 : 5,
+        baseR * 1.05,
+        0.95,
         nodeRand,
       );
       const stumpBase = new THREE.Mesh(gCylTaper8, tMat);
-      stumpBase.scale.set(baseR * 1.12, 0.72, baseR * 1.12);
+      stumpBase.scale.set(baseR * 1.18, 0.76, baseR * 1.18);
       stumpBase.position.y = 0.36;
       stumpBase.castShadow = shadowsEnabledState;
       const stumpTop = new THREE.Mesh(gCircle8, heartwoodCutMat);
-      stumpTop.scale.setScalar(baseR * 0.86);
+      stumpTop.scale.setScalar(baseR * 0.88);
       stumpTop.rotation.x = -Math.PI / 2;
-      stumpTop.position.y = 0.725;
+      stumpTop.position.y = 0.745;
       stumpMesh.add(stumpBase, stumpTop);
       root.add(stumpMesh);
 
       const felledPivot = new THREE.Group();
-      felledPivot.position.y = 0.7;
+      felledPivot.position.y = 0.72;
 
       const trunkH = isOldBirch
         ? 9.2
@@ -2175,17 +2279,20 @@ export function buildIslandWorld(
                   : isPine
                     ? 5.4
                     : isDarkOak
-                      ? 3.8
+                      ? 3.9
                       : isPaleOak
                         ? 4.0
                         : isOak || isBirch
-                          ? 4.5
+                          ? 4.6
                           : isBanyan
-                            ? 4.1
-                            : 4.6;
+                            ? 4.2
+                            : 4.8;
+      const trunkLeanX = (nodeRand() - 0.5) * 0.08;
+      const trunkLeanZ = (nodeRand() - 0.5) * 0.08;
       const upperTrunk = new THREE.Mesh(gCylTaper6, tMat);
-      upperTrunk.scale.set(baseR * 0.88, trunkH, baseR * 0.88);
-      upperTrunk.position.y = trunkH * 0.5;
+      upperTrunk.scale.set(baseR * 0.90, trunkH, baseR * 0.90);
+      upperTrunk.position.set(trunkLeanX * 1.5, trunkH * 0.5, trunkLeanZ * 1.5);
+      upperTrunk.rotation.set(trunkLeanZ, 0, -trunkLeanX);
       upperTrunk.castShadow = shadowsEnabledState;
       felledPivot.add(upperTrunk);
 
@@ -2247,34 +2354,49 @@ export function buildIslandWorld(
           }
         }
       } else {
-        const branchCount = isBanyan || isJungle || isPaleOak || isDarkOak ? 4 : 3;
+        const branchCount = isBanyan || isJungle || isPaleOak || isDarkOak || isOak ? 5 : 4;
         for (let b = 0; b < branchCount; b++) {
-          const ba = (b / branchCount) * Math.PI * 2 + 0.4;
+          const ba = (b / branchCount) * Math.PI * 2 + 0.35 + (nodeRand() - 0.5) * 0.24;
+          const limbLen = isMegaJungle ? 3.2 : isJungle ? 2.6 : 2.3;
+          const limbY = trunkH - 0.85 + (b % 2) * 0.35;
           const limb = new THREE.Mesh(gCylTaper6, tMat);
-          limb.scale.set(
-            isBirch ? 0.13 : 0.2,
-            isMegaJungle ? 2.9 : isJungle ? 2.4 : 2.0,
-            isBirch ? 0.13 : 0.2,
+          limb.scale.set(isBirch ? 0.14 : 0.22, limbLen, isBirch ? 0.14 : 0.22);
+          limb.position.set(
+            Math.cos(ba) * (limbLen * 0.42),
+            limbY + 0.48,
+            Math.sin(ba) * (limbLen * 0.42),
           );
-          limb.position.set(Math.cos(ba) * 0.72, trunkH - 0.45, Math.sin(ba) * 0.72);
-          limb.rotation.z = -Math.cos(ba) * 0.68;
-          limb.rotation.x = Math.sin(ba) * 0.68;
+          limb.rotation.z = -Math.cos(ba) * 0.78;
+          limb.rotation.x = Math.sin(ba) * 0.78;
           limb.castShadow = shadowsEnabledState;
           felledPivot.add(limb);
+
+          // Secondary forked twig branch reaching outward into lower/mid crown
+          const twigAngle = ba + (b % 2 === 0 ? 0.42 : -0.42);
+          const twig = new THREE.Mesh(gCylTaper6, tMat);
+          twig.scale.set(isBirch ? 0.08 : 0.12, limbLen * 0.65, isBirch ? 0.08 : 0.12);
+          twig.position.set(
+            Math.cos(ba) * (limbLen * 0.68) + Math.cos(twigAngle) * 0.42,
+            limbY + 1.05,
+            Math.sin(ba) * (limbLen * 0.68) + Math.sin(twigAngle) * 0.42,
+          );
+          twig.rotation.z = -Math.cos(twigAngle) * 0.88;
+          twig.rotation.x = Math.sin(twigAngle) * 0.88;
+          felledPivot.add(twig);
 
           if (isBanyan) {
             const prop = new THREE.Mesh(gCylStraight5, tMat);
             prop.scale.set(0.06, 2.7, 0.06);
-            prop.position.set(Math.cos(ba) * 1.28, 1.45, Math.sin(ba) * 1.28);
+            prop.position.set(Math.cos(ba) * 1.38, 1.45, Math.sin(ba) * 1.38);
             felledPivot.add(prop);
           }
           if (isJungle) {
             const vine = new THREE.Mesh(gCylStraight5, vineMat);
             vine.scale.set(0.055, isMegaJungle ? 3.8 : 2.6, 0.055);
             vine.position.set(
-              Math.cos(ba) * (isMegaJungle ? 1.85 : 1.45),
+              Math.cos(ba) * (isMegaJungle ? 1.95 : 1.55),
               trunkH - (isMegaJungle ? 1.65 : 1.15),
-              Math.sin(ba) * (isMegaJungle ? 1.85 : 1.45),
+              Math.sin(ba) * (isMegaJungle ? 1.95 : 1.55),
             );
             felledPivot.add(vine);
           }
@@ -2286,43 +2408,83 @@ export function buildIslandWorld(
           }
 
           const clusterR = isMegaJungle
-            ? 2.1
+            ? 2.2
             : isDarkOak
-              ? 1.95
+              ? 2.05
               : isBanyan || isJungle
-                ? 1.65
+                ? 1.75
                 : isPaleOak
-                  ? 1.55
+                  ? 1.6
                   : isBirch
-                    ? 1.18
-                    : 1.4;
-          const cluster = new THREE.Mesh(gDodec1, lMat);
-          cluster.position.set(
-            Math.cos(ba) * (isDarkOak || isMegaJungle ? 1.5 : 1.25),
-            trunkH + (isDarkOak ? 0.15 : 0.35),
-            Math.sin(ba) * (isDarkOak || isMegaJungle ? 1.5 : 1.25),
-          );
-          cluster.scale.set(clusterR * 1.18, clusterR * 0.72, clusterR * 1.18);
-          cluster.castShadow = shadowsEnabledState;
-          felledPivot.add(cluster);
+                    ? 1.25
+                    : 1.55;
+          const cx = Math.cos(ba) * (isDarkOak || isMegaJungle ? 1.72 : 1.48);
+          const cy = trunkH + (isDarkOak ? 0.25 : 0.55) + (b % 2) * 0.3;
+          const cz = Math.sin(ba) * (isDarkOak || isMegaJungle ? 1.72 : 1.48);
+
+          // Shaded interior core casting dappled ground shadows
+          const core = new THREE.Mesh(gDodec1, lMat);
+          core.position.set(cx, cy, cz);
+          core.scale.set(clusterR * 0.72, clusterR * 0.48, clusterR * 0.72);
+          core.castShadow = shadowsEnabledState;
+          felledPivot.add(core);
+
+          // Layered perforated botanical leaf-spray clusters around each branch tip
+          for (let s = 0; s < 2; s++) {
+            const spray = new THREE.Mesh(gLeafSpray, sprayMat);
+            const sa = ba + (s === 0 ? -0.25 : 0.35);
+            spray.position.set(
+              cx + Math.cos(sa) * (clusterR * 0.34),
+              cy + (s === 0 ? 0.15 : 0.52),
+              cz + Math.sin(sa) * (clusterR * 0.34),
+            );
+            spray.rotation.set(
+              (nodeRand() - 0.5) * 0.35,
+              nodeRand() * Math.PI * 2,
+              (nodeRand() - 0.5) * 0.35,
+            );
+            const sc = clusterR * (s === 0 ? 1.35 : 1.15);
+            spray.scale.set(sc, sc * 0.92, sc);
+            felledPivot.add(spray);
+          }
         }
 
         const topR = isMegaJungle
-          ? 2.85
+          ? 2.95
           : isDarkOak
-            ? 2.55
+            ? 2.65
             : isBanyan || isJungle
-              ? 2.25
+              ? 2.35
               : isPaleOak
-                ? 2.05
+                ? 2.1
                 : isBirch
-                  ? 1.55
-                  : 1.92;
-        const topCrown = new THREE.Mesh(gDodec1, lMat);
-        topCrown.position.y = trunkH + (isDarkOak ? 0.65 : 0.95);
-        topCrown.scale.set(topR * 1.22, topR * 0.72, topR * 1.22);
-        topCrown.castShadow = shadowsEnabledState;
-        felledPivot.add(topCrown);
+                  ? 1.65
+                  : 2.05;
+        const topCore = new THREE.Mesh(gDodec1, lMat);
+        topCore.position.y = trunkH + (isDarkOak ? 0.85 : 1.15);
+        topCore.scale.set(topR * 0.76, topR * 0.52, topR * 0.76);
+        topCore.castShadow = shadowsEnabledState;
+        felledPivot.add(topCore);
+
+        // Billowing perforated top crown leaf clusters catching midday sunlight
+        for (let tc = 0; tc < 4; tc++) {
+          const ta = (tc / 4) * Math.PI * 2 + nodeRand() * 0.4;
+          const dist = tc === 0 ? 0.15 : topR * 0.38;
+          const topSpray = new THREE.Mesh(gLeafSpray, sprayMat);
+          topSpray.position.set(
+            Math.cos(ta) * dist,
+            trunkH + (tc === 0 ? 1.65 : 1.25 + (tc % 2) * 0.28),
+            Math.sin(ta) * dist,
+          );
+          topSpray.rotation.set(
+            (nodeRand() - 0.5) * 0.25,
+            nodeRand() * Math.PI * 2,
+            (nodeRand() - 0.5) * 0.25,
+          );
+          const sc = topR * (tc === 0 ? 1.28 : 1.12);
+          topSpray.scale.set(sc, sc * 0.9, sc);
+          felledPivot.add(topSpray);
+        }
       }
 
       root.add(felledPivot);
@@ -2691,38 +2853,52 @@ export function buildIslandWorld(
       ];
       canopyOffsets.forEach(([cx, cy, cz, cr, isLight]) => {
         const puff = new THREE.Mesh(gDodec1, isLight ? cherryBlossomLightMat : cherryLeafMat);
-        puff.scale.set(cr * 1.15, cr * 0.68, cr * 1.15);
+        puff.scale.set(cr * 0.72, cr * 0.48, cr * 0.72);
         puff.position.set(cx, cy, cz);
         puff.castShadow = shadowsEnabledState;
-        felledPivot.add(puff);
+        const spray = new THREE.Mesh(gLeafSpray, isLight ? cherryLightSprayMat : cherrySprayMat);
+        spray.position.set(cx, cy + 0.12, cz);
+        spray.rotation.set((nodeRand() - 0.5) * 0.3, nodeRand() * Math.PI * 2, (nodeRand() - 0.5) * 0.3);
+        spray.scale.set(cr * 1.28, cr * 0.96, cr * 1.28);
+        felledPivot.add(puff, spray);
       });
       root.add(felledPivot);
       root.scale.setScalar(scale);
       return { root, felledPivot, stumpMesh };
     } else if (kind === 'bee_nest_oak') {
       const stumpMesh = new THREE.Group();
-      addRootFlares(stumpMesh, oakTrunkMat, 4, 0.24, 0.45, nodeRand);
+      addRootFlares(stumpMesh, oakTrunkMat, 5, 0.3, 0.62, nodeRand);
       const stumpBase = new THREE.Mesh(gCylTaper8, oakTrunkMat);
-      stumpBase.scale.set(0.32, 0.62, 0.32);
-      stumpBase.position.y = 0.31;
+      stumpBase.scale.set(0.36, 0.65, 0.36);
+      stumpBase.position.y = 0.32;
       stumpMesh.add(stumpBase);
       root.add(stumpMesh);
 
       const felledPivot = new THREE.Group();
       felledPivot.position.y = 0.6;
       const trunk = new THREE.Mesh(gCylTaper8, oakTrunkMat);
-      trunk.scale.set(0.28, 3.4, 0.28);
-      trunk.position.y = 1.7;
+      trunk.scale.set(0.32, 3.6, 0.32);
+      trunk.position.y = 1.8;
       trunk.castShadow = shadowsEnabledState;
       const crown = new THREE.Mesh(gDodec1, oakLeafMat);
-      crown.scale.set(1.95, 1.35, 1.95);
-      crown.position.y = 3.85;
+      crown.scale.set(1.42, 0.95, 1.42);
+      crown.position.y = 3.95;
       crown.castShadow = shadowsEnabledState;
+      felledPivot.add(trunk, crown);
+      for (let s = 0; s < 5; s++) {
+        const sa = (s / 5) * Math.PI * 2 + nodeRand() * 0.4;
+        const dist = s === 0 ? 0.1 : 1.05;
+        const spray = new THREE.Mesh(gLeafSpray, oakSprayMat);
+        spray.position.set(Math.cos(sa) * dist, s === 0 ? 4.35 : 3.75 + (s % 2) * 0.3, Math.sin(sa) * dist);
+        spray.rotation.set((nodeRand() - 0.5) * 0.3, nodeRand() * Math.PI * 2, (nodeRand() - 0.5) * 0.3);
+        spray.scale.set(1.85, 1.55, 1.85);
+        felledPivot.add(spray);
+      }
       // Hanging golden Bee Nest on the side of the trunk under the boughs
       const nest = new THREE.Mesh(gBox1, beeNestMat);
       nest.scale.set(0.55, 0.52, 0.55);
       nest.position.set(0.58, 2.65, 0.2);
-      felledPivot.add(trunk, crown, nest);
+      felledPivot.add(nest);
       root.add(felledPivot);
       root.scale.setScalar(scale);
       return { root, felledPivot, stumpMesh };
@@ -2810,21 +2986,28 @@ export function buildIslandWorld(
       trunk2.position.set(-0.45, 2.4, 0.25);
       trunk2.rotation.z = 0.36;
       const canopy1 = new THREE.Mesh(gCylTaper8, acaciaLeafMat);
-      canopy1.scale.set(2.65, 0.55, 2.35);
+      canopy1.scale.set(1.9, 0.45, 1.7);
       canopy1.position.set(0.7, 3.25, 0);
       canopy1.castShadow = shadowsEnabledState;
       const canopy2 = new THREE.Mesh(gCylTaper8, acaciaLeafMat);
-      canopy2.scale.set(1.85, 0.48, 1.75);
+      canopy2.scale.set(1.35, 0.38, 1.25);
       canopy2.position.set(-0.85, 3.65, 0.35);
       felledPivot.add(trunk1, trunk2, canopy1, canopy2);
+      for (const [ax, ay, az, ar] of [[0.7, 3.35, 0, 2.5], [1.45, 3.3, 0.6, 1.85], [-0.85, 3.72, 0.35, 1.95]]) {
+        const sp = new THREE.Mesh(gLeafSpray, acaciaSprayMat);
+        sp.position.set(ax, ay, az);
+        sp.rotation.set((nodeRand() - 0.5) * 0.16, nodeRand() * Math.PI * 2, (nodeRand() - 0.5) * 0.16);
+        sp.scale.set(ar, ar * 0.48, ar);
+        felledPivot.add(sp);
+      }
       root.add(felledPivot);
       root.scale.setScalar(scale);
       return { root, felledPivot, stumpMesh };
     } else if (kind === 'swamp_oak_tree') {
       const stumpMesh = new THREE.Group();
-      addRootFlares(stumpMesh, darkOakTrunkMat, 4, 0.28, 0.45, nodeRand);
+      addRootFlares(stumpMesh, darkOakTrunkMat, 5, 0.3, 0.55, nodeRand);
       const stumpBase = new THREE.Mesh(gCylTaper8, darkOakTrunkMat);
-      stumpBase.scale.set(0.34, 0.62, 0.34);
+      stumpBase.scale.set(0.36, 0.62, 0.36);
       stumpBase.position.y = 0.31;
       stumpMesh.add(stumpBase);
       root.add(stumpMesh);
@@ -2832,14 +3015,23 @@ export function buildIslandWorld(
       const felledPivot = new THREE.Group();
       felledPivot.position.y = 0.6;
       const trunk = new THREE.Mesh(gCylTaper8, darkOakTrunkMat);
-      trunk.scale.set(0.3, 3.1, 0.3);
+      trunk.scale.set(0.32, 3.1, 0.32);
       trunk.position.y = 1.55;
       trunk.castShadow = shadowsEnabledState;
       const crown = new THREE.Mesh(gDodec1, mangroveLeafMat);
-      crown.scale.set(2.3, 1.35, 2.3);
+      crown.scale.set(1.55, 0.92, 1.55);
       crown.position.y = 3.5;
       crown.castShadow = shadowsEnabledState;
       felledPivot.add(trunk, crown);
+      for (let s = 0; s < 5; s++) {
+        const sa = (s / 5) * Math.PI * 2 + nodeRand() * 0.4;
+        const dist = s === 0 ? 0.1 : 1.15;
+        const sp = new THREE.Mesh(gLeafSpray, mangroveSprayMat);
+        sp.position.set(Math.cos(sa) * dist, s === 0 ? 3.9 : 3.35 + (s % 2) * 0.25, Math.sin(sa) * dist);
+        sp.rotation.set((nodeRand() - 0.5) * 0.28, nodeRand() * Math.PI * 2, (nodeRand() - 0.5) * 0.28);
+        sp.scale.set(2.05, 1.45, 2.05);
+        felledPivot.add(sp);
+      }
       // Hanging swamp vines around the canopy rim
       for (let v = 0; v < 6; v++) {
         const ang = (v / 6) * Math.PI * 2;
@@ -2872,10 +3064,19 @@ export function buildIslandWorld(
       trunk.position.y = 1.55;
       trunk.castShadow = shadowsEnabledState;
       const crown = new THREE.Mesh(gDodec1, mangroveLeafMat);
-      crown.scale.set(2.45, 1.4, 2.45);
+      crown.scale.set(1.65, 0.95, 1.65);
       crown.position.y = 3.55;
       crown.castShadow = shadowsEnabledState;
       felledPivot.add(trunk, crown);
+      for (let s = 0; s < 5; s++) {
+        const sa = (s / 5) * Math.PI * 2 + nodeRand() * 0.4;
+        const dist = s === 0 ? 0.1 : 1.25;
+        const sp = new THREE.Mesh(gLeafSpray, mangroveSprayMat);
+        sp.position.set(Math.cos(sa) * dist, s === 0 ? 3.95 : 3.45 + (s % 2) * 0.25, Math.sin(sa) * dist);
+        sp.rotation.set((nodeRand() - 0.5) * 0.28, nodeRand() * Math.PI * 2, (nodeRand() - 0.5) * 0.28);
+        sp.scale.set(2.15, 1.55, 2.15);
+        felledPivot.add(sp);
+      }
       // Hanging mangrove propagules & vines
       for (let p = 0; p < 5; p++) {
         const ang = (p / 5) * Math.PI * 2 + 0.3;
@@ -3175,6 +3376,31 @@ export function buildIslandWorld(
     );
   });
 
+  // Curated arching palms & tropical coastal nodes framing the southern PLAYER_SPAWN beach cove (walk path clear)
+  const coveFramingNodes: [ResourceNodeKind, number, number, number][] = [
+    ['palm_tree', PLAYER_SPAWN.x + 14.5, PLAYER_SPAWN.z - 15.5, 1.24],
+    ['palm_tree', PLAYER_SPAWN.x - 16.5, PLAYER_SPAWN.z - 14.0, 1.18],
+    ['palm_tree', PLAYER_SPAWN.x + 22.0, PLAYER_SPAWN.z - 6.0, 1.12],
+    ['palm_tree', PLAYER_SPAWN.x - 24.0, PLAYER_SPAWN.z - 5.5, 1.15],
+    ['palm_tree', PLAYER_SPAWN.x + 29.0, PLAYER_SPAWN.z - 19.0, 1.08],
+    ['palm_tree', PLAYER_SPAWN.x - 30.0, PLAYER_SPAWN.z - 18.0, 1.10],
+    ['fiber_fern', PLAYER_SPAWN.x + 11.5, PLAYER_SPAWN.z - 10.5, 1.05],
+    ['fiber_fern', PLAYER_SPAWN.x - 12.0, PLAYER_SPAWN.z - 11.0, 1.0],
+    ['berry_bush', PLAYER_SPAWN.x + 16.0, PLAYER_SPAWN.z - 12.0, 1.08],
+  ];
+  coveFramingNodes.forEach(([kind, cx, cz, sc], idx) => {
+    if (getTerrainHeight(cx, cz) >= 0.45) {
+      addResourceNode(
+        `cove_frame_${idx}`,
+        kind,
+        cx,
+        cz,
+        sc,
+        kind === 'palm_tree',
+      );
+    }
+  });
+
   // Cave ore, mountain rocks & flint nodes
   [
     [CAVE_POS.x - 1.5, CAVE_POS.z - 2.2],
@@ -3355,20 +3581,42 @@ export function buildIslandWorld(
   const garageGroup = new THREE.Group();
   garageGroup.position.set(VEHICLE_GARAGE_POS.x, garageGroundY, VEHICLE_GARAGE_POS.z);
 
-  const concreteBaseMat = new THREE.MeshStandardMaterial({
-    color: 0x57534e,
-    map: rockTex,
-    roughness: 0.88,
+  const concretePbr = getPolishedConcretePbr(maxAniso);
+  const concreteBaseMat = new THREE.MeshPhysicalMaterial({
+    color: 0x6b7280,
+    map: concretePbr.map,
+    normalMap: concretePbr.normalMap,
+    normalScale: new THREE.Vector2(0.45, 0.45),
+    roughnessMap: concretePbr.roughnessMap,
+    roughness: 0.16,
+    metalness: 0.28,
+    clearcoat: 0.82,
+    clearcoatRoughness: 0.12,
+    envMapIntensity: 1.55,
   });
-  const concreteBayPadMat = new THREE.MeshStandardMaterial({
-    color: 0x3f3f46,
-    roughness: 0.72,
-    metalness: 0.1,
+  const concreteBayPadMat = new THREE.MeshPhysicalMaterial({
+    color: 0x4b5563,
+    map: concretePbr.map,
+    normalMap: concretePbr.normalMap,
+    normalScale: new THREE.Vector2(0.35, 0.35),
+    roughnessMap: concretePbr.roughnessMap,
+    roughness: 0.14,
+    metalness: 0.32,
+    clearcoat: 0.88,
+    clearcoatRoughness: 0.1,
+    envMapIntensity: 1.65,
   });
-  const apronMat = new THREE.MeshStandardMaterial({
-    color: 0x6b6760,
-    map: rockTex,
-    roughness: 0.92,
+  const apronMat = new THREE.MeshPhysicalMaterial({
+    color: 0x78716c,
+    map: concretePbr.map,
+    normalMap: concretePbr.normalMap,
+    normalScale: new THREE.Vector2(0.48, 0.48),
+    roughnessMap: concretePbr.roughnessMap,
+    roughness: 0.22,
+    metalness: 0.22,
+    clearcoat: 0.65,
+    clearcoatRoughness: 0.16,
+    envMapIntensity: 1.4,
   });
   const steelFrameMat = new THREE.MeshStandardMaterial({
     color: 0x1e293b,
@@ -3423,26 +3671,38 @@ export function buildIslandWorld(
     metalness: 0.55,
   });
 
-  // Main leveled concrete foundation pad (28.0m x 13.0m for 4 bays)
-  const garagePad = new THREE.Mesh(new THREE.BoxGeometry(28.0, 0.18, 13.0), concreteBaseMat);
+  // Main leveled polished reflective concrete foundation pad (28.0m x 13.0m for 4 bays)
+  const garagePad = new THREE.Mesh(
+    ensureGeometryHasUv(new THREE.BoxGeometry(28.0, 0.18, 13.0)),
+    concreteBaseMat,
+  );
   garagePad.position.set(0, 0.04, 0);
   garagePad.receiveShadow = true;
+  garagePad.userData.preserveEnvMapIntensity = true;
   garageGroup.add(garagePad);
 
-  // Wide beveled concrete driveway apron leading south (+Z) onto the island trails & beach
-  const driveApron = new THREE.Mesh(new THREE.BoxGeometry(28.6, 0.12, 3.8), apronMat);
+  // Wide beveled polished concrete driveway apron leading south (+Z) onto the island trails & beach
+  const driveApron = new THREE.Mesh(
+    ensureGeometryHasUv(new THREE.BoxGeometry(28.6, 0.12, 3.8)),
+    apronMat,
+  );
   driveApron.position.set(0, 0.01, 7.8);
   driveApron.rotation.x = 0.045;
   driveApron.receiveShadow = true;
+  driveApron.userData.preserveEnvMapIntensity = true;
   garageGroup.add(driveApron);
 
   // 4 Distinct Covered Custom Bays: Bay 1 (-9 Lowrider), Bay 2 (-3 DONK), Bay 3 (+3 SLAB), Bay 4 (+9 Cadillac Coupe DeVille)
   const bayCenters = [-9.0, -3.0, 3.0, 9.0];
   bayCenters.forEach((bx, bayIdx) => {
     const trimMat = bayTrimMats[bayIdx];
-    const bayPad = new THREE.Mesh(new THREE.BoxGeometry(5.0, 0.04, 8.2), concreteBayPadMat);
+    const bayPad = new THREE.Mesh(
+      ensureGeometryHasUv(new THREE.BoxGeometry(5.0, 0.04, 8.2)),
+      concreteBayPadMat,
+    );
     bayPad.position.set(bx, 0.145, 0.6);
     bayPad.receiveShadow = true;
+    bayPad.userData.preserveEnvMapIntensity = true;
     garageGroup.add(bayPad);
 
     [-2.42, 2.42].forEach((sideOffset) => {
@@ -5142,188 +5402,624 @@ export function buildIslandWorld(
     count++;
   }
 
-  // 10. Performance-Friendly Instanced Ambient Crossed-Blade Grass Tufts & Minimal River/Mountain Pebbles
-  const grassCount = 2600;
-  const bladeCount = 4;
-  const grassPositions = new Float32Array(bladeCount * 9);
-  const grassColors = new Float32Array(bladeCount * 9);
-  for (let b = 0; b < bladeCount; b++) {
-    const a = b * (Math.PI / bladeCount) + (b % 2) * 0.14;
-    const w = 0.068;
-    const h = 0.44 + (b % 2) * 0.16;
-    const leanX = Math.cos(a + 1.15) * 0.12;
-    const leanZ = Math.sin(a + 1.15) * 0.12;
-    const off = b * 9;
-    grassPositions[off] = -Math.sin(a) * w;
-    grassPositions[off + 1] = 0;
-    grassPositions[off + 2] = Math.cos(a) * w;
-    grassPositions[off + 3] = Math.sin(a) * w;
-    grassPositions[off + 4] = 0;
-    grassPositions[off + 5] = -Math.cos(a) * w;
-    grassPositions[off + 6] = leanX;
-    grassPositions[off + 7] = h;
-    grassPositions[off + 8] = leanZ;
+  // 10. Spatially Chunked (120m x 120m) 8-Blade Arched Grass Carpets, Meadow Wildflowers & River Pebbles
+  const grassBladeCount = 8;
+  const grassVertsPerBlade = 5;
+  const grassTrisPerBlade = 3;
+  const grassPositions = new Float32Array(grassBladeCount * grassVertsPerBlade * 3);
+  const grassNormals = new Float32Array(grassBladeCount * grassVertsPerBlade * 3);
+  const grassUvs = new Float32Array(grassBladeCount * grassVertsPerBlade * 2);
+  const grassColors = new Float32Array(grassBladeCount * grassVertsPerBlade * 3);
+  const grassIndices = new Uint16Array(grassBladeCount * grassTrisPerBlade * 3);
 
-    // Dark root AO -> bright sunlit tip
-    grassColors[off] = 0.48;
-    grassColors[off + 1] = 0.56;
-    grassColors[off + 2] = 0.42;
-    grassColors[off + 3] = 0.48;
-    grassColors[off + 4] = 0.56;
-    grassColors[off + 5] = 0.42;
-    grassColors[off + 6] = 1.0;
-    grassColors[off + 7] = 1.0;
-    grassColors[off + 8] = 0.94;
+  for (let b = 0; b < grassBladeCount; b++) {
+    const az = (b / grassBladeCount) * Math.PI * 2 + (b % 2) * 0.24;
+    const perpX = -Math.sin(az);
+    const perpZ = Math.cos(az);
+    const dirX = Math.cos(az);
+    const dirZ = Math.sin(az);
+    const baseDist = 0.03 + (b % 3) * 0.042;
+    const ox = dirX * baseDist;
+    const oz = dirZ * baseDist;
+    const baseW = 0.042 + (b % 2) * 0.01;
+    const midW = baseW * 0.58;
+    const h = 0.38 + (b % 3) * 0.11;
+    const archMid = 0.065 + (b % 2) * 0.035;
+    const archTip = 0.2 + (b % 3) * 0.06;
+
+    const vBase = b * grassVertsPerBlade;
+    const pOff = vBase * 3;
+    // 0: base left, 1: base right
+    grassPositions[pOff + 0] = ox - perpX * baseW;
+    grassPositions[pOff + 1] = 0.0;
+    grassPositions[pOff + 2] = oz - perpZ * baseW;
+    grassPositions[pOff + 3] = ox + perpX * baseW;
+    grassPositions[pOff + 4] = 0.0;
+    grassPositions[pOff + 5] = oz + perpZ * baseW;
+    // 2: mid left, 3: mid right
+    grassPositions[pOff + 6] = ox + dirX * archMid - perpX * midW;
+    grassPositions[pOff + 7] = h * 0.54;
+    grassPositions[pOff + 8] = oz + dirZ * archMid - perpZ * midW;
+    grassPositions[pOff + 9] = ox + dirX * archMid + perpX * midW;
+    grassPositions[pOff + 10] = h * 0.54;
+    grassPositions[pOff + 11] = oz + dirZ * archMid + perpZ * midW;
+    // 4: tip
+    grassPositions[pOff + 12] = ox + dirX * archTip;
+    grassPositions[pOff + 13] = h;
+    grassPositions[pOff + 14] = oz + dirZ * archTip;
+
+    // Outward-and-upward normals for rich daylight & rim wrap
+    const nLen = Math.hypot(dirX * 0.45, 0.88, dirZ * 0.45);
+    const nx = (dirX * 0.45) / nLen;
+    const ny = 0.88 / nLen;
+    const nz = (dirZ * 0.45) / nLen;
+    for (let k = 0; k < grassVertsPerBlade; k++) {
+      grassNormals[pOff + k * 3 + 0] = nx;
+      grassNormals[pOff + k * 3 + 1] = ny;
+      grassNormals[pOff + k * 3 + 2] = nz;
+    }
+
+    const uvOff = vBase * 2;
+    grassUvs[uvOff + 0] = 0;
+    grassUvs[uvOff + 1] = 0;
+    grassUvs[uvOff + 2] = 1;
+    grassUvs[uvOff + 3] = 0;
+    grassUvs[uvOff + 4] = 0.15;
+    grassUvs[uvOff + 5] = 0.55;
+    grassUvs[uvOff + 6] = 0.85;
+    grassUvs[uvOff + 7] = 0.55;
+    grassUvs[uvOff + 8] = 0.5;
+    grassUvs[uvOff + 9] = 1;
+
+    // Root AO -> mid vibrant meadow green -> sunlit chartreuse tip
+    grassColors[pOff + 0] = 0.2;
+    grassColors[pOff + 1] = 0.34;
+    grassColors[pOff + 2] = 0.12;
+    grassColors[pOff + 3] = 0.2;
+    grassColors[pOff + 4] = 0.34;
+    grassColors[pOff + 5] = 0.12;
+    grassColors[pOff + 6] = 0.58;
+    grassColors[pOff + 7] = 0.8;
+    grassColors[pOff + 8] = 0.24;
+    grassColors[pOff + 9] = 0.58;
+    grassColors[pOff + 10] = 0.8;
+    grassColors[pOff + 11] = 0.24;
+    grassColors[pOff + 12] = 0.98;
+    grassColors[pOff + 13] = 1.0;
+    grassColors[pOff + 14] = 0.48;
+
+    const iOff = b * grassTrisPerBlade * 3;
+    grassIndices[iOff + 0] = vBase + 0;
+    grassIndices[iOff + 1] = vBase + 1;
+    grassIndices[iOff + 2] = vBase + 2;
+    grassIndices[iOff + 3] = vBase + 1;
+    grassIndices[iOff + 4] = vBase + 3;
+    grassIndices[iOff + 5] = vBase + 2;
+    grassIndices[iOff + 6] = vBase + 2;
+    grassIndices[iOff + 7] = vBase + 3;
+    grassIndices[iOff + 8] = vBase + 4;
   }
+
   const grassBladeGeo = registerGeometry(new THREE.BufferGeometry());
   grassBladeGeo.setAttribute('position', new THREE.BufferAttribute(grassPositions, 3));
+  grassBladeGeo.setAttribute('normal', new THREE.BufferAttribute(grassNormals, 3));
+  grassBladeGeo.setAttribute('uv', new THREE.BufferAttribute(grassUvs, 2));
   grassBladeGeo.setAttribute('color', new THREE.BufferAttribute(grassColors, 3));
-  ensureGeometryHasUv(grassBladeGeo);
-  grassBladeGeo.computeVertexNormals();
+  grassBladeGeo.setIndex(new THREE.BufferAttribute(grassIndices, 1));
+
+  // Oxeye Daisy & Buttercup Floret Geometry (crossed slender stem + 6-petal flower crown + pollen disc)
+  const buildFloretGeometry = (): THREE.BufferGeometry => {
+    const pos: number[] = [];
+    const col: number[] = [];
+    const pushTri = (
+      x1: number,
+      y1: number,
+      z1: number,
+      c1: [number, number, number],
+      x2: number,
+      y2: number,
+      z2: number,
+      c2: [number, number, number],
+      x3: number,
+      y3: number,
+      z3: number,
+      c3: [number, number, number],
+    ) => {
+      pos.push(x1, y1, z1, x2, y2, z2, x3, y3, z3);
+      col.push(...c1, ...c2, ...c3);
+    };
+    const stemBase: [number, number, number] = [0.22, 0.42, 0.14];
+    const stemTop: [number, number, number] = [0.46, 0.72, 0.22];
+    const petalInner: [number, number, number] = [0.95, 0.94, 0.88];
+    const petalOuter: [number, number, number] = [1.0, 1.0, 1.0];
+    const centerGold: [number, number, number] = [1.0, 0.84, 0.16];
+    const h = 0.42;
+    // Two crossed slender stem blades
+    pushTri(-0.014, 0, 0, stemBase, 0.014, 0, 0, stemBase, 0.008, h, 0.02, stemTop);
+    pushTri(0, 0, -0.014, stemBase, 0, 0, 0.014, stemBase, 0.008, h, 0.02, stemTop);
+    // 6-petal slightly cupped blossom head at stem tip
+    const cx = 0.008;
+    const cy = h + 0.005;
+    const cz = 0.02;
+    for (let p = 0; p < 6; p++) {
+      const a0 = (p / 6) * Math.PI * 2;
+      const aL = a0 - 0.36;
+      const aR = a0 + 0.36;
+      const rOuter = 0.072;
+      pushTri(
+        cx,
+        cy,
+        cz,
+        petalInner,
+        cx + Math.cos(aL) * rOuter,
+        cy + 0.014,
+        cz + Math.sin(aL) * rOuter,
+        petalOuter,
+        cx + Math.cos(aR) * rOuter,
+        cy + 0.014,
+        cz + Math.sin(aR) * rOuter,
+        petalOuter,
+      );
+    }
+    // Raised golden center disc (3 small triangles)
+    for (let p = 0; p < 3; p++) {
+      const a0 = (p / 3) * Math.PI * 2;
+      const a1 = ((p + 1) / 3) * Math.PI * 2;
+      pushTri(
+        cx,
+        cy + 0.02,
+        cz,
+        centerGold,
+        cx + Math.cos(a0) * 0.022,
+        cy + 0.008,
+        cz + Math.sin(a0) * 0.022,
+        centerGold,
+        cx + Math.cos(a1) * 0.022,
+        cy + 0.008,
+        cz + Math.sin(a1) * 0.022,
+        centerGold,
+      );
+    }
+    const geo = registerGeometry(new THREE.BufferGeometry());
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    ensureGeometryHasUv(geo);
+    geo.computeVertexNormals();
+    return geo;
+  };
+
+  // Purple Lupine Wildflower Spike Geometry (slender stem + 3 tiered violet blossom whorls)
+  const buildLupineGeometry = (): THREE.BufferGeometry => {
+    const pos: number[] = [];
+    const col: number[] = [];
+    const pushTri = (
+      x1: number,
+      y1: number,
+      z1: number,
+      c1: [number, number, number],
+      x2: number,
+      y2: number,
+      z2: number,
+      c2: [number, number, number],
+      x3: number,
+      y3: number,
+      z3: number,
+      c3: [number, number, number],
+    ) => {
+      pos.push(x1, y1, z1, x2, y2, z2, x3, y3, z3);
+      col.push(...c1, ...c2, ...c3);
+    };
+    const stemBase: [number, number, number] = [0.18, 0.36, 0.14];
+    const stemMid: [number, number, number] = [0.34, 0.56, 0.22];
+    pushTri(-0.016, 0, 0, stemBase, 0.016, 0, 0, stemBase, 0, 0.58, 0, stemMid);
+    pushTri(0, 0, -0.016, stemBase, 0, 0, 0.016, stemBase, 0, 0.58, 0, stemMid);
+    const tiers = [
+      { y: 0.32, r: 0.056, h: 0.12, tone: 0.82 },
+      { y: 0.42, r: 0.044, h: 0.11, tone: 0.92 },
+      { y: 0.51, r: 0.03, h: 0.1, tone: 1.0 },
+    ];
+    for (let t = 0; t < tiers.length; t++) {
+      const tier = tiers[t];
+      const baseC: [number, number, number] = [0.85 * tier.tone, 0.72 * tier.tone, 1.0 * tier.tone];
+      const tipC: [number, number, number] = [0.96, 0.88, 1.0];
+      for (let s = 0; s < 4; s++) {
+        const a0 = (s / 4) * Math.PI * 2 + t * 0.45;
+        const a1 = a0 + Math.PI * 0.5;
+        pushTri(
+          Math.cos(a0) * tier.r,
+          tier.y,
+          Math.sin(a0) * tier.r,
+          baseC,
+          Math.cos(a1) * tier.r,
+          tier.y,
+          Math.sin(a1) * tier.r,
+          baseC,
+          0,
+          tier.y + tier.h,
+          0,
+          tipC,
+        );
+      }
+    }
+    const geo = registerGeometry(new THREE.BufferGeometry());
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    ensureGeometryHasUv(geo);
+    geo.computeVertexNormals();
+    return geo;
+  };
+
+  const floretGeo = buildFloretGeometry();
+  const lupineGeo = buildLupineGeometry();
 
   const ambientGrassMat = registerMaterial(
     enhanceSurfaceMaterial(
       new THREE.MeshStandardMaterial({
         color: 0xffffff,
-        roughness: 0.78,
+        roughness: 0.76,
         side: THREE.DoubleSide,
         vertexColors: true,
       }),
       'foliage',
-      0.055,
+      0.06,
     ),
   );
-  const grassInstanced = new THREE.InstancedMesh(grassBladeGeo, ambientGrassMat, grassCount);
-  grassInstanced.receiveShadow = true;
-  grassInstanced.userData.noShadowCast = true;
+  const floretMat = registerMaterial(
+    enhanceSurfaceMaterial(
+      new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: 0.65,
+        side: THREE.DoubleSide,
+        vertexColors: true,
+      }),
+      'foliage',
+      0.048,
+    ),
+  );
+  const lupineMat = registerMaterial(
+    enhanceSurfaceMaterial(
+      new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: 0.66,
+        side: THREE.DoubleSide,
+        vertexColors: true,
+      }),
+      'foliage',
+      0.048,
+    ),
+  );
+
+  const CHUNK_SIZE = 120;
+  interface ChunkBucket {
+    cx: number;
+    cz: number;
+    matrices: THREE.Matrix4[];
+    colors: THREE.Color[];
+  }
+  const grassBuckets = new Map<string, ChunkBucket>();
+  const floretBuckets = new Map<string, ChunkBucket>();
+  const lupineBuckets = new Map<string, ChunkBucket>();
+  const pushToChunk = (
+    map: Map<string, ChunkBucket>,
+    wx: number,
+    wz: number,
+    mat: THREE.Matrix4,
+    col: THREE.Color,
+  ) => {
+    const ix = Math.floor(wx / CHUNK_SIZE);
+    const iz = Math.floor(wz / CHUNK_SIZE);
+    const key = `${ix}_${iz}`;
+    let bucket = map.get(key);
+    if (!bucket) {
+      bucket = {
+        cx: (ix + 0.5) * CHUNK_SIZE,
+        cz: (iz + 0.5) * CHUNK_SIZE,
+        matrices: [],
+        colors: [],
+      };
+      map.set(key, bucket);
+    }
+    bucket.matrices.push(mat.clone());
+    bucket.colors.push(col.clone());
+  };
+
+  const grassTarget = 44000;
+  const floretTarget = 6500;
+  const lupineTarget = 1800;
   const pebbleCount = 180;
-  const pebbleGeo = new THREE.DodecahedronGeometry(0.14, 0);
+  const pebbleGeo = registerGeometry(new THREE.DodecahedronGeometry(0.14, 0));
   const pebbleInstanced = new THREE.InstancedMesh(pebbleGeo, smallStoneMat, pebbleCount);
+  pebbleInstanced.receiveShadow = true;
+  pebbleInstanced.castShadow = false;
+  pebbleInstanced.userData.noShadowCast = true;
 
   const dummy = new THREE.Object3D();
   const tintColor = new THREE.Color();
   let gPlaced = 0;
+  let flPlaced = 0;
+  let luPlaced = 0;
   let pPlaced = 0;
 
-  for (let i = 0; i < 9500 && (gPlaced < grassCount || pPlaced < pebbleCount); i++) {
-    const a = rand() * Math.PI * 2;
-    const rad = 16 + Math.sqrt(rand()) * 725;
-    const px = Math.cos(a) * rad;
-    const pz = Math.sin(a) * rad;
-    const py = getTerrainHeight(px, pz);
-    const biome = getBiomeAt(px, pz);
-    if (py < 0.4) continue;
-    if (Math.hypot(px - SNOWY_WOODLAND_POS.x, pz - SNOWY_WOODLAND_POS.z) < 14) continue;
-    if (Math.hypot(px - AUTUMN_GROVE_POS.x, pz - AUTUMN_GROVE_POS.z) < 11) continue;
-    if (Math.hypot(px - SWAMP_POS.x, pz - SWAMP_POS.z) < SWAMP_POS.radius + 2.5) continue;
-    if (Math.hypot(px - TRIAL_CHAMBERS_POS.x, pz - TRIAL_CHAMBERS_POS.z) < 5.5) continue;
-    if (Math.hypot(px - WOODLAND_MANSION_POS.x, pz - WOODLAND_MANSION_POS.z) < 9.5) continue;
-    if (Math.hypot(px - TAIGA_VILLAGE_POS.x, pz - TAIGA_VILLAGE_POS.z) < 8.5) continue;
-    if (Math.hypot(px - PILLAGER_OUTPOST_POS.x, pz - PILLAGER_OUTPOST_POS.z) < 5.5) continue;
-    if (Math.hypot(px - TRAIL_RUINS_POS.x, pz - TRAIL_RUINS_POS.z) < 5.5) continue;
-    if (Math.hypot(px - SNOWY_VILLAGE_POS.x, pz - SNOWY_VILLAGE_POS.z) < 8.5) continue;
-    if (Math.hypot(px - SNOWY_IGLOO_POS.x, pz - SNOWY_IGLOO_POS.z) < 5.5) continue;
-    if (Math.hypot(px - JUNGLE_TEMPLE_POS.x, pz - JUNGLE_TEMPLE_POS.z) < 7.5) continue;
-    if (Math.hypot(px - WHEATFIELD_POS.x, pz - WHEATFIELD_POS.z) < 9.0) continue;
-    if (Math.hypot(px - FARMER_POS.x, pz - FARMER_POS.z) < 8.5) continue;
-    if (Math.hypot(px - HILL_HOUSE_POS.x, pz - HILL_HOUSE_POS.z) < 16.5) continue;
+  const isClearOfStructures = (px: number, pz: number): boolean => {
+    if (Math.hypot(px - SNOWY_WOODLAND_POS.x, pz - SNOWY_WOODLAND_POS.z) < 14) return false;
+    if (Math.hypot(px - AUTUMN_GROVE_POS.x, pz - AUTUMN_GROVE_POS.z) < 11) return false;
+    if (Math.hypot(px - SWAMP_POS.x, pz - SWAMP_POS.z) < SWAMP_POS.radius + 2.5) return false;
+    if (Math.hypot(px - TRIAL_CHAMBERS_POS.x, pz - TRIAL_CHAMBERS_POS.z) < 5.5) return false;
+    if (Math.hypot(px - WOODLAND_MANSION_POS.x, pz - WOODLAND_MANSION_POS.z) < 9.5) return false;
+    if (Math.hypot(px - TAIGA_VILLAGE_POS.x, pz - TAIGA_VILLAGE_POS.z) < 8.5) return false;
+    if (Math.hypot(px - PILLAGER_OUTPOST_POS.x, pz - PILLAGER_OUTPOST_POS.z) < 5.5) return false;
+    if (Math.hypot(px - TRAIL_RUINS_POS.x, pz - TRAIL_RUINS_POS.z) < 5.5) return false;
+    if (Math.hypot(px - SNOWY_VILLAGE_POS.x, pz - SNOWY_VILLAGE_POS.z) < 8.5) return false;
+    if (Math.hypot(px - SNOWY_IGLOO_POS.x, pz - SNOWY_IGLOO_POS.z) < 5.5) return false;
+    if (Math.hypot(px - JUNGLE_TEMPLE_POS.x, pz - JUNGLE_TEMPLE_POS.z) < 7.5) return false;
+    if (Math.hypot(px - WHEATFIELD_POS.x, pz - WHEATFIELD_POS.z) < 9.0) return false;
+    if (Math.hypot(px - FARMER_POS.x, pz - FARMER_POS.z) < 8.5) return false;
+    if (Math.hypot(px - HILL_HOUSE_POS.x, pz - HILL_HOUSE_POS.z) < 16.5) return false;
     if (
       px >= HILL_HOUSE_POS.x + 3 &&
       px <= HILL_HOUSE_POS.x + 23 &&
       Math.abs(pz - HILL_HOUSE_POS.z) < 5.5
     ) {
-      continue;
+      return false;
     }
-    if (Math.hypot(px - VEHICLE_GARAGE_POS.x, pz - VEHICLE_GARAGE_POS.z) < 19.5) continue;
+    if (Math.hypot(px - VEHICLE_GARAGE_POS.x, pz - VEHICLE_GARAGE_POS.z) < 19.5) return false;
     if (
       px >= VEHICLE_GARAGE_POS.x - 18 &&
       px <= VEHICLE_GARAGE_POS.x + 28 &&
       pz >= VEHICLE_GARAGE_POS.z - 6 &&
       pz <= VEHICLE_GARAGE_POS.z + 24
     ) {
-      continue;
+      return false;
     }
+    return true;
+  };
 
-    const isCoastalGrassEdge = biome === 'beach' && py >= 1.15 && py <= 3.6;
-    const isVegetatedBiome =
-      biome === 'forest' ||
-      biome === 'dark_forest' ||
-      biome === 'grassland' ||
-      biome === 'meadow' ||
-      biome === 'cherry_grove' ||
-      biome === 'flower_forest' ||
-      biome === 'birch_forest' ||
-      biome === 'old_growth_birch_forest' ||
-      biome === 'pale_garden' ||
-      biome === 'taiga' ||
-      biome === 'old_growth_pine_taiga' ||
-      biome === 'old_growth_spruce_taiga' ||
-      biome === 'snowy_taiga' ||
-      biome === 'jungle' ||
-      biome === 'sparse_jungle' ||
-      biome === 'bamboo_jungle' ||
-      biome === 'savanna' ||
-      biome === 'swamp' ||
-      isCoastalGrassEdge;
+  // Sample meadow & forest patches with lush natural clustering (fast CPU gen + seamless grass carpet)
+  for (let i = 0; i < 29000 && gPlaced < grassTarget; i++) {
+    const a = rand() * Math.PI * 2;
+    const rad =
+      i < 9500
+        ? 8 + Math.sqrt(rand()) * 275
+        : 16 + Math.sqrt(rand()) * 715;
+    const ax = Math.cos(a) * rad;
+    const az = Math.sin(a) * rad;
+    const ay = getTerrainHeight(ax, az);
+    const biome = getBiomeAt(ax, az);
+    if (ay < 0.4) continue;
+    if (!isClearOfStructures(ax, az)) continue;
 
-    if (gPlaced < grassCount && isVegetatedBiome) {
-      dummy.position.set(px, py - 0.02, pz);
-      dummy.rotation.set((rand() - 0.5) * 0.22, rand() * Math.PI * 2, (rand() - 0.5) * 0.22);
-      const sc = 0.85 + rand() * 0.85;
-      dummy.scale.set(
-        sc,
-        sc * (biome === 'dark_forest' || biome === 'snowy_taiga' ? 0.45 : 0.82 + rand() * 0.65),
-        sc,
-      );
-      dummy.updateMatrix();
-      grassInstanced.setMatrixAt(gPlaced, dummy.matrix);
-      const grassHex =
-        isCoastalGrassEdge
-          ? 0x769f38
-          : biome === 'grassland' || biome === 'meadow'
-            ? 0x84a93c
-            : biome === 'savanna'
-              ? 0xa4943a
-              : biome === 'cherry_grove'
-                ? 0x6ca848
-                : biome === 'dark_forest'
-                  ? 0x6c4c28
-                  : biome === 'pale_garden'
-                    ? 0x9aa69d
-                    : biome === 'snowy_taiga'
-                      ? 0xdce6f0
-                      : biome === 'taiga' ||
-                          biome === 'old_growth_pine_taiga' ||
-                          biome === 'old_growth_spruce_taiga'
-                        ? 0x346944
-                        : biome === 'jungle' || biome === 'bamboo_jungle' || biome === 'swamp'
-                          ? 0x2f7532
-                          : biome === 'flower_forest' || biome === 'birch_forest'
-                            ? 0x5ca438
-                            : 0x4b8730;
-      tintColor.setHex(grassHex).offsetHSL((rand() - 0.5) * 0.03, 0, (rand() - 0.5) * 0.08);
-      grassInstanced.setColorAt(gPlaced, tintColor);
-      gPlaced++;
-    } else if (pPlaced < pebbleCount && (biome === 'river' || (biome === 'beach' && py < 1.35))) {
-      dummy.position.set(px, py + 0.02, pz);
+    if (pPlaced < pebbleCount && (biome === 'river' || (biome === 'beach' && ay < 1.35))) {
+      dummy.position.set(ax, ay + 0.02, az);
       dummy.rotation.set(rand() * 2, rand() * 3, rand() * 2);
       const sc = 0.55 + rand() * 0.9;
       dummy.scale.set(sc * 1.25, sc * 0.52, sc);
       dummy.updateMatrix();
       pebbleInstanced.setMatrixAt(pPlaced, dummy.matrix);
       pPlaced++;
+      continue;
+    }
+
+    const isCoastalGrassEdge = biome === 'beach' && ay >= 1.15 && ay <= 3.6;
+    const isMeadowLike =
+      biome === 'grassland' ||
+      biome === 'meadow' ||
+      biome === 'sparse_jungle' ||
+      biome === 'flower_forest' ||
+      biome === 'birch_forest' ||
+      biome === 'old_growth_birch_forest' ||
+      biome === 'forest';
+    const isVegetatedBiome =
+      isMeadowLike ||
+      biome === 'dark_forest' ||
+      biome === 'cherry_grove' ||
+      biome === 'pale_garden' ||
+      biome === 'taiga' ||
+      biome === 'old_growth_pine_taiga' ||
+      biome === 'old_growth_spruce_taiga' ||
+      biome === 'snowy_taiga' ||
+      biome === 'jungle' ||
+      biome === 'bamboo_jungle' ||
+      biome === 'savanna' ||
+      biome === 'swamp' ||
+      biome === 'windswept_hills' ||
+      isCoastalGrassEdge;
+    if (!isVegetatedBiome) continue;
+
+    const grassHex = isCoastalGrassEdge
+      ? 0x769f38
+      : biome === 'grassland' || biome === 'meadow' || biome === 'sparse_jungle'
+        ? 0x86ad3b
+        : biome === 'savanna'
+          ? 0xa4943a
+          : biome === 'cherry_grove'
+            ? 0x6ca848
+            : biome === 'dark_forest'
+              ? 0x6c4c28
+              : biome === 'pale_garden'
+                ? 0x9aa69d
+                : biome === 'snowy_taiga'
+                  ? 0xdce6f0
+                  : biome === 'taiga' ||
+                      biome === 'old_growth_pine_taiga' ||
+                      biome === 'old_growth_spruce_taiga'
+                    ? 0x346944
+                    : biome === 'jungle' || biome === 'bamboo_jungle' || biome === 'swamp'
+                      ? 0x327c35
+                      : biome === 'flower_forest' || biome === 'birch_forest'
+                        ? 0x63a638
+                        : 0x528f32;
+
+    const clumpCount = isMeadowLike ? 3 : 2;
+    for (let c = 0; c < clumpCount && gPlaced < grassTarget; c++) {
+      const ca = rand() * Math.PI * 2;
+      const cr = c === 0 ? 0 : 0.42 + rand() * 1.35;
+      const px = ax + Math.cos(ca) * cr;
+      const pz = az + Math.sin(ca) * cr;
+      const py = c === 0 ? ay : getTerrainHeight(px, pz);
+      if (py < 0.4) continue;
+      dummy.position.set(px, py - 0.03, pz);
+      dummy.rotation.set((rand() - 0.5) * 0.24, rand() * Math.PI * 2, (rand() - 0.5) * 0.24);
+      const sc = 0.85 + rand() * 0.92;
+      dummy.scale.set(
+        sc * 1.15,
+        sc * (biome === 'dark_forest' || biome === 'snowy_taiga' ? 0.45 : 0.82 + rand() * 0.68),
+        sc * 1.15,
+      );
+      dummy.updateMatrix();
+      tintColor.setHex(grassHex).offsetHSL((rand() - 0.5) * 0.03, 0.02, (rand() - 0.5) * 0.09);
+      pushToChunk(grassBuckets, px, pz, dummy.matrix, tintColor);
+      gPlaced++;
+    }
+
+    // Wildflower clusters in open meadows, plains, flower_forest, birch_forest & sparse_jungle
+    if (isMeadowLike && flPlaced < floretTarget && rand() < 0.24) {
+      const flowerPatch = 1 + Math.floor(rand() * 3);
+      const isButtercup = rand() < 0.32;
+      for (let f = 0; f < flowerPatch && flPlaced < floretTarget; f++) {
+        const fa = rand() * Math.PI * 2;
+        const fr = 0.2 + rand() * 1.65;
+        const fx = ax + Math.cos(fa) * fr;
+        const fz = az + Math.sin(fa) * fr;
+        const fy = getTerrainHeight(fx, fz);
+        if (fy < 0.65) continue;
+        dummy.position.set(fx, fy - 0.015, fz);
+        dummy.rotation.set((rand() - 0.5) * 0.22, rand() * Math.PI * 2, (rand() - 0.5) * 0.22);
+        const fsc = 0.85 + rand() * 0.55;
+        dummy.scale.set(fsc, fsc * (0.85 + rand() * 0.4), fsc);
+        dummy.updateMatrix();
+        tintColor
+          .setHex(isButtercup ? 0xfacc15 : 0xfefcf5)
+          .offsetHSL((rand() - 0.5) * 0.015, 0, (rand() - 0.5) * 0.04);
+        pushToChunk(floretBuckets, fx, fz, dummy.matrix, tintColor);
+        flPlaced++;
+      }
+    }
+
+    // Purple Lupine Wildflower Clusters
+    if (isMeadowLike && luPlaced < lupineTarget && rand() < 0.065) {
+      const lupinePatch = 2 + Math.floor(rand() * 3);
+      for (let l = 0; l < lupinePatch && luPlaced < lupineTarget; l++) {
+        const la = rand() * Math.PI * 2;
+        const lr = 0.15 + rand() * 1.25;
+        const lx = ax + Math.cos(la) * lr;
+        const lz = az + Math.sin(la) * lr;
+        const ly = getTerrainHeight(lx, lz);
+        if (ly < 0.75) continue;
+        dummy.position.set(lx, ly - 0.02, lz);
+        dummy.rotation.set((rand() - 0.5) * 0.18, rand() * Math.PI * 2, (rand() - 0.5) * 0.18);
+        const lsc = 0.9 + rand() * 0.45;
+        dummy.scale.set(lsc, lsc * (0.9 + rand() * 0.35), lsc);
+        dummy.updateMatrix();
+        tintColor
+          .setHex(l % 2 === 0 ? 0x8b6fd9 : 0x7654cc)
+          .offsetHSL((rand() - 0.5) * 0.025, 0.04, (rand() - 0.5) * 0.08);
+        pushToChunk(lupineBuckets, lx, lz, dummy.matrix, tintColor);
+        luPlaced++;
+      }
     }
   }
-  grassInstanced.count = gPlaced;
-  grassInstanced.instanceMatrix.needsUpdate = true;
-  if (grassInstanced.instanceColor) grassInstanced.instanceColor.needsUpdate = true;
-  grassInstanced.computeBoundingSphere();
-  overworldGroup.add(grassInstanced);
+
+  interface FoliageChunkEntry {
+    mesh: THREE.InstancedMesh;
+    cx: number;
+    cz: number;
+  }
+  const foliageChunkEntries: FoliageChunkEntry[] = [];
+  const finalizeFoliageChunks = (
+    buckets: Map<string, ChunkBucket>,
+    geo: THREE.BufferGeometry,
+    mat: THREE.Material,
+  ) => {
+    for (const bucket of buckets.values()) {
+      const count = bucket.matrices.length;
+      if (count === 0) continue;
+      const im = new THREE.InstancedMesh(geo, mat, count);
+      im.castShadow = false;
+      im.receiveShadow = true;
+      im.userData.noShadowCast = true;
+      for (let k = 0; k < count; k++) {
+        im.setMatrixAt(k, bucket.matrices[k]);
+        im.setColorAt(k, bucket.colors[k]);
+      }
+      im.instanceMatrix.needsUpdate = true;
+      if (im.instanceColor) im.instanceColor.needsUpdate = true;
+      im.computeBoundingSphere();
+      im.updateMatrix();
+      im.matrixAutoUpdate = false;
+      overworldGroup.add(im);
+      foliageChunkEntries.push({ mesh: im, cx: bucket.cx, cz: bucket.cz });
+    }
+  };
+  finalizeFoliageChunks(grassBuckets, grassBladeGeo, ambientGrassMat);
+  finalizeFoliageChunks(floretBuckets, floretGeo, floretMat);
+  finalizeFoliageChunks(lupineBuckets, lupineGeo, lupineMat);
 
   pebbleInstanced.count = pPlaced;
   pebbleInstanced.instanceMatrix.needsUpdate = true;
   pebbleInstanced.computeBoundingSphere();
   overworldGroup.add(pebbleInstanced);
+
+  // Embedded Mossy Hillside Limestone Boulders (1 static InstancedMesh draw call)
+  const meadowBoulderMat = registerMaterial(
+    enhanceSurfaceMaterial(
+      applySafeStandardMaps(
+        new THREE.MeshStandardMaterial({
+          color: 0x6b675e,
+          roughness: 0.9,
+        }),
+        {
+          map: rockTex,
+          normalMap: rockNormalTex,
+          roughnessMap: rockRoughnessTex,
+        },
+      ),
+      'rock',
+    ),
+  );
+  meadowBoulderMat.normalScale.set(1.2, 1.2);
+  const meadowBoulderCount = 260;
+  const meadowBoulderInstanced = new THREE.InstancedMesh(
+    gDodec1,
+    meadowBoulderMat,
+    meadowBoulderCount,
+  );
+  meadowBoulderInstanced.castShadow = false;
+  meadowBoulderInstanced.receiveShadow = true;
+  meadowBoulderInstanced.userData.noShadowCast = true;
+  let mbPlaced = 0;
+  for (let i = 0; i < 6500 && mbPlaced < meadowBoulderCount; i++) {
+    const a = rand() * Math.PI * 2;
+    const rad = i < 2400 ? 12 + Math.sqrt(rand()) * 265 : 18 + Math.sqrt(rand()) * 695;
+    const bx = Math.cos(a) * rad;
+    const bz = Math.sin(a) * rad;
+    const by = getTerrainHeight(bx, bz);
+    if (by < 2.2) continue;
+    const biome = getBiomeAt(bx, bz);
+    if (
+      biome !== 'sparse_jungle' &&
+      biome !== 'grassland' &&
+      biome !== 'meadow' &&
+      biome !== 'windswept_hills' &&
+      biome !== 'forest' &&
+      biome !== 'birch_forest' &&
+      biome !== 'flower_forest'
+    ) {
+      continue;
+    }
+    if (!isClearOfStructures(bx, bz)) continue;
+    const bs = 0.72 + rand() * 1.15;
+    dummy.position.set(bx, by - 0.16 * bs, bz);
+    dummy.rotation.set((rand() - 0.5) * 0.45, rand() * Math.PI * 2, (rand() - 0.5) * 0.45);
+    dummy.scale.set(bs * (1.2 + rand() * 0.55), bs * (0.36 + rand() * 0.22), bs * (1.05 + rand() * 0.45));
+    dummy.updateMatrix();
+    meadowBoulderInstanced.setMatrixAt(mbPlaced++, dummy.matrix);
+  }
+  meadowBoulderInstanced.count = mbPlaced;
+  meadowBoulderInstanced.instanceMatrix.needsUpdate = true;
+  meadowBoulderInstanced.computeBoundingSphere();
+  meadowBoulderInstanced.updateMatrix();
+  meadowBoulderInstanced.matrixAutoUpdate = false;
+  overworldGroup.add(meadowBoulderInstanced);
 
   // 10b. Instanced Dark Volcanic Shoreline Boulders & Crimson Tropical Hibiscus Bushes (3 total draw calls)
   const volcanicShoreBoulderMat = registerMaterial(
@@ -5343,7 +6039,7 @@ export function buildIslandWorld(
     ),
   );
   volcanicShoreBoulderMat.normalScale.set(1.25, 1.25);
-  const shoreBoulderCount = 140;
+  const shoreBoulderCount = 220;
   const shoreBoulderInstanced = new THREE.InstancedMesh(
     gDodec1,
     volcanicShoreBoulderMat,
@@ -5375,14 +6071,14 @@ export function buildIslandWorld(
       new THREE.MeshStandardMaterial({
         color: 0xdc2626,
         emissive: 0x7f1d1d,
-        emissiveIntensity: 0.12,
+        emissiveIntensity: 0.14,
         roughness: 0.55,
       }),
       'foliage',
       0.04,
     ),
   );
-  const hibiscusBushCount = 95;
+  const hibiscusBushCount = 150;
   const hibiscusLeafInstanced = new THREE.InstancedMesh(
     gSphere7,
     hibiscusLeafMat,
@@ -5400,32 +6096,75 @@ export function buildIslandWorld(
   hibiscusFlowerInstanced.castShadow = false;
   hibiscusFlowerInstanced.userData.noShadowCast = true;
 
+  // Sun-bleached coastal driftwood logs along the wet shoreline tide line (1 InstancedMesh draw call)
+  const driftwoodMat = registerMaterial(
+    enhanceSurfaceMaterial(
+      applySafeStandardMaps(
+        new THREE.MeshStandardMaterial({
+          color: 0x7c654f,
+          roughness: 0.90,
+        }),
+        {
+          map: barkTex,
+          normalMap: barkNormalTex,
+        },
+      ),
+      'wood',
+    ),
+  );
+  const driftwoodCount = 85;
+  const driftwoodInstanced = new THREE.InstancedMesh(
+    gCylTaper8,
+    driftwoodMat,
+    driftwoodCount,
+  );
+  driftwoodInstanced.castShadow = false;
+  driftwoodInstanced.receiveShadow = true;
+  driftwoodInstanced.userData.noShadowCast = true;
+
   let sbPlaced = 0;
   let hbPlaced = 0;
   let hfPlaced = 0;
-  for (let i = 0; i < 4200 && (sbPlaced < shoreBoulderCount || hbPlaced < hibiscusBushCount); i++) {
-    const a = rand() * Math.PI * 2;
-    const rad = 18 + Math.sqrt(rand()) * 210;
-    const bx = Math.cos(a) * rad;
-    const bz = Math.sin(a) * rad;
+  let dwPlaced = 0;
+  for (let i = 0; i < 9500 && (sbPlaced < shoreBoulderCount || hbPlaced < hibiscusBushCount || dwPlaced < driftwoodCount); i++) {
+    let bx: number;
+    let bz: number;
+    // Focus ~30% of samples around the southern cove shoreline near PLAYER_SPAWN, 70% around full island beach ring
+    if (i < 1600) {
+      bx = PLAYER_SPAWN.x + (rand() - 0.5) * 260;
+      bz = PLAYER_SPAWN.z - 55 + rand() * 135;
+    } else {
+      const a = rand() * Math.PI * 2;
+      const rad = 240 + rand() * 560;
+      bx = Math.cos(a) * rad;
+      bz = Math.sin(a) * rad;
+    }
     const by = getTerrainHeight(bx, bz);
     const bBiome = getBiomeAt(bx, bz);
     if (Math.hypot(bx - PLAYER_SPAWN.x, bz - PLAYER_SPAWN.z) < 5.5) continue;
     if (Math.hypot(bx - HILL_HOUSE_POS.x, bz - HILL_HOUSE_POS.z) < 16.5) continue;
     if (Math.hypot(bx - VEHICLE_GARAGE_POS.x, bz - VEHICLE_GARAGE_POS.z) < 18.5) continue;
 
-    if (sbPlaced < shoreBoulderCount && bBiome === 'beach' && by >= -0.35 && by <= 1.45) {
+    if (sbPlaced < shoreBoulderCount && bBiome === 'beach' && by >= -0.35 && by <= 1.55) {
       dummy.position.set(bx, by - 0.14, bz);
       dummy.rotation.set(rand() * 0.4, rand() * Math.PI * 2, rand() * 0.4);
-      const s = 0.65 + rand() * 0.95;
-      dummy.scale.set(s * (1.2 + rand() * 0.45), s * (0.48 + rand() * 0.25), s * (1.1 + rand() * 0.4));
+      const s = 0.65 + rand() * 1.05;
+      dummy.scale.set(s * (1.25 + rand() * 0.45), s * (0.48 + rand() * 0.25), s * (1.1 + rand() * 0.4));
       dummy.updateMatrix();
       shoreBoulderInstanced.setMatrixAt(sbPlaced++, dummy.matrix);
+    } else if (dwPlaced < driftwoodCount && bBiome === 'beach' && by >= 0.08 && by <= 1.25 && rand() < 0.48) {
+      dummy.position.set(bx, by + 0.04, bz);
+      dummy.rotation.set(Math.PI / 2 + (rand() - 0.5) * 0.18, rand() * Math.PI * 2, (rand() - 0.5) * 0.15);
+      const dLen = 1.6 + rand() * 2.2;
+      const dRad = 0.11 + rand() * 0.09;
+      dummy.scale.set(dRad, dLen, dRad * 0.85);
+      dummy.updateMatrix();
+      driftwoodInstanced.setMatrixAt(dwPlaced++, dummy.matrix);
     } else if (
       hbPlaced < hibiscusBushCount &&
       (bBiome === 'beach' || bBiome === 'jungle' || bBiome === 'sparse_jungle' || bBiome === 'flower_forest') &&
-      by >= 1.15 &&
-      by <= 5.2
+      by >= 0.95 &&
+      by <= 5.4
     ) {
       const bScale = 0.72 + rand() * 0.58;
       dummy.position.set(bx, by + 0.34 * bScale, bz);
@@ -5463,6 +6202,13 @@ export function buildIslandWorld(
   shoreBoulderInstanced.matrixAutoUpdate = false;
   overworldGroup.add(shoreBoulderInstanced);
 
+  driftwoodInstanced.count = dwPlaced;
+  driftwoodInstanced.instanceMatrix.needsUpdate = true;
+  driftwoodInstanced.computeBoundingSphere();
+  driftwoodInstanced.updateMatrix();
+  driftwoodInstanced.matrixAutoUpdate = false;
+  overworldGroup.add(driftwoodInstanced);
+
   hibiscusLeafInstanced.count = hbPlaced;
   hibiscusLeafInstanced.instanceMatrix.needsUpdate = true;
   if (hibiscusLeafInstanced.instanceColor) hibiscusLeafInstanced.instanceColor.needsUpdate = true;
@@ -5478,6 +6224,91 @@ export function buildIslandWorld(
   hibiscusFlowerInstanced.updateMatrix();
   hibiscusFlowerInstanced.matrixAutoUpdate = false;
   overworldGroup.add(hibiscusFlowerInstanced);
+
+  // Soaring coastal gulls gliding overhead in 1 GPU-animated InstancedMesh (0 CPU loop overhead)
+  const seabirdGeo = registerGeometry(new THREE.BufferGeometry());
+  const birdPositions = new Float32Array([
+    // Left wing triangle
+    0.0, 0.0, 0.24,
+    -1.05, 0.14, -0.18,
+    0.0, 0.04, -0.28,
+    // Right wing triangle
+    0.0, 0.0, 0.24,
+    0.0, 0.04, -0.28,
+    1.05, 0.14, -0.18,
+  ]);
+  const birdNormals = new Float32Array([
+    0, 1, 0, 0, 1, 0, 0, 1, 0,
+    0, 1, 0, 0, 1, 0, 0, 1, 0,
+  ]);
+  seabirdGeo.setAttribute('position', new THREE.BufferAttribute(birdPositions, 3));
+  seabirdGeo.setAttribute('normal', new THREE.BufferAttribute(birdNormals, 3));
+  ensureGeometryHasUv(seabirdGeo);
+  const seabirdMat = registerMaterial(
+    new THREE.MeshStandardMaterial({
+      color: 0x1e2430,
+      roughness: 0.72,
+      side: THREE.DoubleSide,
+    }),
+  );
+  seabirdMat.customProgramCacheKey = () => 'si_seabird_flight_v2';
+  seabirdMat.onBeforeCompile = (shader) => {
+    shader.uniforms.uBirdTime = waterfallShaderMat.uniforms.uTime;
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+uniform float uBirdTime;
+`,
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+float bInstId = float(gl_InstanceID);
+float flap = sin(uBirdTime * 4.6 + bInstId * 1.9) * abs(transformed.x) * 0.36;
+transformed.y += flap;
+`,
+      )
+      .replace(
+        '#include <project_vertex>',
+        `vec4 mvPosition = vec4( transformed, 1.0 );
+#ifdef USE_INSTANCING
+  mvPosition = instanceMatrix * mvPosition;
+#endif
+float glideAngle = uBirdTime * 0.16 + float(gl_InstanceID) * 0.9;
+mvPosition.x += cos(glideAngle) * 14.0;
+mvPosition.z += sin(glideAngle) * 14.0;
+mvPosition = modelViewMatrix * mvPosition;
+gl_Position = projectionMatrix * mvPosition;`,
+      );
+  };
+  const seabirdCount = 14;
+  const seabirdInstanced = new THREE.InstancedMesh(seabirdGeo, seabirdMat, seabirdCount);
+  seabirdInstanced.castShadow = false;
+  seabirdInstanced.receiveShadow = false;
+  seabirdInstanced.frustumCulled = false;
+  seabirdInstanced.userData.noShadowCast = true;
+  for (let b = 0; b < seabirdCount; b++) {
+    const ba = (b / seabirdCount) * Math.PI * 2;
+    const isNearSpawn = b < 6;
+    const bx = isNearSpawn
+      ? PLAYER_SPAWN.x + (b - 2.5) * 26 + (rand() - 0.5) * 18
+      : WATERFALL_POS.x + Math.cos(ba) * (28 + rand() * 44);
+    const bz = isNearSpawn
+      ? PLAYER_SPAWN.z - 55 - rand() * 75
+      : WATERFALL_POS.z + Math.sin(ba) * (28 + rand() * 44);
+    const by = 24 + rand() * 20;
+    dummy.position.set(bx, by, bz);
+    dummy.rotation.set(0, rand() * Math.PI * 2, 0);
+    const bs = 1.05 + rand() * 0.55;
+    dummy.scale.setScalar(bs);
+    dummy.updateMatrix();
+    seabirdInstanced.setMatrixAt(b, dummy.matrix);
+  }
+  seabirdInstanced.instanceMatrix.needsUpdate = true;
+  seabirdInstanced.updateMatrix();
+  seabirdInstanced.matrixAutoUpdate = false;
+  overworldGroup.add(seabirdInstanced);
 
   // Finalize all batched InstancedMeshes with bounding spheres for accurate frustum culling
   for (const [key, entry] of batchRegistry.entries()) {
@@ -5529,8 +6360,6 @@ export function buildIslandWorld(
   // Freeze static matrices on terrain and instanced foliage/resources to skip per-frame matrix recomputation
   terrainMesh.updateMatrix();
   terrainMesh.matrixAutoUpdate = false;
-  grassInstanced.updateMatrix();
-  grassInstanced.matrixAutoUpdate = false;
   pebbleInstanced.updateMatrix();
   pebbleInstanced.matrixAutoUpdate = false;
   for (const im of builtBatchMeshes.values()) {
@@ -5546,11 +6375,14 @@ export function buildIslandWorld(
     cloudsGroup,
     farmerNpcGroup,
     waterfallFoam,
-    grassInstanced,
     pebbleInstanced,
+    meadowBoulderInstanced,
     shoreBoulderInstanced,
+    driftwoodInstanced,
+    seabirdInstanced,
     hibiscusLeafInstanced,
     hibiscusFlowerInstanced,
+    ...foliageChunkEntries.map((c) => c.mesh),
     ...waterfallStreams,
   ]);
   const cullableLandmarks: {
@@ -5612,6 +6444,16 @@ export function buildIslandWorld(
     maxDist: number,
     budgetQueue?: FrameBudgetQueue,
   ): void => {
+    const chunkRangeSq = (250 + 85) * (250 + 85);
+    for (let i = 0; i < foliageChunkEntries.length; i++) {
+      const fc = foliageChunkEntries[i];
+      const dx = fc.cx - px;
+      const dz = fc.cz - pz;
+      const showChunk = dx * dx + dz * dz <= chunkRangeSq;
+      if (fc.mesh.visible !== showChunk) {
+        fc.mesh.visible = showChunk;
+      }
+    }
     for (let i = 0; i < cullablePointLights.length; i++) {
       const pl = cullablePointLights[i];
       const dx = pl.wx - px;

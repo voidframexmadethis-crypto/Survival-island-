@@ -199,25 +199,27 @@ export function createGroundDetailTexture(renderer: THREE.WebGLRenderer): THREE.
   const img = ctx.createImageData(size, size);
   const d = img.data;
 
-  // High-brightness neutral-warm detail texture so vertex biome colors multiply cleanly
-  // while delivering crisp sand grains, pebble flecks, and organic ground contrast.
+  // Rich natural turf/soil/sand micro-contrast so vertex biome colors multiply cleanly
+  // while delivering crisp grass-soil mottling, pebble flecks, and organic ground depth.
   for (let y = 0; y < size; y++) {
     const hy = (y >> 1) * hSize;
+    const v = y / size;
     for (let x = 0; x < size; x++) {
       const hv = heights[hy + (x >> 1)];
       const grain = fastHash2D(x, y, 503);
       const micro = fastHash2D(x >> 1, y >> 1, 709);
-      const isPebble = grain > 0.986;
-      const isDarkFlecks = grain < 0.032;
+      const clod = periodicFbm(x / size, v, 12, 2, 853);
+      const isPebble = grain > 0.985;
+      const isDarkFlecks = grain < 0.042;
 
-      let lum = 192 + hv * 62 + (micro - 0.5) * 20;
-      if (isPebble) lum += 22;
-      else if (isDarkFlecks) lum -= 44;
+      let lum = 176 + hv * 72 + (clod - 0.5) * 34 + (micro - 0.5) * 22;
+      if (isPebble) lum += 24;
+      else if (isDarkFlecks) lum -= 52;
 
       const idx = (y * size + x) * 4;
       d[idx] = clamp255(lum * 1.01);
       d[idx + 1] = clamp255(lum * 1.0);
-      d[idx + 2] = clamp255(lum * 0.97);
+      d[idx + 2] = clamp255(lum * 0.96);
       d[idx + 3] = 255;
     }
   }
@@ -282,21 +284,21 @@ export function createBarkTexture(renderer: THREE.WebGLRenderer): THREE.CanvasTe
   const img = ctx.createImageData(size, size);
   const d = img.data;
 
-  // Neutral-warm furrowed bark albedo so tree material tints (palm/oak/birch/spruce) stay accurate
+  // Deeply furrowed bark albedo with crisp dark fissures & subtle sunlit ridges
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const hv = heights[y * size + x];
       const streak = fastHash2D(x, y >> 2, 313);
       const lichen = periodicFbm(x / size, y / size, 6, 2, 419);
-      const crevice = hv < 0.32 ? (0.32 - hv) * 1.15 : 0;
-      let r = 135 + hv * 88 - crevice * 75 + (streak - 0.5) * 22;
-      let g = 122 + hv * 80 - crevice * 68 + (streak - 0.5) * 18;
-      let b = 108 + hv * 72 - crevice * 60 + (streak - 0.5) * 16;
-      if (lichen > 0.72) {
-        const m = (lichen - 0.72) * 2.2;
-        r = r * (1 - m * 0.25) + 150 * m * 0.25;
-        g = g * (1 - m * 0.25) + 168 * m * 0.25;
-        b = b * (1 - m * 0.25) + 132 * m * 0.25;
+      const crevice = hv < 0.36 ? (0.36 - hv) * 1.38 : 0;
+      let r = 126 + hv * 102 - crevice * 88 + (streak - 0.5) * 26;
+      let g = 114 + hv * 92 - crevice * 80 + (streak - 0.5) * 22;
+      let b = 100 + hv * 82 - crevice * 70 + (streak - 0.5) * 18;
+      if (lichen > 0.7) {
+        const m = (lichen - 0.7) * 2.4;
+        r = r * (1 - m * 0.28) + 148 * m * 0.28;
+        g = g * (1 - m * 0.28) + 170 * m * 0.28;
+        b = b * (1 - m * 0.28) + 122 * m * 0.28;
       }
       const idx = (y * size + x) * 4;
       d[idx] = clamp255(r);
@@ -320,7 +322,7 @@ export function createBarkNormalTexture(renderer: THREE.WebGLRenderer): THREE.Da
   const size = 256;
   const heights = getBarkHeightField(size);
   const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-  return createTangentNormalTextureFromHeights(heights, size, 3.2, 2, 3, aniso);
+  return createTangentNormalTextureFromHeights(heights, size, 3.6, 2, 3, aniso);
 }
 
 export function createWaterNormalTexture(renderer: THREE.WebGLRenderer): THREE.CanvasTexture {
@@ -550,38 +552,37 @@ export function createLeafCanopyTexture(renderer: THREE.WebGLRenderer): THREE.Ca
   const ctx = canvas.getContext('2d')!;
   const rand = makeSeededRand(9091);
 
-  // Neutral-bright shaded leaf mosaic so material color tints (oak/palm/cherry/spruce) stay vibrant
-  ctx.fillStyle = '#5c7a52';
+  // Deep interior foliage shadow backdrop so overlapped leaves have rich depth
+  ctx.fillStyle = '#2f4c1c';
   ctx.fillRect(0, 0, size, size);
 
-  for (let i = 0; i < 1400; i++) {
+  for (let i = 0; i < 1800; i++) {
     const x = rand() * size;
     const y = rand() * size;
-    const rx = 5 + rand() * 8;
-    const ry = 2.4 + rand() * 4.2;
+    const rx = 5.5 + rand() * 8.5;
+    const ry = 2.6 + rand() * 4.4;
     const ang = rand() * Math.PI;
-    const shade = 118 + Math.floor(rand() * 118);
-    const r = Math.floor(shade * 0.78);
-    const g = Math.floor(shade * 1.02);
-    const b = Math.floor(shade * 0.66);
+    const tier = rand();
+    const lum = tier < 0.3 ? 115 + rand() * 40 : tier < 0.78 ? 165 + rand() * 48 : 208 + rand() * 42;
+    const r = Math.floor(lum * 0.84);
+    const g = Math.floor(lum * 1.04);
+    const b = Math.floor(lum * 0.56);
 
-    // Wrap across edges so tiling is seamless
     for (const ox of [-size, 0, size]) {
       for (const oy of [-size, 0, size]) {
         const px = x + ox;
         const py = y + oy;
         if (px < -20 || px > size + 20 || py < -20 || py > size + 20) continue;
-        ctx.fillStyle = `rgba(${r},${g},${b},0.62)`;
+        ctx.fillStyle = `rgba(${r},${g},${b},0.78)`;
         ctx.beginPath();
         ctx.ellipse(px, py, rx, ry, ang, 0, Math.PI * 2);
         ctx.fill();
 
-        // Crisp sunlit leaf midrib
-        ctx.strokeStyle = `rgba(${Math.min(255, r + 40)},${Math.min(255, g + 35)},${Math.min(255, b + 20)},0.35)`;
+        ctx.strokeStyle = `rgba(${Math.min(255, r + 48)},${Math.min(255, g + 42)},${Math.min(255, b + 20)},0.42)`;
         ctx.lineWidth = 0.9;
         ctx.beginPath();
-        ctx.moveTo(px - Math.cos(ang) * rx * 0.75, py - Math.sin(ang) * rx * 0.75);
-        ctx.lineTo(px + Math.cos(ang) * rx * 0.75, py + Math.sin(ang) * rx * 0.75);
+        ctx.moveTo(px - Math.cos(ang) * rx * 0.78, py - Math.sin(ang) * rx * 0.78);
+        ctx.lineTo(px + Math.cos(ang) * rx * 0.78, py + Math.sin(ang) * rx * 0.78);
         ctx.stroke();
       }
     }
@@ -596,11 +597,93 @@ export function createLeafCanopyTexture(renderer: THREE.WebGLRenderer): THREE.Ca
   return tex;
 }
 
+/**
+ * Generates an alpha-cutout botanical broadleaf foliage cluster sprite sheet
+ * with crisp pointed leaves, woody twig stems, sunlit tips, and natural air gaps
+ * so tree canopies break into realistic crisp leafy silhouettes via alphaTest.
+ */
+export function createLeafSprayTexture(renderer: THREE.WebGLRenderer): THREE.CanvasTexture {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const rand = makeSeededRand(7431);
+
+  ctx.clearRect(0, 0, size, size);
+
+  // Subtle dark woody twig skeleton branching from cluster center
+  ctx.lineCap = 'round';
+  for (let t = 0; t < 7; t++) {
+    const ta = (t / 7) * Math.PI * 2 + (rand() - 0.5) * 0.35;
+    const tLen = size * (0.22 + rand() * 0.16);
+    ctx.strokeStyle = 'rgba(72, 52, 32, 0.95)';
+    ctx.lineWidth = 2.6;
+    ctx.beginPath();
+    ctx.moveTo(size * 0.5, size * 0.5);
+    ctx.lineTo(size * 0.5 + Math.cos(ta) * tLen, size * 0.5 + Math.sin(ta) * tLen);
+    ctx.stroke();
+  }
+
+  // Paint ~165 pointed overlapping broadleaf oak/tropical leaves inside an organic radial cluster
+  for (let i = 0; i < 175; i++) {
+    const radial = Math.pow(rand(), 0.62) * (size * 0.41);
+    const theta = rand() * Math.PI * 2;
+    const cx = size * 0.5 + Math.cos(theta) * radial;
+    const cy = size * 0.5 + Math.sin(theta) * radial;
+    const leafLen = (11 + rand() * 14) * (1.08 - (radial / (size * 0.44)) * 0.25);
+    const leafWid = leafLen * (0.42 + rand() * 0.14);
+    const rot = theta + (rand() - 0.5) * 0.95;
+
+    // Brighter sunlit chartreuse toward outer cluster perimeter & top, richer shaded green near core
+    const edgeLight = radial / (size * 0.42);
+    const sunMix = Math.min(1, edgeLight * 0.72 + (1 - cy / size) * 0.35 + (rand() - 0.5) * 0.25);
+    const r = Math.floor(118 + sunMix * 98);
+    const g = Math.floor(155 + sunMix * 84);
+    const b = Math.floor(68 + sunMix * 36);
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(rot);
+
+    // Pointed botanical leaf silhouette
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.beginPath();
+    ctx.moveTo(-leafLen * 0.55, 0);
+    ctx.quadraticCurveTo(0, -leafWid, leafLen * 0.62, 0);
+    ctx.quadraticCurveTo(0, leafWid, -leafLen * 0.55, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    // Subtle dark leaf rim & crisp central vein
+    ctx.strokeStyle = `rgba(${Math.max(0, r - 45)},${Math.max(0, g - 45)},${Math.max(0, b - 24)},0.65)`;
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+
+    ctx.strokeStyle = `rgba(${Math.min(255, r + 42)},${Math.min(255, g + 38)},${Math.min(255, b + 16)},0.72)`;
+    ctx.lineWidth = 1.0;
+    ctx.beginPath();
+    ctx.moveTo(-leafLen * 0.48, 0);
+    ctx.lineTo(leafLen * 0.52, 0);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  tex.needsUpdate = true;
+  return tex;
+}
+
 export function createLeafNormalTexture(renderer: THREE.WebGLRenderer): THREE.DataTexture {
   const size = 256;
   const heights = getLeafHeightField(size);
   const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-  return createTangentNormalTextureFromHeights(heights, size, 2.2, 2, 2, aniso);
+  return createTangentNormalTextureFromHeights(heights, size, 2.5, 2, 2, aniso);
 }
 
 export interface PbrTextureSet {
@@ -624,34 +707,34 @@ export function createGunmetalTextureSet(anisotropy = 4): PbrTextureSet {
     // Horizontal brushed machining lines + crisp slide serration & chamfer edge wear
     const brushBand = fastHash2D(0, y, 811);
     const serration =
-      v > 0.72 && v < 0.95 ? Math.sin(v * 90 * Math.PI * 2) * 0.38 : 0;
+      v > 0.72 && v < 0.95 ? Math.sin(v * 90 * Math.PI * 2) * 0.42 : 0;
     for (let x = 0; x < size; x++) {
       const u = x / size;
       const micro = fastHash2D(x, y, 823);
-      const streak = periodicSmoothNoise(u * 0.18, v * 4.5, 16, 829);
-      const scratch = micro > 0.985 ? 0.24 : 0;
+      const streak = periodicSmoothNoise(u * 0.16, v * 5.2, 16, 829);
+      const scratch = micro > 0.982 ? 0.30 : 0;
       const edgeWear =
-        Math.abs(u - 0.5) > 0.43 || Math.abs(v - 0.5) > 0.43 ? 0.34 : 0;
+        Math.abs(u - 0.5) > 0.41 || Math.abs(v - 0.5) > 0.41 ? 0.44 : 0;
       const hVal = Math.max(
         0,
         Math.min(
           1,
-          0.5 + (brushBand - 0.5) * 0.24 + (micro - 0.5) * 0.2 + serration + scratch,
+          0.5 + (brushBand - 0.5) * 0.28 + (micro - 0.5) * 0.22 + serration + scratch,
         ),
       );
       heights[y * size + x] = hVal;
 
       const base =
-        54 +
-        streak * 28 +
-        (brushBand - 0.5) * 18 +
-        (micro - 0.5) * 12 +
-        edgeWear * 62 +
-        scratch * 52;
+        46 +
+        streak * 30 +
+        (brushBand - 0.5) * 20 +
+        (micro - 0.5) * 14 +
+        edgeWear * 78 +
+        scratch * 62;
       const idx = (y * size + x) * 4;
-      d[idx] = clamp255(base * 0.95);
-      d[idx + 1] = clamp255(base * 0.98);
-      d[idx + 2] = clamp255(base * 1.05);
+      d[idx] = clamp255(base * 0.94);
+      d[idx + 1] = clamp255(base * 0.97);
+      d[idx + 2] = clamp255(base * 1.04);
       d[idx + 3] = 255;
     }
   }
@@ -666,7 +749,7 @@ export function createGunmetalTextureSet(anisotropy = 4): PbrTextureSet {
   const normalMap = createTangentNormalTextureFromHeights(
     heights,
     size,
-    2.35,
+    2.65,
     1,
     1,
     anisotropy,
@@ -674,8 +757,8 @@ export function createGunmetalTextureSet(anisotropy = 4): PbrTextureSet {
   const roughnessMap = createRoughnessTextureFromHeights(
     heights,
     size,
-    0.18,
-    0.46,
+    0.16,
+    0.44,
     true,
     1,
     1,
@@ -755,18 +838,24 @@ export function createTacticalGloveTextureSet(anisotropy = 4): PbrTextureSet {
   const d = img.data;
 
   for (let y = 0; y < size; y++) {
+    const v = y / size;
+    // Ribbed tactical accordion knuckle seams + stitched leather bands
+    const seamBand = Math.abs(Math.sin(v * 6 * Math.PI)) < 0.14 ? -0.18 : 0;
+    const ribPattern = Math.sin(v * 18 * Math.PI) * 0.16;
     for (let x = 0; x < size; x++) {
-      // Tactical woven ballistic nylon / leather grain
-      const weave = ((x >> 1) + (y >> 1)) % 2 === 0 ? 0.65 : 0.42;
-      const grain = periodicFbm(x / size, y / size, 12, 2, 1021);
-      const hv = weave * 0.55 + grain * 0.45;
+      const u = x / size;
+      // Rich dark charcoal ballistic nylon weave + weathered leather creases
+      const weave = ((x >> 1) + (y >> 1)) % 2 === 0 ? 0.72 : 0.34;
+      const crease = periodicFbm(u * 1.5, v * 1.5, 8, 3, 1021);
+      const wear = crease > 0.62 ? (crease - 0.62) * 0.65 : 0;
+      const hv = Math.max(0, Math.min(1, weave * 0.42 + crease * 0.46 + ribPattern + seamBand + 0.1));
       heights[y * size + x] = hv;
 
-      const lum = 34 + hv * 28;
+      const lum = 22 + hv * 32 + wear * 28;
       const idx = (y * size + x) * 4;
-      d[idx] = clamp255(lum * 1.04);
-      d[idx + 1] = clamp255(lum * 1.0);
-      d[idx + 2] = clamp255(lum * 0.96);
+      d[idx] = clamp255(lum * 1.06 + wear * 10);
+      d[idx + 1] = clamp255(lum * 1.0 + wear * 5);
+      d[idx + 2] = clamp255(lum * 0.94);
       d[idx + 3] = 255;
     }
   }
@@ -781,7 +870,7 @@ export function createTacticalGloveTextureSet(anisotropy = 4): PbrTextureSet {
   const normalMap = createTangentNormalTextureFromHeights(
     heights,
     size,
-    1.8,
+    2.45,
     2,
     2,
     anisotropy,
@@ -789,8 +878,8 @@ export function createTacticalGloveTextureSet(anisotropy = 4): PbrTextureSet {
   const roughnessMap = createRoughnessTextureFromHeights(
     heights,
     size,
-    0.65,
-    0.92,
+    0.52,
+    0.88,
     true,
     2,
     2,
@@ -1590,3 +1679,129 @@ export function applySafeStandardMaps(
   material.needsUpdate = true;
   return material;
 }
+
+let cachedPolishedConcretePbr: PbrTextureSet | null = null;
+
+/**
+ * Cached 512px polished showroom concrete PBR maps (color SRGB, normal/roughness NoColorSpace).
+ */
+export function getPolishedConcretePbr(anisotropy = 4): PbrTextureSet {
+  if (cachedPolishedConcretePbr) return cachedPolishedConcretePbr;
+
+  const size = 512;
+  const heights = new Float32Array(size * size);
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const img = ctx.createImageData(size, size);
+  const d = img.data;
+
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    const jointY = Math.abs(v - 0.5) < 0.005 || v < 0.004 || v > 0.996;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const jointX = Math.abs(u - 0.5) < 0.005 || u < 0.004 || u > 0.996;
+      const trowel = periodicFbm(u * 1.4, v * 1.4, 6, 3, 412);
+      const aggregate = fastHash2D(x, y, 719) * 0.08;
+      const isJoint = jointX || jointY;
+      const hVal = isJoint ? 0.14 : Math.max(0.25, Math.min(0.95, 0.52 + (trowel - 0.5) * 0.24 + aggregate));
+      heights[y * size + x] = hVal;
+
+      const base = isJoint ? 42 : 76 + trowel * 44 + aggregate * 28;
+      const idx = (y * size + x) * 4;
+      d[idx] = clamp255(base * 0.98);
+      d[idx + 1] = clamp255(base * 1.0);
+      d[idx + 2] = clamp255(base * 1.04);
+      d[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+
+  const map = new THREE.CanvasTexture(canvas);
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.repeat.set(3, 2);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = anisotropy;
+  map.needsUpdate = true;
+
+  const normalMap = createTangentNormalTextureFromHeights(
+    heights,
+    size,
+    1.15,
+    3,
+    2,
+    anisotropy,
+  );
+  const roughnessMap = createRoughnessTextureFromHeights(
+    heights,
+    size,
+    0.09,
+    0.26,
+    true,
+    3,
+    2,
+    anisotropy,
+  );
+
+  cachedPolishedConcretePbr = { map, normalMap, roughnessMap };
+  return cachedPolishedConcretePbr;
+}
+
+let cachedCrossDrilledRotorTex: THREE.CanvasTexture | null = null;
+
+/**
+ * Cached 256px cross-drilled performance brake rotor disc texture.
+ */
+export function getCrossDrilledRotorTexture(anisotropy = 4): THREE.CanvasTexture {
+  if (cachedCrossDrilledRotorTex) return cachedCrossDrilledRotorTex;
+
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const cx = size / 2;
+  const cy = size / 2;
+
+  ctx.fillStyle = '#525864';
+  ctx.fillRect(0, 0, size, size);
+
+  // Machined metallic concentric lathe rings
+  for (let r = 42; r <= 122; r += 3) {
+    ctx.strokeStyle = r % 6 === 0 ? 'rgba(226,232,240,0.45)' : 'rgba(100,116,139,0.5)';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Dark inner hat
+  ctx.fillStyle = '#1e2430';
+  ctx.beginPath();
+  ctx.arc(cx, cy, 40, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Cross-drilled ventilation holes in curved spiral patterns
+  ctx.fillStyle = '#090d14';
+  for (let spoke = 0; spoke < 12; spoke++) {
+    const baseAngle = (spoke / 12) * Math.PI * 2;
+    for (let ring = 0; ring < 3; ring++) {
+      const r = 58 + ring * 20;
+      const a = baseAngle + ring * 0.14;
+      ctx.beginPath();
+      ctx.arc(cx + Math.cos(a) * r, cy + Math.sin(a) * r, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = anisotropy;
+  tex.needsUpdate = true;
+  cachedCrossDrilledRotorTex = tex;
+  return tex;
+}
+

@@ -133,7 +133,7 @@ import {
 import {
   CameraViewMode,
   DEFAULT_PLAYER_CAMERA_CONFIG,
-  SmoothPlayerCameraRig,
+  ZeroStutterCameraController,
 } from '../systems/playerCameraRig';
 import {
   ActiveModal,
@@ -333,25 +333,25 @@ const _scratchMat4 = new THREE.Matrix4();
 const _zeroMat4 = new THREE.Matrix4().makeScale(0, 0, 0);
 const _scratchColorA = new THREE.Color();
 const _skyColor = new THREE.Color(0x6db0dc);
-const _fogDayColor = new THREE.Color(0xc5d2d8);
-const _fogScratchColor = new THREE.Color(0xc5d2d8);
+const _fogDayColor = new THREE.Color(0xb8dcf5);
+const _fogScratchColor = new THREE.Color(0xb8dcf5);
 const _nightSky = new THREE.Color(0x060b16);
-const _dawnSky = new THREE.Color(0xf08543);
-const _duskSky = new THREE.Color(0xf69a4a);
-const _daySky = new THREE.Color(0x6db0dc);
-const _zenithDaySky = new THREE.Color(0x164ea0);
+const _dawnSky = new THREE.Color(0xf68d3e);
+const _duskSky = new THREE.Color(0xf58434);
+const _daySky = new THREE.Color(0x5faef0);
+const _zenithDaySky = new THREE.Color(0x134fb8);
 const _zenithNightSky = new THREE.Color(0x040712);
-const _zenithScratchColor = new THREE.Color(0x164ea0);
+const _zenithScratchColor = new THREE.Color(0x134fb8);
 const _horizonScratchColor = new THREE.Color(0x9ecbe6);
 const _stormSky = new THREE.Color(0x334155);
 const _stormDeepSky = new THREE.Color(0x1e293b);
 const _lightningSky = new THREE.Color(0xe2e8f0);
-const _sunOrangeColor = new THREE.Color(0xfb8b24);
-const _hemiDayColor = new THREE.Color(0xd9edff);
-const _hemiTwilightColor = new THREE.Color(0xfdba74);
-const _hemiGroundDayColor = new THREE.Color(0x46513a);
-const _hemiGroundTwilightColor = new THREE.Color(0x5e3c24);
-const _skyFillDayColor = new THREE.Color(0xa5cfff);
+const _sunOrangeColor = new THREE.Color(0xff9c38);
+const _hemiDayColor = new THREE.Color(0xe4f2ff);
+const _hemiTwilightColor = new THREE.Color(0xffc078);
+const _hemiGroundDayColor = new THREE.Color(0x3f4f28);
+const _hemiGroundTwilightColor = new THREE.Color(0x6b4226);
+const _skyFillDayColor = new THREE.Color(0xb6dbff);
 const _oceanDayColor = new THREE.Color(0x0b7285);
 const _lakeDayColor = new THREE.Color(0x14b8a6);
 
@@ -554,7 +554,7 @@ export class GameEngine {
   private elapsed = 0;
   private hudSyncTimer = 0;
 
-  // Performance Engine & 1500 FPS Lock + Smooth Clamped Substepping + 3.5ms FrameBudgetQueue
+  // Performance Engine & 60 FPS Cap + Smooth Clamped Substepping + 3.5ms FrameBudgetQueue
   private ecosystemTickAccum = 0;
   private worldCullTimer = 0;
   private shadowUpdateFrame = 0;
@@ -566,8 +566,9 @@ export class GameEngine {
   private worldQueue = new FrameBudgetQueue(3.5);
   private _scavengerTargetsScratch: ScavengerCarcassTarget[] = [];
   private currentFps = 60;
-  private fpsRampElapsed = 0;
-  private fpsLockedAt1500 = false;
+  private fpsDisplayTimer = 0;
+  private fpsDisplayFrames = 0;
+  private fpsDisplayAccumMs = 0;
   private autoFpsTier = 0;
   private fpsSampleTimer = 0;
   private fpsSampleFrames = 0;
@@ -578,7 +579,15 @@ export class GameEngine {
     ...createMasterRuntimeState(),
     isThirdPerson: false,
   };
-  private playerCameraRig = new SmoothPlayerCameraRig();
+  private playerCameraRig = new ZeroStutterCameraController({
+    firstPersonEyeY: DEFAULT_PLAYER_CAMERA_CONFIG.firstPersonEyeHeight,
+    thirdPersonDistance: DEFAULT_PLAYER_CAMERA_CONFIG.thirdPersonDistance,
+    thirdPersonHeight: DEFAULT_PLAYER_CAMERA_CONFIG.thirdPersonHeight,
+    vehicleDistance: DEFAULT_PLAYER_CAMERA_CONFIG.vehicleDistance,
+    vehicleHeight: DEFAULT_PLAYER_CAMERA_CONFIG.vehicleHeight,
+    smoothness: 14,
+    minGroundClearance: DEFAULT_PLAYER_CAMERA_CONFIG.minGroundClearance,
+  });
   private _chaseTargetScratch = new THREE.Vector3();
   private _sessionYawRef = { value: 0 };
   private localPlayerHandle: RemotePlayerMeshHandle | null = null;
@@ -705,6 +714,13 @@ export class GameEngine {
   private cinematicActive = false;
   private cinematicTimer = 0;
   private cinematicSubtitle = '';
+  private lastCinematicHudSubtitle = '';
+  private cinematicCameraInitialized = false;
+  private readonly _cinematicPosTarget = new THREE.Vector3();
+  private readonly _cinematicLookTarget = new THREE.Vector3();
+  private readonly _cinematicLookCurrent = new THREE.Vector3();
+  private menuCameraSnapped = false;
+  private menuOrbitAngle = 0;
 
   // Weather & Atmosphere
   private weather: WeatherType = 'clear';
@@ -813,7 +829,7 @@ export class GameEngine {
     temperatureC: 37.0,
   };
   private dayCount = 1;
-  private timeOfDay = 0.305;
+  private timeOfDay = 0.278;
   private inventory: InventorySlot[] = [];
   private backpackCompartments: BackpackCompartmentEntry[] = [];
   private hotbarItemIds: (ItemId | null)[] = [
@@ -1125,6 +1141,9 @@ export class GameEngine {
     this.setupInputs();
     this.startNewWorldState('slot_1', false);
     this.mode = 'menu';
+    this.menuCameraSnapped = false;
+    this.applyMenuCullImmediate();
+    this.resetFrameTiming();
 
     this.clock.start();
     this.tick();
@@ -1173,11 +1192,10 @@ export class GameEngine {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.06;
-    // Cap DPR cleanly for sharp edges while holding steady 60 FPS
-    this.renderer.setPixelRatio(
-      this.isSoftwareGl
-        ? 1
-        : Math.min(window.devicePixelRatio || 1, this.isTouchDevice ? 1.25 : 1.5),
+    // Cap DPR cleanly at <= 2 without redundant canvas reallocations
+    ZeroStutterCameraController.applyRendererCaps(
+      this.renderer,
+      this.isSoftwareGl ? 1 : this.isTouchDevice ? 1.5 : 2,
     );
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -1213,8 +1231,9 @@ export class GameEngine {
     this.camera = new THREE.PerspectiveCamera(68, aspect, 0.08, 420);
     this.camera.rotation.order = 'YXZ';
 
-    // Attach First-Person Hands & Held Tool Rig + subtle night sight fill directly to Camera
+    // Attach First-Person Hands & Held Tool Rig at 1.1 scale directly to Camera
     this.handsRig = createFirstPersonHandsRig();
+    this.handsRig.root.scale.setScalar(1.1);
     this.handsRig.root.traverse((o) => {
       o.userData.ignoreLightingPass = true;
     });
@@ -1469,15 +1488,48 @@ export class GameEngine {
     this.applyGraphicsProfile();
 
     if (!this.isSoftwareGl) {
-      // Temporarily mark hidden worlds/ship visible during boot compilation so shaders pre-warm
+      // Temporarily mark hidden worlds/ship/storm FX visible during boot compilation so shaders pre-warm
       const prevFlatVis = this.flatWorld.flatGroup.visible;
       const prevShipVis = this.shipModel.visible;
+      const prevRainVis = this.rainPoints.visible;
+      const prevStarVis = this.skyBodies.starPoints.visible;
       this.flatWorld.setVisible(true);
       this.shipModel.visible = true;
+      this.rainPoints.visible = true;
+      this.skyBodies.starPoints.visible = true;
       this.renderer.compile(this.scene, this.camera);
+      this.prewarmSceneTextures(this.scene);
       this.flatWorld.setVisible(prevFlatVis);
       this.shipModel.visible = prevShipVis;
+      this.rainPoints.visible = prevRainVis;
+      this.skyBodies.starPoints.visible = prevStarVis;
     }
+  }
+
+  private prewarmSceneTextures(root: THREE.Object3D = this.scene): void {
+    if (this.isSoftwareGl || !this.renderer) return;
+    const seen = new Set<THREE.Texture>();
+    const visitTex = (t: unknown) => {
+      if (t instanceof THREE.Texture && t.isTexture && !seen.has(t)) {
+        seen.add(t);
+        this.renderer.initTexture(t);
+      }
+    };
+    root.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const m of mats) {
+        if (!m) continue;
+        const std = m as THREE.MeshStandardMaterial;
+        visitTex(std.map);
+        visitTex(std.normalMap);
+        visitTex(std.roughnessMap);
+        visitTex(std.bumpMap);
+        visitTex(std.emissiveMap);
+        visitTex(std.aoMap);
+        visitTex(std.metalnessMap);
+      }
+    });
   }
 
   private setupInputs(): void {
@@ -1492,7 +1544,14 @@ export class GameEngine {
   }
 
   private onCanvasPointerDown = (e: PointerEvent): void => {
-    if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
+    if (
+      this.mode !== 'playing' ||
+      !canProcessGameplayInput(this.masterRuntime) ||
+      this.gameOver ||
+      this.cinematicActive
+    ) {
+      return;
+    }
     if (e.button !== 0) return;
 
     const rect = this.renderer.domElement.getBoundingClientRect();
@@ -1644,10 +1703,9 @@ export class GameEngine {
     const h = this.container.clientHeight || window.innerHeight;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    this.renderer.setPixelRatio(
-      this.isSoftwareGl
-        ? 1
-        : Math.min(window.devicePixelRatio || 1, this.isTouchDevice ? 1.25 : 1.5),
+    ZeroStutterCameraController.applyRendererCaps(
+      this.renderer,
+      this.isSoftwareGl ? 1 : this.isTouchDevice ? 1.5 : 2,
     );
     this.renderer.setSize(w, h);
   };
@@ -1878,7 +1936,7 @@ export class GameEngine {
 
   public setCameraViewMode(mode: CameraViewMode): void {
     if (this.playerCameraRig.mode === mode) return;
-    this.playerCameraRig.mode = mode;
+    this.playerCameraRig.setMode(mode);
     this.masterRuntime.isThirdPerson = mode === 'third_person';
     this.snapPlayerCamera();
     this.emitHud();
@@ -1921,14 +1979,14 @@ export class GameEngine {
     isThirdPerson = this.masterRuntime.isThirdPerson,
   ): void {
     if (!this.camera) return;
-    this.playerCameraRig.mode = isThirdPerson ? 'third_person' : 'first_person';
+    this.playerCameraRig.setMode(isThirdPerson ? 'third_person' : 'first_person');
     this.masterRuntime.isThirdPerson = isThirdPerson;
     this._chaseTargetScratch.set(this.playerX, this.playerY, this.playerZ);
     this.playerCameraRig.yaw = this.camYaw + Math.PI;
     this.playerCameraRig.pitch = isThirdPerson
       ? THREE.MathUtils.clamp(-this.camPitch, -0.75, 1.05)
       : THREE.MathUtils.clamp(this.camPitch, -1.42, 1.42);
-    this.playerCameraRig.update(
+    this.playerCameraRig.step(
       this.camera,
       this._chaseTargetScratch,
       this.masterRuntime.isInVehicle,
@@ -1937,20 +1995,105 @@ export class GameEngine {
     );
   }
 
+  private resetFrameTiming(): void {
+    const now = performance.now();
+    this.frameWatch.lastTimeMs = now;
+    this.masterRuntime.lastFrameMs = now;
+    this.lastFramePerfMs = now;
+    this.fpsSampleTimer = 0;
+    this.fpsSampleFrames = 0;
+    this.fpsSampleAccumMs = 0;
+    this.fpsDisplayTimer = 0;
+    this.fpsDisplayFrames = 0;
+    this.fpsDisplayAccumMs = 0;
+    this.consecutiveSlowSeconds = 0;
+  }
+
+  private cullPlacedObjectsByDistance(cx: number, cz: number, maxDist: number): void {
+    const inOverworld = this.currentDimension === 'overworld';
+    const maxDistSq = maxDist * maxDist;
+    for (let i = 0; i < this.structures.length; i++) {
+      const st = this.structures[i];
+      const vis = this.structureVisuals.get(st.id);
+      if (vis) {
+        const dx = st.x - cx;
+        const dz = st.z - cz;
+        vis.group.visible = inOverworld && dx * dx + dz * dz <= maxDistSq;
+      }
+    }
+    for (let i = 0; i < this.structuralBlocks.length; i++) {
+      const blk = this.structuralBlocks[i];
+      const mesh = this.structuralMeshes.get(blk.id);
+      if (mesh) {
+        const dx = blk.x - cx;
+        const dz = blk.z - cz;
+        mesh.visible = inOverworld && dx * dx + dz * dz <= maxDistSq;
+      }
+    }
+  }
+
+  private applyMenuCullImmediate(): void {
+    if (!this.world) return;
+    this.worldQueue.clear();
+    if (this.currentDimension === 'overworld' && this.worldType === 'island') {
+      const cullDist = Math.min(this.effectiveMaxDrawDistance, 220);
+      this.world.cullWorldByDistance(0, 0, cullDist);
+      this.cullPlacedObjectsByDistance(0, 0, cullDist);
+    }
+    this.shadowLastCamX = NaN;
+    this.shadowUpdateFrame = 0;
+  }
+
+  private applyCinematicCullImmediate(): void {
+    if (!this.world) return;
+    this.worldQueue.clear();
+    if (this.currentDimension === 'overworld' && this.worldType === 'island') {
+      const cullDist = Math.max(this.effectiveMaxDrawDistance, 210);
+      this.world.cullWorldByDistance(0, 740, cullDist);
+      this.cullPlacedObjectsByDistance(0, 740, cullDist);
+    }
+    this.shadowLastCamX = NaN;
+    this.shadowUpdateFrame = 0;
+  }
+
+  private applyPlayingCullImmediate(): void {
+    if (!this.world) return;
+    this.worldQueue.clear();
+    if (this.currentDimension === 'overworld' && this.worldType === 'island') {
+      this.world.cullWorldByDistance(this.playerX, this.playerZ, this.effectiveMaxDrawDistance);
+      this.cullPlacedObjectsByDistance(this.playerX, this.playerZ, this.effectiveMaxDrawDistance);
+    }
+    this.shadowLastCamX = NaN;
+    this.shadowUpdateFrame = 0;
+  }
+
   public setMode(mode: 'menu' | 'playing' | 'paused'): void {
-    const wasNotPlaying = this.mode !== 'playing';
+    const prevMode = this.mode;
+    const wasNotPlaying = prevMode !== 'playing';
     this.mode = mode;
     if (mode !== 'playing') {
       this.clearMovementInputs();
       this.sound.stopTrunkBass();
+      if (mode === 'menu' && prevMode !== 'menu') {
+        this.menuCameraSnapped = false;
+        this.applyMenuCullImmediate();
+        this.resetFrameTiming();
+      }
     } else {
       closeExclusiveModal(this.masterRuntime);
       this.sound.unlock();
       this.smartTv?.unlockAudio();
       if (wasNotPlaying) {
         this.ensurePlayerHasGun(false);
+        if (!this.cinematicActive) {
+          this.snapPlayerCamera();
+          this.applyPlayingCullImmediate();
+        } else {
+          this.applyCinematicCullImmediate();
+        }
+        this.resetFrameTiming();
+        this.emitHud();
       }
-      this.emitHud();
     }
   }
 
@@ -2061,7 +2204,9 @@ export class GameEngine {
     this.effectiveShadowExtent = shadowHalfExtent;
     this.effectiveWaterReflections = waterRefl;
 
-    this.renderer.setPixelRatio(dpr);
+    if (this.renderer.getPixelRatio() !== dpr) {
+      this.renderer.setPixelRatio(dpr);
+    }
     this.renderer.shadowMap.enabled = shadowsOn;
     if (this.sunLight) {
       this.sunLight.castShadow = shadowsOn;
@@ -2409,7 +2554,14 @@ export class GameEngine {
 
   public triggerJump(): void {
     this.sound.unlock();
-    if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
+    if (
+      this.mode !== 'playing' ||
+      !canProcessGameplayInput(this.masterRuntime) ||
+      this.gameOver ||
+      this.cinematicActive
+    ) {
+      return;
+    }
     if (this.activeVehicleId) {
       const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
       if (av && this.vehicleHasHydraulics(av)) {
@@ -2453,7 +2605,9 @@ export class GameEngine {
 
   private finishCinematic(): void {
     this.cinematicActive = false;
+    this.cinematicCameraInitialized = false;
     this.cinematicSubtitle = '';
+    this.lastCinematicHudSubtitle = '';
     this.shipModel.visible = false;
     this.weather = 'clear';
     this.weatherTimer = 85;
@@ -2466,6 +2620,7 @@ export class GameEngine {
     this.camPitch = -0.05;
     this.playerYaw = this.camYaw + Math.PI;
     this.snapPlayerCamera();
+    this.applyPlayingCullImmediate();
     this.markExploredAroundPlayer();
 
     const wreckX = SHIPWRECK_POS.x;
@@ -2492,13 +2647,28 @@ export class GameEngine {
       ['captain_key', 1],
       ['ammo', 120],
     ];
-    this.spawnWorldPickupsFromGrants(wreckX - 2.8, wreckZ - 7.0, treasureDrops.slice(0, 8), 0, 0);
-    this.spawnWorldPickupsFromGrants(wreckX - 1.5, wreckZ - 2.0, treasureDrops.slice(8), 0, 0);
+    // Spread shipwreck loot mesh creation across frames via FrameBudgetQueue to avoid a transition hitch
+    const dropBatches = [
+      { cx: wreckX - 2.8, cz: wreckZ - 7.0, items: treasureDrops.slice(0, 8) },
+      { cx: wreckX - 1.5, cz: wreckZ - 2.0, items: treasureDrops.slice(8) },
+    ];
+    for (const batch of dropBatches) {
+      batch.items.forEach(([itemId, quantity], idx) => {
+        const angle = (idx / Math.max(1, batch.items.length)) * Math.PI * 2 + Math.random() * 0.6;
+        const r = 0.55 + (idx % 3) * 0.32;
+        const px = batch.cx + Math.cos(angle) * r;
+        const pz = batch.cz + Math.sin(angle) * r;
+        this.worldQueue.enqueue(() => {
+          this.spawnPickup(itemId, quantity, px, pz, 180, undefined, 0, false);
+        });
+      });
+    }
 
     this.toast(
       'SHIPWRECK BEACHED! 4 Unlocked Loot Chests on ship & shoreline (Shotguns, Rifles, Barrett .50, Glocks & Ammo)!',
       'discovery',
     );
+    this.resetFrameTiming();
     this.emitHud();
   }
 
@@ -3272,6 +3442,8 @@ export class GameEngine {
       (nextWorldType === 'flat' ? 'Flat Park Grounds' : 'Survival Island');
     this.gameMode = nextMode;
     this.clearTransitAndElevatorState();
+    this.flightAndTeleport.toggleFlight(false);
+    this.clearMovementInputs();
     this.ridingCoasterId = null;
     this.currentDimension = 'overworld';
     if (this.activeDimensionWorld) {
@@ -3411,6 +3583,7 @@ export class GameEngine {
       );
 
       this.applyExchangeCosmetics(true);
+      this.resetFrameTiming();
       this.emitHud();
       return;
     }
@@ -3452,7 +3625,7 @@ export class GameEngine {
       temperatureC: 37.0,
     };
     this.dayCount = 1;
-    this.timeOfDay = 0.305;
+    this.timeOfDay = 0.278;
     this.lastIsNight = false;
     this.playerVisibility = 1.0;
     this.nocturnalActiveCount = 0;
@@ -3646,17 +3819,27 @@ export class GameEngine {
 
     if (playCinematic) {
       this.cinematicActive = true;
+      this.cinematicCameraInitialized = false;
       this.cinematicTimer = 0;
       this.cinematicSubtitle =
         'A violent storm strikes your pirate galleon in uncharted tropical waters...';
+      this.lastCinematicHudSubtitle = this.cinematicSubtitle;
       this.shipModel.visible = true;
       // Start far offshore in deep open ocean (coastline is ~z=740) so the ship always stays on water
       this.shipModel.position.set(-34, OCEAN_LEVEL - 0.15, 850);
       this.shipModel.rotation.set(0, Math.PI * 0.82, 0);
+      this.applyCinematicCullImmediate();
     } else {
       this.cinematicActive = false;
+      this.cinematicCameraInitialized = false;
       this.cinematicSubtitle = '';
+      this.lastCinematicHudSubtitle = '';
       this.shipModel.visible = false;
+      if (this.mode === 'menu') {
+        this.applyMenuCullImmediate();
+      } else {
+        this.applyPlayingCullImmediate();
+      }
     }
 
     if (this.gameMode === 'boss_hunt') {
@@ -3664,6 +3847,7 @@ export class GameEngine {
     }
     this.ensurePlayerHasGun(true);
     this.applyExchangeCosmetics(true);
+    this.resetFrameTiming();
     this.emitHud();
   }
 
@@ -3731,6 +3915,8 @@ export class GameEngine {
       save.gameMode || (loadedWorldType === 'flat' ? 'sandbox' : 'survival'),
     );
     this.clearTransitAndElevatorState();
+    this.flightAndTeleport.toggleFlight(false);
+    this.clearMovementInputs();
     this.ridingCoasterId = null;
     this.currentDimension = 'overworld';
     if (this.activeDimensionWorld) {
@@ -4066,6 +4252,8 @@ export class GameEngine {
       loadedWorldType === 'island' ? save.clearedStructureIds : [],
     );
     this.applyExchangeCosmetics(true);
+    this.applyPlayingCullImmediate();
+    this.resetFrameTiming();
     this.emitHud();
   }
 
@@ -5990,6 +6178,7 @@ export class GameEngine {
     this.sound.unlock();
     if (
       this.mode !== 'playing' ||
+      !canProcessGameplayInput(this.masterRuntime) ||
       this.gameOver ||
       this.cinematicActive ||
       this.actionCooldown > 0
@@ -8445,12 +8634,18 @@ export class GameEngine {
     }
 
     // Position visible Sun, Moon & Starfield around active focal position
-    const centerX = this.cinematicActive
-      ? this.shipModel.position.x
-      : this.playerX;
-    const centerZ = this.cinematicActive
-      ? this.shipModel.position.z
-      : this.playerZ;
+    const centerX =
+      this.mode === 'menu'
+        ? 0
+        : this.cinematicActive
+          ? this.shipModel.position.x
+          : this.playerX;
+    const centerZ =
+      this.mode === 'menu'
+        ? 0
+        : this.cinematicActive
+          ? this.shipModel.position.z
+          : this.playerZ;
     this.skyBodies.group.position.set(centerX, 0, centerZ);
     this.skyBodies.sunMesh.position.set(sunCos * 210, sunElev * 195, -90);
     this.skyBodies.sunMesh.visible = sunElev > -0.15 && !this.cinematicActive;
@@ -8458,8 +8653,8 @@ export class GameEngine {
     this.skyBodies.moonMesh.visible = sunElev < 0.15 && !this.cinematicActive;
 
     // Texel-snap sun shadow camera around active focal point to eliminate shadow edge shimmer
-    const focusX = this.cinematicActive ? this.shipModel.position.x : this.playerX;
-    const focusZ = this.cinematicActive ? this.shipModel.position.z : this.playerZ;
+    const focusX = centerX;
+    const focusZ = centerZ;
     const texelStep =
       (this.effectiveShadowExtent * 2) / Math.max(512, this.effectiveShadowMapSize);
     const snappedX = Math.round(focusX / texelStep) * texelStep;
@@ -8504,13 +8699,13 @@ export class GameEngine {
     this.skyBodies.skyDome.visible = true;
 
     const daylight = THREE.MathUtils.clamp((sunElev + 0.16) / 0.65, 0, 1);
-    const twilight = Math.max(0, 1 - Math.abs(sunElev - 0.14) * 2.6);
+    const twilight = Math.max(0, 1 - Math.abs(sunElev - 0.16) * 2.45);
     const isMorning = this.timeOfDay < 0.5;
 
     _skyColor
       .copy(_nightSky)
       .lerp(_daySky, daylight)
-      .lerp(isMorning ? _dawnSky : _duskSky, twilight * 0.58);
+      .lerp(isMorning ? _dawnSky : _duskSky, twilight * 0.64);
 
     if (this.weather === 'overcast') {
       _skyColor.lerp(_stormSky, 0.45);
@@ -8548,11 +8743,11 @@ export class GameEngine {
           ? 0.0036
           : this.weather === 'overcast'
             ? 0.0021
-            : 0.00065;
+            : 0.00062;
     const fogDensity = (weatherFog + (1 - daylight) * 0.0028) * this.effectiveFogMult;
     _fogScratchColor
       .copy(_skyColor)
-      .lerp(_fogDayColor, daylight * (this.weather === 'clear' ? 0.55 : 0.18));
+      .lerp(_fogDayColor, daylight * (this.weather === 'clear' ? 0.48 : 0.18));
     (this.scene.fog as THREE.FogExp2).color.copy(_fogScratchColor);
     (this.scene.fog as THREE.FogExp2).density = fogDensity;
 
@@ -8565,14 +8760,14 @@ export class GameEngine {
             ? 0.78
             : 1.0;
 
-    const sunFade = THREE.MathUtils.clamp((sunElev + 0.06) / 0.45, 0, 1);
+    const sunFade = THREE.MathUtils.clamp((sunElev + 0.06) / 0.42, 0, 1);
     const moonRise = THREE.MathUtils.clamp((-sunElev + 0.06) / 0.5, 0, 1);
 
     this.sunLight.intensity =
-      sunFade * 3.2 * weatherDim + this.lightningFlash * 1.9;
+      sunFade * 3.55 * weatherDim + this.lightningFlash * 1.9;
     this.sunLight.color
-      .setHex(0xffedcf)
-      .lerp(_sunOrangeColor, twilight * 0.52);
+      .setHex(0xfff5e4)
+      .lerp(_sunOrangeColor, twilight * 0.64);
 
     // Clear moonlit night lighting without making island terrain pitch-black
     this.moonLight.intensity =
@@ -8581,23 +8776,23 @@ export class GameEngine {
     this.hemiLight.color
       .setHex(0x334155)
       .lerp(_hemiDayColor, daylight)
-      .lerp(_hemiTwilightColor, twilight * 0.45);
+      .lerp(_hemiTwilightColor, twilight * 0.52);
     this.hemiLight.groundColor
       .setHex(0x162032)
       .lerp(_hemiGroundDayColor, daylight)
-      .lerp(_hemiGroundTwilightColor, twilight * 0.35);
+      .lerp(_hemiGroundTwilightColor, twilight * 0.42);
     this.hemiLight.intensity =
-      (0.48 + daylight * 0.87) * Math.max(0.62, weatherDim) +
+      (0.48 + daylight * 0.96) * Math.max(0.62, weatherDim) +
       this.lightningFlash * 0.55;
 
     this.skyFillLight.color
       .setHex(0x6089b8)
       .lerp(_skyFillDayColor, daylight);
     this.skyFillLight.intensity =
-      (0.14 + daylight * 0.31) * Math.max(0.65, weatherDim) +
+      (0.14 + daylight * 0.36) * Math.max(0.65, weatherDim) +
       this.lightningFlash * 0.35;
 
-    this.renderer.toneMappingExposure = 0.96 + daylight * 0.19;
+    this.renderer.toneMappingExposure = 1.0 + daylight * 0.18;
     const nvIntensity = (1 - daylight) * 0.62;
     this.nightVisionLight.intensity = nvIntensity;
     this.nightVisionLight.visible = nvIntensity > 0.02;
@@ -8675,8 +8870,9 @@ export class GameEngine {
       );
     }
 
-    // Rain particle drop animation
+    // Rain particle drop animation (disabled on title menu for steady 60+ FPS)
     const showRain =
+      this.mode !== 'menu' &&
       !isFlat &&
       (this.weather === 'rain' ||
         this.weather === 'storm' ||
@@ -8689,7 +8885,7 @@ export class GameEngine {
       this.rainPoints.position.set(center.x, Math.max(0, center.y - 6), center.z);
       const posAttr = this.rainGeo.attributes.position as THREE.BufferAttribute;
       const arr = posAttr.array as Float32Array;
-      const fallDelta = (this.weather === 'storm' ? 24 : 18) * dt;
+      const fallDelta = (this.weather === 'storm' || this.cinematicActive ? 24 : 18) * dt;
       for (let i = 1; i < arr.length; i += 3) {
         let ry = arr[i] - fallDelta;
         if (ry < 0) ry = 18;
@@ -8698,12 +8894,14 @@ export class GameEngine {
       posAttr.needsUpdate = true;
     }
 
-    for (const st of this.structures) {
-      if (st.type === 'drying_rack' && st.dryingSlots) {
-        for (const slot of st.dryingSlots) {
-          if (slot.quantity > 0 && slot.itemId && slot.progress < 1.0) {
-            slot.progress += dt / 10;
-            if (slot.progress > 1.0) slot.progress = 1.0;
+    if (this.mode === 'playing' && !this.gameOver && !this.cinematicActive) {
+      for (const st of this.structures) {
+        if (st.type === 'drying_rack' && st.dryingSlots) {
+          for (const slot of st.dryingSlots) {
+            if (slot.quantity > 0 && slot.itemId && slot.progress < 1.0) {
+              slot.progress += dt / 10;
+              if (slot.progress > 1.0) slot.progress = 1.0;
+            }
           }
         }
       }
@@ -8711,81 +8909,113 @@ export class GameEngine {
   }
 
   private updateCinematic(dt: number): void {
-    this.cinematicTimer += dt;
+    // Advance smoothly from t=0 on first frame so frame-0 renders cleanly without skipping
+    if (this.cinematicCameraInitialized) {
+      this.cinematicTimer += dt;
+    }
     const t = this.cinematicTimer;
 
     // Giant pirate galleon stays strictly on deep open water (z >= 802, far offshore from the ~740m coastline)
-    const swellY = Math.sin(t * 2.1) * 0.85;
+    // Continuous ship swell, heel & camera targets across all 3 beats (zero cuts, zero teleports, zero GC)
+    const swellY = Math.sin(t * 2.1) * 0.72;
+    const pitchWave = Math.sin(t * 2.3) * 0.085;
+    const rollWave = Math.cos(t * 1.9) * 0.11;
+
     if (t < 3.4) {
-      const p = t / 3.4;
+      const e = THREE.MathUtils.smoothstep(t / 3.4, 0, 1);
       this.cinematicSubtitle =
         'A violent tropical storm tears across the open sea...';
-      // Sail across deep open water parallel/angled toward the distant island without ever touching land
-      const shipX = THREE.MathUtils.lerp(-34, -16, p);
-      const shipZ = THREE.MathUtils.lerp(850, 816, p);
+      const shipX = THREE.MathUtils.lerp(-34, -16, e);
+      const shipZ = THREE.MathUtils.lerp(850, 816, e);
       this.shipModel.position.set(shipX, OCEAN_LEVEL + swellY, shipZ);
       this.shipModel.rotation.set(
-        Math.sin(t * 2.3) * 0.09,
-        Math.PI * 0.82 + Math.sin(t * 0.7) * 0.04,
-        Math.cos(t * 1.9) * 0.14,
+        pitchWave,
+        Math.PI * 0.82 + Math.sin(t * 0.7) * 0.035,
+        rollWave,
       );
-      this.camera.position.set(
-        shipX + 34 - p * 4,
-        13.5 + Math.sin(t * 1.6) * 0.55,
-        shipZ + 22 - p * 4,
+      this._cinematicPosTarget.set(
+        shipX + THREE.MathUtils.lerp(34, 30, e),
+        13.2 + Math.sin(t * 1.6) * 0.45,
+        shipZ + THREE.MathUtils.lerp(22, 18, e),
       );
-      this.camera.lookAt(shipX, 8.2, shipZ - 2);
+      this._cinematicLookTarget.set(shipX, 8.0, shipZ - 2);
     } else if (t < 6.6) {
-      const p = (t - 3.4) / 3.2;
+      const e = THREE.MathUtils.smoothstep((t - 3.4) / 3.2, 0, 1);
       this.cinematicSubtitle =
         'A colossal rogue wave slams the galleon — you are swept overboard into the surf!';
-      // Pirate ship remains afloat & heeling in deep water (z = 816 -> 802, never hitting land)
-      const shipX = THREE.MathUtils.lerp(-16, -10, p);
-      const shipZ = THREE.MathUtils.lerp(816, 802, p);
-      this.shipModel.position.set(
-        shipX,
-        OCEAN_LEVEL + swellY * 0.6 - p * 0.65,
-        shipZ,
-      );
+      const shipX = THREE.MathUtils.lerp(-16, -10, e);
+      const shipZ = THREE.MathUtils.lerp(816, 802, e);
+      const waveHeel = THREE.MathUtils.lerp(0, 0.28, e);
+      const waveDip = THREE.MathUtils.lerp(0, -0.55, e);
+      this.shipModel.position.set(shipX, OCEAN_LEVEL + swellY * 0.8 + waveDip, shipZ);
       this.shipModel.rotation.set(
-        0.1 * Math.sin(t * 2.6),
-        Math.PI * 0.82 + p * 0.18,
-        0.14 + p * 0.28,
+        pitchWave * 1.15,
+        Math.PI * 0.82 + e * 0.18 + Math.sin(t * 0.7) * 0.035 * (1 - e),
+        rollWave + waveHeel,
       );
-      this.camera.position.set(
-        shipX + THREE.MathUtils.lerp(30, 18, p),
-        THREE.MathUtils.lerp(13.0, 5.2, p),
-        shipZ + THREE.MathUtils.lerp(18, -16, p),
+      // Continuous glide from Beat 1 end (shipX+30, ~13, shipZ+18) down toward coastal surf
+      this._cinematicPosTarget.set(
+        shipX + THREE.MathUtils.lerp(30, 16, e),
+        THREE.MathUtils.lerp(13.0, 5.2, e),
+        shipZ + THREE.MathUtils.lerp(18, -18, e),
       );
-      this.camera.lookAt(shipX, THREE.MathUtils.lerp(7.5, 4.2, p), shipZ);
+      this._cinematicLookTarget.set(
+        shipX,
+        THREE.MathUtils.lerp(8.0, 4.2, e),
+        THREE.MathUtils.lerp(shipZ - 2, shipZ - 14, e),
+      );
     } else if (t < 9.8) {
       const p = (t - 6.6) / 3.2;
+      const e = THREE.MathUtils.smoothstep(p, 0, 1);
       this.cinematicSubtitle =
         'Carried by the tide, you wash ashore on the island while the pirate ship drifts offshore...';
       // Giant pirate ship stays offshore on deep water (z = 802 -> 810) — ONLY the player goes onto land!
       this.shipModel.position.set(
-        -10 - p * 4,
-        OCEAN_LEVEL - 0.5 + swellY * 0.5,
-        802 + p * 8,
+        -10 - e * 4,
+        OCEAN_LEVEL - 0.55 + swellY * 0.65,
+        802 + e * 8,
       );
       this.shipModel.rotation.set(
-        Math.sin(t * 1.8) * 0.06,
-        Math.PI * 1.0 + p * 0.12,
-        0.32 + Math.cos(t * 1.5) * 0.06,
+        pitchWave * 0.75,
+        Math.PI * 1.0 + e * 0.12,
+        0.28 + rollWave * 0.65,
       );
-      // Player washes from the coastal surf onto the sandy beach at PLAYER_SPAWN (0, 680)
-      const camX = THREE.MathUtils.lerp(6, PLAYER_SPAWN.x, p);
-      const camZ = THREE.MathUtils.lerp(756, PLAYER_SPAWN.z, p);
+      // Smooth continuous shore-wash arc from Beat 2 end (6, 5.2, 784) to PLAYER_SPAWN (0, ground+1.62, 680)
+      const camX = THREE.MathUtils.lerp(6, PLAYER_SPAWN.x, e);
+      const camZ = THREE.MathUtils.lerp(784, PLAYER_SPAWN.z, e);
       const groundY = Math.max(OCEAN_LEVEL + 0.35, getTerrainHeight(camX, camZ));
-      this.camera.position.set(
+      const surfLift = Math.sin(e * Math.PI) * 1.1;
+      this._cinematicPosTarget.set(
         camX,
-        groundY + THREE.MathUtils.lerp(0.65, 1.62, p),
+        THREE.MathUtils.lerp(5.2, groundY + 1.62, e) + surfLift,
         camZ,
       );
-      this.camera.lookAt(0, 4.0, PLAYER_SPAWN.z - 52);
+      // Smoothly swing gaze from offshore surf around toward the beach landing direction (camYaw=0.12)
+      const endGroundY = getTerrainHeight(PLAYER_SPAWN.x, PLAYER_SPAWN.z);
+      const endLookX = PLAYER_SPAWN.x - Math.sin(0.12) * 52;
+      const endLookY = endGroundY + 1.62 - Math.sin(0.05) * 52;
+      const endLookZ = PLAYER_SPAWN.z - Math.cos(0.12) * 52;
+      this._cinematicLookTarget.set(
+        THREE.MathUtils.lerp(-10, endLookX, e),
+        THREE.MathUtils.lerp(4.2, endLookY, e),
+        THREE.MathUtils.lerp(788, endLookZ, e),
+      );
     } else {
       this.finishCinematic();
+      return;
     }
+
+    if (!this.cinematicCameraInitialized) {
+      this.camera.position.copy(this._cinematicPosTarget);
+      this._cinematicLookCurrent.copy(this._cinematicLookTarget);
+      this.cinematicCameraInitialized = true;
+    } else {
+      const camAlpha = 1 - Math.exp(-8.5 * dt);
+      const lookAlpha = 1 - Math.exp(-7.0 * dt);
+      this.camera.position.lerp(this._cinematicPosTarget, camAlpha);
+      this._cinematicLookCurrent.lerp(this._cinematicLookTarget, lookAlpha);
+    }
+    this.camera.lookAt(this._cinematicLookCurrent);
 
     const shoreProx = 1.0;
     this.sound.updateEnvironmentAmbience(
@@ -9823,6 +10053,7 @@ export class GameEngine {
     this.sound.unlock();
     if (
       this.mode !== 'playing' ||
+      !canProcessGameplayInput(this.masterRuntime) ||
       this.gameOver ||
       this.cinematicActive ||
       this.kickCooldown > 0
@@ -9965,6 +10196,7 @@ export class GameEngine {
 
     this.handsRig.toolGroup.visible = hasTool;
     this.handsRig.gunMesh.visible = isGun;
+    this.handsRig.setFirearmGrip(isGun);
     if (isGun && eqId) {
       const gunSpec = FIREARM_SPECS[eqId];
       if (gunSpec?.soundProfile === 'sniper' || gunSpec?.soundProfile === 'musket') {
@@ -10181,24 +10413,32 @@ export class GameEngine {
     if (isGun) {
       const reloadingTilt =
         this.reloadingItemId && this.reloadingItemId === eqId ? 0.36 : 0;
-      // Sturdy tactical two-handed sidearm / rifle hold with recoil & reload dip
+      // Exact 1:1 tactical two-handed pistol hold angled inward at bottom-right
       this.handsRig.rightHand.position.set(
-        0.2 + moveBobX * 0.5,
-        -0.21 - idleBob - moveBobY * 0.5 + recoil * 0.07 - reloadingTilt * 0.14,
-        -0.34 + recoil * 0.1,
+        0.21 + moveBobX * 0.45,
+        -0.22 - idleBob - moveBobY * 0.45 + recoil * 0.065 - reloadingTilt * 0.14,
+        -0.315 + recoil * 0.09,
       );
-      this.handsRig.rightHand.rotation.x = -recoil * 0.42 - reloadingTilt;
-      this.handsRig.gunMesh.rotation.x = -recoil * 0.45 - reloadingTilt * 0.35;
+      this.handsRig.rightHand.rotation.set(
+        -recoil * 0.38 - reloadingTilt + 0.04,
+        0.14,
+        -0.06,
+      );
+      this.handsRig.gunMesh.rotation.x = -recoil * 0.42 - reloadingTilt * 0.35;
 
-      // Left stabilizing support hand cradling the grip base
+      // Left gloved support hand rising from bottom-center-right to cradle right knuckles & trigger guard
       this.handsRig.leftHand.position.set(
-        0.06 - moveBobX * 0.3,
-        -0.24 + idleBob - moveBobY * 0.4 + recoil * 0.03,
-        -0.35 + recoil * 0.06,
+        0.11 - moveBobX * 0.25,
+        -0.242 + idleBob - moveBobY * 0.35 + recoil * 0.03,
+        -0.335 + recoil * 0.055,
       );
-      this.handsRig.leftHand.rotation.x = this.isSwimming
-        ? -0.4 + Math.sin(this.elapsed * 6) * 0.35
-        : -0.22;
+      this.handsRig.leftHand.rotation.set(
+        this.isSwimming
+          ? -0.4 + Math.sin(this.elapsed * 6) * 0.35
+          : 0.16,
+        -0.42,
+        0.28,
+      );
     } else {
       this.handsRig.gunMesh.rotation.x = 0;
       this.handsRig.leftHand.position.set(
@@ -12154,7 +12394,7 @@ export class GameEngine {
       this.camera.up.set(0, 1, 0);
       this.handsRig.root.visible = false;
       if (this.localPlayerHandle) this.localPlayerHandle.group.visible = false;
-      const angle = this.elapsed * 0.14;
+      const angle = this.menuOrbitAngle;
       const r = this.worldType === 'flat' ? 68 : 92;
       _vec3A.set(
         Math.cos(angle) * r,
@@ -12162,7 +12402,14 @@ export class GameEngine {
         Math.sin(angle) * r,
       );
       _vec3B.set(0, this.worldType === 'flat' ? 3 : 6, 0);
-      this.camera.position.lerp(_vec3A, 0.04);
+      if (!this.menuCameraSnapped) {
+        this.camera.position.copy(_vec3A);
+        this.menuCameraSnapped = true;
+      } else if (this.camera.position.distanceToSquared(_vec3A) > 4.0) {
+        this.camera.position.lerp(_vec3A, 1 - Math.exp(-7 * dt));
+      } else {
+        this.camera.position.copy(_vec3A);
+      }
       this.camera.lookAt(_vec3B);
       return;
     }
@@ -12277,7 +12524,7 @@ export class GameEngine {
           this._chaseTargetScratch.set(activeV.x, activeV.y, activeV.z);
           this.playerCameraRig.yaw = this.camYaw + Math.PI;
           this.playerCameraRig.pitch = THREE.MathUtils.clamp(-this.camPitch, -0.55, 0.75);
-          this.playerCameraRig.update(
+          this.playerCameraRig.step(
             this.camera,
             this._chaseTargetScratch,
             true,
@@ -12373,7 +12620,7 @@ export class GameEngine {
 
     if (isThirdPerson) {
       this.playerCameraRig.pitch = THREE.MathUtils.clamp(-this.camPitch, -0.75, 1.05);
-      this.playerCameraRig.update(
+      this.playerCameraRig.step(
         this.camera,
         this._chaseTargetScratch,
         false,
@@ -12388,7 +12635,7 @@ export class GameEngine {
     }
 
     this.playerCameraRig.pitch = this.camPitch;
-    this.playerCameraRig.update(
+    this.playerCameraRig.step(
       this.camera,
       this._chaseTargetScratch,
       false,
@@ -12971,19 +13218,19 @@ export class GameEngine {
     const frameTime = Math.min(clampedDt, masterDt, 0.033);
     this.lastFramePerfMs = nowPerf;
 
-    // 1500 FPS Engine Ramp & Lock: starts at 60 FPS, rises smoothly to 1500 FPS, and never drops below 1500
-    if (!this.fpsLockedAt1500) {
-      this.fpsRampElapsed += Math.max(frameTime, 0.016);
-      const rampT = Math.min(1, this.fpsRampElapsed / 1.5);
-      const eased = 1 - Math.pow(1 - rampT, 2.2);
-      const rampedFps = Math.round(60 + 1440 * eased);
-      this.currentFps = Math.min(1500, Math.max(this.currentFps, rampedFps));
-      if (rampT >= 1 || this.currentFps >= 1500) {
-        this.currentFps = 1500;
-        this.fpsLockedAt1500 = true;
-      }
-    } else {
-      this.currentFps = 1500;
+    // Measure real device FPS and cap display cleanly at 60 FPS
+    const displaySampleMs = Math.min(100, Math.max(1, rawFrameMs));
+    this.fpsDisplayAccumMs += displaySampleMs;
+    this.fpsDisplayFrames += 1;
+    this.fpsDisplayTimer += frameTime;
+    if (this.fpsDisplayTimer >= 0.25) {
+      const measuredFps = Math.round(
+        (this.fpsDisplayFrames * 1000) / Math.max(1, this.fpsDisplayAccumMs),
+      );
+      this.currentFps = Math.min(60, Math.max(1, measuredFps));
+      this.fpsDisplayTimer = 0;
+      this.fpsDisplayFrames = 0;
+      this.fpsDisplayAccumMs = 0;
     }
 
     // Dynamic Auto-FPS Guard: detects sustained GPU bottlenecks and steps down GPU load cleanly
@@ -13033,10 +13280,12 @@ export class GameEngine {
     // 3. Only run non-essential biome/vine/prop wake-ups if time remains in the Freeze-Shield frame budget
     if (performance.now() - frameStart < FREEZE_SHIELD.maxFrameMs) {
       measure('world_queue', () => this.worldQueue.flush());
-      this.updateVinesAndExtras(
-        Math.min(frameTime, FREEZE_SHIELD.maxDt),
-        FREEZE_SHIELD.maxActiveVines,
-      );
+      if (this.mode === 'playing' && !this.cinematicActive) {
+        this.updateVinesAndExtras(
+          Math.min(frameTime, FREEZE_SHIELD.maxDt),
+          FREEZE_SHIELD.maxActiveVines,
+        );
+      }
     }
 
     this.renderScene();
@@ -13051,6 +13300,9 @@ export class GameEngine {
   private updateSimulation(dt: number, frameStart: number): void {
     this.lastSimDt = dt;
     this.elapsed += dt;
+    if (this.mode === 'menu') {
+      this.menuOrbitAngle += dt * 0.14;
+    }
 
     if (this.portalWarpCooldown > 0) {
       this.portalWarpCooldown = Math.max(0, this.portalWarpCooldown - dt);
@@ -13067,20 +13319,26 @@ export class GameEngine {
     }
 
     // 2. Run core simulation & world updates
-    this.modSystem?.tick(dt);
-    this.updateMultiplayer(dt);
+    if (this.mode === 'playing' && !this.cinematicActive) {
+      this.modSystem?.tick(dt);
+    }
+    if (this.mode === 'playing' || this.remotePlayers.size > 0 || this.p2p?.connected) {
+      this.updateMultiplayer(dt);
+    }
     measure('weather_particles', () => {
       this.updateWeatherAndAtmosphere(dt);
-      this.ecosystemTickAccum += dt;
-      if (this.ecosystemTickAccum >= 1.2) {
-        const ecoDt = this.ecosystemTickAccum;
-        this.ecosystemTickAccum = 0;
-        this.ecosystem = simulateEcosystemTick(
-          this.ecosystem,
-          ecoDt,
-          this.weather,
-          { x: this.playerX, y: this.playerY, z: this.playerZ },
-        );
+      if (this.mode === 'playing' && !this.cinematicActive) {
+        this.ecosystemTickAccum += dt;
+        if (this.ecosystemTickAccum >= 1.2) {
+          const ecoDt = this.ecosystemTickAccum;
+          this.ecosystemTickAccum = 0;
+          this.ecosystem = simulateEcosystemTick(
+            this.ecosystem,
+            ecoDt,
+            this.weather,
+            { x: this.playerX, y: this.playerY, z: this.playerZ },
+          );
+        }
       }
       if (
         this.realisticOcean &&
@@ -13097,9 +13355,8 @@ export class GameEngine {
     if (this.mode === 'playing' && !this.gameOver) {
       if (this.cinematicActive) {
         this.updateCinematic(dt);
-        this.hudSyncTimer += dt;
-        if (this.hudSyncTimer >= 0.15) {
-          this.hudSyncTimer = 0;
+        if (this.cinematicSubtitle !== this.lastCinematicHudSubtitle) {
+          this.lastCinematicHudSubtitle = this.cinematicSubtitle;
           this.emitHud();
         }
       } else {
@@ -13352,36 +13609,20 @@ export class GameEngine {
       if (this.kineticPreviewGroup) {
         this.kineticPreviewGroup.visible = false;
       }
-      this.updateKineticNetwork(dt);
-      if (this.worldType === 'island') {
-        const creatureCycle = this.creatures.update(
-          dt,
-          this.elapsed,
-          9999,
-          9999,
-          false,
-          false,
-          false,
-          1.0,
-          () => {},
-          () => {},
-          () => {},
-        );
-        this.nocturnalActiveCount = creatureCycle.nocturnalActiveCount;
-      } else {
-        this.nocturnalActiveCount = 0;
-      }
+      this.nocturnalActiveCount = 0;
     }
 
-    // Subtle idle life for Farmer NPC & glowing TV screen inside the Hilltop House (Island World)
+    // Subtle idle life for Farmer NPC inside the Hilltop House (only during active gameplay)
     if (
+      this.mode === 'playing' &&
+      !this.cinematicActive &&
       this.worldType === 'island' &&
       this.world.farmerNpcGroup &&
       this.currentDimension === 'overworld'
     ) {
       const dfx = this.world.farmerNpcPos.x - this.playerX;
       const dfz = this.world.farmerNpcPos.z - this.playerZ;
-      if (dfx * dfx + dfz * dfz < 64 && this.mode === 'playing') {
+      if (dfx * dfx + dfz * dfz < 64) {
         const lookYaw = Math.atan2(
           this.playerX - this.world.farmerNpcPos.x,
           this.playerZ - this.world.farmerNpcPos.z,
@@ -13395,8 +13636,15 @@ export class GameEngine {
       }
     }
 
-    // Emergency Freeze-Shield: skip non-essential Smart TV & ambient animations if frame is already over budget
-    if (performance.now() - frameStart >= FREEZE_SHIELD.maxFrameMs) {
+    // Emergency Freeze-Shield: skip non-essential Smart TV & ambient animations if frame is already over budget or in menu/cinematic
+    if (
+      this.mode !== 'playing' ||
+      this.cinematicActive ||
+      performance.now() - frameStart >= FREEZE_SHIELD.maxFrameMs
+    ) {
+      if (this.smartTv.tvGlowLight && this.mode !== 'playing') {
+        this.smartTv.tvGlowLight.visible = false;
+      }
       return;
     }
 
@@ -13452,12 +13700,10 @@ export class GameEngine {
             ? 'Flat Park Grounds'
             : BIOME_INFO[getBiomeAt(this.playerX, this.playerZ)].name,
       });
-      if (this.mode !== 'menu' && !this.cinematicActive) {
-        const audioX = this.tvModalOpen ? this.camera.position.x : this.playerX;
-        const audioY = this.tvModalOpen ? this.camera.position.y : this.playerY;
-        const audioZ = this.tvModalOpen ? this.camera.position.z : this.playerZ;
-        this.smartTv.updateSpatialAudio(audioX, audioY, audioZ);
-      }
+      const audioX = this.tvModalOpen ? this.camera.position.x : this.playerX;
+      const audioY = this.tvModalOpen ? this.camera.position.y : this.playerY;
+      const audioZ = this.tvModalOpen ? this.camera.position.z : this.playerZ;
+      this.smartTv.updateSpatialAudio(audioX, audioY, audioZ);
 
       const tvBassEnergy = this.smartTv.getTrunkBassEnergy();
       const tvBassMode = this.smartTv.getBassMode();
@@ -13570,26 +13816,48 @@ export class GameEngine {
 
   private renderScene(): void {
     this.updateCamera();
-    this.syncTvScreenProjection();
-    // Adaptive shadow cadence: update every 2-3 frames when moving, every 8 frames when camera is still
+    if (this.mode === 'playing' && !this.cinematicActive) {
+      this.syncTvScreenProjection();
+    }
+    // Adaptive shadow cadence:
+    // - Main menu: world & sun are static, so bake once on entry and refresh only every 45 frames
+    // - Cinematic / gameplay: update every 2-4 frames when moving, every 8 frames when still
     if (this.effectiveShadowsEnabled && this.renderer.shadowMap.enabled) {
-      const dx = this.camera.position.x - this.shadowLastCamX;
-      const dy = this.camera.position.y - this.shadowLastCamY;
-      const dz = this.camera.position.z - this.shadowLastCamZ;
-      const moved =
-        Number.isNaN(this.shadowLastCamX) ||
-        dx * dx + dy * dy + dz * dz > 0.0025 ||
-        Math.abs(this.camYaw - this.shadowLastYaw) > 0.008 ||
-        Math.abs(this.camPitch - this.shadowLastPitch) > 0.008;
-      const cadence = moved ? (this.isTouchDevice ? 3 : 2) : 8;
-      this.shadowUpdateFrame = (this.shadowUpdateFrame + 1) % cadence;
-      if (this.shadowUpdateFrame === 0) {
-        this.renderer.shadowMap.needsUpdate = true;
-        this.shadowLastCamX = this.camera.position.x;
-        this.shadowLastCamY = this.camera.position.y;
-        this.shadowLastCamZ = this.camera.position.z;
-        this.shadowLastYaw = this.camYaw;
-        this.shadowLastPitch = this.camPitch;
+      if (this.mode === 'menu') {
+        if (Number.isNaN(this.shadowLastCamX) || this.shadowUpdateFrame === 0) {
+          this.renderer.shadowMap.needsUpdate = true;
+          this.shadowLastCamX = this.camera.position.x;
+          this.shadowLastCamY = this.camera.position.y;
+          this.shadowLastCamZ = this.camera.position.z;
+        }
+        this.shadowUpdateFrame = (this.shadowUpdateFrame + 1) % 45;
+      } else {
+        const dx = this.camera.position.x - this.shadowLastCamX;
+        const dz = this.camera.position.z - this.shadowLastCamZ;
+        // Shadow frustum is centered & texel-snapped around player/camera XZ, independent of look yaw/pitch.
+        // Skipping shadow updates on camera panning eliminates frame spikes during fast look turns.
+        const distSq = dx * dx + dz * dz;
+        const farMoved = Number.isNaN(this.shadowLastCamX) || distSq > 2.25;
+        const walkingMoved = distSq > 0.025;
+        const cadence = this.cinematicActive
+          ? this.isTouchDevice
+            ? 8
+            : 6
+          : walkingMoved
+            ? this.isTouchDevice
+              ? 12
+              : 10
+            : 24;
+        this.shadowUpdateFrame = (this.shadowUpdateFrame + 1) % cadence;
+        if (farMoved || this.shadowUpdateFrame === 0) {
+          this.renderer.shadowMap.needsUpdate = true;
+          this.shadowLastCamX = this.camera.position.x;
+          this.shadowLastCamY = this.camera.position.y;
+          this.shadowLastCamZ = this.camera.position.z;
+          this.shadowLastYaw = this.camYaw;
+          this.shadowLastPitch = this.camPitch;
+          this.shadowUpdateFrame = 0;
+        }
       }
     }
     measure('render', () => this.renderer.render(this.scene, this.camera));
@@ -15085,6 +15353,7 @@ export class GameEngine {
       envMapIntensity: 1.0,
     });
     this.scene.add(built.root);
+    this.prewarmSceneTextures(built.root);
     this.vehicleMeshes.set(v.id, built);
     this.vehicles.push(v);
   }
@@ -17224,6 +17493,15 @@ export class GameEngine {
   }
 
   public togglePlayerFlight(forceState?: boolean, customFlySpeed?: number): boolean {
+    if (
+      forceState !== false &&
+      (this.mode !== 'playing' ||
+        !canProcessGameplayInput(this.masterRuntime) ||
+        this.gameOver ||
+        this.cinematicActive)
+    ) {
+      return this.flightAndTeleport.flying;
+    }
     if (typeof customFlySpeed === 'number' && Number.isFinite(customFlySpeed)) {
       this.flightAndTeleport.flySpeed = customFlySpeed;
     }
@@ -17255,6 +17533,16 @@ export class GameEngine {
   }
 
   public setTouchFlyAscend(active: boolean): void {
+    if (
+      active &&
+      (this.mode !== 'playing' ||
+        !canProcessGameplayInput(this.masterRuntime) ||
+        this.gameOver ||
+        this.cinematicActive)
+    ) {
+      this.touchFlyAscend = false;
+      return;
+    }
     if (active && !this.flightAndTeleport.flying) {
       this.togglePlayerFlight(true);
     }
@@ -17262,10 +17550,28 @@ export class GameEngine {
   }
 
   public setTouchFlyDescend(active: boolean): void {
+    if (
+      active &&
+      (this.mode !== 'playing' ||
+        !canProcessGameplayInput(this.masterRuntime) ||
+        this.gameOver ||
+        this.cinematicActive)
+    ) {
+      this.touchFlyDescend = false;
+      return;
+    }
     this.touchFlyDescend = active;
   }
 
   public teleportToBiome(rawInput: string): boolean {
+    if (
+      this.mode !== 'playing' ||
+      !canProcessGameplayInput(this.masterRuntime) ||
+      this.gameOver ||
+      this.cinematicActive
+    ) {
+      return false;
+    }
     this.seatedState = null;
     this.vaultTimer = 0;
     this.flightPlayerProxy.x = this.playerX;
@@ -19057,6 +19363,14 @@ export class GameEngine {
   }
 
   public igniteSaturnVQuickLaunch(): void {
+    if (
+      this.mode !== 'playing' ||
+      !canProcessGameplayInput(this.masterRuntime) ||
+      this.gameOver ||
+      this.cinematicActive
+    ) {
+      return;
+    }
     if (
       SATURN_V_LAUNCH_CONTROLLER.phase === 'IGNITION' ||
       SATURN_V_LAUNCH_CONTROLLER.phase === 'ASCENT'

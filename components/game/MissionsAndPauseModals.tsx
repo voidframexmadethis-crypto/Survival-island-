@@ -190,17 +190,17 @@ export function SettingsModal({
         </div>
 
         <div className="p-5 space-y-5 text-sm overflow-y-auto survival-scroll">
-          {/* Graphics & 1500 FPS Performance Section */}
+          {/* Graphics & 60 FPS Performance Section */}
           <div className="rounded-xl bg-stone-950/75 border border-stone-800 p-4 space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Gauge className="w-4 h-4 text-emerald-400" />
                 <span className="font-display text-sm font-bold text-stone-100">
-                  Graphics &amp; 1500 FPS
+                  Graphics &amp; 60 FPS
                 </span>
               </div>
               <span className="text-[11px] font-medium text-emerald-400">
-                Locked 1500 FPS Engine
+                Locked 60 FPS Engine
               </span>
             </div>
 
