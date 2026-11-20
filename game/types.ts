@@ -1270,6 +1270,7 @@ export interface HUDStateSnapshot {
   playerY: number;
   playerZ: number;
   playerYaw: number;
+  cameraViewMode?: 'first_person' | 'third_person';
   isSwimming: boolean;
   isSprinting: boolean;
   isCrouching: boolean;

@@ -13,13 +13,17 @@
 
 import * as THREE from "three";
 
-const _dayDeepColor = new THREE.Color("#063b65");
-const _dayShallowColor = new THREE.Color("#28c5c4");
+const _dayDeepColor = new THREE.Color("#073b61");
+const _dayShallowColor = new THREE.Color("#269896");
+
+const SHORE_TEX_SIZE = 256;
+const SHORE_WORLD_HALF = 960;
 
 export class RealisticOcean {
   private water: THREE.Mesh;
   private material: THREE.ShaderMaterial;
   private geometry: THREE.PlaneGeometry;
+  private shoreHeightTex: THREE.DataTexture | null = null;
   private time = 0;
 
   constructor(
@@ -30,18 +34,23 @@ export class RealisticOcean {
     this.geometry = new THREE.PlaneGeometry(
       width,
       height,
-      64,
-      64
+      96,
+      96
     );
+
+    const fallbackData = new Uint8Array([0, 0, 0, 255]);
+    const fallbackTex = new THREE.DataTexture(fallbackData, 1, 1, THREE.RGBAFormat);
+    fallbackTex.needsUpdate = true;
+    this.shoreHeightTex = fallbackTex;
 
     this.material = new THREE.ShaderMaterial({
       uniforms: {
         uTime: { value: 0 },
         uDeepColor: {
-          value: new THREE.Color("#063b65")
+          value: new THREE.Color("#073b61")
         },
         uShallowColor: {
-          value: new THREE.Color("#28c5c4")
+          value: new THREE.Color("#269896")
         },
         uSunDirection: {
           value: new THREE.Vector3(0.3, 0.8, 0.4).normalize()
@@ -57,7 +66,9 @@ export class RealisticOcean {
         },
         uFogDensity: { value: 0.0034 },
         uDaylight: { value: 1.0 },
-        uReflectionStrength: { value: 1.0 }
+        uReflectionStrength: { value: 1.0 },
+        uShoreHeightTex: { value: fallbackTex },
+        uHasShoreTex: { value: 0.0 },
       },
 
       vertexShader: `
@@ -72,27 +83,24 @@ export class RealisticOcean {
 
           vec3 pos = position;
 
-          float wave1 = sin(pos.x * 0.035 + uTime * 1.1);
-          float wave2 = cos(pos.y * 0.045 + uTime * 0.8);
-          float wave3 = sin(
-            (pos.x + pos.y) * 0.018 + uTime * 0.55
-          );
+          float wave1 = sin(pos.x * 0.035 + uTime * 1.15);
+          float wave2 = cos(pos.y * 0.048 + uTime * 0.85);
+          float wave3 = sin((pos.x + pos.y) * 0.019 + uTime * 0.58);
 
           float displacement =
-            wave1 * 0.65 +
-            wave2 * 0.35 +
-            wave3 * 0.45;
+            wave1 * 0.34 +
+            wave2 * 0.22 +
+            wave3 * 0.26;
 
           pos.z += displacement;
           vWave = displacement;
 
-          // Analytic surface slope in rotated plane space (x, -z in world)
           float dWdX =
-            cos(pos.x * 0.035 + uTime * 1.1) * 0.035 * 0.65 +
-            cos((pos.x + pos.y) * 0.018 + uTime * 0.55) * 0.018 * 0.45;
+            cos(pos.x * 0.035 + uTime * 1.15) * 0.035 * 0.34 +
+            cos((pos.x + pos.y) * 0.019 + uTime * 0.58) * 0.019 * 0.26;
           float dWdY =
-            -sin(pos.y * 0.045 + uTime * 0.8) * 0.045 * 0.35 +
-            cos((pos.x + pos.y) * 0.018 + uTime * 0.55) * 0.018 * 0.45;
+            -sin(pos.y * 0.048 + uTime * 0.85) * 0.048 * 0.22 +
+            cos((pos.x + pos.y) * 0.019 + uTime * 0.58) * 0.019 * 0.26;
 
           vec3 localN = normalize(vec3(-dWdX, -dWdY, 1.0));
           vWaveNormal = normalize(mat3(modelMatrix) * localN);
@@ -118,67 +126,111 @@ export class RealisticOcean {
         uniform float uFogDensity;
         uniform float uDaylight;
         uniform float uReflectionStrength;
+        uniform sampler2D uShoreHeightTex;
+        uniform float uHasShoreTex;
 
         varying vec2 vUv;
         varying float vWave;
         varying vec3 vWorldPos;
         varying vec3 vWaveNormal;
 
-        void main() {
-          float distFromCenter = length(vWorldPos.xz);
-          float radialDepth = smoothstep(500.0, 740.0, distFromCenter);
-          float uvDepth = smoothstep(0.0, 0.75, vUv.y);
-          float depthBlend = mix(uvDepth, radialDepth, 0.65);
+        float wHash(vec2 p) {
+          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
 
-          vec3 waterColor = mix(
-            uShallowColor,
-            uDeepColor,
-            depthBlend
+        float wNoise(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          return mix(
+            mix(wHash(i), wHash(i + vec2(1.0, 0.0)), f.x),
+            mix(wHash(i + vec2(0.0, 1.0)), wHash(i + vec2(1.0, 1.0)), f.x),
+            f.y
           );
+        }
 
-          // Fine animated micro-ripples on top of vertex wave normals
-          float r1 = sin(vWorldPos.x * 0.62 + uTime * 2.1) * cos(vWorldPos.z * 0.58 - uTime * 1.6);
-          float r2 = cos((vWorldPos.x - vWorldPos.z) * 0.42 + uTime * 1.35);
-          vec3 N = normalize(vWaveNormal + vec3(r1 * 0.08, 0.0, r2 * 0.08) * uReflectionStrength);
+        vec3 computeWaveNormal(vec2 xz, float t) {
+          vec2 p1 = xz * 0.38 + vec2(t * 0.32, -t * 0.24);
+          vec2 p2 = xz * 0.92 + vec2(-t * 0.41, t * 0.29);
+          vec2 p3 = xz * 2.15 + vec2(t * 0.55, t * 0.38);
+
+          float e = 0.14;
+          float hC = wNoise(p1) * 0.55 + wNoise(p2) * 0.32 + wNoise(p3) * 0.16;
+          float hX = wNoise(p1 + vec2(e, 0.0)) * 0.55 + wNoise(p2 + vec2(e, 0.0)) * 0.32 + wNoise(p3 + vec2(e, 0.0)) * 0.16;
+          float hZ = wNoise(p1 + vec2(0.0, e)) * 0.55 + wNoise(p2 + vec2(0.0, e)) * 0.32 + wNoise(p3 + vec2(0.0, e)) * 0.16;
+
+          vec2 grad = vec2(hX - hC, hZ - hC) / e;
+          float s1 = sin(xz.x * 1.35 + xz.y * 0.55 + t * 2.5);
+          float s2 = cos(xz.y * 1.65 - xz.x * 0.45 - t * 2.1);
+          grad += vec2(s1, s2) * 0.11;
+
+          return normalize(vWaveNormal + vec3(-grad.x, 0.0, -grad.y) * (0.28 + 0.38 * uReflectionStrength));
+        }
+
+        void main() {
+          // Sample island shore height map when inside island bounds [-960, 960]
+          float waterDepth = 4.5;
+          if (uHasShoreTex > 0.5) {
+            vec2 shoreUv = vWorldPos.xz / 1920.0 + 0.5;
+            if (shoreUv.x >= 0.0 && shoreUv.x <= 1.0 && shoreUv.y >= 0.0 && shoreUv.y <= 1.0) {
+              float normH = texture2D(uShoreHeightTex, shoreUv).r;
+              float terrainY = normH * 16.0 - 6.0;
+              waterDepth = max(0.0, 0.0 - terrainY);
+            }
+          } else {
+            float distFromCenter = length(vWorldPos.xz);
+            waterDepth = smoothstep(420.0, 740.0, distFromCenter) * 4.5;
+          }
+
+          float depthT = smoothstep(0.0, 3.6, waterDepth);
+          vec3 sandSeabedTint = vec3(0.46, 0.44, 0.34) * (0.35 + 0.65 * uDaylight);
+          vec3 waterBody = mix(uShallowColor, uDeepColor, depthT);
+          float shallowMask = 1.0 - smoothstep(0.05, 1.9, waterDepth);
+          vec3 waterColor = mix(waterBody, mix(sandSeabedTint, waterBody, 0.58), shallowMask * 0.72);
+
+          vec3 N = computeWaveNormal(vWorldPos.xz, uTime);
           vec3 V = normalize(cameraPosition - vWorldPos);
           vec3 L = normalize(uSunDirection);
           vec3 H = normalize(L + V);
 
-          // Diffuse sun warmth & Fresnel sky reflection
+          float ndv = max(0.001, dot(N, V));
           float ndl = max(0.0, dot(N, L));
-          float fresnel = pow(1.0 - max(0.0, dot(N, V)), 3.2);
-          float spec = pow(max(0.0, dot(N, H)), mix(42.0, 110.0, uReflectionStrength));
+          // Schlick Fresnel reflection
+          float fresnel = 0.03 + 0.97 * pow(1.0 - ndv, 4.2);
+          float specSharp = pow(max(0.0, dot(N, H)), mix(180.0, 360.0, uReflectionStrength));
+          float specSheen = pow(max(0.0, dot(N, H)), 34.0);
 
-          waterColor *= (0.42 + 0.58 * uDaylight) + ndl * 0.22 * uDaylight;
+          waterColor *= (0.42 + 0.58 * uDaylight) + ndl * 0.24 * uDaylight;
+
+          // Reflected sky + warm horizon sun reflection
+          vec3 reflSky = mix(uSkyColor * 0.95, uFogColor * 1.08, 0.35);
           waterColor = mix(
             waterColor,
-            uSkyColor * 1.05,
-            clamp(fresnel * 0.72 * uReflectionStrength, 0.0, 0.78)
+            reflSky,
+            clamp(fresnel * (0.42 + 0.46 * uReflectionStrength), 0.0, 0.86)
           );
 
-          float highlights = pow(
-            max(0.0, sin(vUv.x * 95.0 + vUv.y * 75.0)),
-            16.0
-          );
+          // Crisp sunlit sparkle & warm golden reflection path
+          waterColor += uSunColor * specSharp * (0.95 + 1.65 * uReflectionStrength) * (0.2 + 0.95 * uDaylight);
+          waterColor += uSunColor * specSheen * 0.22 * uReflectionStrength * uDaylight;
 
-          float foam = smoothstep(
-            0.85, 1.1, abs(vWave)
-          );
-
-          waterColor += highlights * 0.09 * (0.35 + 0.65 * uDaylight);
-          waterColor += uSunColor * spec * (0.28 + 0.78 * uReflectionStrength) * (0.25 + 0.85 * uDaylight);
-          waterColor = mix(
-            waterColor,
-            mix(vec3(0.55, 0.66, 0.78), vec3(0.92, 0.98, 1.0), uDaylight),
-            foam * 0.28
-          );
+          // Animated shoreline surf foam where water meets sandy shore + gentle open-water crest foam
+          float surfNoise = wNoise(vWorldPos.xz * 0.65 - vec2(uTime * 0.45, uTime * 0.35));
+          float shoreWave = 0.5 + 0.5 * sin(waterDepth * 9.5 - uTime * 2.4 + surfNoise * 3.2);
+          float shoreFoam = (1.0 - smoothstep(0.02, 0.68, waterDepth)) * smoothstep(0.32, 0.85, surfNoise + shoreWave * 0.45);
+          float crestFoam = smoothstep(0.55, 0.82, abs(vWave)) * smoothstep(0.45, 0.8, surfNoise) * 0.25;
+          float totalFoam = clamp(shoreFoam * 0.82 + crestFoam, 0.0, 1.0);
+          vec3 foamColor = mix(vec3(0.45, 0.54, 0.65), vec3(0.95, 0.98, 1.0), uDaylight);
+          waterColor = mix(waterColor, foamColor, totalFoam * 0.68);
 
           // Exponential horizon fog matching scene.fog
           float viewDist = length(cameraPosition - vWorldPos);
           float fogFactor = 1.0 - exp(-uFogDensity * uFogDensity * viewDist * viewDist);
           waterColor = mix(waterColor, uFogColor, clamp(fogFactor, 0.0, 1.0));
 
-          gl_FragColor = vec4(waterColor, 0.94);
+          float alpha = mix(0.68, 0.95, smoothstep(0.0, 1.35, waterDepth));
+          alpha = max(alpha, totalFoam * 0.88);
+          gl_FragColor = vec4(waterColor, clamp(alpha, 0.45, 0.96));
         }
       `,
 
@@ -197,6 +249,42 @@ export class RealisticOcean {
     this.water.userData.noShadowReceive = true;
 
     this.scene.add(this.water);
+  }
+
+  public buildShoreDepthTexture(
+    heightSampler: (x: number, z: number) => number,
+  ): void {
+    const size = SHORE_TEX_SIZE;
+    const data = new Uint8Array(size * size * 4);
+    for (let y = 0; y < size; y++) {
+      const z = (y / (size - 1) - 0.5) * SHORE_WORLD_HALF * 2;
+      for (let x = 0; x < size; x++) {
+        const wx = (x / (size - 1) - 0.5) * SHORE_WORLD_HALF * 2;
+        const h = heightSampler(wx, z);
+        const clamped = Math.max(-6, Math.min(10, h));
+        const enc = Math.round(((clamped + 6) / 16) * 255);
+        const idx = (y * size + x) * 4;
+        data[idx] = enc;
+        data[idx + 1] = enc;
+        data[idx + 2] = enc;
+        data[idx + 3] = 255;
+      }
+    }
+
+    if (this.shoreHeightTex) {
+      this.shoreHeightTex.dispose();
+    }
+    const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.colorSpace = THREE.NoColorSpace;
+    tex.needsUpdate = true;
+
+    this.shoreHeightTex = tex;
+    this.material.uniforms.uShoreHeightTex.value = tex;
+    this.material.uniforms.uHasShoreTex.value = 1.0;
   }
 
   setVisible(visible: boolean): void {
@@ -241,5 +329,9 @@ export class RealisticOcean {
     this.scene.remove(this.water);
     this.geometry.dispose();
     this.material.dispose();
+    if (this.shoreHeightTex) {
+      this.shoreHeightTex.dispose();
+      this.shoreHeightTex = null;
+    }
   }
 }

@@ -144,6 +144,19 @@ float siNoise(vec2 p) {
 `,
       )
       .replace(
+        '#include <roughnessmap_fragment>',
+        `#include <roughnessmap_fragment>
+${
+  mode === 'terrain'
+    ? `if (uShaderQuality >= 0.5) {
+  float shoreWetMask = (1.0 - smoothstep(0.0, 1.15, max(0.0, vSiWorldPos.y))) * smoothstep(-0.35, 0.08, vSiWorldPos.y);
+  roughnessFactor = mix(roughnessFactor, 0.16, clamp(shoreWetMask, 0.0, 1.0) * 0.78);
+}`
+    : ''
+}
+`,
+      )
+      .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
 if (uShaderQuality >= 0.5) {
@@ -152,38 +165,44 @@ if (uShaderQuality >= 0.5) {
   ${
     mode === 'terrain'
       ? `
-  // Crisp micro-grain & valley crevice AO + wet shoreline shading
+  // Crisp multi-scale micro-grain, coastal wind ripples, valley AO & glistening wet shoreline
   float macroTex = siNoise(vSiWorldPos.xz * 0.14);
-  float microTex = siNoise(vSiWorldPos.xz * 1.15);
+  float midTex = siNoise(vSiWorldPos.xz * 1.15);
+  float fineTex = siNoise(vSiWorldPos.xz * 4.6);
+  float rippleBand = 0.5 + 0.5 * sin(vSiWorldPos.x * 2.3 + vSiWorldPos.z * 0.95 + macroTex * 4.2);
+  float sandElevMask = 1.0 - smoothstep(1.2, 4.4, max(0.0, vSiWorldPos.y));
   float slopeUp = clamp(siN.y, 0.0, 1.0);
-  float valleyAo = mix(0.84, 1.04, smoothstep(0.35, 0.96, slopeUp));
-  float detailMod = 0.93 + macroTex * 0.09 + microTex * 0.05;
+  float valleyAo = mix(0.80, 1.06, smoothstep(0.32, 0.96, slopeUp));
+  float detailMod = 0.90 + macroTex * 0.10 + midTex * 0.06 + fineTex * 0.04 + (rippleBand - 0.5) * 0.045 * sandElevMask;
   diffuseColor.rgb *= valleyAo * detailMod;
-  // Subtle damp sand darkening just above ocean level
-  float shoreWet = 1.0 - smoothstep(0.0, 0.72, max(0.0, vSiWorldPos.y));
-  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.68, 0.70, 0.74), shoreWet * 0.55);
+  float shoreWet = 1.0 - smoothstep(0.0, 0.95, max(0.0, vSiWorldPos.y));
+  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.58, 0.60, 0.65), shoreWet * 0.65);
   `
       : mode === 'foliage'
         ? `
   // Rich foliage depth: darkened inner canopy underside + warm sunlit leaf translucency
-  float leafVar = siNoise(vSiWorldPos.xz * 0.85 + vSiWorldPos.y * 0.6);
-  float canopyAo = mix(0.74, 1.06, clamp(siN.y * 0.5 + 0.52, 0.0, 1.0));
-  diffuseColor.rgb *= canopyAo * (0.91 + leafVar * 0.16);
-  float backLight = pow(max(0.0, dot(siView, -uShaderSunDir)), 2.2) * (0.35 + 0.65 * max(0.0, siN.y * 0.5 + 0.5));
-  diffuseColor.rgb += uShaderSunColor * diffuseColor.rgb * backLight * uShaderDaylight * (uShaderQuality >= 1.5 ? 0.52 : 0.36);
+  float leafVar = siNoise(vSiWorldPos.xz * 0.85 + vSiWorldPos.y * 0.6) * 0.65 + siNoise(vSiWorldPos.xz * 2.4 + vSiWorldPos.y * 1.7) * 0.35;
+  float canopyAo = mix(0.68, 1.08, clamp(siN.y * 0.5 + 0.52, 0.0, 1.0));
+  diffuseColor.rgb *= canopyAo * (0.89 + leafVar * 0.20);
+  float backLight = pow(max(0.0, dot(siView, -uShaderSunDir)), 2.0) * (0.35 + 0.65 * max(0.0, siN.y * 0.5 + 0.5));
+  diffuseColor.rgb += uShaderSunColor * diffuseColor.rgb * backLight * uShaderDaylight * (uShaderQuality >= 1.5 ? 0.60 : 0.42);
   `
         : mode === 'rock'
           ? `
-  // Faceted rock micro-grain + crevice ambient occlusion
-  float rockGrain = siNoise(vSiWorldPos.xz * 1.6 + vSiWorldPos.y * 1.3);
-  float rockAo = mix(0.78, 1.05, clamp(vSiLocalY * 0.45 + 0.55, 0.0, 1.0));
-  diffuseColor.rgb *= rockAo * (0.88 + rockGrain * 0.2);
+  // Stratified rock bands, high-frequency mineral grain, crevice AO & mossy tops
+  float strata = 0.5 + 0.5 * sin(vSiWorldPos.y * 2.6 + siNoise(vSiWorldPos.xz * 0.45) * 3.2);
+  float rockGrain = siNoise(vSiWorldPos.xz * 1.9 + vSiWorldPos.y * 1.5);
+  float rockAo = mix(0.74, 1.06, clamp(vSiLocalY * 0.45 + 0.55, 0.0, 1.0));
+  diffuseColor.rgb *= rockAo * (0.84 + rockGrain * 0.22 + strata * 0.06);
+  float mossMask = smoothstep(0.62, 0.94, siN.y) * smoothstep(0.6, 1.6, vSiWorldPos.y) * (1.0 - smoothstep(10.0, 16.0, vSiWorldPos.y));
+  float mossPatch = smoothstep(0.42, 0.72, siNoise(vSiWorldPos.xz * 0.72));
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.24, 0.36, 0.16), mossMask * mossPatch * 0.58);
   `
           : `
-  // Bark / wood base contact AO + subtle sunlit edge lift
-  float woodGrain = siNoise(vec2(vSiWorldPos.x + vSiWorldPos.z, vSiWorldPos.y * 2.2));
-  float contactAo = mix(0.76, 1.03, smoothstep(-0.2, 0.8, vSiLocalY));
-  diffuseColor.rgb *= contactAo * (0.91 + woodGrain * 0.14);
+  // Bark / wood base contact AO + vertical fiber grain
+  float woodGrain = siNoise(vec2(vSiWorldPos.x * 1.5 + vSiWorldPos.z * 1.5, vSiWorldPos.y * 2.8));
+  float contactAo = mix(0.72, 1.04, smoothstep(-0.2, 1.2, vSiLocalY));
+  diffuseColor.rgb *= contactAo * (0.89 + woodGrain * 0.18);
   `
   }
 }

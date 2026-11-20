@@ -1,97 +1,380 @@
 import * as THREE from 'three';
 
 /**
- * Procedural CanvasTexture generators (zero external PNG/JPG 404s).
- * All albedo/color textures explicitly use THREE.SRGBColorSpace.
+ * High-definition procedural PBR CanvasTexture & DataTexture generators
+ * (zero external PNG/JPG 404s).
+ * - Albedo/color maps explicitly use THREE.SRGBColorSpace.
+ * - Normal & roughness maps explicitly use THREE.NoColorSpace.
  */
+
+function fastHash2D(ix: number, iy: number, seed: number): number {
+  let h = (ix * 374761393 + iy * 668265263 + seed * 1442695041) | 0;
+  h = ((h ^ (h >> 13)) * 1274126177) | 0;
+  return ((h ^ (h >> 16)) >>> 0) / 4294967295;
+}
+
+function periodicSmoothNoise(
+  u: number,
+  v: number,
+  period: number,
+  seed: number,
+): number {
+  const x = u * period;
+  const y = v * period;
+  const ix0 = Math.floor(x);
+  const iy0 = Math.floor(y);
+  const fx = x - ix0;
+  const fy = y - iy0;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+
+  const px0 = ((ix0 % period) + period) % period;
+  const py0 = ((iy0 % period) + period) % period;
+  const px1 = (px0 + 1) % period;
+  const py1 = (py0 + 1) % period;
+
+  const a = fastHash2D(px0, py0, seed);
+  const b = fastHash2D(px1, py0, seed);
+  const c = fastHash2D(px0, py1, seed);
+  const d = fastHash2D(px1, py1, seed);
+
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+
+function periodicFbm(
+  u: number,
+  v: number,
+  basePeriod: number,
+  octaves: number,
+  seed: number,
+): number {
+  let sum = 0;
+  let amp = 0.5;
+  let norm = 0;
+  let period = basePeriod;
+  for (let o = 0; o < octaves; o++) {
+    sum += amp * periodicSmoothNoise(u, v, period, seed + o * 97);
+    norm += amp;
+    amp *= 0.5;
+    period *= 2;
+  }
+  return sum / norm;
+}
+
+function clamp255(n: number): number {
+  return n < 0 ? 0 : n > 255 ? 255 : n | 0;
+}
+
+function createTangentNormalTextureFromHeights(
+  heights: Float32Array,
+  size: number,
+  strength: number,
+  repeatX: number,
+  repeatY: number,
+  anisotropy: number,
+): THREE.DataTexture {
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    const ym = (y - 1 + size) % size;
+    const yp = (y + 1) % size;
+    for (let x = 0; x < size; x++) {
+      const xm = (x - 1 + size) % size;
+      const xp = (x + 1) % size;
+
+      // Sobel filter for smooth, crisp tangent-space normals
+      const tl = heights[ym * size + xm];
+      const t = heights[ym * size + x];
+      const tr = heights[ym * size + xp];
+      const l = heights[y * size + xm];
+      const r = heights[y * size + xp];
+      const bl = heights[yp * size + xm];
+      const b = heights[yp * size + x];
+      const br = heights[yp * size + xp];
+
+      const dx = (tr + 2 * r + br - (tl + 2 * l + bl)) * strength;
+      const dy = (bl + 2 * b + br - (tl + 2 * t + tr)) * strength;
+
+      let nx = -dx;
+      let ny = -dy;
+      let nz = 1.0;
+      const invLen = 1.0 / Math.sqrt(nx * nx + ny * ny + nz * nz);
+      nx *= invLen;
+      ny *= invLen;
+      nz *= invLen;
+
+      const idx = (y * size + x) * 4;
+      data[idx] = clamp255((nx * 0.5 + 0.5) * 255);
+      data[idx + 1] = clamp255((ny * 0.5 + 0.5) * 255);
+      data[idx + 2] = clamp255((nz * 0.5 + 0.5) * 255);
+      data[idx + 3] = 255;
+    }
+  }
+
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(repeatX, repeatY);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.anisotropy = anisotropy;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function createRoughnessTextureFromHeights(
+  heights: Float32Array,
+  size: number,
+  minRough: number,
+  maxRough: number,
+  invert: boolean,
+  repeatX: number,
+  repeatY: number,
+  anisotropy: number,
+): THREE.DataTexture {
+  const data = new Uint8Array(size * size * 4);
+  for (let i = 0; i < size * size; i++) {
+    const t = invert ? 1 - heights[i] : heights[i];
+    const v = clamp255((minRough + (maxRough - minRough) * t) * 255);
+    const idx = i * 4;
+    data[idx] = v;
+    data[idx + 1] = v;
+    data[idx + 2] = v;
+    data[idx + 3] = 255;
+  }
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(repeatX, repeatY);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.anisotropy = anisotropy;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function buildGroundHeightField(size: number): Float32Array {
+  const h = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const macro = periodicFbm(u, v, 4, 3, 11);
+      const mid = periodicFbm(u, v, 16, 3, 37);
+      const fine = periodicSmoothNoise(u, v, 64, 71);
+      // Subtle wind-blown coastal ripples
+      const ripplePhase = (u * 6 + v * 2 + macro * 1.45) * Math.PI * 2;
+      const ripple = 0.5 + 0.5 * Math.sin(ripplePhase);
+      // Occasional micro pebble glint
+      const grit = fastHash2D(x, y, 193);
+      const pebble = grit > 0.965 ? (grit - 0.965) * 14.0 : 0;
+      h[y * size + x] = Math.min(
+        1,
+        macro * 0.34 + mid * 0.32 + fine * 0.16 + ripple * 0.14 + pebble * 0.18,
+      );
+    }
+  }
+  return h;
+}
+
+let cachedGroundHeights: { size: number; data: Float32Array } | null = null;
+function getGroundHeightField(size = 256): Float32Array {
+  if (!cachedGroundHeights || cachedGroundHeights.size !== size) {
+    cachedGroundHeights = { size, data: buildGroundHeightField(size) };
+  }
+  return cachedGroundHeights.data;
+}
 
 export function createGroundDetailTexture(renderer: THREE.WebGLRenderer): THREE.CanvasTexture {
   const size = 512;
+  const hSize = 256;
+  const heights = getGroundHeightField(hSize);
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d')!;
+  const img = ctx.createImageData(size, size);
+  const d = img.data;
 
-  ctx.fillStyle = '#e5e5e5';
-  ctx.fillRect(0, 0, size, size);
+  // High-brightness neutral-warm detail texture so vertex biome colors multiply cleanly
+  // while delivering crisp sand grains, pebble flecks, and organic ground contrast.
+  for (let y = 0; y < size; y++) {
+    const hy = (y >> 1) * hSize;
+    for (let x = 0; x < size; x++) {
+      const hv = heights[hy + (x >> 1)];
+      const grain = fastHash2D(x, y, 503);
+      const micro = fastHash2D(x >> 1, y >> 1, 709);
+      const isPebble = grain > 0.986;
+      const isDarkFlecks = grain < 0.032;
 
-  // Organic soil/pebble/grain speckle
-  for (let i = 0; i < 9000; i++) {
-    const x = Math.random() * size;
-    const y = Math.random() * size;
-    const r = 0.6 + Math.random() * 2.2;
-    const v = 195 + Math.floor(Math.random() * 55);
-    ctx.fillStyle = `rgb(${v},${v},${v})`;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
+      let lum = 192 + hv * 62 + (micro - 0.5) * 20;
+      if (isPebble) lum += 22;
+      else if (isDarkFlecks) lum -= 44;
+
+      const idx = (y * size + x) * 4;
+      d[idx] = clamp255(lum * 1.01);
+      d[idx + 1] = clamp255(lum * 1.0);
+      d[idx + 2] = clamp255(lum * 0.97);
+      d[idx + 3] = 255;
+    }
   }
+  ctx.putImageData(img, 0, 0);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(36, 36);
+  tex.repeat.set(144, 144);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
   return tex;
 }
 
+export function createGroundNormalTexture(renderer: THREE.WebGLRenderer): THREE.DataTexture {
+  const hSize = 256;
+  const heights = getGroundHeightField(hSize);
+  const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return createTangentNormalTextureFromHeights(heights, hSize, 2.35, 144, 144, aniso);
+}
+
+export function createGroundRoughnessTexture(renderer: THREE.WebGLRenderer): THREE.DataTexture {
+  const hSize = 256;
+  const heights = getGroundHeightField(hSize);
+  const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return createRoughnessTextureFromHeights(heights, hSize, 0.72, 0.98, true, 144, 144, aniso);
+}
+
+function buildBarkHeightField(size: number): Float32Array {
+  const h = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      // Vertical bark ridges warped by low-frequency organic twist
+      const warp = periodicFbm(u, v, 4, 2, 211) * 0.14;
+      const ridgeWave = Math.sin((u + warp) * 14 * Math.PI * 2);
+      const secondaryRidge = Math.sin((u * 2.0 + warp * 1.5) * 14 * Math.PI * 2) * 0.35;
+      const fiber = periodicFbm(u * 2.0, v * 0.45, 8, 3, 257);
+      const raw = 0.5 + 0.32 * ridgeWave + 0.14 * secondaryRidge + (fiber - 0.5) * 0.45;
+      h[y * size + x] = Math.max(0, Math.min(1, raw));
+    }
+  }
+  return h;
+}
+
+let cachedBarkHeights: { size: number; data: Float32Array } | null = null;
+function getBarkHeightField(size = 256): Float32Array {
+  if (!cachedBarkHeights || cachedBarkHeights.size !== size) {
+    cachedBarkHeights = { size, data: buildBarkHeightField(size) };
+  }
+  return cachedBarkHeights.data;
+}
+
 export function createBarkTexture(renderer: THREE.WebGLRenderer): THREE.CanvasTexture {
   const size = 256;
+  const heights = getBarkHeightField(size);
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d')!;
+  const img = ctx.createImageData(size, size);
+  const d = img.data;
 
-  ctx.fillStyle = '#6b4c35';
-  ctx.fillRect(0, 0, size, size);
-
-  for (let i = 0; i < 180; i++) {
-    const x = Math.random() * size;
-    const y = Math.random() * size;
-    const w = 2 + Math.random() * 6;
-    const h = 16 + Math.random() * 44;
-    ctx.fillStyle = Math.random() > 0.5 ? 'rgba(42,26,16,0.45)' : 'rgba(130,96,68,0.35)';
-    ctx.fillRect(x, y, w, h);
+  // Neutral-warm furrowed bark albedo so tree material tints (palm/oak/birch/spruce) stay accurate
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const hv = heights[y * size + x];
+      const streak = fastHash2D(x, y >> 2, 313);
+      const lichen = periodicFbm(x / size, y / size, 6, 2, 419);
+      const crevice = hv < 0.32 ? (0.32 - hv) * 1.15 : 0;
+      let r = 135 + hv * 88 - crevice * 75 + (streak - 0.5) * 22;
+      let g = 122 + hv * 80 - crevice * 68 + (streak - 0.5) * 18;
+      let b = 108 + hv * 72 - crevice * 60 + (streak - 0.5) * 16;
+      if (lichen > 0.72) {
+        const m = (lichen - 0.72) * 2.2;
+        r = r * (1 - m * 0.25) + 150 * m * 0.25;
+        g = g * (1 - m * 0.25) + 168 * m * 0.25;
+        b = b * (1 - m * 0.25) + 132 * m * 0.25;
+      }
+      const idx = (y * size + x) * 4;
+      d[idx] = clamp255(r);
+      d[idx + 1] = clamp255(g);
+      d[idx + 2] = clamp255(b);
+      d[idx + 3] = 255;
+    }
   }
+  ctx.putImageData(img, 0, 0);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(1, 3);
+  tex.repeat.set(2, 3);
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
   return tex;
+}
+
+export function createBarkNormalTexture(renderer: THREE.WebGLRenderer): THREE.DataTexture {
+  const size = 256;
+  const heights = getBarkHeightField(size);
+  const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return createTangentNormalTextureFromHeights(heights, size, 3.2, 2, 3, aniso);
 }
 
 export function createWaterNormalTexture(renderer: THREE.WebGLRenderer): THREE.CanvasTexture {
   const size = 256;
+  const heights = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const w1 = Math.sin((u * 4 + v * 2) * Math.PI * 2);
+      const w2 = Math.cos((u * 3 - v * 5) * Math.PI * 2) * 0.7;
+      const w3 = Math.sin((u * 9 + v * 7) * Math.PI * 2) * 0.35;
+      const w4 = (periodicFbm(u, v, 8, 3, 911) - 0.5) * 1.4;
+      heights[y * size + x] = 0.5 + (w1 + w2 + w3 + w4) * 0.16;
+    }
+  }
+
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d')!;
+  const img = ctx.createImageData(size, size);
+  const d = img.data;
+  const strength = 2.6;
 
-  ctx.fillStyle = '#8080ff';
-  ctx.fillRect(0, 0, size, size);
-
-  for (let i = 0; i < 420; i++) {
-    const x = Math.random() * size;
-    const y = Math.random() * size;
-    const rx = 8 + Math.random() * 22;
-    const ry = 3 + Math.random() * 8;
-    const r = 115 + Math.floor(Math.random() * 30);
-    const g = 115 + Math.floor(Math.random() * 30);
-    ctx.fillStyle = `rgba(${r}, ${g}, 255, 0.28)`;
-    ctx.beginPath();
-    ctx.ellipse(x, y, rx, ry, Math.random() * Math.PI, 0, Math.PI * 2);
-    ctx.fill();
+  for (let y = 0; y < size; y++) {
+    const ym = (y - 1 + size) % size;
+    const yp = (y + 1) % size;
+    for (let x = 0; x < size; x++) {
+      const xm = (x - 1 + size) % size;
+      const xp = (x + 1) % size;
+      const dx = (heights[y * size + xp] - heights[y * size + xm]) * strength;
+      const dy = (heights[yp * size + x] - heights[ym * size + x]) * strength;
+      let nx = -dx;
+      let ny = -dy;
+      let nz = 1.0;
+      const inv = 1.0 / Math.sqrt(nx * nx + ny * ny + nz * nz);
+      nx *= inv;
+      ny *= inv;
+      nz *= inv;
+      const idx = (y * size + x) * 4;
+      d[idx] = clamp255((nx * 0.5 + 0.5) * 255);
+      d[idx + 1] = clamp255((ny * 0.5 + 0.5) * 255);
+      d[idx + 2] = clamp255((nz * 0.5 + 0.5) * 255);
+      d[idx + 3] = 255;
+    }
   }
+  ctx.putImageData(img, 0, 0);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(18, 18);
-  tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+  tex.repeat.set(22, 22);
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
   return tex;
 }
 
@@ -105,66 +388,158 @@ export function createWoodPlankTexture(renderer: THREE.WebGLRenderer): THREE.Can
   ctx.fillStyle = '#8b5a2b';
   ctx.fillRect(0, 0, size, size);
 
-  // Planks
+  const rand = makeSeededRand(777);
   for (let p = 0; p < 4; p++) {
     const y = p * 64;
-    ctx.fillStyle = p % 2 === 0 ? '#966232' : '#7f5126';
-    ctx.fillRect(0, y, size, 62);
-    ctx.fillStyle = '#3f2410';
-    ctx.fillRect(0, y + 62, size, 2);
-    for (let g = 0; g < 22; g++) {
-      ctx.fillStyle = 'rgba(55, 30, 12, 0.25)';
-      ctx.fillRect(Math.random() * size, y + Math.random() * 60, 40 + Math.random() * 90, 1.5);
+    const tone = p % 2 === 0 ? [154, 102, 54] : [132, 84, 42];
+    ctx.fillStyle = `rgb(${tone[0]}, ${tone[1]}, ${tone[2]})`;
+    ctx.fillRect(0, y, size, 61);
+    ctx.fillStyle = '#331c0b';
+    ctx.fillRect(0, y + 61, size, 3);
+    ctx.fillStyle = 'rgba(218, 170, 114, 0.24)';
+    ctx.fillRect(0, y + 1, size, 2);
+    for (let g = 0; g < 36; g++) {
+      ctx.fillStyle =
+        g % 3 === 0 ? 'rgba(42, 22, 8, 0.28)' : 'rgba(195, 145, 92, 0.16)';
+      ctx.fillRect(rand() * size, y + 3 + rand() * 56, 35 + rand() * 110, 1.4);
     }
+    // Subtle wood knots & nail heads
+    const kx = 24 + rand() * (size - 48);
+    const ky = y + 18 + rand() * 26;
+    ctx.fillStyle = 'rgba(54, 30, 12, 0.45)';
+    ctx.beginPath();
+    ctx.ellipse(kx, ky, 7, 3.5, 0, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
   return tex;
+}
+
+export function createWoodPlankNormalTexture(renderer: THREE.WebGLRenderer): THREE.DataTexture {
+  const size = 256;
+  const heights = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) {
+    const inPlank = y % 64;
+    const isSeam = inPlank >= 61;
+    for (let x = 0; x < size; x++) {
+      const grain = periodicFbm(x / size, (y / size) * 4, 6, 3, 601);
+      heights[y * size + x] = isSeam ? 0.08 : 0.45 + grain * 0.45;
+    }
+  }
+  const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return createTangentNormalTextureFromHeights(heights, size, 2.2, 1, 1, aniso);
+}
+
+function buildRockHeightField(size: number): Float32Array {
+  const h = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const strata = periodicFbm(u * 0.85, v * 1.75, 5, 4, 511);
+      const crag = Math.abs(periodicFbm(u, v, 8, 3, 541) - 0.5) * 2.0;
+      const fine = periodicSmoothNoise(u, v, 48, 577);
+      //Sharp fracture lines where crag is near 0
+      const fracture = Math.min(1, crag * 2.8);
+      h[y * size + x] = Math.max(0, Math.min(1, (strata * 0.55 + fine * 0.25) * (0.45 + 0.55 * fracture)));
+    }
+  }
+  return h;
+}
+
+let cachedRockHeights: { size: number; data: Float32Array } | null = null;
+function getRockHeightField(size = 256): Float32Array {
+  if (!cachedRockHeights || cachedRockHeights.size !== size) {
+    cachedRockHeights = { size, data: buildRockHeightField(size) };
+  }
+  return cachedRockHeights.data;
 }
 
 export function createRockTexture(renderer: THREE.WebGLRenderer): THREE.CanvasTexture {
   const size = 256;
+  const heights = getRockHeightField(size);
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d')!;
+  const img = ctx.createImageData(size, size);
+  const d = img.data;
 
-  ctx.fillStyle = '#7b7772';
-  ctx.fillRect(0, 0, size, size);
-
-  for (let i = 0; i < 1600; i++) {
-    const x = Math.random() * size;
-    const y = Math.random() * size;
-    const r = 1 + Math.random() * 4.5;
-    const shade = 85 + Math.floor(Math.random() * 70);
-    ctx.fillStyle = `rgba(${shade},${shade - 2},${shade - 5},0.35)`;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const hv = heights[y * size + x];
+      const mica = fastHash2D(x, y, 619);
+      const mossPatch = periodicFbm(x / size, y / size, 5, 2, 643);
+      let lum = 110 + hv * 112 + (mica > 0.97 ? 38 : (mica - 0.5) * 18);
+      if (hv < 0.25) lum *= 0.72; // Deep fracture crevices
+      let r = lum * 1.01;
+      let g = lum * 0.99;
+      let b = lum * 0.95;
+      // Subtle weathered lichen / mineral warmth
+      if (mossPatch > 0.68) {
+        const w = (mossPatch - 0.68) * 1.8;
+        r = r * (1 - w * 0.28) + 124 * w * 0.28;
+        g = g * (1 - w * 0.28) + 138 * w * 0.28;
+        b = b * (1 - w * 0.28) + 92 * w * 0.28;
+      }
+      const idx = (y * size + x) * 4;
+      d[idx] = clamp255(r);
+      d[idx + 1] = clamp255(g);
+      d[idx + 2] = clamp255(b);
+      d[idx + 3] = 255;
+    }
   }
-
-  // Subtle mineral striations
-  for (let i = 0; i < 42; i++) {
-    ctx.strokeStyle = i % 2 === 0 ? 'rgba(38,35,32,0.38)' : 'rgba(180,175,168,0.22)';
-    ctx.lineWidth = 1 + Math.random() * 1.5;
-    ctx.beginPath();
-    const sx = Math.random() * size;
-    const sy = Math.random() * size;
-    ctx.moveTo(sx, sy);
-    ctx.lineTo(sx + (Math.random() - 0.5) * 60, sy + (Math.random() - 0.5) * 32);
-    ctx.stroke();
-  }
+  ctx.putImageData(img, 0, 0);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 2);
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
   return tex;
+}
+
+export function createRockNormalTexture(renderer: THREE.WebGLRenderer): THREE.DataTexture {
+  const size = 256;
+  const heights = getRockHeightField(size);
+  const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return createTangentNormalTextureFromHeights(heights, size, 3.3, 2, 2, aniso);
+}
+
+export function createRockRoughnessTexture(renderer: THREE.WebGLRenderer): THREE.DataTexture {
+  const size = 256;
+  const heights = getRockHeightField(size);
+  const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return createRoughnessTextureFromHeights(heights, size, 0.68, 0.96, true, 2, 2, aniso);
+}
+
+function buildLeafHeightField(size: number): Float32Array {
+  const h = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const cluster = periodicFbm(u, v, 8, 3, 733);
+      const leafVein = Math.abs(Math.sin((u * 12 + cluster * 1.4) * Math.PI * 2));
+      const micro = periodicSmoothNoise(u, v, 32, 761);
+      h[y * size + x] = Math.min(1, cluster * 0.58 + leafVein * 0.24 + micro * 0.18);
+    }
+  }
+  return h;
+}
+
+let cachedLeafHeights: { size: number; data: Float32Array } | null = null;
+function getLeafHeightField(size = 256): Float32Array {
+  if (!cachedLeafHeights || cachedLeafHeights.size !== size) {
+    cachedLeafHeights = { size, data: buildLeafHeightField(size) };
+  }
+  return cachedLeafHeights.data;
 }
 
 export function createLeafCanopyTexture(renderer: THREE.WebGLRenderer): THREE.CanvasTexture {
@@ -173,28 +548,245 @@ export function createLeafCanopyTexture(renderer: THREE.WebGLRenderer): THREE.Ca
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d')!;
+  const rand = makeSeededRand(9091);
 
-  ctx.fillStyle = '#2d6a32';
+  // Neutral-bright shaded leaf mosaic so material color tints (oak/palm/cherry/spruce) stay vibrant
+  ctx.fillStyle = '#5c7a52';
   ctx.fillRect(0, 0, size, size);
 
-  for (let i = 0; i < 850; i++) {
-    const x = Math.random() * size;
-    const y = Math.random() * size;
-    const rx = 4 + Math.random() * 7;
-    const ry = 2 + Math.random() * 4;
-    const g = 78 + Math.floor(Math.random() * 68);
-    ctx.fillStyle = `rgba(${Math.floor(g * 0.42)},${g},${Math.floor(g * 0.45)},0.55)`;
-    ctx.beginPath();
-    ctx.ellipse(x, y, rx, ry, Math.random() * Math.PI, 0, Math.PI * 2);
-    ctx.fill();
+  for (let i = 0; i < 1400; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const rx = 5 + rand() * 8;
+    const ry = 2.4 + rand() * 4.2;
+    const ang = rand() * Math.PI;
+    const shade = 118 + Math.floor(rand() * 118);
+    const r = Math.floor(shade * 0.78);
+    const g = Math.floor(shade * 1.02);
+    const b = Math.floor(shade * 0.66);
+
+    // Wrap across edges so tiling is seamless
+    for (const ox of [-size, 0, size]) {
+      for (const oy of [-size, 0, size]) {
+        const px = x + ox;
+        const py = y + oy;
+        if (px < -20 || px > size + 20 || py < -20 || py > size + 20) continue;
+        ctx.fillStyle = `rgba(${r},${g},${b},0.62)`;
+        ctx.beginPath();
+        ctx.ellipse(px, py, rx, ry, ang, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Crisp sunlit leaf midrib
+        ctx.strokeStyle = `rgba(${Math.min(255, r + 40)},${Math.min(255, g + 35)},${Math.min(255, b + 20)},0.35)`;
+        ctx.lineWidth = 0.9;
+        ctx.beginPath();
+        ctx.moveTo(px - Math.cos(ang) * rx * 0.75, py - Math.sin(ang) * rx * 0.75);
+        ctx.lineTo(px + Math.cos(ang) * rx * 0.75, py + Math.sin(ang) * rx * 0.75);
+        ctx.stroke();
+      }
+    }
   }
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 2);
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
   return tex;
+}
+
+export function createLeafNormalTexture(renderer: THREE.WebGLRenderer): THREE.DataTexture {
+  const size = 256;
+  const heights = getLeafHeightField(size);
+  const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return createTangentNormalTextureFromHeights(heights, size, 2.2, 2, 2, aniso);
+}
+
+export interface PbrTextureSet {
+  map: THREE.CanvasTexture;
+  normalMap: THREE.DataTexture;
+  roughnessMap: THREE.DataTexture;
+}
+
+export function createGunmetalTextureSet(anisotropy = 4): PbrTextureSet {
+  const size = 256;
+  const heights = new Float32Array(size * size);
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const img = ctx.createImageData(size, size);
+  const d = img.data;
+
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    // Horizontal brushed machining lines + fine parkerized grain
+    const brushBand = fastHash2D(0, y, 811);
+    const serration =
+      v > 0.72 && v < 0.95 ? Math.sin(v * 90 * Math.PI * 2) * 0.35 : 0;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const micro = fastHash2D(x, y, 823);
+      const streak = periodicSmoothNoise(u * 0.15, v * 4.0, 16, 829);
+      const edgeWear =
+        Math.abs(u - 0.5) > 0.44 || Math.abs(v - 0.5) > 0.44 ? 0.25 : 0;
+      const hVal = Math.max(
+        0,
+        Math.min(1, 0.5 + (brushBand - 0.5) * 0.22 + (micro - 0.5) * 0.18 + serration),
+      );
+      heights[y * size + x] = hVal;
+
+      const base = 62 + streak * 24 + (brushBand - 0.5) * 14 + (micro - 0.5) * 10 + edgeWear * 48;
+      const idx = (y * size + x) * 4;
+      d[idx] = clamp255(base * 0.95);
+      d[idx + 1] = clamp255(base * 0.98);
+      d[idx + 2] = clamp255(base * 1.04);
+      d[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+
+  const map = new THREE.CanvasTexture(canvas);
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = anisotropy;
+
+  const normalMap = createTangentNormalTextureFromHeights(
+    heights,
+    size,
+    1.9,
+    1,
+    1,
+    anisotropy,
+  );
+  const roughnessMap = createRoughnessTextureFromHeights(
+    heights,
+    size,
+    0.22,
+    0.48,
+    true,
+    1,
+    1,
+    anisotropy,
+  );
+
+  return { map, normalMap, roughnessMap };
+}
+
+export function createTacticalGripTextureSet(anisotropy = 4): PbrTextureSet {
+  const size = 256;
+  const heights = new Float32Array(size * size);
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const img = ctx.createImageData(size, size);
+  const d = img.data;
+
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      // Diamond-knurled polymer grip stippling
+      const diagA = Math.abs(Math.sin((u + v) * 24 * Math.PI));
+      const diagB = Math.abs(Math.sin((u - v) * 24 * Math.PI));
+      const knurl = Math.min(diagA, diagB);
+      const stipple = fastHash2D(x, y, 941) * 0.16;
+      const hv = Math.max(0, Math.min(1, knurl * 0.84 + stipple));
+      heights[y * size + x] = hv;
+
+      const base = 36 + hv * 32;
+      const idx = (y * size + x) * 4;
+      d[idx] = clamp255(base * 1.05);
+      d[idx + 1] = clamp255(base * 0.96);
+      d[idx + 2] = clamp255(base * 0.92);
+      d[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+
+  const map = new THREE.CanvasTexture(canvas);
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = anisotropy;
+
+  const normalMap = createTangentNormalTextureFromHeights(
+    heights,
+    size,
+    2.6,
+    2,
+    2,
+    anisotropy,
+  );
+  const roughnessMap = createRoughnessTextureFromHeights(
+    heights,
+    size,
+    0.58,
+    0.88,
+    true,
+    2,
+    2,
+    anisotropy,
+  );
+  return { map, normalMap, roughnessMap };
+}
+
+export function createTacticalGloveTextureSet(anisotropy = 4): PbrTextureSet {
+  const size = 256;
+  const heights = new Float32Array(size * size);
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const img = ctx.createImageData(size, size);
+  const d = img.data;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      // Tactical woven ballistic nylon / leather grain
+      const weave = ((x >> 1) + (y >> 1)) % 2 === 0 ? 0.65 : 0.42;
+      const grain = periodicFbm(x / size, y / size, 12, 2, 1021);
+      const hv = weave * 0.55 + grain * 0.45;
+      heights[y * size + x] = hv;
+
+      const lum = 34 + hv * 28;
+      const idx = (y * size + x) * 4;
+      d[idx] = clamp255(lum * 1.04);
+      d[idx + 1] = clamp255(lum * 1.0);
+      d[idx + 2] = clamp255(lum * 0.96);
+      d[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+
+  const map = new THREE.CanvasTexture(canvas);
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = anisotropy;
+
+  const normalMap = createTangentNormalTextureFromHeights(
+    heights,
+    size,
+    1.8,
+    2,
+    2,
+    anisotropy,
+  );
+  const roughnessMap = createRoughnessTextureFromHeights(
+    heights,
+    size,
+    0.65,
+    0.92,
+    true,
+    2,
+    2,
+    anisotropy,
+  );
+  return { map, normalMap, roughnessMap };
 }
 
 function makeSeededRand(seed: number): () => number {
@@ -773,46 +1365,47 @@ export interface PbrMaterialBundle {
   dispose: () => void;
 }
 
-function makeNoiseCanvas(
+function makeSurfaceColorCanvas(
   size: number,
-  baseHex: string,
-  grainHex: string,
-  highlightHex: string,
-  streakAxis: 'none' | 'x' | 'y' = 'none',
+  baseRgb: [number, number, number],
+  darkRgb: [number, number, number],
+  lightRgb: [number, number, number],
+  heights: Float32Array,
 ): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d')!;
+  const img = ctx.createImageData(size, size);
+  const d = img.data;
 
-  ctx.fillStyle = baseHex;
-  ctx.fillRect(0, 0, size, size);
-
-  // Deterministic pseudo-random grain so textures are consistent & tileable-feeling
-  let seed = 1337;
-  const rand = () => {
-    seed = (seed * 16807) % 2147483647;
-    return (seed - 1) / 2147483646;
-  };
-
-  const count = Math.floor((size * size) / 14);
-  for (let i = 0; i < count; i++) {
-    const x = rand() * size;
-    const y = rand() * size;
-    const pick = rand();
-    ctx.fillStyle = pick > 0.78 ? highlightHex : grainHex;
-    ctx.globalAlpha = 0.14 + rand() * 0.28;
-
-    if (streakAxis === 'y') {
-      ctx.fillRect(x, y, 2, 10 + rand() * 22);
-    } else if (streakAxis === 'x') {
-      ctx.fillRect(x, y, 10 + rand() * 22, 2);
-    } else {
-      const r = 1 + rand() * 3.5;
-      ctx.fillRect(x, y, r, r);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const hv = heights[y * size + x];
+      const speckle = (fastHash2D(x, y, 331) - 0.5) * 0.18;
+      const t = Math.max(0, Math.min(1, hv + speckle));
+      let r: number;
+      let g: number;
+      let b: number;
+      if (t < 0.5) {
+        const k = t * 2;
+        r = darkRgb[0] + (baseRgb[0] - darkRgb[0]) * k;
+        g = darkRgb[1] + (baseRgb[1] - darkRgb[1]) * k;
+        b = darkRgb[2] + (baseRgb[2] - darkRgb[2]) * k;
+      } else {
+        const k = (t - 0.5) * 2;
+        r = baseRgb[0] + (lightRgb[0] - baseRgb[0]) * k;
+        g = baseRgb[1] + (lightRgb[1] - baseRgb[1]) * k;
+        b = baseRgb[2] + (lightRgb[2] - baseRgb[2]) * k;
+      }
+      const idx = (y * size + x) * 4;
+      d[idx] = clamp255(r);
+      d[idx + 1] = clamp255(g);
+      d[idx + 2] = clamp255(b);
+      d[idx + 3] = 255;
     }
   }
-  ctx.globalAlpha = 1;
+  ctx.putImageData(img, 0, 0);
   return canvas;
 }
 
@@ -842,66 +1435,93 @@ export function createRealisticSurfaceMaterial(options: {
 }): PbrMaterialBundle {
   const repeat = options.repeat ?? 1;
   const aniso = options.anisotropy ?? 4;
+  const size = 256;
 
+  let heights: Float32Array;
   let colorCanvas: HTMLCanvasElement;
-  let bumpCanvas: HTMLCanvasElement;
+  let normalStrength = 2.4;
   let defaultRoughness = options.roughness ?? 0.85;
-  let defaultMetalness = options.metalness ?? 0.05;
+  let defaultMetalness = options.metalness ?? 0.04;
 
   switch (options.kind) {
     case 'grass':
-      colorCanvas = makeNoiseCanvas(512, '#3b6e2c', '#264b1c', '#6ca346', 'y');
-      bumpCanvas = makeNoiseCanvas(512, '#808080', '#484848', '#d4d4d4', 'y');
-      defaultRoughness = options.roughness ?? 0.88;
+      heights = getGroundHeightField(size);
+      colorCanvas = makeSurfaceColorCanvas(size, [66, 118, 46], [40, 78, 28], [118, 168, 72], heights);
+      defaultRoughness = options.roughness ?? 0.86;
       break;
     case 'sand':
-      colorCanvas = makeNoiseCanvas(512, '#d8be8a', '#b99b63', '#efe0ba', 'none');
-      bumpCanvas = makeNoiseCanvas(512, '#808080', '#5a5a5a', '#c8c8c8', 'none');
-      defaultRoughness = options.roughness ?? 0.92;
-      break;
-    case 'rock':
-      colorCanvas = makeNoiseCanvas(512, '#5a5f66', '#383c42', '#899099', 'x');
-      bumpCanvas = makeNoiseCanvas(512, '#808080', '#323232', '#e0e0e0', 'x');
+      heights = getGroundHeightField(size);
+      colorCanvas = makeSurfaceColorCanvas(size, [216, 190, 140], [176, 148, 102], [242, 224, 184], heights);
+      normalStrength = 2.1;
       defaultRoughness = options.roughness ?? 0.9;
       break;
+    case 'rock':
+      heights = getRockHeightField(size);
+      colorCanvas = makeSurfaceColorCanvas(size, [118, 114, 108], [62, 60, 56], [164, 158, 148], heights);
+      normalStrength = 3.2;
+      defaultRoughness = options.roughness ?? 0.88;
+      break;
     case 'bark':
-      colorCanvas = makeNoiseCanvas(512, '#533927', '#2e1d12', '#7a573e', 'y');
-      bumpCanvas = makeNoiseCanvas(512, '#808080', '#2b2b2b', '#dcdcdc', 'y');
+      heights = getBarkHeightField(size);
+      colorCanvas = makeSurfaceColorCanvas(size, [96, 66, 44], [48, 30, 18], [136, 98, 68], heights);
+      normalStrength = 3.0;
       defaultRoughness = options.roughness ?? 0.92;
       break;
     case 'sea':
-      colorCanvas = makeNoiseCanvas(512, '#0e5a78', '#083b52', '#49b6d6', 'x');
-      bumpCanvas = makeNoiseCanvas(512, '#808080', '#404040', '#ffffff', 'x');
+      heights = getGroundHeightField(size);
+      colorCanvas = makeSurfaceColorCanvas(size, [14, 90, 120], [8, 59, 82], [73, 182, 214], heights);
+      normalStrength = 2.6;
       defaultRoughness = options.roughness ?? 0.16;
       defaultMetalness = options.metalness ?? 0.35;
       break;
     case 'animal_fur':
     default:
-      colorCanvas = makeNoiseCanvas(512, '#7c5334', '#492e1a', '#b4835a', 'y');
-      bumpCanvas = makeNoiseCanvas(512, '#808080', '#444444', '#d8d8d8', 'y');
+      heights = getBarkHeightField(size);
+      colorCanvas = makeSurfaceColorCanvas(size, [124, 83, 52], [73, 46, 26], [180, 131, 90], heights);
+      normalStrength = 1.6;
       defaultRoughness = options.roughness ?? 0.82;
       break;
   }
 
   const map = configureSurfaceTexture(colorCanvas, THREE.SRGBColorSpace, repeat, repeat, aniso);
-  const bumpMap = configureSurfaceTexture(bumpCanvas, THREE.NoColorSpace, repeat, repeat, aniso);
+  const normalMap = createTangentNormalTextureFromHeights(
+    heights,
+    size,
+    normalStrength,
+    repeat,
+    repeat,
+    aniso,
+  );
+  const roughnessMap = createRoughnessTextureFromHeights(
+    heights,
+    size,
+    Math.max(0.15, defaultRoughness - 0.16),
+    Math.min(1.0, defaultRoughness + 0.08),
+    true,
+    repeat,
+    repeat,
+    aniso,
+  );
 
   const material = new THREE.MeshStandardMaterial({
     map,
-    bumpMap,
-    bumpScale: options.kind === 'sea' ? 0.08 : 0.045,
-    roughness: defaultRoughness,
+    normalMap,
+    normalScale: new THREE.Vector2(1.05, 1.05),
+    roughnessMap,
+    roughness: 1.0,
     metalness: defaultMetalness,
   });
 
   return {
     material,
-    textures: [map, bumpMap],
+    textures: [map, normalMap, roughnessMap],
     dispose: () => {
       map.dispose();
-      bumpMap.dispose();
+      normalMap.dispose();
+      roughnessMap.dispose();
       material.dispose();
     },
   };
 }
+
 

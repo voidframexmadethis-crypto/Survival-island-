@@ -88,13 +88,20 @@ import {
   buildUndergroundCarElevator,
 } from './undergroundElevatorModel';
 import {
+  createBarkNormalTexture,
   createBarkTexture,
   createGroundDetailTexture,
+  createGroundNormalTexture,
+  createGroundRoughnessTexture,
   createHayTexture,
   createLeafCanopyTexture,
+  createLeafNormalTexture,
   createRealisticSurfaceMaterial,
+  createRockNormalTexture,
+  createRockRoughnessTexture,
   createRockTexture,
   createWaterNormalTexture,
+  createWoodPlankNormalTexture,
   createWoodPlankTexture,
 } from './textures';
 import {
@@ -207,11 +214,18 @@ export function buildIslandWorld(
   const rand = seededRand(42071);
 
   const groundTex = createGroundDetailTexture(renderer);
+  const groundNormalTex = createGroundNormalTexture(renderer);
+  const groundRoughnessTex = createGroundRoughnessTexture(renderer);
   const barkTex = createBarkTexture(renderer);
+  const barkNormalTex = createBarkNormalTexture(renderer);
   const rockTex = createRockTexture(renderer);
+  const rockNormalTex = createRockNormalTexture(renderer);
+  const rockRoughnessTex = createRockRoughnessTexture(renderer);
   const leafTex = createLeafCanopyTexture(renderer);
+  const leafNormalTex = createLeafNormalTexture(renderer);
   const waterNormalTex = createWaterNormalTexture(renderer);
   const woodTex = createWoodPlankTexture(renderer);
+  const woodNormalTex = createWoodPlankNormalTexture(renderer);
   const maxAniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
   const rockPbrBundle = createRealisticSurfaceMaterial({
     kind: 'rock',
@@ -415,7 +429,10 @@ export function buildIslandWorld(
     new THREE.MeshStandardMaterial({
       vertexColors: true,
       map: groundTex,
-      roughness: 0.9,
+      normalMap: groundNormalTex,
+      normalScale: new THREE.Vector2(0.85, 0.85),
+      roughnessMap: groundRoughnessTex,
+      roughness: 1.0,
       metalness: 0.03,
     }),
     'terrain',
@@ -552,11 +569,18 @@ export function buildIslandWorld(
   const disposableMats: THREE.Material[] = [];
   const disposableTexs: THREE.Texture[] = [
     groundTex,
+    groundNormalTex,
+    groundRoughnessTex,
     barkTex,
+    barkNormalTex,
     rockTex,
+    rockNormalTex,
+    rockRoughnessTex,
     leafTex,
+    leafNormalTex,
     waterNormalTex,
     woodTex,
+    woodNormalTex,
     ...rockPbrBundle.textures,
     ...sandPbrBundle.textures,
   ];
@@ -633,14 +657,15 @@ export function buildIslandWorld(
     }
   };
 
-  // 5. Drifting 3D Tropical Clouds (1 InstancedMesh draw call instead of 72)
+  // 5. Drifting 3D Tropical Clouds (soft translucent wisps complementing skyDome cumulus layer)
   const cloudsGroup = new THREE.Group();
   const cloudMat = registerMaterial(
     new THREE.MeshStandardMaterial({
       color: 0xf8fafc,
-      roughness: 0.95,
+      roughness: 0.98,
       transparent: true,
-      opacity: 0.82,
+      opacity: 0.42,
+      depthWrite: false,
     }),
   );
   const cloudPuffGeo = registerGeometry(new THREE.SphereGeometry(1, 8, 7));
@@ -651,17 +676,17 @@ export function buildIslandWorld(
     const angle = (i / 18) * Math.PI * 2;
     const dist = 80 + rand() * 230;
     const cx = Math.cos(angle) * dist;
-    const cy = 56 + rand() * 18;
+    const cy = 62 + rand() * 18;
     const cz = Math.sin(angle) * dist;
     for (let p = 0; p < 4; p++) {
-      const r = 5 + rand() * 5;
+      const r = 5.5 + rand() * 5.5;
       cloudDummy.position.set(
-        cx + (p - 1.5) * 5.2,
-        cy + rand() * 1.8,
-        cz + (rand() - 0.5) * 4,
+        cx + (p - 1.5) * 5.6,
+        cy + rand() * 1.4,
+        cz + (rand() - 0.5) * 4.2,
       );
       cloudDummy.rotation.set(0, 0, 0);
-      cloudDummy.scale.set(r * 1.5, r * 0.52, r * 1.1);
+      cloudDummy.scale.set(r * 1.85, r * 0.36, r * 1.25);
       cloudDummy.updateMatrix();
       cloudInstanced.setMatrixAt(cloudIdx++, cloudDummy.matrix);
     }
@@ -677,6 +702,8 @@ export function buildIslandWorld(
   const wreckMat = new THREE.MeshStandardMaterial({
     color: 0x4b3320,
     map: woodTex,
+    normalMap: woodNormalTex,
+    normalScale: new THREE.Vector2(0.75, 0.75),
     roughness: 0.9,
   });
   const tatteredSailMat = new THREE.MeshStandardMaterial({
@@ -1089,11 +1116,15 @@ export function buildIslandWorld(
   const barnWoodMat = new THREE.MeshStandardMaterial({
     color: 0x6b4226,
     map: woodTex,
+    normalMap: woodNormalTex,
+    normalScale: new THREE.Vector2(0.7, 0.7),
     roughness: 0.9,
   });
   const darkBeamMat = new THREE.MeshStandardMaterial({
     color: 0x422614,
     map: woodTex,
+    normalMap: woodNormalTex,
+    normalScale: new THREE.Vector2(0.7, 0.7),
     roughness: 0.92,
   });
   const roofShingleMat = new THREE.MeshStandardMaterial({
@@ -1316,9 +1347,9 @@ export function buildIslandWorld(
 
   // 2) Snowy Woodland Plateau (Timber Wolves) - Batched into InstancedMeshes
   const snowCapMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xeef2f6, roughness: 0.88 }));
-  const snowCedarLeafMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x1e4a38, map: leafTex, roughness: 0.85 }));
-  const snowBarkMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x453226, map: barkTex, roughness: 0.94 }));
-  const snowBoulderMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x64748b, map: rockTex, roughness: 0.9 }));
+  const snowCedarLeafMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x1e4a38, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.75, 0.75), roughness: 0.85 }));
+  const snowBarkMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x453226, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.94 }));
+  const snowBoulderMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x64748b, map: rockTex, normalMap: rockNormalTex, roughnessMap: rockRoughnessTex, roughness: 1.0 }));
   const unitTrunkGeo = registerGeometry(new THREE.CylinderGeometry(0.28, 0.42, 1, 8));
   const unitConeGeo = registerGeometry(new THREE.ConeGeometry(1, 1, 8));
   const unitRockGeo = registerGeometry(new THREE.DodecahedronGeometry(1, 1));
@@ -1377,7 +1408,7 @@ export function buildIslandWorld(
   });
 
   // 3) Rocky Crystal River Bank & Dense Pines (Grizzly Bear territory near (-4, -26))
-  const riverBankRockMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x706c66, map: rockTex, roughness: 0.85 }));
+  const riverBankRockMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x706c66, map: rockTex, normalMap: rockNormalTex, roughnessMap: rockRoughnessTex, roughness: 1.0 }));
   const bankPines: [number, number, number][] = [
     [-11.2, -23.5, 1.1],
     [-10.4, -31.2, 1.25],
@@ -1585,7 +1616,7 @@ export function buildIslandWorld(
   // 7) Gnarled Dead Oak Tree & Exposed Perch Branch (Great Horned Owl at DEAD_OAK_POS = (18, 78))
   const deadOakBaseY = getTerrainHeight(DEAD_OAK_POS.x, DEAD_OAK_POS.z);
   const deadOakMat = enhanceSurfaceMaterial(
-    new THREE.MeshStandardMaterial({ color: 0x574c43, map: barkTex, roughness: 0.96 }),
+    new THREE.MeshStandardMaterial({ color: 0x574c43, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.96 }),
     'wood',
   );
   const deadOakGroup = new THREE.Group();
@@ -1626,32 +1657,32 @@ export function buildIslandWorld(
   const resourceMeshes = new Map<string, THREE.Object3D>();
   const resourceHandles = new Map<string, ResourceVisualHandle>();
 
-  const palmTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x855a3c, map: barkTex, roughness: 0.92 }), 'wood'));
-  const palmLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x358f42, map: leafTex, roughness: 0.74 }), 'foliage', 0.06));
-  const jungleTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x5c3d28, map: barkTex, roughness: 0.94 }), 'wood'));
-  const jungleLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x227038, map: leafTex, roughness: 0.78 }), 'foliage', 0.045));
-  const banyanTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x6b4b34, map: barkTex, roughness: 0.93 }), 'wood'));
-  const banyanLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x1b5e30, map: leafTex, roughness: 0.8 }), 'foliage', 0.04));
-  const cedarTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x4f3422, map: barkTex, roughness: 0.95 }), 'wood'));
-  const cedarLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x1f5c3a, map: leafTex, roughness: 0.82 }), 'foliage', 0.038));
-  const birchTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0xe7e5e0, map: barkTex, roughness: 0.84 }), 'wood'));
+  const palmTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x855a3c, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.92 }), 'wood'));
+  const palmLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x358f42, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 0.72 }), 'foliage', 0.06));
+  const jungleTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x5c3d28, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.94 }), 'wood'));
+  const jungleLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x227038, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 0.76 }), 'foliage', 0.045));
+  const banyanTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x6b4b34, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.93 }), 'wood'));
+  const banyanLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x1b5e30, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 0.78 }), 'foliage', 0.04));
+  const cedarTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x4f3422, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.95 }), 'wood'));
+  const cedarLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x1f5c3a, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 0.8 }), 'foliage', 0.038));
+  const birchTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0xe7e5e0, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.7, 0.7), roughness: 0.84 }), 'wood'));
   const birchBandMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x262624, roughness: 0.92 }));
-  const birchLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x5ca438, map: leafTex, roughness: 0.72 }), 'foliage', 0.052));
-  const paleOakTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x7b7f7c, map: barkTex, roughness: 0.92 }), 'wood'));
-  const paleOakLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x8e998f, map: leafTex, roughness: 0.85 }), 'foliage', 0.025));
+  const birchLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x5ca438, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 0.7 }), 'foliage', 0.052));
+  const paleOakTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x7b7f7c, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.9, 0.9), roughness: 0.92 }), 'wood'));
+  const paleOakLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x8e998f, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.75, 0.75), roughness: 0.84 }), 'foliage', 0.025));
   const paleMossMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xa6b1a8, roughness: 0.9 }));
   const paleHeartGlowMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xf97316, emissive: 0xea580c, emissiveIntensity: 0.95, roughness: 0.35 }));
-  const pineTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x6b3e26, map: barkTex, roughness: 0.93 }), 'wood'));
-  const pineLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x1b4d2e, map: leafTex, roughness: 0.82 }), 'foliage', 0.036));
-  const spruceTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x3e2a1e, map: barkTex, roughness: 0.95 }), 'wood'));
-  const spruceLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x1b4a3b, map: leafTex, roughness: 0.82 }), 'foliage', 0.036));
-  const rainforestTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x523c28, map: barkTex, roughness: 0.92 }), 'wood'));
-  const rainforestLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x166534, map: leafTex, roughness: 0.72 }), 'foliage', 0.048));
+  const pineTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x6b3e26, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.93 }), 'wood'));
+  const pineLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x1b4d2e, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 0.8 }), 'foliage', 0.036));
+  const spruceTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x3e2a1e, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.95 }), 'wood'));
+  const spruceLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x1b4a3b, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 0.8 }), 'foliage', 0.036));
+  const rainforestTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x523c28, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.92 }), 'wood'));
+  const rainforestLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x166534, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 0.7 }), 'foliage', 0.048));
   const vineMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x2e7d32, roughness: 0.86 }));
-  const oakTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x6b4a2b, map: barkTex, roughness: 0.93 }), 'wood'));
-  const oakLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x2e8238, map: leafTex, roughness: 0.75 }), 'foliage', 0.048));
-  const darkOakTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x3b281a, map: barkTex, roughness: 0.96 }), 'wood'));
-  const darkOakLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x1a421e, map: leafTex, roughness: 0.82 }), 'foliage', 0.036));
+  const oakTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x6b4a2b, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.93 }), 'wood'));
+  const oakLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x2e8238, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 0.73 }), 'foliage', 0.048));
+  const darkOakTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x3b281a, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.96 }), 'wood'));
+  const darkOakLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x1a421e, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 0.8 }), 'foliage', 0.036));
   const giantMushroomStemMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xe7e2d8, roughness: 0.88 }));
   const redMushroomCapMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.72 }));
   const mushroomSpotMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xfefce8, roughness: 0.78 }));
@@ -1688,24 +1719,24 @@ export function buildIslandWorld(
   const coconutMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x4b2e19, roughness: 0.85 }));
 
   const boulderMat = registerMaterial(enhanceSurfaceMaterial(rockPbrBundle.material, 'rock'));
-  const smallStoneMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x8b8680, map: rockTex, bumpMap: rockPbrBundle.textures[1], bumpScale: 0.04, roughness: 0.88 }), 'rock'));
-  const mountainRockMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x5d5853, map: rockTex, bumpMap: rockPbrBundle.textures[1], bumpScale: 0.05, roughness: 0.94 }), 'rock'));
+  const smallStoneMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x8b8680, map: rockTex, normalMap: rockNormalTex, normalScale: new THREE.Vector2(1.05, 1.05), roughnessMap: rockRoughnessTex, roughness: 1.0 }), 'rock'));
+  const mountainRockMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x5d5853, map: rockTex, normalMap: rockNormalTex, normalScale: new THREE.Vector2(1.15, 1.15), roughnessMap: rockRoughnessTex, roughness: 1.0 }), 'rock'));
   const flintMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.32, metalness: 0.25 }));
-  const oreRockMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x4a4540, map: rockTex, bumpMap: rockPbrBundle.textures[1], bumpScale: 0.045, roughness: 0.9 }), 'rock'));
+  const oreRockMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x4a4540, map: rockTex, normalMap: rockNormalTex, normalScale: new THREE.Vector2(1.1, 1.1), roughnessMap: rockRoughnessTex, roughness: 1.0 }), 'rock'));
   const oreVeinMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.28, metalness: 0.82 }));
   const emeraldCrystalMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x10b981, emissive: 0x059669, emissiveIntensity: 0.35, roughness: 0.2, metalness: 0.45 }));
-  const cherryTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x3f2228, map: barkTex, roughness: 0.88 }), 'wood'));
-  const cherryLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0xf472b6, map: leafTex, roughness: 0.72 }), 'foliage', 0.032));
-  const cherryBlossomLightMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0xfbcfe8, map: leafTex, roughness: 0.7 }), 'foliage', 0.032));
+  const cherryTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x3f2228, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.9, 0.9), roughness: 0.88 }), 'wood'));
+  const cherryLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0xf472b6, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.75, 0.75), roughness: 0.72 }), 'foliage', 0.032));
+  const cherryBlossomLightMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0xfbcfe8, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.75, 0.75), roughness: 0.7 }), 'foliage', 0.032));
   const sunflowerPetalMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.55 }));
   const sunflowerCenterMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x451a03, roughness: 0.9 }));
   const beeNestMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.72 }));
   const packedIceMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x93c5fd, roughness: 0.18, metalness: 0.12, transparent: true, opacity: 0.88 }));
   const blueIceMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0284c7, emissiveIntensity: 0.25, roughness: 0.12, metalness: 0.18, transparent: true, opacity: 0.92 }));
-  const acaciaTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x6e6a65, map: barkTex, roughness: 0.92 }), 'wood'));
-  const acaciaLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x7c8f38, map: leafTex, roughness: 0.78 }), 'foliage', 0.04));
-  const mangroveTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x5c362c, map: barkTex, roughness: 0.94 }), 'wood'));
-  const mangroveLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x3b6e2e, map: leafTex, roughness: 0.8 }), 'foliage', 0.036));
+  const acaciaTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x6e6a65, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.92 }), 'wood'));
+  const acaciaLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x7c8f38, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.75, 0.75), roughness: 0.78 }), 'foliage', 0.04));
+  const mangroveTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x5c362c, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.94 }), 'wood'));
+  const mangroveLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x3b6e2e, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 0.8 }), 'foliage', 0.036));
   const cactusMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x2f7d32, roughness: 0.82 }));
   const blueOrchidMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0284c7, emissiveIntensity: 0.2, roughness: 0.55 }));
   const goldOreCrystalMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xca8a04, emissiveIntensity: 0.32, roughness: 0.22, metalness: 0.88 }));
@@ -4967,19 +4998,60 @@ export function buildIslandWorld(
     count++;
   }
 
-  // 10. Performance-Friendly Instanced Ambient Grass & Minimal River/Mountain Pebbles (clean beaches & fields)
-  const grassCount = 960;
-  const grassBladeGeo = new THREE.ConeGeometry(0.11, 0.55, 4);
-  grassBladeGeo.translate(0, 0.27, 0);
-  const ambientGrassMat = enhanceSurfaceMaterial(
-    new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.9 }),
-    'foliage',
-    0.048,
+  // 10. Performance-Friendly Instanced Ambient Crossed-Blade Grass Tufts & Minimal River/Mountain Pebbles
+  const grassCount = 2600;
+  const bladeCount = 4;
+  const grassPositions = new Float32Array(bladeCount * 9);
+  const grassColors = new Float32Array(bladeCount * 9);
+  for (let b = 0; b < bladeCount; b++) {
+    const a = b * (Math.PI / bladeCount) + (b % 2) * 0.14;
+    const w = 0.068;
+    const h = 0.44 + (b % 2) * 0.16;
+    const leanX = Math.cos(a + 1.15) * 0.12;
+    const leanZ = Math.sin(a + 1.15) * 0.12;
+    const off = b * 9;
+    grassPositions[off] = -Math.sin(a) * w;
+    grassPositions[off + 1] = 0;
+    grassPositions[off + 2] = Math.cos(a) * w;
+    grassPositions[off + 3] = Math.sin(a) * w;
+    grassPositions[off + 4] = 0;
+    grassPositions[off + 5] = -Math.cos(a) * w;
+    grassPositions[off + 6] = leanX;
+    grassPositions[off + 7] = h;
+    grassPositions[off + 8] = leanZ;
+
+    // Dark root AO -> bright sunlit tip
+    grassColors[off] = 0.48;
+    grassColors[off + 1] = 0.56;
+    grassColors[off + 2] = 0.42;
+    grassColors[off + 3] = 0.48;
+    grassColors[off + 4] = 0.56;
+    grassColors[off + 5] = 0.42;
+    grassColors[off + 6] = 1.0;
+    grassColors[off + 7] = 1.0;
+    grassColors[off + 8] = 0.94;
+  }
+  const grassBladeGeo = registerGeometry(new THREE.BufferGeometry());
+  grassBladeGeo.setAttribute('position', new THREE.BufferAttribute(grassPositions, 3));
+  grassBladeGeo.setAttribute('color', new THREE.BufferAttribute(grassColors, 3));
+  grassBladeGeo.computeVertexNormals();
+
+  const ambientGrassMat = registerMaterial(
+    enhanceSurfaceMaterial(
+      new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: 0.78,
+        side: THREE.DoubleSide,
+        vertexColors: true,
+      }),
+      'foliage',
+      0.055,
+    ),
   );
   const grassInstanced = new THREE.InstancedMesh(grassBladeGeo, ambientGrassMat, grassCount);
   grassInstanced.receiveShadow = true;
   grassInstanced.userData.noShadowCast = true;
-  const pebbleCount = 150;
+  const pebbleCount = 180;
   const pebbleGeo = new THREE.DodecahedronGeometry(0.14, 0);
   const pebbleInstanced = new THREE.InstancedMesh(pebbleGeo, smallStoneMat, pebbleCount);
 
@@ -4988,9 +5060,9 @@ export function buildIslandWorld(
   let gPlaced = 0;
   let pPlaced = 0;
 
-  for (let i = 0; i < 4200 && (gPlaced < grassCount || pPlaced < pebbleCount); i++) {
+  for (let i = 0; i < 9500 && (gPlaced < grassCount || pPlaced < pebbleCount); i++) {
     const a = rand() * Math.PI * 2;
-    const rad = 16 + Math.sqrt(rand()) * 255;
+    const rad = 16 + Math.sqrt(rand()) * 725;
     const px = Math.cos(a) * rad;
     const pz = Math.sin(a) * rad;
     const py = getTerrainHeight(px, pz);
@@ -5027,10 +5099,13 @@ export function buildIslandWorld(
       continue;
     }
 
+    const isCoastalGrassEdge = biome === 'beach' && py >= 1.15 && py <= 3.6;
     const isVegetatedBiome =
       biome === 'forest' ||
       biome === 'dark_forest' ||
       biome === 'grassland' ||
+      biome === 'meadow' ||
+      biome === 'cherry_grove' ||
       biome === 'flower_forest' ||
       biome === 'birch_forest' ||
       biome === 'old_growth_birch_forest' ||
@@ -5041,41 +5116,54 @@ export function buildIslandWorld(
       biome === 'snowy_taiga' ||
       biome === 'jungle' ||
       biome === 'sparse_jungle' ||
-      biome === 'bamboo_jungle';
+      biome === 'bamboo_jungle' ||
+      biome === 'savanna' ||
+      biome === 'swamp' ||
+      isCoastalGrassEdge;
 
     if (gPlaced < grassCount && isVegetatedBiome) {
-      dummy.position.set(px, py, pz);
-      dummy.rotation.set((rand() - 0.5) * 0.25, rand() * Math.PI * 2, (rand() - 0.5) * 0.25);
-      const sc = 0.75 + rand() * 0.7;
-      dummy.scale.set(sc, sc * (biome === 'dark_forest' || biome === 'snowy_taiga' ? 0.38 : 0.8 + rand() * 0.6), sc);
+      dummy.position.set(px, py - 0.02, pz);
+      dummy.rotation.set((rand() - 0.5) * 0.22, rand() * Math.PI * 2, (rand() - 0.5) * 0.22);
+      const sc = 0.85 + rand() * 0.85;
+      dummy.scale.set(
+        sc,
+        sc * (biome === 'dark_forest' || biome === 'snowy_taiga' ? 0.45 : 0.82 + rand() * 0.65),
+        sc,
+      );
       dummy.updateMatrix();
       grassInstanced.setMatrixAt(gPlaced, dummy.matrix);
       const grassHex =
-        biome === 'grassland'
-          ? 0x84a93c
-          : biome === 'dark_forest'
-            ? 0x7c4a24 // Fallen leaf litter tint
-            : biome === 'pale_garden'
-              ? 0x9aa69d // Pale moss tint
-              : biome === 'snowy_taiga'
-                ? 0xe2ecf5 // Crisp snow layer wisps
-                : biome === 'taiga' ||
-                    biome === 'old_growth_pine_taiga' ||
-                    biome === 'old_growth_spruce_taiga'
-                  ? 0x2f5e3e
-                  : biome === 'jungle' || biome === 'bamboo_jungle'
-                    ? 0x256d2c
-                    : biome === 'flower_forest' || biome === 'birch_forest'
-                      ? 0x5ca438
-                      : 0x3f7a2c;
-      tintColor.setHex(grassHex).offsetHSL(0, 0, (rand() - 0.5) * 0.08);
+        isCoastalGrassEdge
+          ? 0x769f38
+          : biome === 'grassland' || biome === 'meadow'
+            ? 0x84a93c
+            : biome === 'savanna'
+              ? 0xa4943a
+              : biome === 'cherry_grove'
+                ? 0x6ca848
+                : biome === 'dark_forest'
+                  ? 0x6c4c28
+                  : biome === 'pale_garden'
+                    ? 0x9aa69d
+                    : biome === 'snowy_taiga'
+                      ? 0xdce6f0
+                      : biome === 'taiga' ||
+                          biome === 'old_growth_pine_taiga' ||
+                          biome === 'old_growth_spruce_taiga'
+                        ? 0x346944
+                        : biome === 'jungle' || biome === 'bamboo_jungle' || biome === 'swamp'
+                          ? 0x2f7532
+                          : biome === 'flower_forest' || biome === 'birch_forest'
+                            ? 0x5ca438
+                            : 0x4b8730;
+      tintColor.setHex(grassHex).offsetHSL((rand() - 0.5) * 0.03, 0, (rand() - 0.5) * 0.08);
       grassInstanced.setColorAt(gPlaced, tintColor);
       gPlaced++;
-    } else if (pPlaced < pebbleCount && biome === 'river') {
-      dummy.position.set(px, py + 0.04, pz);
+    } else if (pPlaced < pebbleCount && (biome === 'river' || (biome === 'beach' && py < 1.35))) {
+      dummy.position.set(px, py + 0.02, pz);
       dummy.rotation.set(rand() * 2, rand() * 3, rand() * 2);
-      const sc = 0.6 + rand() * 0.95;
-      dummy.scale.set(sc * 1.2, sc * 0.65, sc);
+      const sc = 0.55 + rand() * 0.9;
+      dummy.scale.set(sc * 1.25, sc * 0.52, sc);
       dummy.updateMatrix();
       pebbleInstanced.setMatrixAt(pPlaced, dummy.matrix);
       pPlaced++;

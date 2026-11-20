@@ -13,6 +13,7 @@ import {
   createChestnutHorseTexture,
   createCrocodileScaleTexture,
   createGrizzlyFurTexture,
+  createGunmetalTextureSet,
   createHolsteinCoatTexture,
   createLionFurTexture,
   createLionManeTexture,
@@ -20,9 +21,12 @@ import {
   createOwlFeatherTexture,
   createRedFoxFurTexture,
   createTabbyFurTexture,
+  createTacticalGloveTextureSet,
+  createTacticalGripTextureSet,
   createWolfFurTexture,
   createWoolFleeceTexture,
   createYorkshirePigTexture,
+  PbrTextureSet,
 } from './textures';
 import {
   createExpandedCreatureModel,
@@ -81,6 +85,23 @@ function getAnimalTextures() {
   return cachedAnimalTextures;
 }
 
+let cachedFirstPersonPbr: {
+  gunmetal: PbrTextureSet;
+  grip: PbrTextureSet;
+  glove: PbrTextureSet;
+} | null = null;
+
+function getFirstPersonPbrTextures() {
+  if (!cachedFirstPersonPbr) {
+    cachedFirstPersonPbr = {
+      gunmetal: createGunmetalTextureSet(4),
+      grip: createTacticalGripTextureSet(4),
+      glove: createTacticalGloveTextureSet(4),
+    };
+  }
+  return cachedFirstPersonPbr;
+}
+
 export interface FirstPersonHandsRig {
   root: THREE.Group;
   leftHand: THREE.Group;
@@ -130,14 +151,131 @@ export interface CreatureRig {
 
 export interface SkyCelestialHandles {
   group: THREE.Group;
+  skyDome: THREE.Mesh;
   sunMesh: THREE.Mesh;
   moonMesh: THREE.Mesh;
   starPoints: THREE.Points;
   starMat: THREE.PointsMaterial;
+  updateSky: (params: {
+    sunDirection: THREE.Vector3;
+    sunColor: THREE.Color;
+    zenithColor: THREE.Color;
+    horizonColor: THREE.Color;
+    daylight: number;
+    twilight: number;
+    weatherDim: number;
+    time: number;
+  }) => void;
 }
 
 export function createSkyCelestialBodies(): SkyCelestialHandles {
   const group = new THREE.Group();
+
+  const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    fog: false,
+    uniforms: {
+      uSunDirection: { value: new THREE.Vector3(0.4, 0.6, 0.3).normalize() },
+      uSunColor: { value: new THREE.Color(0xfff1d6) },
+      uZenithColor: { value: new THREE.Color(0x1f62b5) },
+      uHorizonColor: { value: new THREE.Color(0x8ec8ea) },
+      uDaylight: { value: 1.0 },
+      uTwilight: { value: 0.0 },
+      uWeatherDim: { value: 1.0 },
+      uTime: { value: 0.0 },
+    },
+    vertexShader: `
+      varying vec3 vLocalDir;
+      void main() {
+        vLocalDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uSunDirection;
+      uniform vec3 uSunColor;
+      uniform vec3 uZenithColor;
+      uniform vec3 uHorizonColor;
+      uniform float uDaylight;
+      uniform float uTwilight;
+      uniform float uWeatherDim;
+      uniform float uTime;
+
+      varying vec3 vLocalDir;
+
+      float sHash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+      }
+
+      float sNoise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        return mix(
+          mix(sHash(i), sHash(i + vec2(1.0, 0.0)), f.x),
+          mix(sHash(i + vec2(0.0, 1.0)), sHash(i + vec2(1.0, 1.0)), f.x),
+          f.y
+        );
+      }
+
+      float sFbm(vec2 p) {
+        float sum = 0.0;
+        float amp = 0.5;
+        for (int i = 0; i < 4; i++) {
+          sum += amp * sNoise(p);
+          p *= 2.04;
+          amp *= 0.5;
+        }
+        return sum;
+      }
+
+      void main() {
+        vec3 dir = normalize(vLocalDir);
+        float elev = clamp(dir.y, -0.25, 1.0);
+        float zenithT = pow(clamp(elev, 0.0, 1.0), 0.58);
+
+        // Deep azure zenith smoothly fading into crisp atmospheric horizon
+        vec3 sky = mix(uHorizonColor, uZenithColor, zenithT);
+
+        // Mie solar scattering & horizon golden-hour warm glow
+        vec3 sunDir = normalize(uSunDirection);
+        float sunCos = max(0.0, dot(dir, sunDir));
+        float sunHalo = pow(sunCos, 6.0) * 0.28 + pow(sunCos, 42.0) * 0.52;
+        float sunDisc = smoothstep(0.9978, 0.9994, sunCos);
+        float sunVisible = smoothstep(-0.08, 0.12, sunDir.y) * uDaylight * uWeatherDim;
+        sky += uSunColor * (sunHalo * (0.65 + uTwilight * 0.75) + sunDisc * 1.65) * sunVisible;
+
+        // Soft layered cumulus cloud deck in upper sky dome
+        if (elev > 0.03) {
+          vec2 cloudUv = dir.xz / (elev + 0.24) * 1.35 + vec2(uTime * 0.0085, uTime * 0.004);
+          float c1 = sFbm(cloudUv);
+          float c2 = sFbm(cloudUv * 2.15 - vec2(uTime * 0.005, 0.0));
+          float cloudDensity = smoothstep(0.48 - (1.0 - uWeatherDim) * 0.22, 0.78, c1 * 0.72 + c2 * 0.28);
+          float horizonFade = smoothstep(0.03, 0.22, elev);
+          float cloudSelfShade = clamp(0.68 + (c2 - 0.45) * 0.55 + sunCos * 0.25, 0.42, 1.15);
+          vec3 cloudBase = mix(vec3(0.22, 0.28, 0.38), vec3(0.96, 0.98, 1.0), uDaylight);
+          cloudBase *= mix(0.62, 1.0, uWeatherDim) * cloudSelfShade;
+          cloudBase += uSunColor * pow(sunCos, 8.0) * 0.34 * uDaylight;
+          sky = mix(sky, cloudBase, cloudDensity * horizonFade * (0.48 + 0.35 * uDaylight));
+        }
+
+        // Below-horizon atmospheric haze match
+        float belowHorizon = smoothstep(0.02, -0.14, elev);
+        sky = mix(sky, uHorizonColor * 0.92, belowHorizon);
+
+        gl_FragColor = vec4(sky, 1.0);
+      }
+    `,
+  });
+
+  const skyDome = new THREE.Mesh(
+    new THREE.SphereGeometry(205, 32, 20),
+    skyMat,
+  );
+  skyDome.renderOrder = -10;
+  skyDome.frustumCulled = false;
+  group.add(skyDome);
 
   const sunMesh = new THREE.Mesh(
     new THREE.SphereGeometry(9, 16, 12),
@@ -156,7 +294,7 @@ export function createSkyCelestialBodies(): SkyCelestialHandles {
   for (let i = 0; i < starCount; i++) {
     const theta = Math.random() * Math.PI * 2;
     const phi = Math.acos(0.12 + Math.random() * 0.88); // Upper hemisphere
-    const r = 240;
+    const r = 196;
     starPositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
     starPositions[i * 3 + 1] = r * Math.cos(phi);
     starPositions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
@@ -165,16 +303,29 @@ export function createSkyCelestialBodies(): SkyCelestialHandles {
   starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
   const starMat = new THREE.PointsMaterial({
     color: 0xe2e8f0,
-    size: 1.8,
+    size: 1.6,
     transparent: true,
     opacity: 0,
     fog: false,
     depthWrite: false,
   });
   const starPoints = new THREE.Points(starGeo, starMat);
+  starPoints.renderOrder = -9;
   group.add(starPoints);
 
-  return { group, sunMesh, moonMesh, starPoints, starMat };
+  const updateSky: SkyCelestialHandles['updateSky'] = (params) => {
+    const u = skyMat.uniforms;
+    (u.uSunDirection.value as THREE.Vector3).copy(params.sunDirection).normalize();
+    (u.uSunColor.value as THREE.Color).copy(params.sunColor);
+    (u.uZenithColor.value as THREE.Color).copy(params.zenithColor);
+    (u.uHorizonColor.value as THREE.Color).copy(params.horizonColor);
+    u.uDaylight.value = params.daylight;
+    u.uTwilight.value = params.twilight;
+    u.uWeatherDim.value = params.weatherDim;
+    u.uTime.value = params.time;
+  };
+
+  return { group, skyDome, sunMesh, moonMesh, starPoints, starMat, updateSky };
 }
 
 function makeContactShadow(radius: number): THREE.Mesh {
@@ -196,9 +347,19 @@ function makeContactShadow(radius: number): THREE.Mesh {
  */
 export function createFirstPersonHandsRig(): FirstPersonHandsRig {
   const root = new THREE.Group();
+  const fpPbr = getFirstPersonPbrTextures();
 
-  const skinMat = new THREE.MeshStandardMaterial({ color: 0xd69e72, roughness: 0.65 });
-  const sleeveMat = new THREE.MeshStandardMaterial({ color: 0x5f6b43, roughness: 0.85 });
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0xc98d62, roughness: 0.62 });
+  const gloveMat = new THREE.MeshStandardMaterial({
+    color: 0xbac0c8,
+    map: fpPbr.glove.map,
+    normalMap: fpPbr.glove.normalMap,
+    normalScale: new THREE.Vector2(1.0, 1.0),
+    roughnessMap: fpPbr.glove.roughnessMap,
+    roughness: 0.94,
+    metalness: 0.08,
+  });
+  const sleeveMat = new THREE.MeshStandardMaterial({ color: 0x4b5539, roughness: 0.86 });
   const woodMat = new THREE.MeshStandardMaterial({ color: 0x6b4423, roughness: 0.85 });
   const stoneMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.5, metalness: 0.25 });
 
@@ -216,9 +377,18 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
     forearm.position.set(0, -0.01, -0.02);
     g.add(forearm);
 
-    const palm = new THREE.Mesh(new THREE.BoxGeometry(0.068, 0.055, 0.09), skinMat);
+    const wristCuff = new THREE.Mesh(new THREE.CylinderGeometry(0.041, 0.043, 0.045, 10), gloveMat);
+    wristCuff.rotation.x = Math.PI / 2.2;
+    wristCuff.position.set(0, 0.008, -0.085);
+    g.add(wristCuff);
+
+    const palm = new THREE.Mesh(new THREE.BoxGeometry(0.070, 0.056, 0.092), gloveMat);
     palm.position.set(0, 0.02, -0.14);
     g.add(palm);
+
+    const knuckleGuard = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.022, 0.032), gloveMat);
+    knuckleGuard.position.set(0, 0.044, -0.155);
+    g.add(knuckleGuard);
 
     return g;
   };
@@ -270,8 +440,12 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
 
   const sickleSteelMat = new THREE.MeshStandardMaterial({
     color: 0xd4d4d8,
-    roughness: 0.28,
-    metalness: 0.85,
+    normalMap: fpPbr.gunmetal.normalMap,
+    normalScale: new THREE.Vector2(0.55, 0.55),
+    roughnessMap: fpPbr.gunmetal.roughnessMap,
+    roughness: 0.42,
+    metalness: 0.86,
+    envMapIntensity: 1.3,
   });
   const sickleBlade = new THREE.Mesh(
     new THREE.TorusGeometry(0.115, 0.014, 6, 14, Math.PI * 1.15),
@@ -331,36 +505,61 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
   knifeBlade.visible = false;
   toolGroup.add(knifeBlade);
 
-  // 3D Realistic Survival Sidearm (Gun)
+  // 3D Realistic Survival Sidearm (Gun) with brushed gunmetal PBR maps, slide serrations & stippled grip
   const gunMesh = new THREE.Group();
   gunMesh.position.set(0, 0.02, -0.06);
   const gunSteelMat = new THREE.MeshStandardMaterial({
-    color: 0x1f2937,
-    roughness: 0.28,
-    metalness: 0.88,
+    color: 0xd4dae2,
+    map: fpPbr.gunmetal.map,
+    normalMap: fpPbr.gunmetal.normalMap,
+    normalScale: new THREE.Vector2(0.9, 0.9),
+    roughnessMap: fpPbr.gunmetal.roughnessMap,
+    roughness: 0.92,
+    metalness: 0.86,
+    envMapIntensity: 1.35,
   });
   const gunGripMat = new THREE.MeshStandardMaterial({
-    color: 0x3b1d11,
-    roughness: 0.72,
+    color: 0xb8aca4,
+    map: fpPbr.grip.map,
+    normalMap: fpPbr.grip.normalMap,
+    normalScale: new THREE.Vector2(1.15, 1.15),
+    roughnessMap: fpPbr.grip.roughnessMap,
+    roughness: 0.95,
+    metalness: 0.12,
   });
   const chromeMat = new THREE.MeshStandardMaterial({
-    color: 0x9ca3af,
-    roughness: 0.2,
-    metalness: 0.95,
+    color: 0xcbd5e1,
+    normalMap: fpPbr.gunmetal.normalMap,
+    normalScale: new THREE.Vector2(0.45, 0.45),
+    roughnessMap: fpPbr.gunmetal.roughnessMap,
+    roughness: 0.7,
+    metalness: 0.92,
+    envMapIntensity: 1.45,
   });
 
-  const slide = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.054, 0.24), gunSteelMat);
-  slide.position.set(0, 0.065, -0.06);
+  const slide = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.052, 0.245), gunSteelMat);
+  slide.position.set(0, 0.066, -0.062);
   slide.castShadow = true;
   gunMesh.add(slide);
 
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.017, 0.22, 10), chromeMat);
+  const lowerFrame = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.024, 0.21), gunGripMat);
+  lowerFrame.position.set(0, 0.036, -0.055);
+  gunMesh.add(lowerFrame);
+
+  // Machined rear slide serrations
+  for (let sr = 0; sr < 5; sr++) {
+    const notch = new THREE.Mesh(new THREE.BoxGeometry(0.0445, 0.036, 0.005), chromeMat);
+    notch.position.set(0, 0.066, 0.018 + sr * 0.009);
+    gunMesh.add(notch);
+  }
+
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.017, 0.22, 12), chromeMat);
   barrel.rotation.x = Math.PI / 2;
   barrel.position.set(0, 0.065, -0.19);
   barrel.castShadow = true;
   gunMesh.add(barrel);
 
-  const muzzleTip = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.03, 10), gunSteelMat);
+  const muzzleTip = new THREE.Mesh(new THREE.CylinderGeometry(0.019, 0.019, 0.036, 12), gunSteelMat);
   muzzleTip.rotation.x = Math.PI / 2;
   muzzleTip.position.set(0, 0.065, -0.305);
   gunMesh.add(muzzleTip);
@@ -384,6 +583,12 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
   const rearSight = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.014, 0.01), gunSteelMat);
   rearSight.position.set(0, 0.098, 0.045);
   gunMesh.add(frontSight, rearSight);
+
+  gunMesh.traverse((obj) => {
+    if (obj instanceof THREE.Mesh) {
+      obj.userData.preserveEnvMapIntensity = true;
+    }
+  });
 
   gunMesh.visible = false;
   toolGroup.add(gunMesh);
@@ -5309,6 +5514,7 @@ export function applyBackpackSkinToPlayerHandle(
 export function createRemotePlayerMesh(
   name: string,
   accentHex = 0x38bdf8,
+  showNameplate = true,
 ): RemotePlayerMeshHandle {
   const group = new THREE.Group();
   const bodyGroup = new THREE.Group();
@@ -5405,7 +5611,7 @@ export function createRemotePlayerMesh(
   let speakerSprite: THREE.Sprite | undefined;
 
   // Floating Nameplate & Active Speaker Sprites
-  if (typeof document !== 'undefined') {
+  if (showNameplate && typeof document !== 'undefined') {
     const canvas = document.createElement('canvas');
     canvas.width = 256;
     canvas.height = 64;

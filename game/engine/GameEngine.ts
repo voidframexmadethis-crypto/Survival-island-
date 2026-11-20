@@ -116,7 +116,6 @@ import {
   FrameBudgetQueue,
   FrameWatchState,
   MasterRuntimeState,
-  ZeroAllocCameraFollower,
   canProcessGameplayInput,
   closeExclusiveModal,
   createFrameWatchState,
@@ -126,6 +125,11 @@ import {
   stepClampedFrame,
   stepMasterFrame,
 } from '../systems/frameBudgetQueue';
+import {
+  CameraViewMode,
+  DEFAULT_PLAYER_CAMERA_CONFIG,
+  SmoothPlayerCameraRig,
+} from '../systems/playerCameraRig';
 import {
   ActiveModal,
   ActiveVehicleHudState,
@@ -330,6 +334,10 @@ const _nightSky = new THREE.Color(0x060b16);
 const _dawnSky = new THREE.Color(0xe76f51);
 const _duskSky = new THREE.Color(0xf4a261);
 const _daySky = new THREE.Color(0x87b9dc);
+const _zenithDaySky = new THREE.Color(0x1e5cae);
+const _zenithNightSky = new THREE.Color(0x040712);
+const _zenithScratchColor = new THREE.Color(0x1e5cae);
+const _horizonScratchColor = new THREE.Color(0x8ec8ea);
 const _stormSky = new THREE.Color(0x334155);
 const _stormDeepSky = new THREE.Color(0x1e293b);
 const _lightningSky = new THREE.Color(0xe2e8f0);
@@ -562,8 +570,15 @@ export class GameEngine {
   private lastFramePerfMs = 0;
   private frameWatch: FrameWatchState = createFrameWatchState();
   private masterRuntime: MasterRuntimeState = createMasterRuntimeState();
-  private zeroAllocCamFollower = new ZeroAllocCameraFollower();
+  private playerCameraRig = new SmoothPlayerCameraRig();
   private _chaseTargetScratch = new THREE.Vector3();
+  private localPlayerHandle: RemotePlayerMeshHandle | null = null;
+  private localAppliedBackpackSkinId: string | null | undefined = undefined;
+  private localAppliedGunSkinId: string | null | undefined = undefined;
+  private readonly _groundSampleFn = (x: number, z: number): number => {
+    if (this.worldType === 'flat') return 0;
+    return Math.max(getTerrainHeight(x, z), getWaterLevelAt(x, z));
+  };
   private consecutiveSlowSeconds = 0;
   private effectiveShadowsEnabled = true;
   private effectiveShadowMapSize = 1024;
@@ -1196,6 +1211,11 @@ export class GameEngine {
     this.camera.add(this.nightVisionLight);
     this.scene.add(this.camera);
 
+    // Local 3rd-Person Avatar Rig (visible when SmoothPlayerCameraRig is in 'third_person')
+    this.localPlayerHandle = createRemotePlayerMesh('Player', 0x38bdf8, false);
+    this.localPlayerHandle.group.visible = false;
+    this.scene.add(this.localPlayerHandle.group);
+
     // Realistic Island Lighting Rig (Sunlight, Hemisphere Bounce, Sky Fill, ACES Tone Mapping & Soft Shadows)
     const lightingRig = enableRealisticIslandLighting(
       this.scene,
@@ -1235,6 +1255,7 @@ export class GameEngine {
     this.flatWorld.setVisible(false);
     this.coasterRuntime = new RollerCoasterRuntime(this.scene);
     this.realisticOcean = new RealisticOcean(this.scene);
+    this.realisticOcean.buildShoreDepthTexture(getTerrainHeight);
     this.world.oceanMesh.visible = false;
     this.world.resourceNodes.forEach((n) => this.nodeById.set(n.id, n));
     this.buildResourceNodeSpatialGrid();
@@ -1713,6 +1734,9 @@ export class GameEngine {
       this.cycleVehicleRimLights(this.activeVehicleId);
     } else if (e.code === 'KeyB' && this.activeVehicleId) {
       this.openCarRadio();
+    } else if (e.code === 'F5' || (e.code === 'KeyK' && !this.activeVehicleId && !this.ridingCoasterId)) {
+      if (e.code === 'F5') e.preventDefault();
+      this.toggleCameraView();
     } else if (e.code === 'KeyV') {
       if (this.activeVehicleId) {
         this.toggleVehicleInteriorCamera();
@@ -1824,20 +1848,78 @@ export class GameEngine {
     return this.masterRuntime;
   }
 
+  public toggleCameraView(): CameraViewMode {
+    const next = this.playerCameraRig.toggleMode();
+    this.masterRuntime.isThirdPerson = next === 'third_person';
+    this.snapPlayerCamera();
+    this.toast(
+      next === 'third_person'
+        ? '3rd-Person Follow Camera ON'
+        : '1st-Person View ON',
+      'info',
+    );
+    this.emitHud();
+    return next;
+  }
+
+  public setCameraViewMode(mode: CameraViewMode): void {
+    if (this.playerCameraRig.mode === mode) return;
+    this.playerCameraRig.mode = mode;
+    this.masterRuntime.isThirdPerson = mode === 'third_person';
+    this.snapPlayerCamera();
+    this.emitHud();
+  }
+
+  private snapPlayerCamera(): void {
+    if (!this.camera) return;
+    const inVehicle = Boolean(this.activeVehicleId && !this.vehicleInteriorCamera);
+    if (inVehicle) {
+      const activeV = this.vehicles.find((v) => v.id === this.activeVehicleId);
+      if (activeV) {
+        this._chaseTargetScratch.set(activeV.x, activeV.y, activeV.z);
+        this.playerCameraRig.yaw = this.camYaw + Math.PI;
+        this.playerCameraRig.pitch = THREE.MathUtils.clamp(-this.camPitch, -0.55, 0.75);
+        this.playerCameraRig.snapTo(
+          this.camera,
+          this._chaseTargetScratch,
+          true,
+          this._groundSampleFn,
+        );
+        return;
+      }
+    }
+    this._chaseTargetScratch.set(this.playerX, this.playerY, this.playerZ);
+    this.playerCameraRig.yaw = this.camYaw + Math.PI;
+    this.playerCameraRig.pitch =
+      this.playerCameraRig.mode === 'third_person'
+        ? THREE.MathUtils.clamp(-this.camPitch, -0.75, 1.05)
+        : THREE.MathUtils.clamp(this.camPitch, -1.42, 1.42);
+    this.playerCameraRig.snapTo(
+      this.camera,
+      this._chaseTargetScratch,
+      false,
+      this._groundSampleFn,
+    );
+  }
+
   public updateZeroAllocFollowCamera(
     dt: number,
     isThirdPerson = this.masterRuntime.isThirdPerson,
   ): void {
     if (!this.camera) return;
+    this.playerCameraRig.mode = isThirdPerson ? 'third_person' : 'first_person';
     this.masterRuntime.isThirdPerson = isThirdPerson;
     this._chaseTargetScratch.set(this.playerX, this.playerY, this.playerZ);
-    this.zeroAllocCamFollower.update(
+    this.playerCameraRig.yaw = this.camYaw + Math.PI;
+    this.playerCameraRig.pitch = isThirdPerson
+      ? THREE.MathUtils.clamp(-this.camPitch, -0.75, 1.05)
+      : THREE.MathUtils.clamp(this.camPitch, -1.42, 1.42);
+    this.playerCameraRig.update(
       this.camera,
       this._chaseTargetScratch,
-      this.camYaw,
-      isThirdPerson,
       this.masterRuntime.isInVehicle,
       dt,
+      this._groundSampleFn,
     );
   }
 
@@ -2302,6 +2384,11 @@ export class GameEngine {
       1.42,
     );
     this.playerYaw = this.camYaw + Math.PI;
+    this.playerCameraRig.yaw = this.playerYaw;
+    this.playerCameraRig.pitch =
+      this.playerCameraRig.mode === 'third_person'
+        ? THREE.MathUtils.clamp(-this.camPitch, -0.75, 1.05)
+        : this.camPitch;
   }
 
   public triggerJump(): void {
@@ -2362,6 +2449,7 @@ export class GameEngine {
     this.camYaw = 0.12;
     this.camPitch = -0.05;
     this.playerYaw = this.camYaw + Math.PI;
+    this.snapPlayerCamera();
     this.markExploredAroundPlayer();
 
     const wreckX = SHIPWRECK_POS.x;
@@ -3186,6 +3274,7 @@ export class GameEngine {
       this.camYaw = 0;
       this.camPitch = -0.05;
       this.playerYaw = this.camYaw + Math.PI;
+      this.snapPlayerCamera();
       this.isCrouching = false;
       this.touchCrouch = false;
       this.currentEyeHeight = 1.62;
@@ -3302,6 +3391,7 @@ export class GameEngine {
     this.camYaw = 0.12;
     this.camPitch = -0.05;
     this.playerYaw = this.camYaw + Math.PI;
+    this.snapPlayerCamera();
     this.isCrouching = false;
     this.touchCrouch = false;
     this.currentEyeHeight = 1.62;
@@ -3584,6 +3674,7 @@ export class GameEngine {
     this.playerYaw = save.player.yaw;
     this.camYaw = this.playerYaw - Math.PI;
     this.camPitch = save.player.pitch ?? -0.05;
+    this.snapPlayerCamera();
     this.vitals = {
       health: loadedWorldType === 'flat' ? 9999 : (save.player.vitals.health ?? 100),
       maxHealth: loadedWorldType === 'flat' ? 9999 : (save.player.vitals.maxHealth ?? 100),
@@ -8306,6 +8397,7 @@ export class GameEngine {
 
     if (this.currentDimension !== 'overworld') {
       this.rainPoints.visible = false;
+      this.skyBodies.skyDome.visible = false;
       this.skyBodies.sunMesh.visible = false;
       this.skyBodies.moonMesh.visible = false;
       this.skyBodies.starPoints.visible = false;
@@ -8319,6 +8411,7 @@ export class GameEngine {
       );
       return;
     }
+    this.skyBodies.skyDome.visible = true;
 
     const daylight = THREE.MathUtils.clamp((sunElev + 0.16) / 0.65, 0, 1);
     const twilight = Math.max(0, 1 - Math.abs(sunElev - 0.04) * 4.2);
@@ -8439,6 +8532,23 @@ export class GameEngine {
         reflectionStrength: this.effectiveWaterReflections ? 1.0 : 0.2,
       });
     }
+    _zenithScratchColor
+      .copy(_zenithNightSky)
+      .lerp(_zenithDaySky, daylight)
+      .lerp(_stormDeepSky, 1 - weatherDim);
+    _horizonScratchColor
+      .copy(_skyColor)
+      .lerp(_fogScratchColor, 0.35);
+    this.skyBodies.updateSky({
+      sunDirection: this._sunDirScratch,
+      sunColor: this.sunLight.color,
+      zenithColor: _zenithScratchColor,
+      horizonColor: _horizonScratchColor,
+      daylight,
+      twilight,
+      weatherDim,
+      time: this.elapsed,
+    });
 
     if (this.worldType === 'island') {
       // Tint ocean & freshwater palette with day-night lighting
@@ -11832,8 +11942,94 @@ export class GameEngine {
     }
   }
 
+  private updateLocalPlayerAvatar(dt: number, visible: boolean): void {
+    const h = this.localPlayerHandle;
+    if (!h) return;
+    h.group.visible = visible;
+    if (!visible) return;
+
+    h.group.position.set(this.playerX, this.playerY, this.playerZ);
+    h.group.rotation.y = this.playerYaw;
+    h.bodyGroup.position.y = this.isCrouching ? -0.35 : 0;
+    h.headGroup.rotation.x = THREE.MathUtils.clamp(-this.camPitch * 0.55, -0.45, 0.45);
+
+    const eqItemId = this.getEquippedItemId();
+    const hasGun = Boolean(eqItemId && isFirearmItem(eqItemId));
+    h.heldGunMesh.visible = hasGun;
+    h.heldToolMesh.visible = Boolean(eqItemId) && !hasGun;
+
+    // Sync equipped Gun Skin cosmetic in 3rd-person
+    const gunSkin = getEquippedGunSkinForWeapon(eqItemId);
+    const nextGunSkinKey = `${eqItemId ?? 'none'}|${gunSkin?.id ?? 'default'}`;
+    if (this.localAppliedGunSkinId !== nextGunSkinKey) {
+      this.localAppliedGunSkinId = nextGunSkinKey;
+      const gunMat = h.heldGunMesh.material;
+      if (gunMat instanceof THREE.MeshStandardMaterial) {
+        if (gunSkin && gunSkin.category === 'gun_skin') {
+          const imgTex = getCosmeticImageTexture(gunSkin.productImageUrl);
+          gunMat.color.set(imgTex ? '#ffffff' : gunSkin.visual.primaryHex);
+          gunMat.metalness = gunSkin.visual.metalness;
+          gunMat.roughness = gunSkin.visual.roughness;
+          gunMat.map = imgTex || getCosmeticPatternTexture(gunSkin.visual);
+          if (gunSkin.visual.emissiveHex) {
+            gunMat.emissive.set(gunSkin.visual.emissiveHex);
+            gunMat.emissiveIntensity = 0.28;
+          } else {
+            gunMat.emissive.set(0x000000);
+            gunMat.emissiveIntensity = 0;
+          }
+        } else {
+          gunMat.color.set(0x1e293b);
+          gunMat.metalness = 0.78;
+          gunMat.roughness = 0.3;
+          gunMat.map = null;
+          gunMat.emissive.set(0x000000);
+          gunMat.emissiveIntensity = 0;
+        }
+        gunMat.needsUpdate = true;
+      }
+    }
+
+    // Sync equipped Backpack Skin cosmetic in 3rd-person
+    const bpSkin = getEquippedBackpackSkin();
+    const nextBpKey = bpSkin?.id ?? null;
+    if (this.localAppliedBackpackSkinId !== nextBpKey) {
+      this.localAppliedBackpackSkinId = nextBpKey;
+      applyBackpackSkinToPlayerHandle(h, bpSkin ?? null);
+    }
+
+    const isMoving = this.currentSpeedMps > 0.35;
+    if (this.isSwimming) {
+      const stroke = Math.sin(this.elapsed * 6.5) * 0.75;
+      h.armL.rotation.x = -1.2 + stroke;
+      h.armR.rotation.x = -1.2 - stroke;
+      h.legL.rotation.x = -0.35 + stroke * 0.5;
+      h.legR.rotation.x = -0.35 - stroke * 0.5;
+    } else if (isMoving) {
+      const swing = Math.sin(this.walkBobPhase) * (this.isSprinting ? 0.78 : 0.55);
+      h.armL.rotation.x = swing;
+      h.armR.rotation.x = hasGun ? -1.32 + this.camPitch * 0.55 : -swing;
+      h.legL.rotation.x = -swing;
+      h.legR.rotation.x = swing;
+    } else {
+      h.armL.rotation.x = THREE.MathUtils.damp(h.armL.rotation.x, 0, 10, dt);
+      h.armR.rotation.x = THREE.MathUtils.damp(
+        h.armR.rotation.x,
+        hasGun ? -1.32 + this.camPitch * 0.55 : 0,
+        10,
+        dt,
+      );
+      h.legL.rotation.x = THREE.MathUtils.damp(h.legL.rotation.x, 0, 10, dt);
+      h.legR.rotation.x = THREE.MathUtils.damp(h.legR.rotation.x, 0, 10, dt);
+    }
+  }
+
   private updateCamera(): void {
     const dt = Math.min(0.05, Math.max(0.001, this.lastSimDt || 0.016));
+    const isThirdPerson = this.playerCameraRig.mode === 'third_person';
+    this.masterRuntime.isThirdPerson = isThirdPerson;
+    this.masterRuntime.isInVehicle = Boolean(this.activeVehicleId);
+
     const sprintFovKick =
       this.mode === 'playing' &&
       !this.isAiming &&
@@ -11843,7 +12039,11 @@ export class GameEngine {
         ? 72.5
         : 68;
     const targetFov =
-      this.mode === 'playing' && this.isAiming && !this.activeVehicleId ? 52 : sprintFovKick;
+      this.mode === 'playing' && this.isAiming && !this.activeVehicleId
+        ? isThirdPerson
+          ? 56
+          : 52
+        : sprintFovKick;
     if (Math.abs(this.camera.fov - targetFov) > 0.02) {
       this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 14, dt);
       if (Math.abs(this.camera.fov - targetFov) <= 0.05) {
@@ -11856,6 +12056,7 @@ export class GameEngine {
       this.camera.rotation.order = 'YXZ';
       this.camera.up.set(0, 1, 0);
       this.handsRig.root.visible = false;
+      if (this.localPlayerHandle) this.localPlayerHandle.group.visible = false;
       const angle = this.elapsed * 0.14;
       const r = this.worldType === 'flat' ? 68 : 92;
       _vec3A.set(
@@ -11873,6 +12074,7 @@ export class GameEngine {
       const rideCam = this.coasterRuntime.getRideCameraTransform(this.ridingCoasterId);
       if (rideCam) {
         this.handsRig.root.visible = false;
+        if (this.localPlayerHandle) this.localPlayerHandle.group.visible = false;
         this.camera.position.copy(rideCam.position);
         this.camera.up.copy(rideCam.up);
         this.camera.lookAt(rideCam.lookAt);
@@ -11893,6 +12095,7 @@ export class GameEngine {
 
     if (this.cinematicActive) {
       this.handsRig.root.visible = false;
+      if (this.localPlayerHandle) this.localPlayerHandle.group.visible = false;
       return;
     }
 
@@ -11900,6 +12103,7 @@ export class GameEngine {
       const tvTarget = this.resolveNearestTvTarget(true);
       if (tvTarget) {
         this.handsRig.root.visible = false;
+        if (this.localPlayerHandle) this.localPlayerHandle.group.visible = false;
         const viewportW = this.renderer.domElement.clientWidth || 1024;
         if (viewportW >= 640) {
           _vec3A
@@ -11933,6 +12137,7 @@ export class GameEngine {
       const activeV = this.vehicles.find((v) => v.id === this.activeVehicleId);
       if (activeV) {
         this.handsRig.root.visible = false;
+        if (this.localPlayerHandle) this.localPlayerHandle.group.visible = false;
         const handles = this.vehicleMeshes.get(activeV.id);
         if (this.vehicleInteriorCamera && handles) {
           // Real First-Person Driver Seat Interior View + old-school chest-thump bass pulse
@@ -11959,19 +12164,30 @@ export class GameEngine {
           this.getStructuralSurfaceY(activeV.x, activeV.z, activeV.y + 0.6),
         );
         const airborne = specs.canFly && activeV.y > surfY + 0.6;
-        const chaseDist = airborne ? 9.6 : 7.6;
-        const fwdX = -Math.sin(this.camYaw);
-        const fwdZ = -Math.cos(this.camYaw);
-        const cx = activeV.x - fwdX * chaseDist;
-        const cz = activeV.z - fwdZ * chaseDist;
-        const groundAtCam = Math.max(
-          getTerrainHeight(cx, cz),
-          getWaterLevelAt(cx, cz),
-        );
-        const lift = THREE.MathUtils.clamp(3.3 - this.camPitch * 4.2, 1.3, 8.2);
-        const cy = Math.max(groundAtCam + 0.9, activeV.y + lift);
-        this.camera.position.set(cx, cy, cz);
-        this.camera.lookAt(activeV.x, activeV.y + 1.35, activeV.z);
+        if (airborne) {
+          const chaseDist = 9.6;
+          const fwdX = -Math.sin(this.camYaw);
+          const fwdZ = -Math.cos(this.camYaw);
+          const cx = activeV.x - fwdX * chaseDist;
+          const cz = activeV.z - fwdZ * chaseDist;
+          const groundAtCam = this._groundSampleFn(cx, cz);
+          const lift = THREE.MathUtils.clamp(3.3 - this.camPitch * 4.2, 1.3, 8.2);
+          const cy = Math.max(groundAtCam + 0.9, activeV.y + lift);
+          _vec3A.set(cx, cy, cz);
+          this.camera.position.lerp(_vec3A, 1 - Math.exp(-DEFAULT_PLAYER_CAMERA_CONFIG.followResponsiveness * dt));
+          this.camera.lookAt(activeV.x, activeV.y + 1.35, activeV.z);
+        } else {
+          this._chaseTargetScratch.set(activeV.x, activeV.y, activeV.z);
+          this.playerCameraRig.yaw = this.camYaw + Math.PI;
+          this.playerCameraRig.pitch = THREE.MathUtils.clamp(-this.camPitch, -0.55, 0.75);
+          this.playerCameraRig.update(
+            this.camera,
+            this._chaseTargetScratch,
+            true,
+            dt,
+            this._groundSampleFn,
+          );
+        }
         return;
       }
     }
@@ -11980,6 +12196,7 @@ export class GameEngine {
       const c = this.creatures.creatures.find((x) => x.id === this.mountedCreatureId);
       if (c) {
         this.handsRig.root.visible = false;
+        if (this.localPlayerHandle) this.localPlayerHandle.group.visible = false;
         const chaseDist = c.species === 'brachiosaurus' || c.species === 'trex' ? 10.5 : 5.8;
         const fwdX = -Math.sin(this.camYaw);
         const fwdZ = -Math.cos(this.camYaw);
@@ -11994,7 +12211,13 @@ export class GameEngine {
       }
     }
 
-    this.handsRig.root.visible = true;
+    if (!Number.isFinite(this.camYaw)) this.camYaw = 0;
+    if (!Number.isFinite(this.camPitch)) this.camPitch = -0.05;
+    this.playerYaw = this.camYaw + Math.PI;
+
+    this.handsRig.root.visible = !isThirdPerson;
+    this.updateLocalPlayerAvatar(dt, isThirdPerson);
+
     const isMovingOnGround =
       this.grounded && !this.isSwimming && this.currentSpeedMps > 0.35;
     const targetBobBlend = isMovingOnGround
@@ -12040,20 +12263,38 @@ export class GameEngine {
         ? Math.cos(this.elapsed * 53) * this.saturnLaunchCameraShake * 0.42
         : 0;
 
-    if (!Number.isFinite(this.camYaw)) this.camYaw = 0;
-    if (!Number.isFinite(this.camPitch)) this.camPitch = -0.05;
+    this.playerCameraRig.yaw = this.playerYaw;
+    this._chaseTargetScratch.set(this.playerX, this.playerY, this.playerZ);
 
-    this.camera.position.set(
-      this.playerX + blastShakeX + rocketShakeX,
-      this.playerY +
-        this.camStepOffsetY +
-        this.currentEyeHeight +
-        headBobY +
-        washDip +
-        blastShakeY +
-        rocketShakeY,
-      this.playerZ,
+    if (isThirdPerson) {
+      this.playerCameraRig.pitch = THREE.MathUtils.clamp(-this.camPitch, -0.75, 1.05);
+      this.playerCameraRig.update(
+        this.camera,
+        this._chaseTargetScratch,
+        false,
+        dt,
+        this._groundSampleFn,
+      );
+      if (blastShakeX !== 0 || rocketShakeX !== 0 || blastShakeY !== 0 || rocketShakeY !== 0) {
+        this.camera.position.x += blastShakeX + rocketShakeX;
+        this.camera.position.y += blastShakeY + rocketShakeY;
+      }
+      return;
+    }
+
+    this.playerCameraRig.pitch = this.camPitch;
+    this.playerCameraRig.update(
+      this.camera,
+      this._chaseTargetScratch,
+      false,
+      dt,
+      this._groundSampleFn,
     );
+    const eyeDelta =
+      this.currentEyeHeight - DEFAULT_PLAYER_CAMERA_CONFIG.firstPersonEyeHeight;
+    this.camera.position.x += blastShakeX + rocketShakeX;
+    this.camera.position.y +=
+      eyeDelta + this.camStepOffsetY + headBobY + washDip + blastShakeY + rocketShakeY;
     this.camera.rotation.set(
       this.camPitch + hurtKick + chewNod + drinkNod,
       this.camYaw,
@@ -12437,6 +12678,7 @@ export class GameEngine {
       playerY: this.playerY,
       playerZ: this.playerZ,
       playerYaw: this.playerYaw,
+      cameraViewMode: this.playerCameraRig.mode,
       isSwimming: this.isSwimming,
       isSprinting: this.isSprinting,
       isCrouching: this.isCrouching,
@@ -18011,6 +18253,10 @@ export class GameEngine {
 
   // ---- Survival Island Exchange Cosmetics (Visual-Only, Zero Stat Impact) ----
   public applyExchangeCosmetics(force = false): void {
+    if (force) {
+      this.localAppliedGunSkinId = undefined;
+      this.localAppliedBackpackSkinId = undefined;
+    }
     if (!this.handsRig?.gunMesh) return;
     const eqId = this.getEquippedItemId();
     const gunSkin = getEquippedGunSkinForWeapon(eqId);
@@ -18032,6 +18278,9 @@ export class GameEngine {
           roughness: mat.roughness,
           emissive: mat.emissive.getHex(),
           emissiveIntensity: mat.emissiveIntensity,
+          map: mat.map,
+          normalMap: mat.normalMap,
+          roughnessMap: mat.roughnessMap,
         };
       }
       if (gunSkin) {
@@ -18066,11 +18315,16 @@ export class GameEngine {
           roughness: number;
           emissive: number;
           emissiveIntensity: number;
+          map: THREE.Texture | null;
+          normalMap: THREE.Texture | null;
+          roughnessMap: THREE.Texture | null;
         };
         mat.color.setHex(orig.color);
         mat.metalness = orig.metalness;
         mat.roughness = orig.roughness;
-        mat.map = null;
+        mat.map = orig.map;
+        mat.normalMap = orig.normalMap;
+        mat.roughnessMap = orig.roughnessMap;
         mat.emissive.setHex(orig.emissive);
         mat.emissiveIntensity = orig.emissiveIntensity;
       }
@@ -19099,6 +19353,13 @@ export class GameEngine {
       this.disposeObject3D(rp.handle.group);
     }
     this.remotePlayers.clear();
+
+    if (this.localPlayerHandle) {
+      this.scene.remove(this.localPlayerHandle.group);
+      this.localPlayerHandle.backpackDispose();
+      this.disposeObject3D(this.localPlayerHandle.group);
+      this.localPlayerHandle = null;
+    }
 
     if (this.activeDimensionWorld) {
       disposeDimensionWorld(this.activeDimensionWorld);

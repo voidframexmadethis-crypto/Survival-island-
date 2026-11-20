@@ -10,6 +10,7 @@ import {
   Axe,
   Backpack,
   Box,
+  Camera,
   Car,
   ChevronDown,
   ChevronLeft,
@@ -1650,6 +1651,15 @@ export function SurvivalGameClient() {
                   </button>
                 ) : (
                   <>
+                    <button
+                      type="button"
+                      onClick={() => engineRef.current?.toggleCameraView()}
+                      className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg bg-stone-950/90 hover:bg-stone-900 text-amber-200 font-display font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-lg border border-stone-700/85 transition whitespace-nowrap shrink-0"
+                      title="Toggle 1st / 3rd Person Camera (F5 / K)"
+                    >
+                      <Camera className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400" />
+                      <span>{hud?.cameraViewMode === 'first_person' ? '1ST' : '3RD'}</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => openModal('coaster')}
