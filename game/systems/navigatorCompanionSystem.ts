@@ -106,6 +106,7 @@ export class NavigatorCompanionController {
   private cachedTreeTarget: ResourceNodeState | null = null;
   private cachedCreatureTarget: ActiveCreature | null = null;
   private targetScanTimer = 0;
+  private creatureScanTimer = 0;
 
   constructor() {
     this.girlRig = buildShipNavigatorNpcModel('girl');
@@ -568,6 +569,7 @@ export class NavigatorCompanionController {
     if (this.gunFlashTimer > 0) this.gunFlashTimer = Math.max(0, this.gunFlashTimer - dt);
     if (this.swingTimer > 0) this.swingTimer = Math.max(0, this.swingTimer - dt);
     if (this.targetScanTimer > 0) this.targetScanTimer = Math.max(0, this.targetScanTimer - dt);
+    if (this.creatureScanTimer > 0) this.creatureScanTimer = Math.max(0, this.creatureScanTimer - dt);
     if (this.speechTimer > 0) {
       this.speechTimer = Math.max(0, this.speechTimer - dt);
       if (this.speechTimer <= 0) {
@@ -800,16 +802,31 @@ export class NavigatorCompanionController {
     else if (this.task === 'hunt_animals') {
       this.equippedTool = 'gun';
       this.syncEquippedToolVisual();
-      let target: ActiveCreature | null = null;
-      let bestDist = 70;
-      for (const c of ctx.creatures) {
-        if (!c.alive || !c.cycleActive) continue;
-        const d = Math.hypot(c.x - this.x, c.z - this.z);
-        if (d < bestDist) {
-          bestDist = d;
-          target = c;
-        }
+      if (
+        this.cachedCreatureTarget &&
+        (!this.cachedCreatureTarget.alive || !this.cachedCreatureTarget.cycleActive)
+      ) {
+        this.cachedCreatureTarget = null;
       }
+      if (!this.cachedCreatureTarget || this.creatureScanTimer <= 0) {
+        this.creatureScanTimer = 0.25;
+        let bestTarget: ActiveCreature | null = null;
+        let bestDistSq = 70 * 70;
+        for (let i = 0; i < ctx.creatures.length; i++) {
+          const c = ctx.creatures[i];
+          if (!c.alive || !c.cycleActive) continue;
+          const dx = c.x - this.x;
+          const dz = c.z - this.z;
+          const dSq = dx * dx + dz * dz;
+          if (dSq < bestDistSq) {
+            bestDistSq = dSq;
+            bestTarget = c;
+          }
+        }
+        this.cachedCreatureTarget = bestTarget;
+      }
+      const target = this.cachedCreatureTarget;
+      const bestDist = target ? Math.hypot(target.x - this.x, target.z - this.z) : 70;
 
       if (target) {
         const targetName = target.displayNameOverride || target.spec.displayName;
@@ -890,20 +907,41 @@ export class NavigatorCompanionController {
       this.equippedTool = 'gun';
       this.syncEquippedToolVisual();
 
-      // Auto-defend player from nearby hostile predators
-      let threat: ActiveCreature | null = null;
-      let threatDist = 17.5;
-      for (const c of ctx.creatures) {
-        const isHostile =
-          c.spec.attackDamage > 0 &&
-          (c.state === 'chase' || c.spec.aggroRadius > 0 || c.provokedTimer > 0);
-        if (!c.alive || !c.cycleActive || !isHostile) continue;
-        const d = Math.hypot(c.x - ctx.playerX, c.z - ctx.playerZ);
-        if (d < threatDist) {
-          threatDist = d;
-          threat = c;
+      // Auto-defend player from nearby hostile predators (4Hz scan + O(1) cached validation)
+      if (this.cachedCreatureTarget) {
+        const ct = this.cachedCreatureTarget;
+        const stillHostile =
+          ct.alive &&
+          ct.cycleActive &&
+          ct.spec.attackDamage > 0 &&
+          (ct.state === 'chase' || ct.spec.aggroRadius > 0 || ct.provokedTimer > 0);
+        const cdx = ct.x - ctx.playerX;
+        const cdz = ct.z - ctx.playerZ;
+        if (!stillHostile || cdx * cdx + cdz * cdz > 20 * 20) {
+          this.cachedCreatureTarget = null;
         }
       }
+      if (!this.cachedCreatureTarget || this.creatureScanTimer <= 0) {
+        this.creatureScanTimer = 0.25;
+        let bestThreat: ActiveCreature | null = null;
+        let threatDistSq = 17.5 * 17.5;
+        for (let i = 0; i < ctx.creatures.length; i++) {
+          const c = ctx.creatures[i];
+          if (!c.alive || !c.cycleActive || c.spec.attackDamage <= 0) continue;
+          const isHostile =
+            c.state === 'chase' || c.spec.aggroRadius > 0 || c.provokedTimer > 0;
+          if (!isHostile) continue;
+          const dx = c.x - ctx.playerX;
+          const dz = c.z - ctx.playerZ;
+          const dSq = dx * dx + dz * dz;
+          if (dSq < threatDistSq) {
+            threatDistSq = dSq;
+            bestThreat = c;
+          }
+        }
+        this.cachedCreatureTarget = bestThreat;
+      }
+      const threat = this.cachedCreatureTarget;
 
       if (threat) {
         const threatName = threat.displayNameOverride || threat.spec.displayName;

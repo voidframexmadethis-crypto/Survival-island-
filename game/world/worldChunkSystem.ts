@@ -39,7 +39,9 @@ export function updateWorldChunks(
 export class WorldChunkManager {
   public readonly chunkSize: number;
   public readonly chunks: WorldChunk[] = [];
+  public readonly foliageChunks: WorldChunk[] = [];
   private readonly chunkMap = new Map<string, WorldChunk>();
+  private readonly foliageChunkMap = new Map<string, WorldChunk>();
   private lastChunkX = Number.NaN;
   private lastChunkZ = Number.NaN;
   private lastRenderRadius = -1;
@@ -68,8 +70,29 @@ export class WorldChunkManager {
     return chunk;
   }
 
+  public getOrCreateFoliageChunk(worldX: number, worldZ: number): WorldChunk {
+    const cx = Math.floor(worldX / this.chunkSize);
+    const cz = Math.floor(worldZ / this.chunkSize);
+    const key = `${cx},${cz}`;
+    let chunk = this.foliageChunkMap.get(key);
+    if (!chunk) {
+      const group = new THREE.Group();
+      group.name = `world_foliage_chunk_${cx}_${cz}`;
+      this.parentGroup.add(group);
+      chunk = { group, x: cx, z: cz };
+      this.foliageChunkMap.set(key, chunk);
+      this.foliageChunks.push(chunk);
+    }
+    return chunk;
+  }
+
   public addObjectAt(obj: THREE.Object3D, worldX: number, worldZ: number): void {
     const chunk = this.getOrCreateChunk(worldX, worldZ);
+    chunk.group.add(obj);
+  }
+
+  public addFoliageObjectAt(obj: THREE.Object3D, worldX: number, worldZ: number): void {
+    const chunk = this.getOrCreateFoliageChunk(worldX, worldZ);
     chunk.group.add(obj);
   }
 
@@ -83,8 +106,8 @@ export class WorldChunkManager {
   ): boolean {
     const px = Math.floor(playerPos.x / this.chunkSize);
     const pz = Math.floor(playerPos.z / this.chunkSize);
-    // Preserve full existing render distance (+1 chunk padding so chunk borders never pop inside fog)
-    const renderRadius = Math.max(2, Math.ceil(renderDistanceMeters / this.chunkSize) + 1);
+    // Preserve full existing render distance while avoiding an extra outer ring beyond camera.far
+    const renderRadius = Math.max(2, Math.ceil(renderDistanceMeters / this.chunkSize));
 
     if (
       px === this.lastChunkX &&
@@ -99,6 +122,14 @@ export class WorldChunkManager {
     this.lastRenderRadius = renderRadius;
 
     updateWorldChunks(this.chunks, playerPos, this.chunkSize, renderRadius);
+    if (this.foliageChunks.length > 0) {
+      // Keep full ambient ground grass & wildflowers within ~128-192m while culling sub-pixel distant grass
+      const foliageRadius = Math.min(
+        renderRadius,
+        Math.max(2, Math.ceil(115 / this.chunkSize)),
+      );
+      updateWorldChunks(this.foliageChunks, playerPos, this.chunkSize, foliageRadius);
+    }
     return true;
   }
 

@@ -898,7 +898,34 @@ export class GameEngine {
   private structures: PlacedStructure[] = [];
   private structureVisuals = new Map<
     string,
-    { group: THREE.Group; fireLight?: THREE.PointLight; flameGroup?: THREE.Group }
+    {
+      group: THREE.Group;
+      fireLight?: THREE.PointLight;
+      flameGroup?: THREE.Group;
+      lightMeta?: {
+        localX: number;
+        localY: number;
+        localZ: number;
+        colorHex: number;
+        baseIntensity: number;
+        currentIntensity: number;
+        distance: number;
+        decay: number;
+      };
+    }
+  >();
+  private structureLightPool: THREE.PointLight[] = [];
+  private vehicleUnderglowPool: THREE.PointLight[] = [];
+  private vehicleUnderglowMeta = new Map<
+    string,
+    {
+      localX: number;
+      localY: number;
+      localZ: number;
+      colorHex: number;
+      distance: number;
+      decay: number;
+    }
   >();
   private visitedBiomes: Set<BiomeId> = new Set(['beach']);
   private cachedVisitedBiomes: BiomeId[] = ['beach'];
@@ -1258,9 +1285,7 @@ export class GameEngine {
       this.isSoftwareGl ? 1 : this.isTouchDevice ? 1.5 : 2,
     );
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
-    this.renderer.shadowMap.type = this.isTouchDevice
-      ? THREE.PCFShadowMap
-      : THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.needsUpdate = !this.isSoftwareGl;
     this.renderer.setSize(
@@ -1345,6 +1370,11 @@ export class GameEngine {
       o.userData.ignoreLightingPass = true;
     });
     this.flatWorld = buildFlatWorld(this.scene, this.renderer);
+    this.flatWorld.flatGroup.traverse((o) => {
+      if (o instanceof THREE.Mesh && !o.castShadow && o.receiveShadow) {
+        o.userData.noShadowCast = true;
+      }
+    });
     this.flatWorld.setVisible(false);
     this.coasterRuntime = new RollerCoasterRuntime(this.scene);
     this.realisticOcean = new RealisticOcean(
@@ -1543,6 +1573,21 @@ export class GameEngine {
       mesh.userData.ignoreLightingPass = true;
       this.scene.add(mesh);
       this.p2pTracerPool.push({ mesh, life: 0 });
+    }
+
+    // Fixed-size PointLight pools added BEFORE boot renderer.compile so WebGL shader
+    // programs are compiled once at startup and numPointLights never changes mid-game.
+    for (let i = 0; i < 4; i++) {
+      const sLight = new THREE.PointLight(0xffffff, 0, 16, 1.6);
+      sLight.castShadow = false;
+      this.scene.add(sLight);
+      this.structureLightPool.push(sLight);
+    }
+    for (let i = 0; i < 2; i++) {
+      const uLight = new THREE.PointLight(0x38bdf8, 0, 9.5, 1.4);
+      uLight.castShadow = false;
+      this.scene.add(uLight);
+      this.vehicleUnderglowPool.push(uLight);
     }
 
     applyRealisticMeshLightingPass(this.scene, {
@@ -2087,6 +2132,7 @@ export class GameEngine {
         mesh.visible = inOverworld && dx * dx + dz * dz <= maxDistSq;
       }
     }
+    this.updateStructureLightPool(cx, cz, maxDistSq, inOverworld);
   }
 
   private applyMenuCullImmediate(): void {
@@ -3733,6 +3779,7 @@ export class GameEngine {
       this.fridgeItems = [];
       this.clearPlantedCrops();
       this.clearPlacedStructures();
+      this.clearAlienRelicDecorMeshes();
       this.clearPickups();
       this.clearCarcasses();
       this.visitedBiomes = new Set(['grassland']);
@@ -3919,6 +3966,7 @@ export class GameEngine {
     this.clearPlantedCrops();
 
     this.clearPlacedStructures();
+    this.clearAlienRelicDecorMeshes();
     // Initial weathered Crafting Station at the Abandoned Expedition Camp
     this.spawnStructure({
       id: 'exp_workbench',
@@ -4347,6 +4395,7 @@ export class GameEngine {
     }
 
     this.clearPlacedStructures();
+    this.clearAlienRelicDecorMeshes();
     save.structures.forEach((st) => this.spawnStructure(st));
     if (loadedWorldType === 'island') {
       this.ensurePremadeShelterDryingRack();
@@ -5179,25 +5228,135 @@ export class GameEngine {
     }
   }
 
+  private clearAlienRelicDecorMeshes(): void {
+    for (let i = 0; i < this.alienRelicDecorMeshes.length; i++) {
+      const m = this.alienRelicDecorMeshes[i];
+      this.scene.remove(m);
+      this.disposeObject3D(m);
+    }
+    this.alienRelicDecorMeshes.length = 0;
+  }
+
   private clearPlacedStructures(): void {
     this.structureVisuals.forEach((v) => {
       this.scene.remove(v.group);
+      this.disposeObject3D(v.group);
     });
     this.structureVisuals.clear();
     this.structures = [];
+    for (let i = 0; i < this.structureLightPool.length; i++) {
+      this.structureLightPool[i].intensity = 0;
+    }
+  }
+
+  private updateStructureLightPool(
+    cx = this.playerX,
+    cz = this.playerZ,
+    maxDistSq = this.effectiveMaxDrawDistance * this.effectiveMaxDrawDistance,
+    inOverworld = this.currentDimension === 'overworld',
+  ): void {
+    const poolLen = this.structureLightPool.length;
+    if (poolLen === 0) return;
+    if (!inOverworld) {
+      for (let i = 0; i < poolLen; i++) {
+        this.structureLightPool[i].intensity = 0;
+      }
+      return;
+    }
+    const maxSlots = Math.min(poolLen, this.autoFpsTier >= 2 ? 2 : 4);
+    const bestIdx = [-1, -1, -1, -1];
+    const bestDistSq = [Infinity, Infinity, Infinity, Infinity];
+
+    for (let i = 0; i < this.structures.length; i++) {
+      const st = this.structures[i];
+      const vis = this.structureVisuals.get(st.id);
+      if (!vis || !vis.group.visible || !vis.lightMeta || vis.lightMeta.currentIntensity <= 0) {
+        continue;
+      }
+      const dx = st.x - cx;
+      const dz = st.z - cz;
+      const dSq = dx * dx + dz * dz;
+      if (dSq > maxDistSq) continue;
+      for (let s = 0; s < maxSlots; s++) {
+        if (dSq < bestDistSq[s]) {
+          for (let k = maxSlots - 1; k > s; k--) {
+            bestDistSq[k] = bestDistSq[k - 1];
+            bestIdx[k] = bestIdx[k - 1];
+          }
+          bestDistSq[s] = dSq;
+          bestIdx[s] = i;
+          break;
+        }
+      }
+    }
+
+    for (let s = 0; s < poolLen; s++) {
+      const pl = this.structureLightPool[s];
+      const idx = s < maxSlots ? bestIdx[s] : -1;
+      if (idx === -1) {
+        pl.intensity = 0;
+        continue;
+      }
+      const st = this.structures[idx];
+      const vis = this.structureVisuals.get(st.id);
+      const meta = vis?.lightMeta;
+      if (!vis || !meta) {
+        pl.intensity = 0;
+        continue;
+      }
+      const cosR = Math.cos(st.rotationY);
+      const sinR = Math.sin(st.rotationY);
+      pl.position.set(
+        vis.group.position.x + meta.localX * cosR + meta.localZ * sinR,
+        vis.group.position.y + meta.localY,
+        vis.group.position.z - meta.localX * sinR + meta.localZ * cosR,
+      );
+      pl.color.setHex(meta.colorHex);
+      pl.distance = meta.distance;
+      pl.decay = meta.decay;
+      pl.intensity = meta.currentIntensity;
+    }
   }
 
   private spawnStructure(st: PlacedStructure): void {
     const built = createCampStructureModel(st.type, this.world.woodTex);
     built.group.position.set(st.x, st.y, st.z);
     built.group.rotation.y = st.rotationY;
+    let lightMeta:
+      | {
+          localX: number;
+          localY: number;
+          localZ: number;
+          colorHex: number;
+          baseIntensity: number;
+          currentIntensity: number;
+          distance: number;
+          decay: number;
+        }
+      | undefined;
+    if (built.fireLight) {
+      lightMeta = {
+        localX: built.fireLight.position.x,
+        localY: built.fireLight.position.y,
+        localZ: built.fireLight.position.z,
+        colorHex: built.fireLight.color.getHex(),
+        baseIntensity: built.fireLight.intensity,
+        currentIntensity: built.fireLight.intensity,
+        distance: built.fireLight.distance,
+        decay: built.fireLight.decay,
+      };
+      built.fireLight.parent?.remove(built.fireLight);
+      built.fireLight.dispose();
+      built.fireLight = undefined;
+    }
     applyRealisticMeshLightingPass(built.group, {
       shadowsEnabled: this.effectiveShadowsEnabled,
       envMapIntensity: 1.0,
     });
     this.scene.add(built.group);
-    this.structureVisuals.set(st.id, built);
+    this.structureVisuals.set(st.id, { ...built, lightMeta });
     this.structures.push(st);
+    this.updateStructureLightPool();
   }
 
   public getItemCount(itemId: ItemId): number {
@@ -6021,14 +6180,20 @@ export class GameEngine {
   }
 
   private clearPlantedCrops(): void {
-    this.cropMeshes.forEach((m) => this.scene.remove(m));
+    this.cropMeshes.forEach((m) => {
+      this.scene.remove(m);
+      this.disposeObject3D(m);
+    });
     this.cropMeshes.clear();
     this.plantedCrops = [];
   }
 
   private rebuildCropMesh(crop: PlantedCrop): void {
     const prev = this.cropMeshes.get(crop.id);
-    if (prev) this.scene.remove(prev);
+    if (prev) {
+      this.scene.remove(prev);
+      this.disposeObject3D(prev);
+    }
     const mesh = createCropPlantMesh(
       crop.produceItemId,
       crop.mature ? 1 : crop.growthProgress,
@@ -6106,7 +6271,10 @@ export class GameEngine {
     const crop = this.plantedCrops[idx];
     const spec = SEED_SPECS[crop.seedItemId];
     const m = this.cropMeshes.get(crop.id);
-    if (m) this.scene.remove(m);
+    if (m) {
+      this.scene.remove(m);
+      this.disposeObject3D(m);
+    }
     this.cropMeshes.delete(crop.id);
     this.plantedCrops.splice(idx, 1);
 
@@ -8042,6 +8210,7 @@ export class GameEngine {
   private clearCarcasses(): void {
     this.carcasses.forEach((c) => {
       this.scene.remove(c.mesh);
+      this.disposeObject3D(c.mesh);
     });
     this.carcasses = [];
   }
@@ -8062,7 +8231,10 @@ export class GameEngine {
   ): void {
     if (this.carcasses.length >= 24) {
       const oldest = this.carcasses.shift();
-      if (oldest) this.scene.remove(oldest.mesh);
+      if (oldest) {
+        this.scene.remove(oldest.mesh);
+        this.disposeObject3D(oldest.mesh);
+      }
     }
     const groundY = getTerrainHeight(x, z);
     const waterY = getWaterLevelAt(x, z);
@@ -8175,6 +8347,7 @@ export class GameEngine {
     if (remainingTotal <= 0) {
       carcass.harvested = true;
       this.scene.remove(carcass.mesh);
+      this.disposeObject3D(carcass.mesh);
       this.carcasses.splice(idx, 1);
       if (distToPlayer < 85) {
         this.toast(
@@ -8247,6 +8420,7 @@ export class GameEngine {
     carcass.harvested = true;
     this.carcasses.splice(idx, 1);
     this.scene.remove(carcass.mesh);
+    this.disposeObject3D(carcass.mesh);
 
     const hasKnife =
       this.hotbarItemIds[this.equippedSlot] === 'hunting_knife' ||
@@ -13741,6 +13915,7 @@ export class GameEngine {
                 mesh.visible = inOverworld && dx * dx + dz * dz <= maxDistSq;
               }
             }
+            this.updateStructureLightPool(this.playerX, this.playerZ, maxDistSq, inOverworld);
           }
 
           // Lightweight Grand Finale Pack proximity check (Resort Corner Tiki Lounge + Zone Boss/Loot)
@@ -13949,7 +14124,7 @@ export class GameEngine {
       performance.now() - simStart >= FREEZE_SHIELD.maxFrameMs
     ) {
       if (this.smartTv.tvGlowLight && this.mode !== 'playing') {
-        this.smartTv.tvGlowLight.visible = false;
+        this.smartTv.tvGlowLight.intensity = 0;
       }
       return;
     }
@@ -13959,10 +14134,8 @@ export class GameEngine {
     const hdx = this.playerX - HILL_HOUSE_POS.x;
     const hdz = this.playerZ - HILL_HOUSE_POS.z;
     const nearHillTv = hdx * hdx + hdz * hdz < 2304; // 48m
-    if (this.smartTv.tvGlowLight) {
-      this.smartTv.tvGlowLight.visible = Boolean(
-        this.smartTv.power && (nearHillTv || this.tvModalOpen),
-      );
+    if (this.smartTv.tvGlowLight && (!this.smartTv.power || (!nearHillTv && !this.tvModalOpen))) {
+      this.smartTv.tvGlowLight.intensity = 0;
     }
     if (this.smartTvUpdateTimer >= 0.1 && (nearHillTv || this.tvModalOpen || this.smartTv.power)) {
       const tvDt = this.smartTvUpdateTimer;
@@ -14010,21 +14183,29 @@ export class GameEngine {
       const audioY = this.tvModalOpen ? this.camera.position.y : this.playerY;
       const audioZ = this.tvModalOpen ? this.camera.position.z : this.playerZ;
       this.smartTv.updateSpatialAudio(audioX, audioY, audioZ);
+      if (this.smartTv.tvGlowLight && (!this.smartTv.power || (!nearHillTv && !this.tvModalOpen))) {
+        this.smartTv.tvGlowLight.intensity = 0;
+      }
 
       const tvBassEnergy = this.smartTv.getTrunkBassEnergy();
       const tvBassMode = this.smartTv.getBassMode();
+      let updatedPlacedTvLight = false;
       for (let i = 0; i < this.structures.length; i++) {
         const st = this.structures[i];
         if (st.type !== 'smart_tv') continue;
         const visual = this.structureVisuals.get(st.id);
         if (visual) {
           this.smartTv.syncPlacedTvVisual(visual.group);
-          if (visual.fireLight) {
-            visual.fireLight.intensity = this.smartTv.power
+          if (visual.lightMeta) {
+            visual.lightMeta.currentIntensity = this.smartTv.power
               ? 1.65 + tvBassEnergy * (tvBassMode === 'extreme' ? 2.4 : 1.55)
               : 0;
+            updatedPlacedTvLight = true;
           }
         }
+      }
+      if (updatedPlacedTvLight) {
+        this.updateStructureLightPool();
       }
 
       // Only notify React when bass energy or mode meaningfully changed (prevents 60Hz React re-renders)
@@ -14197,7 +14378,10 @@ export class GameEngine {
   }
 
   private clearStructuralWorld(): void {
-    this.structuralMeshes.forEach((m) => this.scene.remove(m));
+    this.structuralMeshes.forEach((m) => {
+      this.scene.remove(m);
+      this.disposeObject3D(m);
+    });
     this.structuralMeshes.clear();
     this.structuralMeshListDirty = true;
     this.structuralVersion += 1;
@@ -14205,18 +14389,22 @@ export class GameEngine {
     this.structuralBlocks = [];
     for (const c of this.collapsingBlocks) {
       this.scene.remove(c.mesh);
+      this.disposeObject3D(c.mesh);
     }
     this.collapsingBlocks = [];
     for (const k of this.primedKegs) {
       this.scene.remove(k.mesh);
+      this.disposeObject3D(k.mesh);
     }
     this.primedKegs = [];
     for (const t of this.torrentCasks) {
       this.scene.remove(t.mesh);
+      this.disposeObject3D(t.mesh);
     }
     this.torrentCasks = [];
     if (this.previewGroup) {
       this.scene.remove(this.previewGroup);
+      this.disposeObject3D(this.previewGroup);
       this.previewGroup = null;
       this.previewKind = null;
     }
@@ -14333,6 +14521,7 @@ export class GameEngine {
     const mesh = this.structuralMeshes.get(b.id);
     if (mesh) {
       this.scene.remove(mesh);
+      this.disposeObject3D(mesh);
       this.structuralMeshes.delete(b.id);
       this.structuralMeshListDirty = true;
     }
@@ -14930,6 +15119,7 @@ export class GameEngine {
       }
       if (cb.life <= 0) {
         this.scene.remove(cb.mesh);
+        this.disposeObject3D(cb.mesh);
         this.collapsingBlocks.splice(i, 1);
       }
     }
@@ -14957,6 +15147,7 @@ export class GameEngine {
       }
       if (k.fuse <= 0) {
         this.scene.remove(k.mesh);
+        this.disposeObject3D(k.mesh);
         this.primedKegs.splice(i, 1);
         this.detonatePowderKeg(k.pos.x, k.pos.y, k.pos.z);
       }
@@ -14968,6 +15159,7 @@ export class GameEngine {
       t.life -= dt;
       if (t.life <= 0) {
         this.scene.remove(t.mesh);
+        this.disposeObject3D(t.mesh);
         this.torrentCasks.splice(i, 1);
       }
     }
@@ -15024,6 +15216,10 @@ export class GameEngine {
       this.disposeObject3D(vh.root);
     });
     this.vehicleMeshes.clear();
+    this.vehicleUnderglowMeta.clear();
+    for (let i = 0; i < this.vehicleUnderglowPool.length; i++) {
+      this.vehicleUnderglowPool[i].intensity = 0;
+    }
     this.vehicleShadowDiscs.clear();
     this.autoParkJobs.clear();
     this.vehicles = [];
@@ -15643,8 +15839,31 @@ export class GameEngine {
     this.vehicleShadowDiscs.set(vehicleId, disc);
   }
 
+  private extractVehicleUnderglowLight(
+    vehicleId: string,
+    handles: ModularVehicleMeshHandles,
+  ): void {
+    const ul = handles.underglowLight;
+    if (ul) {
+      this.vehicleUnderglowMeta.set(vehicleId, {
+        localX: ul.position.x,
+        localY: ul.position.y,
+        localZ: ul.position.z,
+        colorHex: ul.color.getHex(),
+        distance: ul.distance,
+        decay: ul.decay,
+      });
+      ul.parent?.remove(ul);
+      ul.dispose();
+      handles.underglowLight = undefined;
+    } else {
+      this.vehicleUnderglowMeta.delete(vehicleId);
+    }
+  }
+
   private spawnVehicleInstance(v: ModularVehicleData): void {
     const built = createModularVehicleMesh(v);
+    this.extractVehicleUnderglowLight(v.id, built);
     built.root.position.set(v.x, v.y, v.z);
     built.root.rotation.y = v.yaw;
     for (const sw of built.steerWheels) {
@@ -15726,6 +15945,7 @@ export class GameEngine {
           this.disposeObject3D(oldMesh.root);
         }
         const rebuilt = createModularVehicleMesh(existing);
+        this.extractVehicleUnderglowLight(existing.id, rebuilt);
         rebuilt.root.position.set(existing.x, existing.y, existing.z);
         rebuilt.root.rotation.y = existing.yaw;
         for (const sw of rebuilt.steerWheels) {
@@ -16679,7 +16899,7 @@ export class GameEngine {
       this.activeVehicleId = null;
       return;
     }
-    const specs = computeVehicleSpecs(v.modules);
+    const specs = this.getVehicleSpecs(v);
 
     let moveRight = 0;
     let moveForward = 0;
@@ -17041,8 +17261,27 @@ export class GameEngine {
     const shadowMargin = this.effectiveShadowExtent + 10;
     const shadowDistSq = shadowMargin * shadowMargin;
     const underglowLightMaxSq = 20 * 20;
-    const maxUnderLights = this.autoFpsTier >= 2 ? 1 : 2;
-    let activeUnderLightsShown = 0;
+    const maxUnderLights = Math.min(
+      this.vehicleUnderglowPool.length,
+      this.autoFpsTier >= 2 ? 1 : 2,
+    );
+    let cand0DistSq = Infinity;
+    let cand0X = 0;
+    let cand0Y = 0;
+    let cand0Z = 0;
+    let cand0ColorHex = 0x38bdf8;
+    let cand0Distance = 9.5;
+    let cand0Decay = 1.4;
+    let cand0Intensity = 0;
+
+    let cand1DistSq = Infinity;
+    let cand1X = 0;
+    let cand1Y = 0;
+    let cand1Z = 0;
+    let cand1ColorHex = 0x38bdf8;
+    let cand1Distance = 9.5;
+    let cand1Decay = 1.4;
+    let cand1Intensity = 0;
 
     for (const v of this.vehicles) {
       const specs = this.getVehicleSpecs(v);
@@ -17098,7 +17337,6 @@ export class GameEngine {
         isActive ||
         (this.currentDimension === 'overworld' && distVSq <= maxDrawSq);
       if (!handles.root.visible) {
-        if (handles.underglowLight) handles.underglowLight.visible = false;
         continue;
       }
 
@@ -17145,7 +17383,6 @@ export class GameEngine {
       }
 
       if (!isActive && !autoJob && distVSq > detailDistSq) {
-        if (handles.underglowLight) handles.underglowLight.visible = false;
         continue;
       }
 
@@ -17414,17 +17651,49 @@ export class GameEngine {
           : rimMode === 'blink'
             ? rimLightFactor * 0.95
             : showBassPulse;
-      if (handles.underglowLight) {
-        const allowPointLight =
-          underOn &&
-          (isActive ||
-            (distVSq <= underglowLightMaxSq && activeUnderLightsShown < maxUnderLights));
-        handles.underglowLight.visible = allowPointLight;
-        if (allowPointLight) {
-          activeUnderLightsShown += 1;
-          handles.underglowLight.intensity = 1.85 + underPulse * 3.1;
-        } else {
-          handles.underglowLight.intensity = 0;
+      const uMeta = this.vehicleUnderglowMeta.get(v.id);
+      if (
+        uMeta &&
+        underOn &&
+        maxUnderLights > 0 &&
+        (isActive || distVSq <= underglowLightMaxSq)
+      ) {
+        const effDistSq = isActive ? -1 : distVSq;
+        _vec3A
+          .set(uMeta.localX, handles.chassisGroup.position.y + uMeta.localY, uMeta.localZ)
+          .applyEuler(handles.root.rotation)
+          .add(handles.root.position);
+        const underInt = 1.85 + underPulse * 3.1;
+        const underColorHex = v.underglowColor
+          ? _scratchColorA.set(v.underglowColor).getHex()
+          : uMeta.colorHex;
+        if (effDistSq < cand0DistSq) {
+          cand1DistSq = cand0DistSq;
+          cand1X = cand0X;
+          cand1Y = cand0Y;
+          cand1Z = cand0Z;
+          cand1ColorHex = cand0ColorHex;
+          cand1Distance = cand0Distance;
+          cand1Decay = cand0Decay;
+          cand1Intensity = cand0Intensity;
+
+          cand0DistSq = effDistSq;
+          cand0X = _vec3A.x;
+          cand0Y = _vec3A.y;
+          cand0Z = _vec3A.z;
+          cand0ColorHex = underColorHex;
+          cand0Distance = uMeta.distance;
+          cand0Decay = uMeta.decay;
+          cand0Intensity = underInt;
+        } else if (maxUnderLights > 1 && effDistSq < cand1DistSq) {
+          cand1DistSq = effDistSq;
+          cand1X = _vec3A.x;
+          cand1Y = _vec3A.y;
+          cand1Z = _vec3A.z;
+          cand1ColorHex = underColorHex;
+          cand1Distance = uMeta.distance;
+          cand1Decay = uMeta.decay;
+          cand1Intensity = underInt;
         }
       }
       if (handles.underglowMeshes) {
@@ -17480,11 +17749,37 @@ export class GameEngine {
         p.position.y = 0.62 + Math.sin(this.elapsed * pistonSpeed) * 0.09;
       }
     }
+
+    if (this.vehicleUnderglowPool.length > 0) {
+      const p0 = this.vehicleUnderglowPool[0];
+      if (cand0Intensity > 0) {
+        p0.position.set(cand0X, cand0Y, cand0Z);
+        p0.color.setHex(cand0ColorHex);
+        p0.distance = cand0Distance;
+        p0.decay = cand0Decay;
+        p0.intensity = cand0Intensity;
+      } else {
+        p0.intensity = 0;
+      }
+    }
+    if (this.vehicleUnderglowPool.length > 1) {
+      const p1 = this.vehicleUnderglowPool[1];
+      if (maxUnderLights > 1 && cand1Intensity > 0) {
+        p1.position.set(cand1X, cand1Y, cand1Z);
+        p1.color.setHex(cand1ColorHex);
+        p1.distance = cand1Distance;
+        p1.decay = cand1Decay;
+        p1.intensity = cand1Intensity;
+      } else {
+        p1.intensity = 0;
+      }
+    }
   }
 
   public spawnCustomVehicle(vehicle: ModularVehicleData): void {
     this.vehicles.push(vehicle);
     const handles = createModularVehicleMesh(vehicle);
+    this.extractVehicleUnderglowLight(vehicle.id, handles);
     this.attachVehicleShadowDisc(vehicle.id, handles.root);
     applyRealisticMeshLightingPass(handles.root, {
       shadowsEnabled: this.effectiveShadowsEnabled,
@@ -17533,6 +17828,7 @@ export class GameEngine {
       this.disposeObject3D(oldMesh.root);
     }
     const rebuilt = createModularVehicleMesh(v);
+    this.extractVehicleUnderglowLight(v.id, rebuilt);
     rebuilt.root.position.set(v.x, v.y, v.z);
     rebuilt.root.rotation.y = v.yaw;
     for (const sw of rebuilt.steerWheels) {
@@ -18700,6 +18996,7 @@ export class GameEngine {
           this.disposeObject3D(old.root);
         }
         const rebuilt = createModularVehicleMesh(existing);
+        this.extractVehicleUnderglowLight(existing.id, rebuilt);
         rebuilt.root.position.set(existing.x, existing.y, existing.z);
         rebuilt.root.rotation.y = existing.yaw;
         this.attachVehicleShadowDisc(existing.id, rebuilt.root);
@@ -19275,6 +19572,17 @@ export class GameEngine {
     for (const cm of this.cropMeshes.values()) cm.visible = active;
     for (const p of this.pickups) p.mesh.visible = active;
     for (const c of this.carcasses) c.mesh.visible = showIsland;
+    if (!active) {
+      for (let i = 0; i < this.structureLightPool.length; i++) {
+        this.structureLightPool[i].intensity = 0;
+      }
+      for (let i = 0; i < this.vehicleUnderglowPool.length; i++) {
+        this.vehicleUnderglowPool[i].intensity = 0;
+      }
+      if (this.smartTv.tvGlowLight) {
+        this.smartTv.tvGlowLight.intensity = 0;
+      }
+    }
   }
 
   private updateActivePortals(dt: number): void {
@@ -19432,6 +19740,7 @@ export class GameEngine {
 
     this.vehicles.push(spawned);
     const handles = createModularVehicleMesh(spawned);
+    this.extractVehicleUnderglowLight(spawned.id, handles);
     handles.root.position.set(spawned.x, spawned.y, spawned.z);
     handles.root.rotation.y = spawned.yaw;
     this.attachVehicleShadowDisc(spawned.id, handles.root);
@@ -20152,6 +20461,19 @@ export class GameEngine {
     if (this.smartTv) {
       this.smartTv.dispose();
     }
+    this.clearAlienRelicDecorMeshes();
+    for (let i = 0; i < this.structureLightPool.length; i++) {
+      this.scene.remove(this.structureLightPool[i]);
+      this.structureLightPool[i].dispose();
+    }
+    this.structureLightPool = [];
+    for (let i = 0; i < this.vehicleUnderglowPool.length; i++) {
+      this.scene.remove(this.vehicleUnderglowPool[i]);
+      this.vehicleUnderglowPool[i].dispose();
+    }
+    this.vehicleUnderglowPool = [];
+    this.vehicleUnderglowMeta.clear();
+    this.sound?.dispose();
     this.renderer.dispose();
   }
 

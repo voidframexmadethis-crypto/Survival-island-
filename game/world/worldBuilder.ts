@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ResourceNodeKind, ResourceNodeState } from '../types';
 import { FrameBudgetQueue } from '../systems/frameBudgetQueue';
 import { WorldChunk, WorldChunkManager } from './worldChunkSystem';
@@ -236,6 +237,7 @@ export function buildIslandWorld(
   const leafNormalTex = createLeafNormalTexture(renderer);
   const waterNormalTex = createWaterNormalTexture(renderer);
   const woodTex = createWoodPlankTexture(renderer);
+  woodTex.userData.sharedAsset = true;
   const woodNormalTex = createWoodPlankNormalTexture(renderer);
   const maxAniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
   const rockPbrBundle = createRealisticSurfaceMaterial({
@@ -457,7 +459,10 @@ export function buildIslandWorld(
   );
   terrainMat.normalScale.set(0.85, 0.85);
   const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
+  terrainMesh.castShadow = false;
   terrainMesh.receiveShadow = true;
+  terrainMesh.userData.noShadowCast = true;
+  terrainMesh.userData.preserveShadowFlags = true;
   overworldGroup.add(terrainMesh);
 
   // 2. Ocean Water Plane
@@ -546,6 +551,8 @@ export function buildIslandWorld(
           const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.55 + rand() * 0.45, 0), riverRockMat);
           rock.scale.set(1.2, 0.7, 1.1);
           rock.position.set(rx + (rand() - 0.5) * 2.2, ry - 0.15, rz + (rand() - 0.5) * 2.2);
+          rock.castShadow = false;
+          rock.userData.noShadowCast = true;
           overworldGroup.add(rock);
         }
       }
@@ -649,6 +656,8 @@ export function buildIslandWorld(
     stream.position.set(WATERFALL_POS.x + (i - 1) * 1.45, 8.15, WATERFALL_POS.z + 2.0 + (i % 2) * 0.22);
     stream.rotation.x = -0.24;
     stream.renderOrder = 2;
+    stream.castShadow = false;
+    stream.userData.noShadowCast = true;
     overworldGroup.add(stream);
     waterfallStreams.push(stream);
   }
@@ -687,6 +696,8 @@ export function buildIslandWorld(
       WATERFALL_POS.z + 3.45 + (m % 2) * 0.8,
     );
     mist.scale.set(2.5, 1.25, 2.1);
+    mist.castShadow = false;
+    mist.userData.noShadowCast = true;
     mist.updateMatrix();
     mist.matrixAutoUpdate = false;
     overworldGroup.add(mist);
@@ -704,10 +715,13 @@ export function buildIslandWorld(
   );
   waterfallFoam.rotation.x = -Math.PI / 2;
   waterfallFoam.position.set(WATERFALL_POS.x, 2.66, WATERFALL_POS.z + 4.4);
+  waterfallFoam.castShadow = false;
+  waterfallFoam.userData.noShadowCast = true;
   overworldGroup.add(waterfallFoam);
 
   // Track shadow-casting world objects so Graphics Settings can toggle shadows cleanly
   const shadowCasters: THREE.Object3D[] = [];
+  const staticMergeTargets: { group: THREE.Object3D; protectedObjs?: THREE.Object3D[] }[] = [];
   const disposableGeos: THREE.BufferGeometry[] = [];
   const disposableMats: THREE.Material[] = [];
   const disposableTexs: THREE.Texture[] = [
@@ -736,6 +750,9 @@ export function buildIslandWorld(
     mat: THREE.Material;
     castShadow: boolean;
     receiveShadow: boolean;
+    foliageScatter?: boolean;
+    cx?: number;
+    cz?: number;
     matrices: THREE.Matrix4[];
     colors?: THREE.Color[];
   }
@@ -750,6 +767,7 @@ export function buildIslandWorld(
     { key: string; index: number; matrix: THREE.Matrix4 }[]
   >();
   const builtBatchMeshes = new Map<string, THREE.InstancedMesh>();
+  const foliageBatchMeshes: { mesh: THREE.InstancedMesh; cx: number; cz: number }[] = [];
   const nodeBatchSlots = new Map<string, BatchSlotRef[]>();
 
   const registerGeometry = <T extends THREE.BufferGeometry>(g: T): T => {
@@ -769,6 +787,9 @@ export function buildIslandWorld(
     options?: {
       castShadow?: boolean;
       receiveShadow?: boolean;
+      foliageScatter?: boolean;
+      cx?: number;
+      cz?: number;
       color?: THREE.Color;
       nodeId?: string;
     },
@@ -780,6 +801,9 @@ export function buildIslandWorld(
         mat,
         castShadow: Boolean(options?.castShadow),
         receiveShadow: Boolean(options?.receiveShadow),
+        foliageScatter: options?.foliageScatter,
+        cx: options?.cx,
+        cz: options?.cz,
         matrices: [],
       };
       batchRegistry.set(key, entry);
@@ -937,6 +961,7 @@ export function buildIslandWorld(
     tatteredSail,
   );
   overworldGroup.add(wreckGroup);
+  staticMergeTargets.push({ group: wreckGroup });
   // NOTE: Zero colliders pushed for the ship — completely removing all invisible walls & barriers!
 
   // 4 Interactive 3D Loot Chests placed with 100% open, unrestricted access
@@ -1163,6 +1188,7 @@ export function buildIslandWorld(
   caveLight.position.set(0, 2.6, -1.8);
   caveGroup.add(caveLight);
   overworldGroup.add(caveGroup);
+  staticMergeTargets.push({ group: caveGroup });
   colliders.push({ x: CAVE_POS.x - 4.2, z: CAVE_POS.z, radius: 2.2 });
   colliders.push({ x: CAVE_POS.x + 4.2, z: CAVE_POS.z, radius: 2.2 });
   colliders.push({ x: CAVE_POS.x, z: CAVE_POS.z - 4.8, radius: 3.0 });
@@ -1250,6 +1276,7 @@ export function buildIslandWorld(
   colliders.push({ x: EXPEDITION_POS.x + 1.6, z: EXPEDITION_POS.z + 1.6, radius: 1.0 });
 
   overworldGroup.add(expGroup);
+  staticMergeTargets.push({ group: expGroup });
   const expeditionJournalPos = new THREE.Vector3(
     EXPEDITION_POS.x + 1.6,
     expY + 0.85,
@@ -1380,6 +1407,7 @@ export function buildIslandWorld(
   barnWarmFill.position.set(0.3, 2.35, 0);
   barnGroup.add(barnWarmFill);
   overworldGroup.add(barnGroup);
+  staticMergeTargets.push({ group: barnGroup });
 
   // Barn back/side colliders (keeping east doorway open so player can walk inside!)
   colliders.push({ x: barnX - 2.6, z: barnZ, radius: 1.5 });
@@ -1392,6 +1420,8 @@ export function buildIslandWorld(
   paddockPatch.rotation.x = -Math.PI / 2;
   paddockPatch.position.set(-31.5, homesteadY + 0.025, 66.5);
   paddockPatch.receiveShadow = true;
+  paddockPatch.castShadow = false;
+  paddockPatch.userData.noShadowCast = true;
   overworldGroup.add(paddockPatch);
 
   // Farmyard dirt patch for Rooster scratching & muddy pig pen corner
@@ -1399,6 +1429,8 @@ export function buildIslandWorld(
   yardDirt.rotation.x = -Math.PI / 2;
   yardDirt.position.set(-19.5, homesteadY + 0.024, 60.5);
   yardDirt.receiveShadow = true;
+  yardDirt.castShadow = false;
+  yardDirt.userData.noShadowCast = true;
   overworldGroup.add(yardDirt);
 
   const fencePostUnitGeo = registerGeometry(new THREE.BoxGeometry(0.16, 1.28, 0.16));
@@ -1460,12 +1492,16 @@ export function buildIslandWorld(
   muddyRing.rotation.x = -Math.PI / 2;
   muddyRing.position.set(FARM_POND_POS.x, FARM_POND_POS.waterY + 0.04, FARM_POND_POS.z);
   muddyRing.receiveShadow = true;
+  muddyRing.castShadow = false;
+  muddyRing.userData.noShadowCast = true;
   const pondWater = new THREE.Mesh(
     new THREE.CircleGeometry(FARM_POND_POS.radius + 0.4, 24),
     freshwaterMat,
   );
   pondWater.rotation.x = -Math.PI / 2;
   pondWater.position.set(FARM_POND_POS.x, FARM_POND_POS.waterY, FARM_POND_POS.z);
+  pondWater.castShadow = false;
+  pondWater.userData.noShadowCast = true;
   overworldGroup.add(muddyRing, pondWater);
 
   // 8c. Wild Animal Habitats (Misty Lake, Snowy Woodland, Rocky Pine Bank, Autumn Grove, Murky Swamp, Savanna Tall Grass, Dead Oak Perch)
@@ -1488,6 +1524,8 @@ export function buildIslandWorld(
       LAKE_CENTER.waterY + 0.34 + m * 0.14,
       LAKE_CENTER.z + (m - 1.5) * 1.1,
     );
+    mistRing.castShadow = false;
+    mistRing.userData.noShadowCast = true;
     overworldGroup.add(mistRing);
   }
 
@@ -1693,12 +1731,16 @@ export function buildIslandWorld(
   swampBankRing.rotation.x = -Math.PI / 2;
   swampBankRing.position.set(SWAMP_POS.x, SWAMP_POS.waterY + 0.03, SWAMP_POS.z);
   swampBankRing.receiveShadow = true;
+  swampBankRing.castShadow = false;
+  swampBankRing.userData.noShadowCast = true;
   const swampWater = new THREE.Mesh(
     registerGeometry(new THREE.CircleGeometry(SWAMP_POS.radius + 0.6, 30)),
     swampWaterMat,
   );
   swampWater.rotation.x = -Math.PI / 2;
   swampWater.position.set(SWAMP_POS.x, SWAMP_POS.waterY, SWAMP_POS.z);
+  swampWater.castShadow = false;
+  swampWater.userData.noShadowCast = true;
   overworldGroup.add(swampBankRing, swampWater);
 
   // Mossy swamp logs & dense jungle reeds along lagoon edge (70 reeds in 1 InstancedMesh)
@@ -1739,6 +1781,9 @@ export function buildIslandWorld(
     goldenSavannaMat,
     savannaGrassCount,
   );
+  savannaGrassMesh.castShadow = false;
+  savannaGrassMesh.receiveShadow = true;
+  savannaGrassMesh.userData.noShadowCast = true;
   const savannaDummy = new THREE.Object3D();
   const savannaTint = new THREE.Color();
   for (let sg = 0; sg < savannaGrassCount; sg++) {
@@ -1796,6 +1841,7 @@ export function buildIslandWorld(
   upperLimbR.rotation.x = -0.38;
   deadOakGroup.add(owlBranch, upperLimbL, upperLimbR);
   overworldGroup.add(deadOakGroup);
+  staticMergeTargets.push({ group: deadOakGroup });
   colliders.push({ x: DEAD_OAK_POS.x, z: DEAD_OAK_POS.z, radius: 0.7 });
 
   // 9. Interactive Realistic Trees, Breakable Rocks & Resource Nodes
@@ -3233,8 +3279,11 @@ export function buildIslandWorld(
       meta.kind === 'clay_deposit' ||
       meta.kind === 'sand_mound';
 
-    const secX = Math.floor(meta.x / 220);
-    const secZ = Math.floor(meta.z / 220);
+    const secX = Math.floor(meta.x / 64);
+    const secZ = Math.floor(meta.z / 64);
+    const isSmallGroundScatter = noShadowKind && meta.kind !== 'wheat_patch';
+    const chunkCx = (secX + 0.5) * 64;
+    const chunkCz = (secZ + 0.5) * 64;
 
     tempHandle.root.traverse((child) => {
       if (!(child instanceof THREE.Mesh) || !child.visible) return;
@@ -3246,6 +3295,9 @@ export function buildIslandWorld(
       addBatchInstance(batchKey, child.geometry, mat, child.matrixWorld, {
         castShadow,
         receiveShadow: !noShadowKind,
+        foliageScatter: isSmallGroundScatter,
+        cx: chunkCx,
+        cz: chunkCz,
         nodeId: id,
       });
     });
@@ -3542,6 +3594,7 @@ export function buildIslandWorld(
     stallGroup.add(tray, produce);
   });
   overworldGroup.add(stallGroup);
+  staticMergeTargets.push({ group: stallGroup });
   colliders.push({ x: FARMER_POS.x - 0.9, z: FARMER_POS.z - 1.9, radius: 0.7 });
   colliders.push({ x: FARMER_POS.x + 0.9, z: FARMER_POS.z - 1.9, radius: 0.7 });
 
@@ -3577,6 +3630,10 @@ export function buildIslandWorld(
     woodTex,
   );
   overworldGroup.add(hillHouse.group);
+  staticMergeTargets.push({
+    group: hillHouse.group,
+    protectedObjs: [hillHouse.tvScreenMesh],
+  });
   hillHouse.colliders.forEach((hc) => colliders.push(hc));
 
   // E. Expanded Covered 3-Bay Custom Vehicle Garage Zone Beside the Shelter (VEHICLE_GARAGE_POS)
@@ -3675,6 +3732,8 @@ export function buildIslandWorld(
   );
   garagePad.position.set(0, 0.04, 0);
   garagePad.receiveShadow = true;
+  garagePad.castShadow = false;
+  garagePad.userData.noShadowCast = true;
   garagePad.userData.preserveEnvMapIntensity = true;
   garageGroup.add(garagePad);
 
@@ -3686,6 +3745,8 @@ export function buildIslandWorld(
   driveApron.position.set(0, 0.01, 7.8);
   driveApron.rotation.x = 0.045;
   driveApron.receiveShadow = true;
+  driveApron.castShadow = false;
+  driveApron.userData.noShadowCast = true;
   driveApron.userData.preserveEnvMapIntensity = true;
   garageGroup.add(driveApron);
 
@@ -3699,20 +3760,25 @@ export function buildIslandWorld(
     );
     bayPad.position.set(bx, 0.145, 0.6);
     bayPad.receiveShadow = true;
+    bayPad.castShadow = false;
+    bayPad.userData.noShadowCast = true;
     bayPad.userData.preserveEnvMapIntensity = true;
     garageGroup.add(bayPad);
 
     [-2.42, 2.42].forEach((sideOffset) => {
       const sideLine = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.025, 8.0), trimMat);
       sideLine.position.set(bx + sideOffset, 0.17, 0.6);
+      sideLine.userData.noShadowCast = true;
       garageGroup.add(sideLine);
     });
     const frontApronLine = new THREE.Mesh(new THREE.BoxGeometry(4.95, 0.025, 0.14), trimMat);
     frontApronLine.position.set(bx, 0.17, 4.55);
+    frontApronLine.userData.noShadowCast = true;
     garageGroup.add(frontApronLine);
 
     const backStop = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.16, 0.28), trimMat);
     backStop.position.set(bx, 0.22, -3.35);
+    backStop.userData.noShadowCast = true;
     garageGroup.add(backStop);
   });
 
@@ -3866,6 +3932,7 @@ export function buildIslandWorld(
     tire.rotation.x = Math.PI / 2;
     tire.position.set(-7.6, 0.26 + t * 0.25, -4.85);
     tire.castShadow = false;
+    tire.userData.noShadowCast = true;
     garageGroup.add(tire);
   }
   const fuelCanMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.42, metalness: 0.3 });
@@ -3873,10 +3940,12 @@ export function buildIslandWorld(
     const can = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.56, 0.24), fuelCanMat);
     can.position.set(fx, 0.42, -5.1);
     can.castShadow = false;
+    can.userData.noShadowCast = true;
     garageGroup.add(can);
   });
 
   overworldGroup.add(garageGroup);
+  staticMergeTargets.push({ group: garageGroup });
 
   const garagePos = new THREE.Vector3(VEHICLE_GARAGE_POS.x, garageGroundY, VEHICLE_GARAGE_POS.z);
   const garageBenchPos = new THREE.Vector3(
@@ -3972,6 +4041,7 @@ export function buildIslandWorld(
     bulbLight.position.set(0, 2.6, 3.2);
     tcGroup.add(rim, archL, archR, lintel, vaultShaft, copperSpire, bulb, bulbLight);
     overworldGroup.add(tcGroup);
+    staticMergeTargets.push({ group: tcGroup });
     colliders.push({ x: TRIAL_CHAMBERS_POS.x, z: TRIAL_CHAMBERS_POS.z - 0.6, radius: 2.6 });
   }
 
@@ -4118,6 +4188,7 @@ export function buildIslandWorld(
     eastGlow.position.set(4.6, 3.2, 0);
     wmGroup.add(groundCeiling, upperHall, pitchedRoof, portico, porchGlow, hallGlow, westGlow, eastGlow);
     overworldGroup.add(wmGroup);
+    staticMergeTargets.push({ group: wmGroup });
   }
 
   // Helper for Enterable Walk-In Village Cabins (3 Taiga + 3 Snowy Taiga Houses)
@@ -4170,6 +4241,7 @@ export function buildIslandWorld(
 
     cab.add(roofBase, roof, win, rug, bedFrame, blanket, stove, ember, lantern);
     overworldGroup.add(cab);
+    staticMergeTargets.push({ group: cab });
   };
 
   // 3. Taiga Village & 6. Snowy Taiga Village (all 6 houses enterable!)
@@ -4234,6 +4306,7 @@ export function buildIslandWorld(
     }
     poGroup.add(brazier, brazierGlow, upperFloor, midTower, crownDeck, towerRoof);
     overworldGroup.add(poGroup);
+    staticMergeTargets.push({ group: poGroup });
   }
 
   // 5. Trail Ruins (Old Growth Pine Taiga at TRAIL_RUINS_POS)
@@ -4260,6 +4333,7 @@ export function buildIslandWorld(
     lintel.position.set(0, 2.25, -1.4);
     trGroup.add(lintel);
     overworldGroup.add(trGroup);
+    staticMergeTargets.push({ group: trGroup });
     colliders.push({ x: TRAIL_RUINS_POS.x, z: TRAIL_RUINS_POS.z, radius: 2.8 });
   }
 
@@ -4299,6 +4373,7 @@ export function buildIslandWorld(
     iceWinR.position.set(2.7, 0.95, 0);
     igGroup.add(dome, floorDisc, tunL, tunR, tunTop, igRug, igLantern, igLight, iceWinL, iceWinR);
     overworldGroup.add(igGroup);
+    staticMergeTargets.push({ group: igGroup });
 
     // Perimeter dome colliders leaving the +Z doorway clear
     for (let k = 0; k < 16; k++) {
@@ -4341,6 +4416,7 @@ export function buildIslandWorld(
     sanctumDoor.position.set(0, 1.5, 4.75);
     jtGroup.add(sanctumDoor);
     overworldGroup.add(jtGroup);
+    staticMergeTargets.push({ group: jtGroup });
     colliders.push({ x: JUNGLE_TEMPLE_POS.x, z: JUNGLE_TEMPLE_POS.z, radius: 4.8 });
   }
 
@@ -4387,6 +4463,7 @@ export function buildIslandWorld(
       colliders.push({ x: center.x + ox, z: center.z + oz, radius: 2.7 });
     });
     overworldGroup.add(vGroup);
+    staticMergeTargets.push({ group: vGroup });
   };
   buildPlainsVillage(PLAINS_VILLAGE_POS);
   buildPlainsVillage(SUNFLOWER_VILLAGE_POS);
@@ -4415,6 +4492,7 @@ export function buildIslandWorld(
     goldCap.position.set(-2.1, 6.4, 0);
     rpGroup.add(baseSlab, leftPillar, rightPillar, topLintel, goldCap);
     overworldGroup.add(rpGroup);
+    staticMergeTargets.push({ group: rpGroup });
     colliders.push({ x: RUINED_PORTAL_POS.x - 2.1, z: RUINED_PORTAL_POS.z, radius: 0.85 });
     colliders.push({ x: RUINED_PORTAL_POS.x + 2.1, z: RUINED_PORTAL_POS.z, radius: 0.85 });
   }
@@ -4436,6 +4514,7 @@ export function buildIslandWorld(
     banner.position.set(0, 4.8, 2.25);
     g.add(base, tower, roof, banner);
     overworldGroup.add(g);
+    staticMergeTargets.push({ group: g });
     colliders.push({ x: pos.x, z: pos.z, radius: 2.8 });
   };
   [
@@ -4461,6 +4540,7 @@ export function buildIslandWorld(
     entry.position.set(0, 0.8, 2.6);
     ig.add(dome, entry);
     overworldGroup.add(ig);
+    staticMergeTargets.push({ group: ig });
     colliders.push({ x: SNOWY_SLOPES_IGLOO_POS.x, z: SNOWY_SLOPES_IGLOO_POS.z, radius: 2.9 });
   }
 
@@ -4494,6 +4574,7 @@ export function buildIslandWorld(
       pyr.add(tower, glyph);
     });
     overworldGroup.add(pyr);
+    staticMergeTargets.push({ group: pyr });
     colliders.push({ x: DESERT_PYRAMID_POS.x, z: DESERT_PYRAMID_POS.z, radius: 8.2 });
   }
 
@@ -4522,6 +4603,7 @@ export function buildIslandWorld(
       colliders.push({ x: DESERT_VILLAGE_POS.x + hx, z: DESERT_VILLAGE_POS.z + hz, radius: 2.7 });
     });
     overworldGroup.add(dVillage);
+    staticMergeTargets.push({ group: dVillage });
 
     // Desert Well
     const wy = getTerrainHeight(DESERT_WELL_POS.x, DESERT_WELL_POS.z);
@@ -4545,6 +4627,7 @@ export function buildIslandWorld(
     });
     well.add(basin, waterPool, canopy);
     overworldGroup.add(well);
+    staticMergeTargets.push({ group: well });
     colliders.push({ x: DESERT_WELL_POS.x, z: DESERT_WELL_POS.z, radius: 2.3 });
   }
 
@@ -4574,6 +4657,7 @@ export function buildIslandWorld(
       colliders.push({ x: SAVANNA_VILLAGE_POS.x + hx, z: SAVANNA_VILLAGE_POS.z + hz, radius: 2.6 });
     });
     overworldGroup.add(sVillage);
+    staticMergeTargets.push({ group: sVillage });
   }
 
   // 13d. Desert & Savanna Pillager Outposts
@@ -4598,6 +4682,7 @@ export function buildIslandWorld(
     plankDeck.position.y = 0.1;
     shaft.add(plankDeck);
     overworldGroup.add(shaft);
+    staticMergeTargets.push({ group: shaft });
   }
 
   // 13f. Swamp Hut (Witch Hut on wooden stilts)
@@ -4622,6 +4707,7 @@ export function buildIslandWorld(
     roof.rotation.y = Math.PI / 4;
     hut.add(deck, cabin, roof);
     overworldGroup.add(hut);
+    staticMergeTargets.push({ group: hut });
     colliders.push({ x: SWAMP_HUT_POS.x, z: SWAMP_HUT_POS.z, radius: 2.8 });
   }
 
@@ -4646,6 +4732,7 @@ export function buildIslandWorld(
       });
     }
     overworldGroup.add(fossil);
+    staticMergeTargets.push({ group: fossil });
   });
 
   // 13h. Deep Ocean Monument (Prismarine Temple with glowing Sea Lanterns)
@@ -4662,6 +4749,7 @@ export function buildIslandWorld(
     beacon.position.y = 7.4;
     mon.add(beacon);
     overworldGroup.add(mon);
+    staticMergeTargets.push({ group: mon });
   }
 
   // 13i. Warm Ocean Coral Reefs & Frozen Ocean Icebergs & Coastal Buried Treasure
@@ -4685,6 +4773,7 @@ export function buildIslandWorld(
       peak.position.y = 6.2;
       berg.add(base, peak);
       overworldGroup.add(berg);
+      staticMergeTargets.push({ group: berg });
     }
     // Coastal Buried Treasure X-marker & weathered chest
     const by = getTerrainHeight(BURIED_TREASURE_POS.x, BURIED_TREASURE_POS.z);
@@ -4772,6 +4861,7 @@ export function buildIslandWorld(
     dragonTail.position.set(0, 3.2, -4.5);
     dvGroup.add(dragonBody, dragonNeck, dragonHead, dragonEyeL, dragonEyeR, wingL, wingR, dragonTail);
     overworldGroup.add(dvGroup);
+    staticMergeTargets.push({ group: dvGroup });
 
     // 2. VIKING VILLAGE (560, -260) — Nordic Longhouse, Shield Racks, Rune Stones & Moored Viking Longship
     const vvGroup = new THREE.Group();
@@ -4813,6 +4903,7 @@ export function buildIslandWorld(
     longship.add(hull, mast, sail);
     vvGroup.add(longship);
     overworldGroup.add(vvGroup);
+    staticMergeTargets.push({ group: vvGroup });
 
     // 3. RESORT CORNER (-480, 410) — Thatched Tiki Lounge Bar, Torches, Beach Umbrellas & 2 Jet Skis
     const rcGroup = new THREE.Group();
@@ -4861,6 +4952,7 @@ export function buildIslandWorld(
       rcGroup.add(ski);
     }
     overworldGroup.add(rcGroup);
+    staticMergeTargets.push({ group: rcGroup });
 
     // 4. RUINED CASTLE (-360, -520) — Gothic Citadel Ruins, Throne Dais & Fallen King Ghost Boss
     const castleGroup = new THREE.Group();
@@ -4910,6 +5002,7 @@ export function buildIslandWorld(
     fallenKing.add(kingCloak, kingHead, kingCrown, kingBlade);
     castleGroup.add(fallenKing);
     overworldGroup.add(castleGroup);
+    staticMergeTargets.push({ group: castleGroup });
   }
 
   // Cleanly zoned biome resource scatter (filling dead spots across the 740m Grand Island, well spread out & instanced)
@@ -5686,22 +5779,28 @@ export function buildIslandWorld(
     ),
   );
 
-  const CHUNK_SIZE = 120;
+  const CHUNK_SIZE = 64;
   interface ChunkBucket {
     cx: number;
     cz: number;
     matrices: THREE.Matrix4[];
-    colors: THREE.Color[];
+    colors: THREE.Color[] | null;
   }
   const grassBuckets = new Map<string, ChunkBucket>();
   const floretBuckets = new Map<string, ChunkBucket>();
   const lupineBuckets = new Map<string, ChunkBucket>();
+  const pebbleBuckets = new Map<string, ChunkBucket>();
+  const meadowBoulderBuckets = new Map<string, ChunkBucket>();
+  const shoreBoulderBuckets = new Map<string, ChunkBucket>();
+  const driftwoodBuckets = new Map<string, ChunkBucket>();
+  const hibiscusLeafBuckets = new Map<string, ChunkBucket>();
+  const hibiscusFlowerBuckets = new Map<string, ChunkBucket>();
   const pushToChunk = (
     map: Map<string, ChunkBucket>,
     wx: number,
     wz: number,
     mat: THREE.Matrix4,
-    col: THREE.Color,
+    col?: THREE.Color,
   ) => {
     const ix = Math.floor(wx / CHUNK_SIZE);
     const iz = Math.floor(wz / CHUNK_SIZE);
@@ -5712,12 +5811,15 @@ export function buildIslandWorld(
         cx: (ix + 0.5) * CHUNK_SIZE,
         cz: (iz + 0.5) * CHUNK_SIZE,
         matrices: [],
-        colors: [],
+        colors: col ? [] : null,
       };
       map.set(key, bucket);
     }
     bucket.matrices.push(mat.clone());
-    bucket.colors.push(col.clone());
+    if (col) {
+      if (!bucket.colors) bucket.colors = [];
+      bucket.colors.push(col.clone());
+    }
   };
 
   const grassTarget = 44000;
@@ -5725,10 +5827,6 @@ export function buildIslandWorld(
   const lupineTarget = 1800;
   const pebbleCount = 180;
   const pebbleGeo = registerGeometry(new THREE.DodecahedronGeometry(0.14, 0));
-  const pebbleInstanced = new THREE.InstancedMesh(pebbleGeo, smallStoneMat, pebbleCount);
-  pebbleInstanced.receiveShadow = true;
-  pebbleInstanced.castShadow = false;
-  pebbleInstanced.userData.noShadowCast = true;
 
   const dummy = new THREE.Object3D();
   const tintColor = new THREE.Color();
@@ -5791,7 +5889,7 @@ export function buildIslandWorld(
       const sc = 0.55 + rand() * 0.9;
       dummy.scale.set(sc * 1.25, sc * 0.52, sc);
       dummy.updateMatrix();
-      pebbleInstanced.setMatrixAt(pPlaced, dummy.matrix);
+      pushToChunk(pebbleBuckets, ax, az, dummy.matrix);
       pPlaced++;
       continue;
     }
@@ -5916,47 +6014,48 @@ export function buildIslandWorld(
     }
   }
 
-  interface FoliageChunkEntry {
+  interface ChunkedInstancedEntry {
     mesh: THREE.InstancedMesh;
     cx: number;
     cz: number;
   }
-  const foliageChunkEntries: FoliageChunkEntry[] = [];
-  const finalizeFoliageChunks = (
+  const foliageChunkEntries: ChunkedInstancedEntry[] = [];
+  const chunkedDecorEntries: ChunkedInstancedEntry[] = [];
+  const finalizeChunkedInstanced = (
+    targetList: ChunkedInstancedEntry[],
     buckets: Map<string, ChunkBucket>,
     geo: THREE.BufferGeometry,
     mat: THREE.Material,
+    receiveShadow: boolean,
   ) => {
     for (const bucket of buckets.values()) {
       const count = bucket.matrices.length;
       if (count === 0) continue;
       const im = new THREE.InstancedMesh(geo, mat, count);
       im.castShadow = false;
-      im.receiveShadow = true;
+      im.receiveShadow = receiveShadow;
       im.userData.noShadowCast = true;
+      im.userData.preserveShadowFlags = true;
       for (let k = 0; k < count; k++) {
         im.setMatrixAt(k, bucket.matrices[k]);
-        im.setColorAt(k, bucket.colors[k]);
+        if (bucket.colors && bucket.colors[k]) {
+          im.setColorAt(k, bucket.colors[k]);
+        }
       }
       im.instanceMatrix.needsUpdate = true;
       if (im.instanceColor) im.instanceColor.needsUpdate = true;
       im.computeBoundingSphere();
       im.updateMatrix();
       im.matrixAutoUpdate = false;
-      overworldGroup.add(im);
-      foliageChunkEntries.push({ mesh: im, cx: bucket.cx, cz: bucket.cz });
+      targetList.push({ mesh: im, cx: bucket.cx, cz: bucket.cz });
     }
   };
-  finalizeFoliageChunks(grassBuckets, grassBladeGeo, ambientGrassMat);
-  finalizeFoliageChunks(floretBuckets, floretGeo, floretMat);
-  finalizeFoliageChunks(lupineBuckets, lupineGeo, lupineMat);
+  finalizeChunkedInstanced(foliageChunkEntries, grassBuckets, grassBladeGeo, ambientGrassMat, true);
+  finalizeChunkedInstanced(foliageChunkEntries, floretBuckets, floretGeo, floretMat, true);
+  finalizeChunkedInstanced(foliageChunkEntries, lupineBuckets, lupineGeo, lupineMat, true);
+  finalizeChunkedInstanced(foliageChunkEntries, pebbleBuckets, pebbleGeo, smallStoneMat, true);
 
-  pebbleInstanced.count = pPlaced;
-  pebbleInstanced.instanceMatrix.needsUpdate = true;
-  pebbleInstanced.computeBoundingSphere();
-  overworldGroup.add(pebbleInstanced);
-
-  // Embedded Mossy Hillside Limestone Boulders (1 static InstancedMesh draw call)
+  // Embedded Mossy Hillside Limestone Boulders (64m chunked InstancedMeshes)
   const meadowBoulderMat = registerMaterial(
     enhanceSurfaceMaterial(
       applySafeStandardMaps(
@@ -5975,14 +6074,6 @@ export function buildIslandWorld(
   );
   meadowBoulderMat.normalScale.set(1.2, 1.2);
   const meadowBoulderCount = 260;
-  const meadowBoulderInstanced = new THREE.InstancedMesh(
-    gDodec1,
-    meadowBoulderMat,
-    meadowBoulderCount,
-  );
-  meadowBoulderInstanced.castShadow = false;
-  meadowBoulderInstanced.receiveShadow = true;
-  meadowBoulderInstanced.userData.noShadowCast = true;
   let mbPlaced = 0;
   for (let i = 0; i < 6500 && mbPlaced < meadowBoulderCount; i++) {
     const a = rand() * Math.PI * 2;
@@ -6009,16 +6100,12 @@ export function buildIslandWorld(
     dummy.rotation.set((rand() - 0.5) * 0.45, rand() * Math.PI * 2, (rand() - 0.5) * 0.45);
     dummy.scale.set(bs * (1.2 + rand() * 0.55), bs * (0.36 + rand() * 0.22), bs * (1.05 + rand() * 0.45));
     dummy.updateMatrix();
-    meadowBoulderInstanced.setMatrixAt(mbPlaced++, dummy.matrix);
+    pushToChunk(meadowBoulderBuckets, bx, bz, dummy.matrix);
+    mbPlaced++;
   }
-  meadowBoulderInstanced.count = mbPlaced;
-  meadowBoulderInstanced.instanceMatrix.needsUpdate = true;
-  meadowBoulderInstanced.computeBoundingSphere();
-  meadowBoulderInstanced.updateMatrix();
-  meadowBoulderInstanced.matrixAutoUpdate = false;
-  overworldGroup.add(meadowBoulderInstanced);
+  finalizeChunkedInstanced(chunkedDecorEntries, meadowBoulderBuckets, gDodec1, meadowBoulderMat, true);
 
-  // 10b. Instanced Dark Volcanic Shoreline Boulders & Crimson Tropical Hibiscus Bushes (3 total draw calls)
+  // 10b. Chunked Volcanic Shoreline Boulders, Driftwood & Crimson Tropical Hibiscus Bushes
   const volcanicShoreBoulderMat = registerMaterial(
     enhanceSurfaceMaterial(
       applySafeStandardMaps(
@@ -6037,14 +6124,6 @@ export function buildIslandWorld(
   );
   volcanicShoreBoulderMat.normalScale.set(1.25, 1.25);
   const shoreBoulderCount = 220;
-  const shoreBoulderInstanced = new THREE.InstancedMesh(
-    gDodec1,
-    volcanicShoreBoulderMat,
-    shoreBoulderCount,
-  );
-  shoreBoulderInstanced.castShadow = false;
-  shoreBoulderInstanced.receiveShadow = true;
-  shoreBoulderInstanced.userData.noShadowCast = true;
 
   const hibiscusLeafMat = registerMaterial(
     enhanceSurfaceMaterial(
@@ -6076,24 +6155,8 @@ export function buildIslandWorld(
     ),
   );
   const hibiscusBushCount = 150;
-  const hibiscusLeafInstanced = new THREE.InstancedMesh(
-    gSphere7,
-    hibiscusLeafMat,
-    hibiscusBushCount,
-  );
-  hibiscusLeafInstanced.castShadow = false;
-  hibiscusLeafInstanced.receiveShadow = true;
-  hibiscusLeafInstanced.userData.noShadowCast = true;
 
-  const hibiscusFlowerInstanced = new THREE.InstancedMesh(
-    gDodec0,
-    hibiscusFlowerMat,
-    hibiscusBushCount * 3,
-  );
-  hibiscusFlowerInstanced.castShadow = false;
-  hibiscusFlowerInstanced.userData.noShadowCast = true;
-
-  // Sun-bleached coastal driftwood logs along the wet shoreline tide line (1 InstancedMesh draw call)
+  // Sun-bleached coastal driftwood logs along the wet shoreline tide line
   const driftwoodMat = registerMaterial(
     enhanceSurfaceMaterial(
       applySafeStandardMaps(
@@ -6110,18 +6173,9 @@ export function buildIslandWorld(
     ),
   );
   const driftwoodCount = 85;
-  const driftwoodInstanced = new THREE.InstancedMesh(
-    gCylTaper8,
-    driftwoodMat,
-    driftwoodCount,
-  );
-  driftwoodInstanced.castShadow = false;
-  driftwoodInstanced.receiveShadow = true;
-  driftwoodInstanced.userData.noShadowCast = true;
 
   let sbPlaced = 0;
   let hbPlaced = 0;
-  let hfPlaced = 0;
   let dwPlaced = 0;
   for (let i = 0; i < 9500 && (sbPlaced < shoreBoulderCount || hbPlaced < hibiscusBushCount || dwPlaced < driftwoodCount); i++) {
     let bx: number;
@@ -6148,7 +6202,8 @@ export function buildIslandWorld(
       const s = 0.65 + rand() * 1.05;
       dummy.scale.set(s * (1.25 + rand() * 0.45), s * (0.48 + rand() * 0.25), s * (1.1 + rand() * 0.4));
       dummy.updateMatrix();
-      shoreBoulderInstanced.setMatrixAt(sbPlaced++, dummy.matrix);
+      pushToChunk(shoreBoulderBuckets, bx, bz, dummy.matrix);
+      sbPlaced++;
     } else if (dwPlaced < driftwoodCount && bBiome === 'beach' && by >= 0.08 && by <= 1.25 && rand() < 0.48) {
       dummy.position.set(bx, by + 0.04, bz);
       dummy.rotation.set(Math.PI / 2 + (rand() - 0.5) * 0.18, rand() * Math.PI * 2, (rand() - 0.5) * 0.15);
@@ -6156,7 +6211,8 @@ export function buildIslandWorld(
       const dRad = 0.11 + rand() * 0.09;
       dummy.scale.set(dRad, dLen, dRad * 0.85);
       dummy.updateMatrix();
-      driftwoodInstanced.setMatrixAt(dwPlaced++, dummy.matrix);
+      pushToChunk(driftwoodBuckets, bx, bz, dummy.matrix);
+      dwPlaced++;
     } else if (
       hbPlaced < hibiscusBushCount &&
       (bBiome === 'beach' || bBiome === 'jungle' || bBiome === 'sparse_jungle' || bBiome === 'flower_forest') &&
@@ -6168,59 +6224,33 @@ export function buildIslandWorld(
       dummy.rotation.set((rand() - 0.5) * 0.2, rand() * Math.PI * 2, (rand() - 0.5) * 0.2);
       dummy.scale.set(bScale * 1.18, bScale * 0.78, bScale * 1.12);
       dummy.updateMatrix();
-      hibiscusLeafInstanced.setMatrixAt(hbPlaced, dummy.matrix);
       tintColor.setHex(0x287830).offsetHSL((rand() - 0.5) * 0.03, 0.05, (rand() - 0.5) * 0.06);
-      hibiscusLeafInstanced.setColorAt(hbPlaced, tintColor);
+      pushToChunk(hibiscusLeafBuckets, bx, bz, dummy.matrix, tintColor);
 
       for (let f = 0; f < 3; f++) {
         const fa = (f / 3) * Math.PI * 2 + rand() * 0.8;
         const fr = (0.42 + rand() * 0.32) * bScale;
+        const fx = bx + Math.cos(fa) * fr;
+        const fz = bz + Math.sin(fa) * fr;
         dummy.position.set(
-          bx + Math.cos(fa) * fr,
+          fx,
           by + (0.58 + rand() * 0.22) * bScale,
-          bz + Math.sin(fa) * fr,
+          fz,
         );
         dummy.rotation.set(rand(), rand(), rand());
         const fs = (0.11 + rand() * 0.05) * bScale;
         dummy.scale.set(fs * 1.25, fs * 0.72, fs * 1.25);
         dummy.updateMatrix();
-        hibiscusFlowerInstanced.setMatrixAt(hfPlaced, dummy.matrix);
         tintColor.setHex(f === 2 ? 0xf43f5e : 0xdc2626).offsetHSL((rand() - 0.5) * 0.02, 0, (rand() - 0.5) * 0.06);
-        hibiscusFlowerInstanced.setColorAt(hfPlaced, tintColor);
-        hfPlaced++;
+        pushToChunk(hibiscusFlowerBuckets, fx, fz, dummy.matrix, tintColor);
       }
       hbPlaced++;
     }
   }
-  shoreBoulderInstanced.count = sbPlaced;
-  shoreBoulderInstanced.instanceMatrix.needsUpdate = true;
-  shoreBoulderInstanced.computeBoundingSphere();
-  shoreBoulderInstanced.updateMatrix();
-  shoreBoulderInstanced.matrixAutoUpdate = false;
-  overworldGroup.add(shoreBoulderInstanced);
-
-  driftwoodInstanced.count = dwPlaced;
-  driftwoodInstanced.instanceMatrix.needsUpdate = true;
-  driftwoodInstanced.computeBoundingSphere();
-  driftwoodInstanced.updateMatrix();
-  driftwoodInstanced.matrixAutoUpdate = false;
-  overworldGroup.add(driftwoodInstanced);
-
-  hibiscusLeafInstanced.count = hbPlaced;
-  hibiscusLeafInstanced.instanceMatrix.needsUpdate = true;
-  if (hibiscusLeafInstanced.instanceColor) hibiscusLeafInstanced.instanceColor.needsUpdate = true;
-  hibiscusLeafInstanced.computeBoundingSphere();
-  hibiscusLeafInstanced.updateMatrix();
-  hibiscusLeafInstanced.matrixAutoUpdate = false;
-  overworldGroup.add(hibiscusLeafInstanced);
-
-  hibiscusFlowerInstanced.count = hfPlaced;
-  hibiscusFlowerInstanced.instanceMatrix.needsUpdate = true;
-  if (hibiscusFlowerInstanced.instanceColor) hibiscusFlowerInstanced.instanceColor.needsUpdate = true;
-  hibiscusFlowerInstanced.computeBoundingSphere();
-  hibiscusFlowerInstanced.updateMatrix();
-  hibiscusFlowerInstanced.matrixAutoUpdate = false;
-  overworldGroup.add(hibiscusFlowerInstanced);
+  finalizeChunkedInstanced(chunkedDecorEntries, shoreBoulderBuckets, gDodec1, volcanicShoreBoulderMat, true);
+  finalizeChunkedInstanced(foliageChunkEntries, driftwoodBuckets, gCylTaper8, driftwoodMat, true);
+  finalizeChunkedInstanced(foliageChunkEntries, hibiscusLeafBuckets, gSphere7, hibiscusLeafMat, true);
+  finalizeChunkedInstanced(foliageChunkEntries, hibiscusFlowerBuckets, gDodec0, hibiscusFlowerMat, false);
 
   // Soaring coastal gulls gliding overhead in 1 GPU-animated InstancedMesh (0 CPU loop overhead)
   const seabirdGeo = registerGeometry(new THREE.BufferGeometry());
@@ -6325,7 +6355,13 @@ gl_Position = projectionMatrix * mvPosition;`,
     im.instanceMatrix.needsUpdate = true;
     if (im.instanceColor) im.instanceColor.needsUpdate = true;
     im.computeBoundingSphere();
-    overworldGroup.add(im);
+    if (entry.foliageScatter && entry.cx !== undefined && entry.cz !== undefined) {
+      im.updateMatrix();
+      im.matrixAutoUpdate = false;
+      foliageBatchMeshes.push({ mesh: im, cx: entry.cx, cz: entry.cz });
+    } else {
+      overworldGroup.add(im);
+    }
     builtBatchMeshes.set(key, im);
     if (entry.castShadow) {
       shadowCasters.push(im);
@@ -6347,18 +6383,133 @@ gl_Position = projectionMatrix * mvPosition;`,
   pendingNodeSlots.clear();
   batchRegistry.clear();
 
+  // Safely merge static non-animated landmark geometries by matching material, shadow flags, and attribute layout
+  const mergeStaticGroupMeshes = (
+    root: THREE.Object3D,
+    protectedObjs?: THREE.Object3D[],
+  ): void => {
+    const protectedSet = protectedObjs ? new Set(protectedObjs) : null;
+    root.updateMatrixWorld(true);
+    const invRoot = root.matrixWorld.clone().invert();
+    const localMat = new THREE.Matrix4();
+
+    interface MergeBucket {
+      mat: THREE.Material;
+      castShadow: boolean;
+      receiveShadow: boolean;
+      isHouseWall: boolean;
+      preserveEnvMapIntensity: boolean;
+      meshes: THREE.Mesh[];
+      geos: THREE.BufferGeometry[];
+    }
+    const buckets = new Map<string, MergeBucket>();
+
+    root.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      if (obj instanceof THREE.InstancedMesh) return;
+      if ((obj as THREE.SkinnedMesh).isSkinnedMesh) return;
+      if (!obj.visible || !obj.geometry || !obj.material) return;
+      if (Array.isArray(obj.material)) return;
+      if (obj.userData?.noStaticMerge) return;
+      if (protectedSet && protectedSet.has(obj)) return;
+
+      localMat.multiplyMatrices(invRoot, obj.matrixWorld);
+      // Skip mirrored transforms with negative determinant so triangle winding never flips
+      if (localMat.determinant() <= 0) return;
+
+      const geo = obj.geometry;
+      const attrNames = Object.keys(geo.attributes).sort();
+      const attrSig = attrNames
+        .map((n) => `${n}:${geo.attributes[n].itemSize}`)
+        .join(',');
+      const castShadow = Boolean(obj.castShadow && !obj.userData?.noShadowCast);
+      const receiveShadow = Boolean(obj.receiveShadow);
+      const isHouseWall = Boolean(obj.userData?.isHouseWall);
+      const preserveEnvMapIntensity = Boolean(obj.userData?.preserveEnvMapIntensity);
+      const hasIndex = geo.index !== null ? 1 : 0;
+
+      const key = `${obj.material.uuid}|${castShadow ? 1 : 0}|${receiveShadow ? 1 : 0}|${isHouseWall ? 1 : 0}|${preserveEnvMapIntensity ? 1 : 0}|${hasIndex}|${geo.morphTargetsRelative ? 1 : 0}|${attrSig}`;
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = {
+          mat: obj.material,
+          castShadow,
+          receiveShadow,
+          isHouseWall,
+          preserveEnvMapIntensity,
+          meshes: [],
+          geos: [],
+        };
+        buckets.set(key, bucket);
+      }
+
+      const cloned = geo.clone();
+      cloned.applyMatrix4(localMat);
+      bucket.meshes.push(obj);
+      bucket.geos.push(cloned);
+    });
+
+    for (const bucket of buckets.values()) {
+      if (bucket.meshes.length < 2) {
+        for (const cg of bucket.geos) cg.dispose();
+        const single = bucket.meshes[0];
+        if (single) {
+          single.userData.preserveShadowFlags = true;
+          if (!bucket.castShadow) {
+            single.castShadow = false;
+            single.userData.noShadowCast = true;
+          }
+        }
+        continue;
+      }
+
+      const mergedGeo = mergeGeometries(bucket.geos, false);
+      for (const cg of bucket.geos) cg.dispose();
+      if (!mergedGeo) continue;
+
+      mergedGeo.computeBoundingSphere();
+      disposableGeos.push(mergedGeo);
+      const mergedMesh = new THREE.Mesh(mergedGeo, bucket.mat);
+      mergedMesh.castShadow = bucket.castShadow;
+      mergedMesh.receiveShadow = bucket.receiveShadow;
+      mergedMesh.userData.preserveShadowFlags = true;
+      if (!bucket.castShadow) {
+        mergedMesh.userData.noShadowCast = true;
+      }
+      if (bucket.isHouseWall) {
+        mergedMesh.userData.isHouseWall = true;
+      }
+      if (bucket.preserveEnvMapIntensity) {
+        mergedMesh.userData.preserveEnvMapIntensity = true;
+      }
+      mergedMesh.updateMatrix();
+      mergedMesh.matrixAutoUpdate = false;
+
+      for (const srcMesh of bucket.meshes) {
+        srcMesh.parent?.remove(srcMesh);
+        if (!disposableGeos.includes(srcMesh.geometry)) {
+          disposableGeos.push(srcMesh.geometry);
+        }
+      }
+      root.add(mergedMesh);
+    }
+  };
+
+  for (let i = 0; i < staticMergeTargets.length; i++) {
+    const target = staticMergeTargets[i];
+    mergeStaticGroupMeshes(target.group, target.protectedObjs);
+  }
+
   // Register static shadow-casting meshes (buildings, chests, ship) for runtime shadow toggling
   overworldGroup.traverse((obj) => {
-    if ((obj instanceof THREE.Mesh || obj instanceof THREE.InstancedMesh) && obj.castShadow) {
+    if ((obj instanceof THREE.Mesh || obj instanceof THREE.InstancedMesh) && obj.castShadow && !obj.userData?.noShadowCast) {
       if (!shadowCasters.includes(obj)) shadowCasters.push(obj);
     }
   });
 
-  // Freeze static matrices on terrain and instanced foliage/resources to skip per-frame matrix recomputation
+  // Freeze static matrices on terrain and instanced resources to skip per-frame matrix recomputation
   terrainMesh.updateMatrix();
   terrainMesh.matrixAutoUpdate = false;
-  pebbleInstanced.updateMatrix();
-  pebbleInstanced.matrixAutoUpdate = false;
   for (const im of builtBatchMeshes.values()) {
     im.updateMatrix();
     im.matrixAutoUpdate = false;
@@ -6372,14 +6523,7 @@ gl_Position = projectionMatrix * mvPosition;`,
     cloudsGroup,
     farmerNpcGroup,
     waterfallFoam,
-    pebbleInstanced,
-    meadowBoulderInstanced,
-    shoreBoulderInstanced,
-    driftwoodInstanced,
     seabirdInstanced,
-    hibiscusLeafInstanced,
-    hibiscusFlowerInstanced,
-    ...foliageChunkEntries.map((c) => c.mesh),
     ...waterfallStreams,
   ]);
   const cullableLandmarks: {
@@ -6416,12 +6560,20 @@ gl_Position = projectionMatrix * mvPosition;`,
   }
 
   // Minecraft-style spatial WorldChunk partitioning (64m x 64m grid cells)
-  // Reparents foliage InstancedMeshes & localized biome landmarks into chunk groups at (0,0,0)
+  // Reparents foliage InstancedMeshes, chunked world decor & localized biome landmarks into chunk groups at (0,0,0)
   // preserving 100% of world transforms, graphics, and colliders while updating visibility ONLY on chunk changes.
   const worldChunkManager = new WorldChunkManager(overworldGroup, 64);
   for (let i = 0; i < foliageChunkEntries.length; i++) {
     const fc = foliageChunkEntries[i];
-    worldChunkManager.addObjectAt(fc.mesh, fc.cx, fc.cz);
+    worldChunkManager.addFoliageObjectAt(fc.mesh, fc.cx, fc.cz);
+  }
+  for (let i = 0; i < foliageBatchMeshes.length; i++) {
+    const fb = foliageBatchMeshes[i];
+    worldChunkManager.addFoliageObjectAt(fb.mesh, fb.cx, fb.cz);
+  }
+  for (let i = 0; i < chunkedDecorEntries.length; i++) {
+    const dc = chunkedDecorEntries[i];
+    worldChunkManager.addObjectAt(dc.mesh, dc.cx, dc.cz);
   }
   const largeLandmarks: typeof cullableLandmarks = [];
   for (let i = 0; i < cullableLandmarks.length; i++) {
@@ -6434,24 +6586,51 @@ gl_Position = projectionMatrix * mvPosition;`,
   }
 
   const cullablePointLights: {
-    light: THREE.PointLight;
     wx: number;
+    wy: number;
     wz: number;
+    colorHex: number;
+    intensity: number;
+    distance: number;
+    decay: number;
     maxRangeSq: number;
   }[] = [];
+  const extractedLights: THREE.PointLight[] = [];
   const tmpLightWorldPos = new THREE.Vector3();
   overworldGroup.traverse((obj) => {
     if (obj instanceof THREE.PointLight) {
       obj.getWorldPosition(tmpLightWorldPos);
       const effectiveRange = Math.max(24, (obj.distance || 14) + 18);
       cullablePointLights.push({
-        light: obj,
         wx: tmpLightWorldPos.x,
+        wy: tmpLightWorldPos.y,
         wz: tmpLightWorldPos.z,
+        colorHex: obj.color.getHex(),
+        intensity: obj.intensity,
+        distance: obj.distance,
+        decay: obj.decay,
         maxRangeSq: effectiveRange * effectiveRange,
       });
+      extractedLights.push(obj);
     }
   });
+  for (let i = 0; i < extractedLights.length; i++) {
+    const l = extractedLights[i];
+    l.parent?.remove(l);
+    l.dispose();
+  }
+
+  // Fixed-size PointLight pool attached directly to overworldGroup (always visible=true;
+  // unused slots use intensity=0 so Three.js numPointLights never changes -> zero shader recompiles!)
+  const WORLD_LIGHT_POOL_SIZE = 6;
+  const worldLightPool: THREE.PointLight[] = [];
+  for (let i = 0; i < WORLD_LIGHT_POOL_SIZE; i++) {
+    const poolLight = new THREE.PointLight(0xffffff, 0, 14, 1.5);
+    poolLight.castShadow = false;
+    poolLight.visible = true;
+    overworldGroup.add(poolLight);
+    worldLightPool.push(poolLight);
+  }
 
   const bestLightIdx: number[] = [];
   const bestLightDistSq: number[] = [];
@@ -6490,39 +6669,49 @@ gl_Position = projectionMatrix * mvPosition;`,
     lastLightCullDist = maxDist;
     lastLightCullCap = maxActivePointLights;
 
-    // 2. Active PointLight cap (nearest N point lights stay lit around player)
-    const lightCap = Math.max(0, maxActivePointLights);
+    // 2. Fixed PointLight pool assignment (nearest N point lights stay lit around player without toggling .visible)
+    const lightCap = Math.max(0, Math.min(WORLD_LIGHT_POOL_SIZE, maxActivePointLights));
     bestLightIdx.length = 0;
     bestLightDistSq.length = 0;
-    for (let i = 0; i < cullablePointLights.length; i++) {
-      const pl = cullablePointLights[i];
-      if (pl.light.visible) pl.light.visible = false;
-      if (lightCap === 0) continue;
-      const dx = pl.wx - px;
-      const dz = pl.wz - pz;
-      const dSq = dx * dx + dz * dz;
-      if (dSq > pl.maxRangeSq) continue;
+    if (lightCap > 0) {
+      for (let i = 0; i < cullablePointLights.length; i++) {
+        const pl = cullablePointLights[i];
+        const dx = pl.wx - px;
+        const dz = pl.wz - pz;
+        const dSq = dx * dx + dz * dz;
+        if (dSq > pl.maxRangeSq) continue;
 
-      if (bestLightIdx.length < lightCap) {
-        bestLightIdx.push(i);
-        bestLightDistSq.push(dSq);
-      } else {
-        let worstPos = 0;
-        let worstDist = bestLightDistSq[0];
-        for (let k = 1; k < bestLightDistSq.length; k++) {
-          if (bestLightDistSq[k] > worstDist) {
-            worstDist = bestLightDistSq[k];
-            worstPos = k;
+        if (bestLightIdx.length < lightCap) {
+          bestLightIdx.push(i);
+          bestLightDistSq.push(dSq);
+        } else {
+          let worstPos = 0;
+          let worstDist = bestLightDistSq[0];
+          for (let k = 1; k < bestLightDistSq.length; k++) {
+            if (bestLightDistSq[k] > worstDist) {
+              worstDist = bestLightDistSq[k];
+              worstPos = k;
+            }
           }
-        }
-        if (dSq < worstDist) {
-          bestLightIdx[worstPos] = i;
-          bestLightDistSq[worstPos] = dSq;
+          if (dSq < worstDist) {
+            bestLightIdx[worstPos] = i;
+            bestLightDistSq[worstPos] = dSq;
+          }
         }
       }
     }
-    for (let k = 0; k < bestLightIdx.length; k++) {
-      cullablePointLights[bestLightIdx[k]].light.visible = true;
+    for (let slot = 0; slot < WORLD_LIGHT_POOL_SIZE; slot++) {
+      const poolLight = worldLightPool[slot];
+      if (slot < bestLightIdx.length) {
+        const src = cullablePointLights[bestLightIdx[slot]];
+        poolLight.position.set(src.wx, src.wy, src.wz);
+        poolLight.color.setHex(src.colorHex);
+        poolLight.distance = src.distance;
+        poolLight.decay = src.decay;
+        poolLight.intensity = src.intensity;
+      } else {
+        poolLight.intensity = 0;
+      }
     }
 
     // 3. Large multi-chunk mega-landmarks (radius >= 110m) keep smooth radius culling
@@ -6640,6 +6829,7 @@ gl_Position = projectionMatrix * mvPosition;`,
         }
       }
     });
+    for (const poolLight of worldLightPool) poolLight.dispose();
     for (const g of disposableGeos) g.dispose();
     for (const m of disposableMats) m.dispose();
     for (const t of disposableTexs) t.dispose();

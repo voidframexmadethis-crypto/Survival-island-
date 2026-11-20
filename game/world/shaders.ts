@@ -89,11 +89,14 @@ vec4 siWorldPosPre = modelMatrix * siInstancePos;
 ${
   mode === 'foliage'
     ? `if (uShaderQuality >= 0.5) {
-  float windMask = clamp(position.y * 0.45 + 0.55, 0.0, 1.4);
-  float wavePhase = siWorldPosPre.x * 0.55 + siWorldPosPre.z * 0.45 + uShaderTime * 1.85;
-  float gust = sin(wavePhase) * ${windAmplitude.toFixed(4)} + cos(wavePhase * 1.65) * ${(windAmplitude * 0.4).toFixed(4)};
-  transformed.x += gust * windMask;
-  transformed.z += sin(wavePhase * 0.8 + 1.2) * ${(windAmplitude * 0.65).toFixed(4)} * windMask;
+  vec3 siWindCamDelta = cameraPosition - siWorldPosPre.xyz;
+  if (dot(siWindCamDelta, siWindCamDelta) < 8100.0) {
+    float windMask = clamp(position.y * 0.45 + 0.55, 0.0, 1.4);
+    float wavePhase = siWorldPosPre.x * 0.55 + siWorldPosPre.z * 0.45 + uShaderTime * 1.85;
+    float gust = sin(wavePhase) * ${windAmplitude.toFixed(4)} + cos(wavePhase * 1.65) * ${(windAmplitude * 0.4).toFixed(4)};
+    transformed.x += gust * windMask;
+    transformed.z += sin(wavePhase * 0.8 + 1.2) * ${(windAmplitude * 0.65).toFixed(4)} * windMask;
+  }
 }`
     : ''
 }

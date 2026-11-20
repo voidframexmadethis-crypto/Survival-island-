@@ -38,8 +38,17 @@ export function applyRealisticMeshLightingPass(
     const skipCast = Boolean(object.userData?.noShadowCast);
     const skipReceive = Boolean(object.userData?.noShadowReceive);
 
-    object.castShadow = shadowsEnabled && !skipCast;
-    object.receiveShadow = !skipReceive;
+    if (object.userData?.preserveShadowFlags) {
+      if (!shadowsEnabled || skipCast) {
+        object.castShadow = false;
+      }
+      if (skipReceive) {
+        object.receiveShadow = false;
+      }
+    } else {
+      object.castShadow = shadowsEnabled && !skipCast;
+      object.receiveShadow = !skipReceive;
+    }
 
     const materials = Array.isArray(object.material)
       ? object.material
@@ -100,9 +109,9 @@ export function enableRealisticIslandLighting(
   const shadowFar = options?.shadowFar ?? 300;
   const shadowRadius = options?.shadowRadius ?? 4;
 
-  // Enable physically correct lighting and soft shadows.
+  // Enable physically correct lighting and PCF shadows.
   renderer.shadowMap.enabled = shadowsEnabled;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = options?.exposure ?? 1.15;

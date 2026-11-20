@@ -1288,6 +1288,7 @@ export class CreatureManager {
   private rigPool = new Map<CreatureSpecies, CreatureRig[]>();
   private sightingsScratch: TrackedSighting[] = [];
   private sightingEmitTimer = 0;
+  private lastEmittedSightingsEmpty = true;
   private updateFrameParity = 0;
 
   constructor(scene: THREE.Scene) {
@@ -3482,7 +3483,10 @@ export class CreatureManager {
 
     if (this.sightingEmitTimer >= 0.4) {
       this.sightingEmitTimer = 0;
-      onSightingUpdate(sightings.slice());
+      if (sightings.length > 0 || !this.lastEmittedSightingsEmpty) {
+        this.lastEmittedSightingsEmpty = sightings.length === 0;
+        onSightingUpdate(sightings.length === 0 ? [] : sightings.slice());
+      }
     }
     return { nocturnalActiveCount };
   }

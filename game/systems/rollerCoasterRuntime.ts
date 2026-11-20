@@ -782,7 +782,6 @@ export class RollerCoasterRuntime {
 
       // Build Train Cars according to CoasterModelType
       const carColor = new THREE.Color(entry.trackColor).offsetHSL(0.05, 0.08, 0.06);
-      const wheelMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.45, metalness: 0.78 });
       const chassisMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.38, metalness: 0.85 });
 
       for (let c = 0; c < entry.trainCarCount; c++) {

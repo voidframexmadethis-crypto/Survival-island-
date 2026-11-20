@@ -380,28 +380,34 @@ export class VolumetricTerrainEngine {
     const fx = Math.max(0, Math.min(1, gx - ix0));
     const fz = Math.max(0, Math.min(1, gz - iz0));
 
-    const weights = [
-      (1 - fx) * (1 - fz),
-      fx * (1 - fz),
-      (1 - fx) * fz,
-      fx * fz,
-    ];
-    const indices = [
-      iz0 * TERRAIN_VERTS + ix0,
-      iz0 * TERRAIN_VERTS + ix0 + 1,
-      (iz0 + 1) * TERRAIN_VERTS + ix0,
-      (iz0 + 1) * TERRAIN_VERTS + ix0 + 1,
-    ];
+    const w00 = (1 - fx) * (1 - fz);
+    const w10 = fx * (1 - fz);
+    const w01 = (1 - fx) * fz;
+    const w11 = fx * fz;
+    const idx00 = iz0 * TERRAIN_VERTS + ix0;
+    const idx10 = idx00 + 1;
+    const idx01 = idx00 + TERRAIN_VERTS;
+    const idx11 = idx01 + 1;
 
-    for (let k = 0; k < 4; k++) {
-      const idx = indices[k];
-      const w = weights[k];
-      if (w <= 0.001) continue;
-      terrainDeltaGrid[idx] = Math.max(-14.0, terrainDeltaGrid[idx] + delta * w);
-      terrainWetnessGrid[idx] = Math.min(1, terrainWetnessGrid[idx] + wetBoost * w);
-      if (delta < 0) {
-        terrainLoosenessGrid[idx] = Math.min(1, terrainLoosenessGrid[idx] + 0.14 * w);
-      }
+    if (w00 > 0.001) {
+      terrainDeltaGrid[idx00] = Math.max(-14.0, terrainDeltaGrid[idx00] + delta * w00);
+      terrainWetnessGrid[idx00] = Math.min(1, terrainWetnessGrid[idx00] + wetBoost * w00);
+      if (delta < 0) terrainLoosenessGrid[idx00] = Math.min(1, terrainLoosenessGrid[idx00] + 0.14 * w00);
+    }
+    if (w10 > 0.001) {
+      terrainDeltaGrid[idx10] = Math.max(-14.0, terrainDeltaGrid[idx10] + delta * w10);
+      terrainWetnessGrid[idx10] = Math.min(1, terrainWetnessGrid[idx10] + wetBoost * w10);
+      if (delta < 0) terrainLoosenessGrid[idx10] = Math.min(1, terrainLoosenessGrid[idx10] + 0.14 * w10);
+    }
+    if (w01 > 0.001) {
+      terrainDeltaGrid[idx01] = Math.max(-14.0, terrainDeltaGrid[idx01] + delta * w01);
+      terrainWetnessGrid[idx01] = Math.min(1, terrainWetnessGrid[idx01] + wetBoost * w01);
+      if (delta < 0) terrainLoosenessGrid[idx01] = Math.min(1, terrainLoosenessGrid[idx01] + 0.14 * w01);
+    }
+    if (w11 > 0.001) {
+      terrainDeltaGrid[idx11] = Math.max(-14.0, terrainDeltaGrid[idx11] + delta * w11);
+      terrainWetnessGrid[idx11] = Math.min(1, terrainWetnessGrid[idx11] + wetBoost * w11);
+      if (delta < 0) terrainLoosenessGrid[idx11] = Math.min(1, terrainLoosenessGrid[idx11] + 0.14 * w11);
     }
     if (wetBoost > 0) {
       this.hasWetnessOrPuddles = true;
@@ -895,6 +901,8 @@ export class VolumetricTerrainEngine {
     const geo = terrainMesh.geometry as THREE.BufferGeometry;
     const pos = geo.attributes.position as THREE.BufferAttribute;
     const col = geo.attributes.color as THREE.BufferAttribute;
+    let minUpdatedY = Infinity;
+    let maxUpdatedY = -Infinity;
 
     for (let iz = rect.minIz; iz <= rect.maxIz; iz++) {
       const vz = -TERRAIN_HALF + iz * TERRAIN_STEP;
@@ -905,6 +913,8 @@ export class VolumetricTerrainEngine {
         if (heightChanged) {
           const y = getBaseTerrainHeight(vx, vz) + delta;
           pos.setY(idx, y);
+          if (y < minUpdatedY) minUpdatedY = y;
+          if (y > maxUpdatedY) maxUpdatedY = y;
         }
 
         let r = baseColors[idx * 3];
@@ -955,9 +965,52 @@ export class VolumetricTerrainEngine {
     col.needsUpdate = true;
     if (heightChanged) {
       pos.needsUpdate = true;
-      geo.computeVertexNormals();
-      geo.computeBoundingBox();
-      geo.computeBoundingSphere();
+      const isFullGrid =
+        rect.minIx === 0 &&
+        rect.maxIx >= TERRAIN_VERTS - 1 &&
+        rect.minIz === 0 &&
+        rect.maxIz >= TERRAIN_VERTS - 1;
+      const norm = geo.attributes.normal as THREE.BufferAttribute | undefined;
+      if (isFullGrid || !norm) {
+        geo.computeVertexNormals();
+        geo.computeBoundingBox();
+        geo.computeBoundingSphere();
+      } else {
+        // Compute smooth vertex normals ONLY over the dirty region (+1 border ring)
+        const nMinIx = Math.max(0, rect.minIx - 1);
+        const nMaxIx = Math.min(TERRAIN_VERTS - 1, rect.maxIx + 1);
+        const nMinIz = Math.max(0, rect.minIz - 1);
+        const nMaxIz = Math.min(TERRAIN_VERTS - 1, rect.maxIz + 1);
+        const invDoubleStep = 1 / (2 * TERRAIN_STEP);
+        for (let iz = nMinIz; iz <= nMaxIz; iz++) {
+          const izPrev = iz > 0 ? iz - 1 : 0;
+          const izNext = iz < TERRAIN_VERTS - 1 ? iz + 1 : TERRAIN_VERTS - 1;
+          const spanZ = (izNext - izPrev) * TERRAIN_STEP;
+          const invSpanZ = spanZ > 0 ? 1 / spanZ : invDoubleStep;
+          const row = iz * TERRAIN_VERTS;
+          const rowPrev = izPrev * TERRAIN_VERTS;
+          const rowNext = izNext * TERRAIN_VERTS;
+          for (let ix = nMinIx; ix <= nMaxIx; ix++) {
+            const ixPrev = ix > 0 ? ix - 1 : 0;
+            const ixNext = ix < TERRAIN_VERTS - 1 ? ix + 1 : TERRAIN_VERTS - 1;
+            const spanX = (ixNext - ixPrev) * TERRAIN_STEP;
+            const invSpanX = spanX > 0 ? 1 / spanX : invDoubleStep;
+            const hL = pos.getY(row + ixPrev);
+            const hR = pos.getY(row + ixNext);
+            const hD = pos.getY(rowPrev + ix);
+            const hU = pos.getY(rowNext + ix);
+            const nx = (hL - hR) * invSpanX;
+            const nz = (hD - hU) * invSpanZ;
+            const invLen = 1 / Math.hypot(nx, 1, nz);
+            norm.setXYZ(row + ix, nx * invLen, invLen, nz * invLen);
+          }
+        }
+        norm.needsUpdate = true;
+        if (geo.boundingBox && maxUpdatedY >= minUpdatedY) {
+          if (minUpdatedY < geo.boundingBox.min.y) geo.boundingBox.min.y = minUpdatedY;
+          if (maxUpdatedY > geo.boundingBox.max.y) geo.boundingBox.max.y = maxUpdatedY;
+        }
+      }
     }
   }
 

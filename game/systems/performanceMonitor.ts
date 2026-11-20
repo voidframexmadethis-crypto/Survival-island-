@@ -31,6 +31,12 @@ export function createGamePerformanceMonitor(
       PerformanceObserver.supportedEntryTypes?.includes('longtask')
     ) {
       longTaskObserver = new PerformanceObserver((list) => {
+        if (
+          !(window as unknown as { __ENABLE_PERF_LOG__?: boolean })
+            .__ENABLE_PERF_LOG__
+        ) {
+          return;
+        }
         for (const task of list.getEntries()) {
           console.warn(
             '[GAME PERFORMANCE] Long task:',
@@ -43,7 +49,7 @@ export function createGamePerformanceMonitor(
       longTaskObserver.observe({ entryTypes: ['longtask'] });
     }
   } catch {
-    console.warn('Long-task monitoring unavailable.');
+    // Ignore unsupported longtask observer
   }
 
   const recordFrame = ((now = performance.now()) => {
@@ -57,28 +63,32 @@ export function createGamePerformanceMonitor(
 
     const elapsedSample = now - lastSample;
     if (elapsedSample >= 1000) {
-      const fps = Math.round((frames * 1000) / elapsedSample);
-
-      const report = {
-        fps,
-        averageFrameTimeMs: Number((totalFrameTime / frameCount).toFixed(2)),
-        worstFrameTimeMs: Number(worstFrame.toFixed(2)),
-        drawCalls: renderer.info.render.calls,
-        triangles: renderer.info.render.triangles,
-        geometries: renderer.info.memory.geometries,
-        textures: renderer.info.memory.textures,
-        jsHeapMB: memory.memory
-          ? Number((memory.memory.usedJSHeapSize / 1024 / 1024).toFixed(1))
-          : 'Unavailable',
-      };
-
-      console.table(report);
-
-      if (fps < 30) {
-        console.warn(
-          '[GAME PERFORMANCE] Critical FPS drop detected.',
-          report,
-        );
+      const debugLog = Boolean(
+        typeof window !== 'undefined' &&
+          (window as unknown as { __ENABLE_PERF_LOG__?: boolean })
+            .__ENABLE_PERF_LOG__,
+      );
+      if (debugLog) {
+        const fps = Math.round((frames * 1000) / elapsedSample);
+        const report = {
+          fps,
+          averageFrameTimeMs: Number((totalFrameTime / frameCount).toFixed(2)),
+          worstFrameTimeMs: Number(worstFrame.toFixed(2)),
+          drawCalls: renderer.info.render.calls,
+          triangles: renderer.info.render.triangles,
+          geometries: renderer.info.memory.geometries,
+          textures: renderer.info.memory.textures,
+          jsHeapMB: memory.memory
+            ? Number((memory.memory.usedJSHeapSize / 1024 / 1024).toFixed(1))
+            : 'Unavailable',
+        };
+        console.table(report);
+        if (fps < 30) {
+          console.warn(
+            '[GAME PERFORMANCE] Critical FPS drop detected.',
+            report,
+          );
+        }
       }
 
       frames = 0;

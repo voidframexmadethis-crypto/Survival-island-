@@ -12,6 +12,8 @@ export class SoundEngine {
   private surfGain: GainNode | null = null;
   private rainFilter: BiquadFilterNode | null = null;
   private rainGain: GainNode | null = null;
+  private surfNoiseSrc: AudioBufferSourceNode | null = null;
+  private rainNoiseSrc: AudioBufferSourceNode | null = null;
   private ambienceStarted = false;
 
   private masterVolume = 0.7;
@@ -140,6 +142,7 @@ export class SoundEngine {
     this.surfFilter.connect(this.surfGain);
     this.surfGain.connect(this.ambienceGain);
     noise.start();
+    this.surfNoiseSrc = noise;
 
     // Rain hiss layer (reusing pre-baked white noise buffer)
     const rainSrc = this.ctx.createBufferSource();
@@ -157,6 +160,7 @@ export class SoundEngine {
     this.rainFilter.connect(this.rainGain);
     this.rainGain.connect(this.ambienceGain);
     rainSrc.start();
+    this.rainNoiseSrc = rainSrc;
   }
 
   public updateEnvironmentAmbience(
@@ -1903,5 +1907,35 @@ export class SoundEngine {
     g.connect(this.masterGain);
     osc.start(now);
     osc.stop(now + 0.8);
+  }
+
+  public dispose(): void {
+    try {
+      this.surfNoiseSrc?.stop();
+      this.surfNoiseSrc?.disconnect();
+    } catch {
+      // Ignore already stopped source
+    }
+    try {
+      this.rainNoiseSrc?.stop();
+      this.rainNoiseSrc?.disconnect();
+    } catch {
+      // Ignore already stopped source
+    }
+    this.surfNoiseSrc = null;
+    this.rainNoiseSrc = null;
+    this.ambienceStarted = false;
+    this.whiteNoiseBuf = null;
+    this.brownNoiseBuf = null;
+    this.masterGain = null;
+    this.ambienceGain = null;
+    this.surfFilter = null;
+    this.surfGain = null;
+    this.rainFilter = null;
+    this.rainGain = null;
+    if (this.ctx) {
+      this.ctx.close().catch(() => {});
+      this.ctx = null;
+    }
   }
 }
