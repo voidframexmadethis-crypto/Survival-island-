@@ -767,3 +767,141 @@ export function createOwlFeatherTexture(anisotropy = 4): THREE.CanvasTexture {
   return tex;
 }
 
+export interface PbrMaterialBundle {
+  material: THREE.MeshStandardMaterial;
+  textures: THREE.Texture[];
+  dispose: () => void;
+}
+
+function makeNoiseCanvas(
+  size: number,
+  baseHex: string,
+  grainHex: string,
+  highlightHex: string,
+  streakAxis: 'none' | 'x' | 'y' = 'none',
+): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.fillStyle = baseHex;
+  ctx.fillRect(0, 0, size, size);
+
+  // Deterministic pseudo-random grain so textures are consistent & tileable-feeling
+  let seed = 1337;
+  const rand = () => {
+    seed = (seed * 16807) % 2147483647;
+    return (seed - 1) / 2147483646;
+  };
+
+  const count = Math.floor((size * size) / 14);
+  for (let i = 0; i < count; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const pick = rand();
+    ctx.fillStyle = pick > 0.78 ? highlightHex : grainHex;
+    ctx.globalAlpha = 0.14 + rand() * 0.28;
+
+    if (streakAxis === 'y') {
+      ctx.fillRect(x, y, 2, 10 + rand() * 22);
+    } else if (streakAxis === 'x') {
+      ctx.fillRect(x, y, 10 + rand() * 22, 2);
+    } else {
+      const r = 1 + rand() * 3.5;
+      ctx.fillRect(x, y, r, r);
+    }
+  }
+  ctx.globalAlpha = 1;
+  return canvas;
+}
+
+function configureSurfaceTexture(
+  canvas: HTMLCanvasElement,
+  colorSpace: THREE.ColorSpace,
+  repeatX: number,
+  repeatY: number,
+  anisotropy = 4,
+): THREE.CanvasTexture {
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = colorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(repeatX, repeatY);
+  tex.anisotropy = anisotropy;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+export function createRealisticSurfaceMaterial(options: {
+  kind: 'grass' | 'sand' | 'rock' | 'bark' | 'sea' | 'animal_fur';
+  repeat?: number;
+  roughness?: number;
+  metalness?: number;
+  anisotropy?: number;
+}): PbrMaterialBundle {
+  const repeat = options.repeat ?? 1;
+  const aniso = options.anisotropy ?? 4;
+
+  let colorCanvas: HTMLCanvasElement;
+  let bumpCanvas: HTMLCanvasElement;
+  let defaultRoughness = options.roughness ?? 0.85;
+  let defaultMetalness = options.metalness ?? 0.05;
+
+  switch (options.kind) {
+    case 'grass':
+      colorCanvas = makeNoiseCanvas(512, '#3b6e2c', '#264b1c', '#6ca346', 'y');
+      bumpCanvas = makeNoiseCanvas(512, '#808080', '#484848', '#d4d4d4', 'y');
+      defaultRoughness = options.roughness ?? 0.88;
+      break;
+    case 'sand':
+      colorCanvas = makeNoiseCanvas(512, '#d8be8a', '#b99b63', '#efe0ba', 'none');
+      bumpCanvas = makeNoiseCanvas(512, '#808080', '#5a5a5a', '#c8c8c8', 'none');
+      defaultRoughness = options.roughness ?? 0.92;
+      break;
+    case 'rock':
+      colorCanvas = makeNoiseCanvas(512, '#5a5f66', '#383c42', '#899099', 'x');
+      bumpCanvas = makeNoiseCanvas(512, '#808080', '#323232', '#e0e0e0', 'x');
+      defaultRoughness = options.roughness ?? 0.9;
+      break;
+    case 'bark':
+      colorCanvas = makeNoiseCanvas(512, '#533927', '#2e1d12', '#7a573e', 'y');
+      bumpCanvas = makeNoiseCanvas(512, '#808080', '#2b2b2b', '#dcdcdc', 'y');
+      defaultRoughness = options.roughness ?? 0.92;
+      break;
+    case 'sea':
+      colorCanvas = makeNoiseCanvas(512, '#0e5a78', '#083b52', '#49b6d6', 'x');
+      bumpCanvas = makeNoiseCanvas(512, '#808080', '#404040', '#ffffff', 'x');
+      defaultRoughness = options.roughness ?? 0.16;
+      defaultMetalness = options.metalness ?? 0.35;
+      break;
+    case 'animal_fur':
+    default:
+      colorCanvas = makeNoiseCanvas(512, '#7c5334', '#492e1a', '#b4835a', 'y');
+      bumpCanvas = makeNoiseCanvas(512, '#808080', '#444444', '#d8d8d8', 'y');
+      defaultRoughness = options.roughness ?? 0.82;
+      break;
+  }
+
+  const map = configureSurfaceTexture(colorCanvas, THREE.SRGBColorSpace, repeat, repeat, aniso);
+  const bumpMap = configureSurfaceTexture(bumpCanvas, THREE.NoColorSpace, repeat, repeat, aniso);
+
+  const material = new THREE.MeshStandardMaterial({
+    map,
+    bumpMap,
+    bumpScale: options.kind === 'sea' ? 0.08 : 0.045,
+    roughness: defaultRoughness,
+    metalness: defaultMetalness,
+  });
+
+  return {
+    material,
+    textures: [map, bumpMap],
+    dispose: () => {
+      map.dispose();
+      bumpMap.dispose();
+      material.dispose();
+    },
+  };
+}
+

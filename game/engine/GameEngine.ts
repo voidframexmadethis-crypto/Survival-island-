@@ -111,7 +111,21 @@ import {
   P2PPacket,
   RemoteAnimState,
 } from '../systems/p2pMultiplayer';
-import { FrameBudgetQueue } from '../systems/frameBudgetQueue';
+import {
+  ActiveModalKind,
+  FrameBudgetQueue,
+  FrameWatchState,
+  MasterRuntimeState,
+  ZeroAllocCameraFollower,
+  canProcessGameplayInput,
+  closeExclusiveModal,
+  createFrameWatchState,
+  createMasterRuntimeState,
+  getRendererLoadSnapshot,
+  openExclusiveModal,
+  stepClampedFrame,
+  stepMasterFrame,
+} from '../systems/frameBudgetQueue';
 import {
   ActiveModal,
   ActiveVehicleHudState,
@@ -181,6 +195,7 @@ import {
 import {
   HouseStationTarget,
   RemotePlayerMeshHandle,
+  applyBackpackSkinToPlayerHandle,
   createCampStructureModel,
   createCarcassMesh,
   createCropPlantMesh,
@@ -545,6 +560,10 @@ export class GameEngine {
   private fpsSampleFrames = 0;
   private fpsSampleAccumMs = 0;
   private lastFramePerfMs = 0;
+  private frameWatch: FrameWatchState = createFrameWatchState();
+  private masterRuntime: MasterRuntimeState = createMasterRuntimeState();
+  private zeroAllocCamFollower = new ZeroAllocCameraFollower();
+  private _chaseTargetScratch = new THREE.Vector3();
   private consecutiveSlowSeconds = 0;
   private effectiveShadowsEnabled = true;
   private effectiveShadowMapSize = 1024;
@@ -685,6 +704,9 @@ export class GameEngine {
   private isCrouching = false;
   private currentEyeHeight = 1.62;
   private walkBobPhase = 0;
+  private camBobBlend = 0;
+  private camStepOffsetY = 0;
+  private lastSimDt = 0.016;
   private swingTimer = 0;
   private actionCooldown = 0;
   private recoilTimer = 0;
@@ -1126,13 +1148,9 @@ export class GameEngine {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.06;
+    // Cap DPR cleanly on mobile for sharp edges without frame drops
     this.renderer.setPixelRatio(
-      this.isSoftwareGl
-        ? 1
-        : Math.min(
-            window.devicePixelRatio || 1,
-            this.isTouchDevice ? 1.5 : 2,
-          ),
+      this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2),
     );
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -1557,6 +1575,8 @@ export class GameEngine {
       this.clock.start();
       this.clock.getDelta();
       this.lastFramePerfMs = performance.now();
+      this.frameWatch.lastTimeMs = this.lastFramePerfMs;
+      this.masterRuntime.lastFrameMs = this.lastFramePerfMs;
       this.fpsSampleTimer = 0;
       this.fpsSampleFrames = 0;
       this.fpsSampleAccumMs = 0;
@@ -1581,6 +1601,8 @@ export class GameEngine {
     this.gamepadGas = 0;
     this.gamepadBrake = 0;
     this.gamepadHandbrake = false;
+    this.camBobBlend = 0;
+    this.camStepOffsetY = 0;
   }
 
   private onResize = (): void => {
@@ -1589,6 +1611,9 @@ export class GameEngine {
     const h = this.container.clientHeight || window.innerHeight;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.renderer.setPixelRatio(
+      this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2),
+    );
     this.renderer.setSize(w, h);
   };
 
@@ -1616,7 +1641,12 @@ export class GameEngine {
       this.exitVehicle();
       return;
     }
-    if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) {
+    if (
+      this.mode !== 'playing' ||
+      !canProcessGameplayInput(this.masterRuntime) ||
+      this.gameOver ||
+      this.cinematicActive
+    ) {
       if (this.cinematicActive && e.code === 'Space') {
         e.preventDefault();
         this.skipCinematic();
@@ -1782,6 +1812,35 @@ export class GameEngine {
     this.smartTv?.unlockAudio();
   }
 
+  public setActiveModalKind(kind: ActiveModalKind): void {
+    if (kind === 'none') {
+      closeExclusiveModal(this.masterRuntime, () => this.clearMovementInputs());
+    } else {
+      openExclusiveModal(this.masterRuntime, kind, () => this.clearMovementInputs());
+    }
+  }
+
+  public getMasterRuntimeSnapshot(): Readonly<MasterRuntimeState> {
+    return this.masterRuntime;
+  }
+
+  public updateZeroAllocFollowCamera(
+    dt: number,
+    isThirdPerson = this.masterRuntime.isThirdPerson,
+  ): void {
+    if (!this.camera) return;
+    this.masterRuntime.isThirdPerson = isThirdPerson;
+    this._chaseTargetScratch.set(this.playerX, this.playerY, this.playerZ);
+    this.zeroAllocCamFollower.update(
+      this.camera,
+      this._chaseTargetScratch,
+      this.camYaw,
+      isThirdPerson,
+      this.masterRuntime.isInVehicle,
+      dt,
+    );
+  }
+
   public setMode(mode: 'menu' | 'playing' | 'paused'): void {
     const wasNotPlaying = this.mode !== 'playing';
     this.mode = mode;
@@ -1789,6 +1848,7 @@ export class GameEngine {
       this.clearMovementInputs();
       this.sound.stopTrunkBass();
     } else {
+      closeExclusiveModal(this.masterRuntime);
       this.sound.unlock();
       this.smartTv?.unlockAudio();
       if (wasNotPlaying) {
@@ -1857,12 +1917,10 @@ export class GameEngine {
       const nativeDpr = window.devicePixelRatio || 1;
       if (this.autoFpsTier >= 2 || preset === 'low') {
         dpr = 1;
-      } else if (this.autoFpsTier >= 1 || this.isTouchDevice || preset === 'medium') {
-        dpr = Math.min(nativeDpr, 1.25);
-      } else if (preset === 'ultra') {
-        dpr = Math.min(nativeDpr, 1.75);
-      } else {
+      } else if (this.autoFpsTier >= 1 || preset === 'medium') {
         dpr = Math.min(nativeDpr, 1.5);
+      } else {
+        dpr = Math.min(nativeDpr, 2);
       }
     }
 
@@ -2229,9 +2287,12 @@ export class GameEngine {
 
   public addCameraLookDelta(dx: number, dy: number, isTouch = false): void {
     if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
+    if (!Number.isFinite(this.camYaw)) this.camYaw = 0;
+    if (!Number.isFinite(this.camPitch)) this.camPitch = -0.05;
     const clampedDx = THREE.MathUtils.clamp(dx, -140, 140);
     const clampedDy = THREE.MathUtils.clamp(dy, -140, 140);
-    const baseSens = isTouch ? 0.0076 : 0.0046;
+    const baseSens = isTouch ? 0.0078 : 0.0048;
     const sens = baseSens * this.settings.cameraSensitivity;
     this.camYaw -= clampedDx * sens;
     const ySign = this.settings.invertCameraY ? -1 : 1;
@@ -8860,24 +8921,27 @@ export class GameEngine {
     const standingSurfaceY = Math.max(terrainY, deckY);
     this.isSwimming = !isFlat && standingSurfaceY < waterLevel - 0.45;
 
+    const prevPlayerY = this.playerY;
+    const wasGrounded = this.grounded;
+
     const activeBuff = this.grandFinalePlayer.activeBuff;
     const tikiSpeedMult =
       activeBuff && performance.now() < activeBuff.expiresAt
         ? activeBuff.speedBoost || 1
         : 1;
+    // Responsive Minecraft-like pace: brisk 7.6 m/s walk, 10.8 m/s sprint, smooth analog scaling
+    const analogWalkSpeed = THREE.MathUtils.lerp(4.2, 7.6, inputMag);
     let baseSpeed = this.dragonFlight.flying
       ? this.dragonFlight.flySpeed * 0.45
       : (this.isSwimming
-          ? 4.2
+          ? 5.0
           : this.wallRunTimer > 0
-            ? 11.4
+            ? 12.2
             : this.isSprinting
-              ? 9.4
+              ? 10.8
               : this.isCrouching
-                ? 3.1
-                : inputMag > 0.65
-                  ? 6.0
-                  : 3.4) *
+                ? 4.0
+                : analogWalkSpeed) *
         (this.modSystem?.tweaks.moveSpeedMultiplier ?? 1) *
         tikiSpeedMult;
 
@@ -8929,6 +8993,7 @@ export class GameEngine {
       this.wallRunTimer = 0;
       this.wallRunSide = 0;
       this.wallTiltAngle = THREE.MathUtils.damp(this.wallTiltAngle, 0, 10, dt);
+      this.camStepOffsetY = 0;
       this.currentSpeedMps =
         Math.hypot(this.playerX - prevX, this.playerZ - prevZ) / Math.max(0.001, dt);
       this.markExploredAroundPlayer();
@@ -8949,26 +9014,37 @@ export class GameEngine {
       const nx = dirX / len;
       const nz = dirZ / len;
 
-      const maxClimbSlope = this.grounded ? 1.85 : 2.2;
+      const stepUpAllowance = Math.max(0.55, baseSpeed * inputMag * dt * 1.4);
+      const maxClimbSlope = this.grounded ? 2.15 : 2.4;
       const canStep = (tx: number, tz: number): boolean => {
         if (this.isSwimming || isFlat) return true;
         const th = Math.max(
           getTerrainHeight(tx, tz),
           this.getStructuralSurfaceY(tx, tz, this.playerY),
         );
-        if (th <= standingSurfaceY + 0.35) return true;
+        if (th <= standingSurfaceY + stepUpAllowance) return true;
         return getTerrainSlope(tx, tz) <= maxClimbSlope;
       };
 
-      const stepSlope = isFlat
-        ? 0
-        : getTerrainSlope(
-            this.playerX + nx * baseSpeed * inputMag * dt,
-            this.playerZ + nz * baseSpeed * inputMag * dt,
+      const lookAheadX = this.playerX + nx * baseSpeed * inputMag * dt;
+      const lookAheadZ = this.playerZ + nz * baseSpeed * inputMag * dt;
+      const lookAheadSurfY = isFlat
+        ? standingSurfaceY
+        : Math.max(
+            getTerrainHeight(lookAheadX, lookAheadZ),
+            this.getStructuralSurfaceY(lookAheadX, lookAheadZ, this.playerY),
           );
-      if (!this.isSwimming && !creativeNoNeeds && stepSlope > 0.72 && deckY < -900) {
-        baseSpeed *= 0.65;
-        this.vitals.stamina = Math.max(0, this.vitals.stamina - dt * 4);
+      const stepSlope = isFlat ? 0 : getTerrainSlope(lookAheadX, lookAheadZ);
+      // Only gently slow steep UPHILL climbing — never penalize downhill or flat walking
+      if (
+        !this.isSwimming &&
+        !creativeNoNeeds &&
+        lookAheadSurfY > standingSurfaceY + 0.02 &&
+        stepSlope > 1.05 &&
+        deckY < -900
+      ) {
+        baseSpeed *= 0.82;
+        this.vitals.stamina = Math.max(0, this.vitals.stamina - dt * 3);
       }
 
       const stepX = nx * baseSpeed * inputMag * dt;
@@ -9056,14 +9132,17 @@ export class GameEngine {
         }
       }
 
-      this.currentSpeedMps = Math.hypot(nextX - this.playerX, nextZ - this.playerZ) / Math.max(0.001, dt);
+      const actualMoveDist = Math.hypot(nextX - this.playerX, nextZ - this.playerZ);
+      this.currentSpeedMps = actualMoveDist / Math.max(0.001, dt);
       this.playerX = nextX;
       this.playerZ = nextZ;
       this.markExploredAroundPlayer();
 
-      this.walkBobPhase += dt * (this.isSprinting ? 12.5 : 8.2) * inputMag;
-      this.footstepAccum += baseSpeed * inputMag * dt;
-      if (this.footstepAccum > (this.isSprinting ? 2.6 : 2.1)) {
+      const activeMoveRatio =
+        actualMoveDist > 0.0005 ? Math.min(1.2, this.currentSpeedMps / 7.6) : 0;
+      this.walkBobPhase += dt * (this.isSprinting ? 13.5 : 9.6) * activeMoveRatio;
+      this.footstepAccum += actualMoveDist;
+      if (this.grounded && actualMoveDist > 0.001 && this.footstepAccum > (this.isSprinting ? 2.85 : 2.3)) {
         this.footstepAccum = 0;
         if (isFlat) {
           this.sound.playFootstep(
@@ -9236,7 +9315,32 @@ export class GameEngine {
         this.playerY = newSurfaceY;
         this.playerVelY = 0;
         this.grounded = true;
+      } else if (
+        wasGrounded &&
+        this.playerVelY <= 0 &&
+        this.playerY - newSurfaceY <= 0.48
+      ) {
+        // Keep feet planted cleanly when walking down slopes/ramps instead of micro-floating & bouncing
+        this.playerY = newSurfaceY;
+        this.playerVelY = 0;
+        this.grounded = true;
+      } else if (this.playerY > newSurfaceY + 0.04) {
+        this.grounded = false;
       }
+    }
+
+    // Smooth camera step offset when walking cleanly across steps, decks, and uneven terrain seams
+    if (wasGrounded && this.grounded && !this.isSwimming && Number.isFinite(prevPlayerY)) {
+      const stepDeltaY = this.playerY - prevPlayerY;
+      if (Math.abs(stepDeltaY) > 0.025 && Math.abs(stepDeltaY) <= 0.65) {
+        this.camStepOffsetY = THREE.MathUtils.clamp(
+          this.camStepOffsetY - stepDeltaY,
+          -0.55,
+          0.55,
+        );
+      }
+    } else if (!this.grounded && this.playerVelY > 0.1) {
+      this.camStepOffsetY = 0;
     }
 
     // Smooth Crouch Eye Height
@@ -11729,10 +11833,19 @@ export class GameEngine {
   }
 
   private updateCamera(): void {
+    const dt = Math.min(0.05, Math.max(0.001, this.lastSimDt || 0.016));
+    const sprintFovKick =
+      this.mode === 'playing' &&
+      !this.isAiming &&
+      !this.activeVehicleId &&
+      this.isSprinting &&
+      this.currentSpeedMps > 7.5
+        ? 72.5
+        : 68;
     const targetFov =
-      this.mode === 'playing' && this.isAiming && !this.activeVehicleId ? 52 : 68;
+      this.mode === 'playing' && this.isAiming && !this.activeVehicleId ? 52 : sprintFovKick;
     if (Math.abs(this.camera.fov - targetFov) > 0.02) {
-      this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, 0.22);
+      this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 14, dt);
       if (Math.abs(this.camera.fov - targetFov) <= 0.05) {
         this.camera.fov = targetFov;
       }
@@ -11740,6 +11853,7 @@ export class GameEngine {
     }
 
     if (this.mode === 'menu') {
+      this.camera.rotation.order = 'YXZ';
       this.camera.up.set(0, 1, 0);
       this.handsRig.root.visible = false;
       const angle = this.elapsed * 0.14;
@@ -11774,6 +11888,7 @@ export class GameEngine {
       }
       this.ridingCoasterId = null;
     }
+    this.camera.rotation.order = 'YXZ';
     this.camera.up.set(0, 1, 0);
 
     if (this.cinematicActive) {
@@ -11880,23 +11995,17 @@ export class GameEngine {
     }
 
     this.handsRig.root.visible = true;
+    const isMovingOnGround =
+      this.grounded && !this.isSwimming && this.currentSpeedMps > 0.35;
+    const targetBobBlend = isMovingOnGround
+      ? Math.min(1.15, this.currentSpeedMps / 7.6)
+      : 0;
+    this.camBobBlend = THREE.MathUtils.damp(this.camBobBlend, targetBobBlend, 14, dt);
+    this.camStepOffsetY = THREE.MathUtils.damp(this.camStepOffsetY, 0, 18, dt);
+    if (Math.abs(this.camStepOffsetY) < 0.0005) this.camStepOffsetY = 0;
+
     const headBobY =
-      this.grounded &&
-      (Math.abs(this.joyX) + Math.abs(this.joyY) > 0.1 ||
-        this.keys['KeyW'] ||
-        this.keys['KeyS'] ||
-        this.keys['KeyA'] ||
-        this.keys['KeyD'] ||
-        this.keys['key_w'] ||
-        this.keys['key_s'] ||
-        this.keys['key_a'] ||
-        this.keys['key_d'] ||
-        this.keys['ArrowUp'] ||
-        this.keys['ArrowDown'] ||
-        this.keys['ArrowLeft'] ||
-        this.keys['ArrowRight'])
-        ? Math.sin(this.walkBobPhase) * 0.042
-        : 0;
+      this.camBobBlend > 0.01 ? Math.sin(this.walkBobPhase) * 0.044 * this.camBobBlend : 0;
     const hurtKick = this.hurtFlash > 0 ? Math.sin(this.hurtFlash * 32) * 0.04 : 0;
     const chewNod =
       this.eatTimer > 0
@@ -11931,9 +12040,18 @@ export class GameEngine {
         ? Math.cos(this.elapsed * 53) * this.saturnLaunchCameraShake * 0.42
         : 0;
 
+    if (!Number.isFinite(this.camYaw)) this.camYaw = 0;
+    if (!Number.isFinite(this.camPitch)) this.camPitch = -0.05;
+
     this.camera.position.set(
       this.playerX + blastShakeX + rocketShakeX,
-      this.playerY + this.currentEyeHeight + headBobY + washDip + blastShakeY + rocketShakeY,
+      this.playerY +
+        this.camStepOffsetY +
+        this.currentEyeHeight +
+        headBobY +
+        washDip +
+        blastShakeY +
+        rocketShakeY,
       this.playerZ,
     );
     this.camera.rotation.set(
@@ -12492,10 +12610,18 @@ export class GameEngine {
   private tick = (nowArg?: number): void => {
     if (this.disposed || document.hidden || this.rafPausedByVisibility) return;
     const nowPerf = typeof nowArg === 'number' && nowArg > 0 ? nowArg : performance.now();
-    const rawFrameMs =
-      this.lastFramePerfMs > 0 ? Math.max(0.1, nowPerf - this.lastFramePerfMs) : 16.6667;
+    const { dt: masterDt } = stepMasterFrame(this.masterRuntime, nowPerf);
+    const { dt: clampedDt, frameMs: rawFrameMs } = stepClampedFrame(this.frameWatch, nowPerf);
+    this.masterRuntime.isInVehicle = Boolean(this.activeVehicleId);
+    this.masterRuntime.activeVehicleId = this.activeVehicleId;
+    if (this.activeVehicleId) {
+      const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
+      this.masterRuntime.activeVehicleName = av?.name ?? null;
+    } else {
+      this.masterRuntime.activeVehicleName = null;
+    }
     // Clamp frame delta to 0.033s so a hiccup never causes a huge position jump or spiral-of-death stutter
-    const frameTime = Math.min(Math.max(rawFrameMs * 0.001, 0), 0.033);
+    const frameTime = Math.min(clampedDt, masterDt, 0.033);
     this.lastFramePerfMs = nowPerf;
 
     // 1500 FPS Engine Ramp & Lock: starts at 60 FPS, rises smoothly to 1500 FPS, and never drops below 1500
@@ -12576,6 +12702,7 @@ export class GameEngine {
   };
 
   private updateSimulation(dt: number, frameStart: number): void {
+    this.lastSimDt = dt;
     this.elapsed += dt;
 
     if (this.portalWarpCooldown > 0) {
@@ -12584,7 +12711,10 @@ export class GameEngine {
 
     // 1. Always move the player smoothly first before world & biome updates
     const playerActive =
-      this.mode === 'playing' && !this.gameOver && !this.cinematicActive;
+      this.mode === 'playing' &&
+      canProcessGameplayInput(this.masterRuntime) &&
+      !this.gameOver &&
+      !this.cinematicActive;
     if (playerActive) {
       measure('player', () => this.updatePlayer(dt));
     }
@@ -14982,6 +15112,13 @@ export class GameEngine {
       );
       this.playerVelY = 0;
       this.grounded = true;
+      this.camStepOffsetY = 0;
+      this.camBobBlend = 0;
+      this.wallTiltAngle = 0;
+      this.camPitch = THREE.MathUtils.clamp(this.camPitch, -1.25, 1.25);
+      this.playerYaw = this.camYaw + Math.PI;
+      this.camera.rotation.order = 'YXZ';
+      this.camera.up.set(0, 1, 0);
 
       const specs = this.getVehicleSpecs(v);
       const isPureWatercraft =
@@ -17327,7 +17464,19 @@ export class GameEngine {
       const sideZ = -Math.sin(c.yaw);
       this.playerX = c.x + sideX * 2.2;
       this.playerZ = c.z + sideZ * 2.2;
-      this.playerY = getTerrainHeight(this.playerX, this.playerZ);
+      this.playerY = Math.max(
+        getTerrainHeight(this.playerX, this.playerZ),
+        this.getStructuralSurfaceY(this.playerX, this.playerZ, c.y + 1.5),
+      );
+      this.playerVelY = 0;
+      this.grounded = true;
+      this.camStepOffsetY = 0;
+      this.camBobBlend = 0;
+      this.wallTiltAngle = 0;
+      this.camPitch = THREE.MathUtils.clamp(this.camPitch, -1.25, 1.25);
+      this.playerYaw = this.camYaw + Math.PI;
+      this.camera.rotation.order = 'YXZ';
+      this.camera.up.set(0, 1, 0);
       this.toast(`Dismounted ${c.displayNameOverride || c.spec.displayName}`, 'info');
     }
     this.mountedCreatureId = null;
@@ -17502,6 +17651,7 @@ export class GameEngine {
         const entry = this.remotePlayers.get(peerId);
         if (entry) {
           this.scene.remove(entry.handle.group);
+          entry.handle.backpackDispose();
           this.disposeObject3D(entry.handle.group);
           this.remotePlayers.delete(peerId);
           this.toast(`${entry.name} left the room`, 'info');
@@ -17535,6 +17685,7 @@ export class GameEngine {
       this.remotePlayers.set(peerId, entry);
     } else if (entry.name !== name) {
       this.scene.remove(entry.handle.group);
+      entry.handle.backpackDispose();
       this.disposeObject3D(entry.handle.group);
       const palette = [0x0ea5e9, 0x10b981, 0xf59e0b, 0xec4899, 0x8b5cf6];
       const hash = peerId.split('').reduce((s, ch) => s + ch.charCodeAt(0), 0);
@@ -17639,38 +17790,14 @@ export class GameEngine {
         }
       }
 
-      // Sync remote player's equipped Backpack Skin (cosmetic only)
+      // Sync remote player's equipped Backpack Skin (cosmetic only) using sculpted 3D pack mesh
       const incomingBackpackSkinId = packet.backpackSkinId ?? null;
       if (rp.appliedBackpackSkinId !== incomingBackpackSkinId) {
         rp.appliedBackpackSkinId = incomingBackpackSkinId;
-        const packMat = rp.handle.backpackMesh.material;
-        if (packMat instanceof THREE.MeshStandardMaterial) {
-          const skin = incomingBackpackSkinId
-            ? getExchangeItemById(incomingBackpackSkinId)
-            : null;
-          if (skin && skin.category === 'backpack_skin') {
-            const imgTex = getCosmeticImageTexture(skin.productImageUrl);
-            packMat.color.set(imgTex ? '#ffffff' : skin.visual.primaryHex);
-            packMat.metalness = skin.visual.metalness;
-            packMat.roughness = skin.visual.roughness;
-            packMat.map = imgTex || getCosmeticPatternTexture(skin.visual);
-            if (skin.visual.emissiveHex) {
-              packMat.emissive.set(skin.visual.emissiveHex);
-              packMat.emissiveIntensity = 0.25;
-            } else {
-              packMat.emissive.set(0x000000);
-              packMat.emissiveIntensity = 0;
-            }
-          } else {
-            packMat.color.set(0x78350f);
-            packMat.metalness = 0.05;
-            packMat.roughness = 0.85;
-            packMat.map = null;
-            packMat.emissive.set(0x000000);
-            packMat.emissiveIntensity = 0;
-          }
-          packMat.needsUpdate = true;
-        }
+        const skin = incomingBackpackSkinId
+          ? getExchangeItemById(incomingBackpackSkinId) ?? null
+          : null;
+        applyBackpackSkinToPlayerHandle(rp.handle, skin);
       }
 
       if (packet.vehicleId && packet.vx !== undefined && packet.vz !== undefined && packet.vyaw !== undefined) {
@@ -18968,6 +19095,7 @@ export class GameEngine {
     this.modSystem?.dispose();
     for (const rp of this.remotePlayers.values()) {
       this.scene.remove(rp.handle.group);
+      rp.handle.backpackDispose();
       this.disposeObject3D(rp.handle.group);
     }
     this.remotePlayers.clear();
@@ -19294,13 +19422,26 @@ export class GameEngine {
   public exitCoasterRide(): void {
     if (!this.ridingCoasterId) return;
     this.ridingCoasterId = null;
+    this.camera.rotation.order = 'YXZ';
     this.camera.up.set(0, 1, 0);
-    const groundY = getTerrainHeight(this.playerX, this.playerZ);
+    const groundY = Math.max(
+      getTerrainHeight(this.playerX, this.playerZ),
+      this.getStructuralSurfaceY(this.playerX, this.playerZ, this.playerY + 1.5),
+    );
     this.playerY = groundY;
     this.playerVelY = 0;
     this.grounded = true;
+    this.camStepOffsetY = 0;
+    this.camBobBlend = 0;
+    this.wallTiltAngle = 0;
+    this.camPitch = -0.05;
+    this.playerYaw = this.camYaw + Math.PI;
     this.toast('Disembarked at unload platform', 'info');
     this.emitHud();
+  }
+
+  public getRendererLoadSnapshot() {
+    return getRendererLoadSnapshot(this.renderer);
   }
 
   public restoreHabitatZone(zoneId: string) {

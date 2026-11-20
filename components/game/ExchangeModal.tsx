@@ -39,6 +39,8 @@ import { ExchangeAdminPanel } from './ExchangeAdminPanel';
 interface ExchangeModalProps {
   onClose: () => void;
   onCosmeticsChanged?: () => void;
+  onOpenVaultStore?: () => void;
+  onOpenCustomMarketplace?: () => void;
 }
 
 type StoreSection =
@@ -51,7 +53,12 @@ type StoreSection =
 
 type TopView = 'store' | 'buy_coins' | 'history' | 'admin';
 
-export function ExchangeModal({ onClose, onCosmeticsChanged }: ExchangeModalProps) {
+export function ExchangeModal({
+  onClose,
+  onCosmeticsChanged,
+  onOpenVaultStore,
+  onOpenCustomMarketplace,
+}: ExchangeModalProps) {
   const [state, setState] = useState<ExchangeStorefrontState>(() =>
     getExchangeStateSnapshot(),
   );
@@ -238,6 +245,27 @@ export function ExchangeModal({ onClose, onCosmeticsChanged }: ExchangeModalProp
               <ShoppingBag className="w-3.5 h-3.5" />
               <span>Buy Coins</span>
             </button>
+
+            {onOpenVaultStore && (
+              <button
+                type="button"
+                onClick={onOpenVaultStore}
+                className="px-3 py-2 rounded-xl text-xs font-bold border bg-amber-500/15 hover:bg-amber-500 hover:text-stone-950 text-amber-300 border-amber-500/50 flex items-center gap-1.5 transition"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Vault Store (Payhip)</span>
+              </button>
+            )}
+
+            {onOpenCustomMarketplace && (
+              <button
+                type="button"
+                onClick={onOpenCustomMarketplace}
+                className="px-3 py-2 rounded-xl text-xs font-bold border bg-emerald-500/15 hover:bg-emerald-500 hover:text-stone-950 text-emerald-300 border-emerald-500/50 flex items-center gap-1.5 transition"
+              >
+                <span>+ Phone Skins</span>
+              </button>
+            )}
 
             <button
               type="button"

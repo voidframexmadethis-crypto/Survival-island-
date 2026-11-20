@@ -1163,6 +1163,8 @@ export type ActiveModal =
   | 'ecosystem_journal'
   | 'dragon_sanctuary'
   | 'exchange'
+  | 'vault_store'
+  | 'custom_marketplace'
   | 'saturn_rocket'
   | 'underground_elevator'
   | 'car_radio';

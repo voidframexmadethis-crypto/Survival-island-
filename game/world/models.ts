@@ -34,6 +34,13 @@ import {
   createInfernoBladeMesh,
   createPortalGunFirstPersonMesh,
 } from './multiverseModels';
+import {
+  ExchangeProduct,
+  SkinCatalogItem,
+  buildSculptedBackpackMesh,
+  getCosmeticImageTexture,
+  toBackpackSkinCatalogItem,
+} from '../data/exchangeCatalog';
 
 let cachedAnimalTextures: {
   holstein: THREE.CanvasTexture;
@@ -5238,7 +5245,65 @@ export interface RemotePlayerMeshHandle {
   heldGunMesh: THREE.Mesh;
   heldToolMesh: THREE.Mesh;
   backpackMesh: THREE.Mesh;
+  backpackGroup: THREE.Group;
+  backpackDispose: () => void;
   speakerSprite?: THREE.Sprite;
+}
+
+const DEFAULT_EXPLORER_BACKPACK_SKIN: SkinCatalogItem = {
+  id: 'default_explorer_pack',
+  name: 'Explorer Pack',
+  category: 'backpack',
+  priceLabel: 'Free',
+  payhipUrl: '',
+  primaryHex: '#78350f',
+  secondaryHex: '#451a03',
+  accentHex: '#d97706',
+  pattern: 'solid',
+};
+
+export function applyBackpackSkinToPlayerHandle(
+  handle: RemotePlayerMeshHandle,
+  skin: ExchangeProduct | null,
+): void {
+  const catalogItem =
+    skin && skin.category === 'backpack_skin'
+      ? toBackpackSkinCatalogItem(skin)
+      : DEFAULT_EXPLORER_BACKPACK_SKIN;
+  const nextBuilt = buildSculptedBackpackMesh(catalogItem);
+
+  if (skin && skin.category === 'backpack_skin') {
+    const imgTex = getCosmeticImageTexture(skin.productImageUrl);
+    nextBuilt.group.traverse((child) => {
+      if (
+        child instanceof THREE.Mesh &&
+        child.material instanceof THREE.MeshStandardMaterial &&
+        child.material.map
+      ) {
+        if (imgTex) {
+          child.material.map = imgTex;
+          child.material.color.set('#ffffff');
+        }
+        child.material.metalness = skin.visual.metalness;
+        child.material.roughness = skin.visual.roughness;
+        if (skin.visual.emissiveHex) {
+          child.material.emissive.set(skin.visual.emissiveHex);
+          child.material.emissiveIntensity = 0.25;
+        }
+        child.material.needsUpdate = true;
+      }
+    });
+  }
+
+  handle.backpackGroup.clear();
+  handle.backpackDispose();
+  handle.backpackDispose = nextBuilt.dispose;
+  handle.backpackGroup.add(nextBuilt.group);
+
+  const mainMesh = nextBuilt.group.getObjectByName('sculpted_backpack_main');
+  if (mainMesh instanceof THREE.Mesh) {
+    handle.backpackMesh = mainMesh;
+  }
 }
 
 export function createRemotePlayerMesh(
@@ -5253,7 +5318,6 @@ export function createRemotePlayerMesh(
   const pantsMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.86 });
   const bootMat = new THREE.MeshStandardMaterial({ color: 0x292524, roughness: 0.9 });
   const skinMat = new THREE.MeshStandardMaterial({ color: 0xd99b6c, roughness: 0.7 });
-  const packMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.85 });
   const visorMat = new THREE.MeshStandardMaterial({
     color: 0x0f172a,
     metalness: 0.8,
@@ -5277,14 +5341,18 @@ export function createRemotePlayerMesh(
   const legL = makeLeg(-0.14);
   const legR = makeLeg(0.14);
 
-  // Torso + Survival Backpack
+  // Torso + Sculpted 3D Survival Backpack (straps face +Z toward torso back)
   const torso = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.68, 0.28), jacketMat);
   torso.position.y = 1.14;
   torso.castShadow = true;
-  const backpack = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.48, 0.18), packMat);
-  backpack.position.set(0, 1.16, -0.22);
-  backpack.castShadow = true;
-  bodyGroup.add(torso, backpack);
+  const backpackGroup = new THREE.Group();
+  backpackGroup.position.set(0, 1.16, -0.25);
+  const builtPack = buildSculptedBackpackMesh(DEFAULT_EXPLORER_BACKPACK_SKIN);
+  backpackGroup.add(builtPack.group);
+  const backpack =
+    (builtPack.group.getObjectByName('sculpted_backpack_main') as THREE.Mesh) ||
+    (builtPack.group.children[0] as THREE.Mesh);
+  bodyGroup.add(torso, backpackGroup);
 
   // Articulated Arms + Held Item Proxies
   const makeArm = (ax: number) => {
@@ -5431,6 +5499,8 @@ export function createRemotePlayerMesh(
     heldGunMesh,
     heldToolMesh,
     backpackMesh: backpack,
+    backpackGroup,
+    backpackDispose: builtPack.dispose,
     speakerSprite,
   };
 }

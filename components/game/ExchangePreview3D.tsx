@@ -6,8 +6,10 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Box, Image as ImageIcon, RotateCcw } from 'lucide-react';
 import {
   ExchangeProduct,
+  buildSculptedBackpackMesh,
   getCosmeticImageTexture,
   getCosmeticPatternTexture,
+  toBackpackSkinCatalogItem,
 } from '@/game/data/exchangeCatalog';
 
 interface ExchangePreview3DProps {
@@ -152,47 +154,38 @@ function buildGunPreviewMesh(item: ExchangeProduct): THREE.Group {
   return group;
 }
 
-function buildBackpackPreviewMesh(item: ExchangeProduct): THREE.Group {
-  const group = new THREE.Group();
-  const { visual } = item;
+function buildBackpackPreviewMesh(item: ExchangeProduct): {
+  group: THREE.Group;
+  dispose?: () => void;
+} {
+  const sculpted = buildSculptedBackpackMesh(toBackpackSkinCatalogItem(item));
   const imgTex = getCosmeticImageTexture(item.productImageUrl);
-  const patternTex = imgTex || getCosmeticPatternTexture(visual);
+  const patternTex = imgTex || getCosmeticPatternTexture(item.visual);
 
-  const primaryMat = new THREE.MeshStandardMaterial({
-    color: imgTex ? '#ffffff' : visual.primaryHex,
-    map: patternTex,
-    metalness: visual.metalness,
-    roughness: visual.roughness,
-  });
-  const secondaryMat = new THREE.MeshStandardMaterial({
-    color: visual.secondaryHex,
-    metalness: Math.min(1, visual.metalness + 0.1),
-    roughness: Math.max(0.2, visual.roughness - 0.1),
-  });
-  const accentMat = new THREE.MeshStandardMaterial({
-    color: visual.accentHex,
-    emissive: visual.emissiveHex ? new THREE.Color(visual.emissiveHex) : new THREE.Color(0x000000),
-    emissiveIntensity: visual.emissiveHex ? 0.65 : 0,
-    metalness: 0.72,
-    roughness: 0.26,
+  // Apply uploaded image / advanced pattern & emissive accent if present, keeping sculpted silhouette
+  sculpted.group.traverse((child) => {
+    if (
+      child instanceof THREE.Mesh &&
+      child.material instanceof THREE.MeshStandardMaterial &&
+      child.material.map
+    ) {
+      if (imgTex) {
+        child.material.map = patternTex;
+        child.material.color.set('#ffffff');
+      }
+      child.material.metalness = item.visual.metalness;
+      child.material.roughness = item.visual.roughness;
+      if (item.visual.emissiveHex) {
+        child.material.emissive.set(item.visual.emissiveHex);
+        child.material.emissiveIntensity = 0.4;
+      }
+      child.material.needsUpdate = true;
+    }
   });
 
-  const mainPack = new THREE.Mesh(new THREE.BoxGeometry(1.02, 1.32, 0.54), primaryMat);
-  const topFlap = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.32, 0.58), secondaryMat);
-  topFlap.position.set(0, 0.56, 0.02);
-  const frontPocket = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.56, 0.22), secondaryMat);
-  frontPocket.position.set(0, -0.22, 0.34);
-  const strapL = new THREE.Mesh(new THREE.BoxGeometry(0.11, 1.15, 0.08), accentMat);
-  strapL.position.set(-0.32, 0.02, -0.3);
-  const strapR = new THREE.Mesh(new THREE.BoxGeometry(0.11, 1.15, 0.08), accentMat);
-  strapR.position.set(0.32, 0.02, -0.3);
-  const buckleL = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.1), accentMat);
-  buckleL.position.set(-0.24, 0.24, 0.33);
-  const buckleR = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.1), accentMat);
-  buckleR.position.set(0.24, 0.24, 0.33);
-
-  group.add(mainPack, topFlap, frontPocket, strapL, strapR, buckleL, buckleR);
-  return group;
+  // Scale up to match the 3D showroom pedestal proportions
+  sculpted.group.scale.setScalar(2.35);
+  return sculpted;
 }
 
 export function ExchangePreview3D({
@@ -262,15 +255,20 @@ export function ExchangePreview3D({
     scene.add(pivot);
 
     let disposed = false;
+    let fallbackDispose: (() => void) | undefined;
 
     const attachFallbackModel = () => {
       if (disposed) return;
+      fallbackDispose?.();
+      fallbackDispose = undefined;
       pivot.clear();
-      const meshGroup =
-        item.category === 'gun_skin'
-          ? buildGunPreviewMesh(item)
-          : buildBackpackPreviewMesh(item);
-      pivot.add(meshGroup);
+      if (item.category === 'gun_skin') {
+        pivot.add(buildGunPreviewMesh(item));
+      } else {
+        const built = buildBackpackPreviewMesh(item);
+        fallbackDispose = built.dispose;
+        pivot.add(built.group);
+      }
     };
 
     if (item.model3dUrl) {
@@ -343,6 +341,7 @@ export function ExchangePreview3D({
       disposed = true;
       window.cancelAnimationFrame(rafId);
       window.removeEventListener('resize', onResize);
+      fallbackDispose?.();
       scene.traverse((obj) => {
         if (obj instanceof THREE.Mesh) {
           obj.geometry?.dispose();

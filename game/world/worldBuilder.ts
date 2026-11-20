@@ -92,6 +92,7 @@ import {
   createGroundDetailTexture,
   createHayTexture,
   createLeafCanopyTexture,
+  createRealisticSurfaceMaterial,
   createRockTexture,
   createWaterNormalTexture,
   createWoodPlankTexture,
@@ -211,6 +212,19 @@ export function buildIslandWorld(
   const leafTex = createLeafCanopyTexture(renderer);
   const waterNormalTex = createWaterNormalTexture(renderer);
   const woodTex = createWoodPlankTexture(renderer);
+  const maxAniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  const rockPbrBundle = createRealisticSurfaceMaterial({
+    kind: 'rock',
+    repeat: 2,
+    roughness: 0.92,
+    anisotropy: maxAniso,
+  });
+  const sandPbrBundle = createRealisticSurfaceMaterial({
+    kind: 'sand',
+    repeat: 2,
+    roughness: 0.94,
+    anisotropy: maxAniso,
+  });
 
   // 1. Island Terrain Geometry (vertex colored by biome, slope & forest paths)
   const terrainGeo = new THREE.PlaneGeometry(
@@ -543,6 +557,8 @@ export function buildIslandWorld(
     leafTex,
     waterNormalTex,
     woodTex,
+    ...rockPbrBundle.textures,
+    ...sandPbrBundle.textures,
   ];
   let shadowsEnabledState = true;
 
@@ -1671,11 +1687,11 @@ export function buildIslandWorld(
   const heartwoodCutMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xd4a36a, roughness: 0.78 }));
   const coconutMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x4b2e19, roughness: 0.85 }));
 
-  const boulderMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x7c7670, map: rockTex, roughness: 0.92 }), 'rock'));
-  const smallStoneMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x8b8680, map: rockTex, roughness: 0.88 }), 'rock'));
-  const mountainRockMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x5d5853, map: rockTex, roughness: 0.94 }), 'rock'));
+  const boulderMat = registerMaterial(enhanceSurfaceMaterial(rockPbrBundle.material, 'rock'));
+  const smallStoneMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x8b8680, map: rockTex, bumpMap: rockPbrBundle.textures[1], bumpScale: 0.04, roughness: 0.88 }), 'rock'));
+  const mountainRockMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x5d5853, map: rockTex, bumpMap: rockPbrBundle.textures[1], bumpScale: 0.05, roughness: 0.94 }), 'rock'));
   const flintMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.32, metalness: 0.25 }));
-  const oreRockMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x4a4540, map: rockTex, roughness: 0.9 }), 'rock'));
+  const oreRockMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x4a4540, map: rockTex, bumpMap: rockPbrBundle.textures[1], bumpScale: 0.045, roughness: 0.9 }), 'rock'));
   const oreVeinMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.28, metalness: 0.82 }));
   const emeraldCrystalMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x10b981, emissive: 0x059669, emissiveIntensity: 0.35, roughness: 0.2, metalness: 0.45 }));
   const cherryTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x3f2228, map: barkTex, roughness: 0.88 }), 'wood'));
@@ -1711,7 +1727,7 @@ export function buildIslandWorld(
   const mushroomCapMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xc27849, roughness: 0.7 }));
   const mushroomStemMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xe7e5e4, roughness: 0.85 }));
   const clayMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.94 }));
-  const sandMoundMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xfde047, roughness: 0.95 }));
+  const sandMoundMat = registerMaterial(sandPbrBundle.material);
 
   // Shared geometries across all resource nodes (prevents hundreds of redundant GPU buffers)
   const gCylTaper8 = registerGeometry(new THREE.CylinderGeometry(0.75, 1.0, 1, 8));

@@ -3,7 +3,11 @@ import {
   ExchangeProduct,
   ExchangeTransaction,
   GunWeaponClass,
+  SkinCatalogItem,
+  VAULT_PAYHIP_CATALOG,
   getWeaponClassForItem,
+  toBackpackSkinCatalogItem,
+  toExchangeProductFromSkinCatalogItem,
 } from '../data/exchangeCatalog';
 import { ItemId } from '../types';
 
@@ -145,19 +149,363 @@ export function getExchangeItemById(id: string | null | undefined): ExchangeProd
   );
 }
 
+export type ActiveCosmeticSource = 'exchange' | 'vault' | 'custom_phone';
+
+export interface CustomPhoneSkinRecord extends SkinCatalogItem {
+  mediaDataUrl?: string;
+  mediaKind?: 'image' | 'glb' | 'none';
+}
+
+export interface CustomPhoneMarketplaceState {
+  skins: CustomPhoneSkinRecord[];
+  unlockedIds: string[];
+  equippedBackpackId: string | null;
+  equippedWeaponId: string | null;
+}
+
+export interface VaultPayhipState {
+  unlockedIds: string[];
+  equippedBackpackId: string | null;
+  equippedWeaponId: string | null;
+  customPayhipUrls: Record<string, string>;
+  preferVaultBackpack: boolean;
+  preferVaultWeapon: boolean;
+  backpackSource?: ActiveCosmeticSource;
+  weaponSource?: ActiveCosmeticSource;
+}
+
+const VAULT_PAYHIP_STORAGE_KEY = 'survival_island_vault_payhip_v1';
+
+let cachedVaultState: VaultPayhipState = {
+  unlockedIds: ['vault_backpack_explorer'],
+  equippedBackpackId: null,
+  equippedWeaponId: null,
+  customPayhipUrls: {},
+  preferVaultBackpack: false,
+  preferVaultWeapon: false,
+};
+
+function hydrateVaultPayhipOnce(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = window.localStorage.getItem(VAULT_PAYHIP_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Partial<VaultPayhipState>;
+    cachedVaultState = {
+      unlockedIds: Array.isArray(parsed.unlockedIds)
+        ? parsed.unlockedIds
+        : ['vault_backpack_explorer'],
+      equippedBackpackId: parsed.equippedBackpackId ?? null,
+      equippedWeaponId: parsed.equippedWeaponId ?? null,
+      customPayhipUrls:
+        parsed.customPayhipUrls && typeof parsed.customPayhipUrls === 'object'
+          ? parsed.customPayhipUrls
+          : {},
+      preferVaultBackpack: Boolean(parsed.preferVaultBackpack),
+      preferVaultWeapon: Boolean(parsed.preferVaultWeapon),
+      backpackSource: parsed.backpackSource,
+      weaponSource: parsed.weaponSource,
+    };
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function saveVaultPayhipState(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      VAULT_PAYHIP_STORAGE_KEY,
+      JSON.stringify(cachedVaultState),
+    );
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+const CUSTOM_PHONE_STORAGE_KEY = 'survival_island_custom_phone_skins_v1';
+
+let cachedCustomPhoneState: CustomPhoneMarketplaceState = {
+  skins: [],
+  unlockedIds: [],
+  equippedBackpackId: null,
+  equippedWeaponId: null,
+};
+
+function hydrateCustomPhoneOnce(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_PHONE_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Partial<CustomPhoneMarketplaceState>;
+    cachedCustomPhoneState = {
+      skins: Array.isArray(parsed.skins) ? parsed.skins : [],
+      unlockedIds: Array.isArray(parsed.unlockedIds) ? parsed.unlockedIds : [],
+      equippedBackpackId: parsed.equippedBackpackId ?? null,
+      equippedWeaponId: parsed.equippedWeaponId ?? null,
+    };
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function saveCustomPhoneState(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      CUSTOM_PHONE_STORAGE_KEY,
+      JSON.stringify(cachedCustomPhoneState),
+    );
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+if (typeof window !== 'undefined') {
+  hydrateVaultPayhipOnce();
+  hydrateCustomPhoneOnce();
+}
+
+export function getCustomMarketplaceSnapshot(): CustomPhoneMarketplaceState {
+  return cachedCustomPhoneState;
+}
+
+export function addCustomMarketplaceSkin(
+  skin: CustomPhoneSkinRecord,
+): CustomPhoneMarketplaceState {
+  cachedCustomPhoneState = {
+    ...cachedCustomPhoneState,
+    skins: [skin, ...cachedCustomPhoneState.skins.filter((s) => s.id !== skin.id)],
+  };
+  saveCustomPhoneState();
+  notify();
+  return cachedCustomPhoneState;
+}
+
+export function attachCustomMarketplaceCheckout(
+  skinId: string,
+  payhipUrl: string,
+  priceLabel: string,
+): CustomPhoneMarketplaceState {
+  cachedCustomPhoneState = {
+    ...cachedCustomPhoneState,
+    skins: cachedCustomPhoneState.skins.map((s) =>
+      s.id === skinId ? { ...s, payhipUrl, priceLabel } : s,
+    ),
+  };
+  saveCustomPhoneState();
+  notify();
+  return cachedCustomPhoneState;
+}
+
+export function unlockCustomMarketplaceSkin(skinId: string): CustomPhoneMarketplaceState {
+  if (!cachedCustomPhoneState.unlockedIds.includes(skinId)) {
+    cachedCustomPhoneState = {
+      ...cachedCustomPhoneState,
+      unlockedIds: [...cachedCustomPhoneState.unlockedIds, skinId],
+    };
+    saveCustomPhoneState();
+    notify();
+  }
+  return cachedCustomPhoneState;
+}
+
+export function equipCustomMarketplaceSkin(
+  skin: CustomPhoneSkinRecord,
+): CustomPhoneMarketplaceState {
+  if (skin.category === 'backpack') {
+    const nextId =
+      cachedCustomPhoneState.equippedBackpackId === skin.id ? null : skin.id;
+    cachedCustomPhoneState = {
+      ...cachedCustomPhoneState,
+      equippedBackpackId: nextId,
+    };
+    cachedVaultState = {
+      ...cachedVaultState,
+      preferVaultBackpack: false,
+      backpackSource: nextId ? 'custom_phone' : 'exchange',
+    };
+  } else {
+    const nextId =
+      cachedCustomPhoneState.equippedWeaponId === skin.id ? null : skin.id;
+    cachedCustomPhoneState = {
+      ...cachedCustomPhoneState,
+      equippedWeaponId: nextId,
+    };
+    cachedVaultState = {
+      ...cachedVaultState,
+      preferVaultWeapon: false,
+      weaponSource: nextId ? 'custom_phone' : 'exchange',
+    };
+  }
+  saveCustomPhoneState();
+  saveVaultPayhipState();
+  notify();
+  return cachedCustomPhoneState;
+}
+
+export function getVaultPayhipSnapshot(): VaultPayhipState {
+  return cachedVaultState;
+}
+
+export function getVaultCatalogItems(): SkinCatalogItem[] {
+  const baseItems = VAULT_PAYHIP_CATALOG.map((item) => ({
+    ...item,
+    payhipUrl: cachedVaultState.customPayhipUrls[item.id] ?? item.payhipUrl,
+  }));
+  const existingIds = new Set(baseItems.map((it) => it.id));
+  const exchangeMapped = cachedState.products
+    .filter((p) => !existingIds.has(p.id))
+    .map((p) => {
+      const converted = toBackpackSkinCatalogItem(p);
+      return {
+        ...converted,
+        payhipUrl: cachedVaultState.customPayhipUrls[converted.id] ?? converted.payhipUrl,
+      };
+    });
+  return [...baseItems, ...exchangeMapped];
+}
+
+export function unlockVaultPayhipItem(itemId: string): VaultPayhipState {
+  if (!cachedVaultState.unlockedIds.includes(itemId)) {
+    cachedVaultState = {
+      ...cachedVaultState,
+      unlockedIds: [...cachedVaultState.unlockedIds, itemId],
+    };
+    saveVaultPayhipState();
+    notify();
+  }
+  return cachedVaultState;
+}
+
+export function equipVaultPayhipItem(item: SkinCatalogItem): VaultPayhipState {
+  if (item.category === 'backpack') {
+    const nextId =
+      cachedVaultState.equippedBackpackId === item.id && cachedVaultState.preferVaultBackpack
+        ? null
+        : item.id;
+    cachedVaultState = {
+      ...cachedVaultState,
+      equippedBackpackId: nextId,
+      preferVaultBackpack: Boolean(nextId),
+      backpackSource: nextId ? 'vault' : 'exchange',
+    };
+  } else {
+    const nextId =
+      cachedVaultState.equippedWeaponId === item.id && cachedVaultState.preferVaultWeapon
+        ? null
+        : item.id;
+    cachedVaultState = {
+      ...cachedVaultState,
+      equippedWeaponId: nextId,
+      preferVaultWeapon: Boolean(nextId),
+      weaponSource: nextId ? 'vault' : 'exchange',
+    };
+  }
+  saveVaultPayhipState();
+  notify();
+  return cachedVaultState;
+}
+
+export function updateVaultItemPayhipEmbed(
+  itemId: string,
+  checkoutUrl: string,
+): VaultPayhipState {
+  cachedVaultState = {
+    ...cachedVaultState,
+    customPayhipUrls: {
+      ...cachedVaultState.customPayhipUrls,
+      [itemId]: checkoutUrl,
+    },
+  };
+  saveVaultPayhipState();
+  notify();
+  return cachedVaultState;
+}
+
 export function getEquippedGunSkinForWeapon(
   itemId: ItemId | null,
 ): ExchangeProduct | null {
   const wc = getWeaponClassForItem(itemId);
   if (!wc) return null;
+  if (cachedVaultState.weaponSource === 'custom_phone' && cachedCustomPhoneState.equippedWeaponId) {
+    const customSkin = cachedCustomPhoneState.skins.find(
+      (s) => s.id === cachedCustomPhoneState.equippedWeaponId && s.category === 'weapon',
+    );
+    if (customSkin) {
+      return toExchangeProductFromSkinCatalogItem(customSkin);
+    }
+  }
+  if (cachedVaultState.preferVaultWeapon && cachedVaultState.equippedWeaponId) {
+    const vaultSkin = getVaultCatalogItems().find(
+      (it) => it.id === cachedVaultState.equippedWeaponId && it.category === 'weapon',
+    );
+    if (vaultSkin) {
+      return toExchangeProductFromSkinCatalogItem(vaultSkin);
+    }
+  }
   const skinId = cachedState.equippedGunSkinsByClass[wc];
-  if (!skinId) return null;
-  return getExchangeItemById(skinId);
+  if (skinId) {
+    const prod = getExchangeItemById(skinId);
+    if (prod) return prod;
+  }
+  if (cachedCustomPhoneState.equippedWeaponId) {
+    const customSkin = cachedCustomPhoneState.skins.find(
+      (s) => s.id === cachedCustomPhoneState.equippedWeaponId && s.category === 'weapon',
+    );
+    if (customSkin) {
+      return toExchangeProductFromSkinCatalogItem(customSkin);
+    }
+  }
+  if (cachedVaultState.equippedWeaponId) {
+    const vaultSkin = getVaultCatalogItems().find(
+      (it) => it.id === cachedVaultState.equippedWeaponId && it.category === 'weapon',
+    );
+    if (vaultSkin) {
+      return toExchangeProductFromSkinCatalogItem(vaultSkin);
+    }
+  }
+  return null;
 }
 
 export function getEquippedBackpackSkin(): ExchangeProduct | null {
-  if (!cachedState.equippedBackpackSkinId) return null;
-  return getExchangeItemById(cachedState.equippedBackpackSkinId);
+  if (cachedVaultState.backpackSource === 'custom_phone' && cachedCustomPhoneState.equippedBackpackId) {
+    const customPack = cachedCustomPhoneState.skins.find(
+      (s) => s.id === cachedCustomPhoneState.equippedBackpackId && s.category === 'backpack',
+    );
+    if (customPack) {
+      return toExchangeProductFromSkinCatalogItem(customPack);
+    }
+  }
+  if (cachedVaultState.preferVaultBackpack && cachedVaultState.equippedBackpackId) {
+    const vaultPack = getVaultCatalogItems().find(
+      (it) => it.id === cachedVaultState.equippedBackpackId && it.category === 'backpack',
+    );
+    if (vaultPack) {
+      return toExchangeProductFromSkinCatalogItem(vaultPack);
+    }
+  }
+  if (cachedState.equippedBackpackSkinId) {
+    const prod = getExchangeItemById(cachedState.equippedBackpackSkinId);
+    if (prod) return prod;
+  }
+  if (cachedCustomPhoneState.equippedBackpackId) {
+    const customPack = cachedCustomPhoneState.skins.find(
+      (s) => s.id === cachedCustomPhoneState.equippedBackpackId && s.category === 'backpack',
+    );
+    if (customPack) {
+      return toExchangeProductFromSkinCatalogItem(customPack);
+    }
+  }
+  if (cachedVaultState.equippedBackpackId) {
+    const vaultPack = getVaultCatalogItems().find(
+      (it) => it.id === cachedVaultState.equippedBackpackId && it.category === 'backpack',
+    );
+    if (vaultPack) {
+      return toExchangeProductFromSkinCatalogItem(vaultPack);
+    }
+  }
+  return null;
 }
 
 export async function refreshStorefront(): Promise<ExchangeStorefrontState> {
@@ -217,6 +565,24 @@ export async function equipExchangeProduct(
     body: JSON.stringify({ playerId, productId, action }),
   });
   const data = (await res.json()) as { ok?: boolean; error?: string };
+  const targetProd = getExchangeItemById(productId);
+  if (res.ok && data.ok && targetProd) {
+    if (targetProd.category === 'backpack_skin') {
+      cachedVaultState = {
+        ...cachedVaultState,
+        preferVaultBackpack: false,
+        backpackSource: 'exchange',
+      };
+      saveVaultPayhipState();
+    } else if (targetProd.category === 'gun_skin') {
+      cachedVaultState = {
+        ...cachedVaultState,
+        preferVaultWeapon: false,
+        weaponSource: 'exchange',
+      };
+      saveVaultPayhipState();
+    }
+  }
   await refreshStorefront();
   if (!res.ok || !data.ok) {
     return { ok: false, error: data.error || 'Could not update equipped cosmetic.' };

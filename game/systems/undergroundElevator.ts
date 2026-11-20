@@ -239,6 +239,7 @@ export const ELEVATOR_EXOTIC_LIFT = {
       topSpeedMph: 214,
       engine: '4.0L Twin-Turbo V8',
       turboBoost: 1.52,
+      aliases: ['mclaren 720s', '720s', 'lb works', 'lbw', 'liberty walk'],
       tagline: 'Liberty Walk widebody aero kit with dihedral doors and carbon diffuser.',
     },
     {
@@ -255,6 +256,7 @@ export const ELEVATOR_EXOTIC_LIFT = {
       topSpeedMph: 205,
       engine: '4.0L Bi-Turbo V8 GT3',
       turboBoost: 1.48,
+      aliases: ['aston vantage', 'vantage', 'vantage gt3', 'aston martin gt3'],
       tagline: 'Endurance-spec British GT3 chassis with full downforce splitter & wing.',
     },
     {
@@ -271,6 +273,7 @@ export const ELEVATOR_EXOTIC_LIFT = {
       topSpeedMph: 208,
       engine: '5.2L Naturally Aspirated V10',
       turboBoost: 1.5,
+      aliases: ['huracan', 'huracan gt3', 'lamborghini huracan', 'evo2', 'lambo huracan'],
       tagline: 'Screaming Squadra Corse V10 track weapon with hexagonal roof scoop.',
     },
     {
@@ -287,6 +290,7 @@ export const ELEVATOR_EXOTIC_LIFT = {
       topSpeedMph: 211,
       engine: '4.0L Twin-Turbo V8 + 3 Electric Motors',
       turboBoost: 1.62,
+      aliases: ['sf90', 'ferrari sf90', 'stradale', 'sf90 stradale'],
       tagline: 'Maranello plug-in hybrid AWD flagship with instant e-torque launch.',
     },
     {
@@ -303,6 +307,7 @@ export const ELEVATOR_EXOTIC_LIFT = {
       topSpeedMph: 196,
       engine: '6.2L Hand-Built V8',
       turboBoost: 1.46,
+      aliases: ['sls', 'sls amg', 'mercedes sls', 'amg black', 'gullwing', 'mercedes'],
       tagline: 'Iconic gullwing Black Series coupe with thunderous AMG V8 exhaust.',
     },
     {
@@ -319,6 +324,7 @@ export const ELEVATOR_EXOTIC_LIFT = {
       topSpeedMph: 250,
       engine: '4.0L Hybrid Twin-Turbo V8',
       turboBoost: 1.72,
+      aliases: ['speedtail', 'mclaren speedtail', 'hyper gt'],
       tagline: 'Teardrop three-seat Hyper-GT built for 250 mph straight-line velocity.',
     },
     {
@@ -335,6 +341,7 @@ export const ELEVATOR_EXOTIC_LIFT = {
       topSpeedMph: 225,
       engine: '3.8L Hybrid Twin-Turbo V8',
       turboBoost: 1.68,
+      aliases: ['p1', 'p1 gtr', 'mclaren p1'],
       tagline: 'Track-only hybrid legend with fixed swan-neck rear wing & ERS boost.',
     },
     {
@@ -351,6 +358,7 @@ export const ELEVATOR_EXOTIC_LIFT = {
       topSpeedMph: 261,
       engine: '8.0L Quad-Turbo W16',
       turboBoost: 1.82,
+      aliases: ['chiron', 'bugatti chiron', 'w16', 'bugatti'],
       tagline: 'Molsheim quad-turbocharged W16 masterpiece with signature C-line.',
     },
     {
@@ -367,6 +375,7 @@ export const ELEVATOR_EXOTIC_LIFT = {
       topSpeedMph: 236,
       engine: '8.0L Quad-Turbo W16',
       turboBoost: 1.78,
+      aliases: ['divo', 'bugatti divo'],
       tagline: 'Coachbuilt corner-carving W16 limited to 40 units worldwide.',
     },
     {
@@ -383,6 +392,7 @@ export const ELEVATOR_EXOTIC_LIFT = {
       topSpeedMph: 186,
       engine: '6.5L Naturally Aspirated V12',
       turboBoost: 1.58,
+      aliases: ['monza', 'monza sp2', 'sp2', 'ferrari monza'],
       tagline: 'Open-cockpit Icona series barchetta powered by an 8,500 rpm V12.',
     },
     {
@@ -399,6 +409,7 @@ export const ELEVATOR_EXOTIC_LIFT = {
       topSpeedMph: 220,
       engine: '6.5L V12 + Supercapacitor E-Motor',
       turboBoost: 1.66,
+      aliases: ['sian', 'lamborghini sian', 'fkp 37', 'fkp37', 'lambo sian'],
       tagline: 'Y-shaped DRL razor aero with instant supercapacitor torque fill.',
     },
     {
@@ -415,6 +426,7 @@ export const ELEVATOR_EXOTIC_LIFT = {
       topSpeedMph: 250,
       engine: '6.5L Cosworth V12 Hybrid (11,100 RPM)',
       turboBoost: 1.85,
+      aliases: ['valkyrie', 'aston valkyrie', 'aston martin valkyrie'],
       tagline: 'Formula 1 Venturi-tunnel hypercar engineered for extreme downforce.',
     },
     {
@@ -431,6 +443,7 @@ export const ELEVATOR_EXOTIC_LIFT = {
       topSpeedMph: 238,
       engine: '6.0L AMG Twin-Turbo V12',
       turboBoost: 1.65,
+      aliases: ['pagani', 'huayra', 'huayra roadster', 'pagani huayra'],
       tagline: 'Carbo-Titanium Italian art piece with active aero flaps & billet cabin.',
     },
     {
@@ -447,6 +460,7 @@ export const ELEVATOR_EXOTIC_LIFT = {
       topSpeedMph: 249,
       engine: 'Freevalve Hybrid Mega-GT Powertrain',
       turboBoost: 1.9,
+      aliases: ['koenigsegg', 'gemera', 'koenigsegg gemera', 'mega gt'],
       tagline: 'World’s first 4-seat Mega-GT with automated dihedral synchro-helix doors.',
     },
     {
@@ -463,6 +477,7 @@ export const ELEVATOR_EXOTIC_LIFT = {
       topSpeedMph: 224,
       engine: '7.6L Naturally Aspirated V12 Hybrid',
       turboBoost: 1.8,
+      aliases: ['delage', 'd12', 'delage d12'],
       tagline: 'Fighter-jet tandem cockpit street-legal F1 prototype from France.',
     },
   ] as ExoticElevatorCar[],
@@ -503,10 +518,34 @@ export const ELEVATOR_EXOTIC_LIFT = {
   },
 };
 
+// When asking the vault computer for one of the 15 exotics, match natural phrases too
+export function parseVaultComputerRequest<T extends { id: string; name: string; aliases: string[] }>(
+  input: string,
+  fleet: T[],
+): T | null {
+  const cleaned = input
+    .toLowerCase()
+    .replace(/\b(bring up|pull up|get me|spawn|summon|show|the|car|exotic|vault)\b/g, ' ')
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) return null;
+
+  return (
+    fleet.find(
+      (car) =>
+        car.name.toLowerCase().includes(cleaned) ||
+        cleaned.includes(car.name.toLowerCase()) ||
+        car.aliases.some((alias) => cleaned.includes(alias) || alias.includes(cleaned)),
+    ) ?? null
+  );
+}
+
 export function resolveElevatorCarQuery(rawInput: string): ExoticElevatorCar | null {
   const normalized = rawInput
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/[^a-z0-9\s-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   if (!normalized) return null;
@@ -529,7 +568,19 @@ export function resolveElevatorCarQuery(rawInput: string): ExoticElevatorCar | n
     }
   }
 
-  // 3. Token / substring match across full vault roster
+  // 3. Natural-phrase vault computer parser across the full fleet (handles "bring up the bugatti chiron", "get me the sf90", etc.)
+  const fleet = ELEVATOR_EXOTIC_LIFT.cars.map((car) => ({
+    car,
+    id: car.id,
+    name: car.name,
+    aliases: car.aliases ?? [],
+  }));
+  const naturalMatch = parseVaultComputerRequest(rawInput, fleet);
+  if (naturalMatch) {
+    return naturalMatch.car;
+  }
+
+  // 4. Fallback token / substring match across full vault roster
   for (const car of ELEVATOR_EXOTIC_LIFT.cars) {
     if (
       car.name.toLowerCase().includes(normalized) ||

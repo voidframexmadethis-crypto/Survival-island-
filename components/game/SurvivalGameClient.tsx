@@ -133,6 +133,24 @@ import { CoasterStudioModal } from './CoasterStudioModal';
 import { EcosystemJournalModal } from './EcosystemJournalModal';
 import { DragonSanctuaryModal } from './DragonSanctuaryModal';
 import { ExchangeModal } from './ExchangeModal';
+import { PayhipMarketplaceModal } from './PayhipMarketplaceModal';
+import { BlankPhoneMarketplaceModal } from './BlankPhoneMarketplaceModal';
+import {
+  CustomPhoneMarketplaceState,
+  VaultPayhipState,
+  addCustomMarketplaceSkin,
+  attachCustomMarketplaceCheckout,
+  equipCustomMarketplaceSkin,
+  equipVaultPayhipItem,
+  getCustomMarketplaceSnapshot,
+  getVaultCatalogItems,
+  getVaultPayhipSnapshot,
+  subscribeExchangeState,
+  unlockCustomMarketplaceSkin,
+  unlockVaultPayhipItem,
+  updateVaultItemPayhipEmbed,
+} from '@/game/systems/exchangeManager';
+import { SkinCatalogItem } from '@/game/data/exchangeCatalog';
 import { EcosystemSimulationData } from '@/game/systems/livingEcosystemSystem';
 import { DragonCompanion } from '@/game/systems/dragonValleySystem';
 
@@ -256,6 +274,23 @@ export function SurvivalGameClient() {
 
   const [rocketControlsActive, setRocketControlsActive] = useState(false);
   const [hudMinimizedMobile, setHudMinimizedMobile] = useState(false);
+  const [vaultPayhipState, setVaultPayhipState] = useState<VaultPayhipState>(() =>
+    getVaultPayhipSnapshot(),
+  );
+  const [vaultPayhipItems, setVaultPayhipItems] = useState<SkinCatalogItem[]>(() =>
+    getVaultCatalogItems(),
+  );
+  const [customPhoneState, setCustomPhoneState] = useState<CustomPhoneMarketplaceState>(() =>
+    getCustomMarketplaceSnapshot(),
+  );
+
+  useEffect(() => {
+    return subscribeExchangeState(() => {
+      setVaultPayhipState({ ...getVaultPayhipSnapshot() });
+      setVaultPayhipItems(getVaultCatalogItems());
+      setCustomPhoneState({ ...getCustomMarketplaceSnapshot() });
+    });
+  }, []);
 
   useEffect(() => {
     MOBILE_HUD_ROCKET_CONTROLS.onResetInputs = () => {
@@ -637,14 +672,27 @@ export function SurvivalGameClient() {
       touchControlsRef.current?.resetTouchJoystick();
       touchControlsRef.current?.setGamepadKnobOffset(0, 0);
       engineRef.current.setTouchJoystick(0, 0);
+      engineRef.current.setActiveModalKind('none');
       engineRef.current.setMode('menu');
     } else if (activeModal) {
       lookPointerId.current = null;
       touchControlsRef.current?.resetTouchJoystick();
       touchControlsRef.current?.setGamepadKnobOffset(0, 0);
       engineRef.current.setTouchJoystick(0, 0);
+      const modalKind =
+        activeModal === 'vault_store' ||
+        activeModal === 'exchange' ||
+        activeModal === 'custom_marketplace'
+          ? 'vault_store'
+          : activeModal === 'underground_elevator'
+            ? 'elevator_computer'
+            : activeModal === 'menu_drawer'
+              ? 'menu_drawer'
+              : 'build_panel';
+      engineRef.current.setActiveModalKind(modalKind);
       engineRef.current.setMode('paused');
     } else {
+      engineRef.current.setActiveModalKind('none');
       engineRef.current.setMode('playing');
       if (document.activeElement instanceof HTMLElement) {
         document.activeElement.blur();
@@ -961,7 +1009,7 @@ export function SurvivalGameClient() {
     engineRef.current?.setTouchJoystick(x, y);
   }, []);
   const handleTouchCameraDrag = useCallback((dx: number, dy: number) => {
-    engineRef.current?.addCameraLookDelta(dx, dy);
+    engineRef.current?.addCameraLookDelta(dx, dy, true);
   }, []);
   const handleTouchAction = useCallback(() => {
     if (activeModalRef.current !== null) return;
@@ -1091,13 +1139,18 @@ export function SurvivalGameClient() {
       <div
         ref={canvasMountRef}
         className="fixed inset-0 w-full h-full z-0 touch-surface touch-none"
+        onContextMenu={(e) => {
+          if (screen === 'playing' && !activeModal) {
+            e.preventDefault();
+          }
+        }}
         onPointerDown={(e) => {
           engineRef.current?.unlockAudio();
           if (screen === 'playing' && !activeModal && !hud?.cinematicActive) {
             if (document.activeElement instanceof HTMLElement) {
               document.activeElement.blur();
             }
-            if (lookPointerId.current === null) {
+            if (lookPointerId.current === null || e.pointerType === 'touch') {
               lookPointerId.current = e.pointerId;
               lastLookPos.current = { x: e.clientX, y: e.clientY };
               pointerDownPos.current = { x: e.clientX, y: e.clientY };
@@ -1111,11 +1164,24 @@ export function SurvivalGameClient() {
           }
         }}
         onPointerMove={(e) => {
+          if (screen !== 'playing' || activeModal) return;
+          if (document.pointerLockElement === e.currentTarget) {
+            engineRef.current?.addCameraLookDelta(
+              e.movementX || 0,
+              e.movementY || 0,
+              false,
+            );
+            return;
+          }
           if (
-            lookPointerId.current === e.pointerId &&
-            screen === 'playing' &&
-            !activeModal
+            e.pointerId === lookPointerId.current &&
+            e.pointerType === 'mouse' &&
+            e.buttons === 0
           ) {
+            lookPointerId.current = null;
+            return;
+          }
+          if (lookPointerId.current === e.pointerId) {
             const dx = e.clientX - lastLookPos.current.x;
             const dy = e.clientY - lastLookPos.current.y;
             lastLookPos.current = { x: e.clientX, y: e.clientY };
@@ -1129,6 +1195,13 @@ export function SurvivalGameClient() {
         onPointerUp={(e) => {
           if (lookPointerId.current === e.pointerId) {
             lookPointerId.current = null;
+            try {
+              if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                e.currentTarget.releasePointerCapture(e.pointerId);
+              }
+            } catch {
+              // Ignore
+            }
             const dist = Math.hypot(
               e.clientX - pointerDownPos.current.x,
               e.clientY - pointerDownPos.current.y,
@@ -1151,8 +1224,10 @@ export function SurvivalGameClient() {
             lookPointerId.current = null;
           }
         }}
-        onLostPointerCapture={() => {
-          lookPointerId.current = null;
+        onLostPointerCapture={(e) => {
+          if (lookPointerId.current === e.pointerId) {
+            lookPointerId.current = null;
+          }
         }}
       />
 
@@ -3684,8 +3759,51 @@ export function SurvivalGameClient() {
           onCosmeticsChanged={() => {
             engineRef.current?.applyExchangeCosmetics(true);
           }}
+          onOpenVaultStore={() => setActiveModal('vault_store')}
+          onOpenCustomMarketplace={() => setActiveModal('custom_marketplace')}
         />
       )}
+
+      <PayhipMarketplaceModal
+        isOpen={activeModal === 'vault_store'}
+        items={vaultPayhipItems}
+        unlockedIds={vaultPayhipState.unlockedIds}
+        equippedBackpackId={vaultPayhipState.equippedBackpackId}
+        equippedWeaponId={vaultPayhipState.equippedWeaponId}
+        onUnlockItem={(itemId) => {
+          unlockVaultPayhipItem(itemId);
+        }}
+        onEquipItem={(item) => {
+          equipVaultPayhipItem(item);
+          engineRef.current?.applyExchangeCosmetics(true);
+        }}
+        onUpdateItemPayhipEmbed={(itemId, rawEmbedOrUrl) => {
+          updateVaultItemPayhipEmbed(itemId, rawEmbedOrUrl);
+        }}
+        onClose={closeModal}
+      />
+
+      <BlankPhoneMarketplaceModal
+        isOpen={activeModal === 'custom_marketplace'}
+        skins={customPhoneState.skins}
+        unlockedIds={customPhoneState.unlockedIds}
+        equippedBackpackId={customPhoneState.equippedBackpackId}
+        equippedWeaponId={customPhoneState.equippedWeaponId}
+        onAddUploadedSkin={(skin) => {
+          addCustomMarketplaceSkin(skin);
+        }}
+        onAttachCheckout={(skinId, payhipUrl, priceLabel) => {
+          attachCustomMarketplaceCheckout(skinId, payhipUrl, priceLabel);
+        }}
+        onUnlockSkin={(skinId) => {
+          unlockCustomMarketplaceSkin(skinId);
+        }}
+        onEquipSkin={(skin) => {
+          equipCustomMarketplaceSkin(skin);
+          engineRef.current?.applyExchangeCosmetics(true);
+        }}
+        onClose={closeModal}
+      />
 
       {activeModal === 'menu_drawer' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
@@ -3711,10 +3829,24 @@ export function SurvivalGameClient() {
             <div className="grid grid-cols-2 gap-3">
               <button
                 onClick={() => setActiveModal('exchange')}
-                className="col-span-2 p-3.5 rounded-xl bg-amber-950/90 hover:bg-amber-500 hover:text-stone-950 border border-amber-500/60 font-bold text-amber-200 text-sm flex items-center justify-center gap-2.5 transition"
+                className="p-3.5 rounded-xl bg-amber-950/90 hover:bg-amber-500 hover:text-stone-950 border border-amber-500/60 font-bold text-amber-200 text-sm flex items-center justify-center gap-2 transition"
               >
                 <Store className="w-5 h-5 text-amber-400 shrink-0" />
-                <span className="tracking-wide uppercase">Survival Island Exchange</span>
+                <span className="tracking-wide uppercase">Exchange</span>
+              </button>
+              <button
+                onClick={() => setActiveModal('vault_store')}
+                className="p-3.5 rounded-xl bg-amber-500/15 hover:bg-amber-500 hover:text-stone-950 border border-amber-500/60 font-bold text-amber-200 text-sm flex items-center justify-center gap-2 transition"
+              >
+                <Sparkles className="w-5 h-5 text-amber-400 shrink-0" />
+                <span className="tracking-wide uppercase">Vault Store</span>
+              </button>
+              <button
+                onClick={() => setActiveModal('custom_marketplace')}
+                className="col-span-2 p-3 rounded-xl bg-emerald-950/80 hover:bg-emerald-500 hover:text-stone-950 border border-emerald-500/50 font-bold text-emerald-200 text-sm flex items-center justify-center gap-2 transition"
+              >
+                <Plus className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="tracking-wide uppercase">Phone Skins &amp; Checkout Store</span>
               </button>
               <button
                 onClick={() => setActiveModal('coaster')}
