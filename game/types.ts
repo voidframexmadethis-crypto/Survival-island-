@@ -359,10 +359,16 @@ export interface VehicleModulePlacement {
 
 export interface ModularVehicleData {
   id: string;
+  carId?: string;
   name: string;
   paintColor: string;
+  accentColor?: string;
   preset?: string;
   rimColor?: string;
+  horsepower?: number;
+  topSpeedMph?: number;
+  zeroToSixtySec?: number;
+  engineLabel?: string;
   suspensionOffset?: number;
   wheelScale?: number;
   hydraulicHop?: boolean;

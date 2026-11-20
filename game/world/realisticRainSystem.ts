@@ -142,6 +142,7 @@ export class RealisticRainSystem {
     this.streakGeo.index = baseQuad.index;
     this.streakGeo.attributes.position = baseQuad.attributes.position;
     this.streakGeo.attributes.uv = baseQuad.attributes.uv;
+    baseQuad.dispose();
 
     const offsets = new Float32Array(MAX_RAIN_STREAKS * 3);
     const params = new Float32Array(MAX_RAIN_STREAKS * 2);
@@ -186,6 +187,7 @@ export class RealisticRainSystem {
     this.splashGeo.index = splashQuad.index;
     this.splashGeo.attributes.position = splashQuad.attributes.position;
     this.splashGeo.attributes.uv = splashQuad.attributes.uv;
+    splashQuad.dispose();
 
     const splashPos = new Float32Array(MAX_SPLASH_RINGS * 3);
     for (let i = 0; i < MAX_SPLASH_RINGS; i++) {

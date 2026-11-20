@@ -86,6 +86,7 @@ import {
   VEHICLE_MODULE_SPECS,
   VehiclePresetKey,
 } from '../systems/modularVehicle';
+import { resolveVehicleProfile } from '../systems/vehicleProfiles';
 import {
   STRUCT_GRID_XZ,
   STRUCT_GRID_Y,
@@ -1148,6 +1149,15 @@ export class GameEngine {
   private vehicleAscendHold = false;
   private vehicleDescendHold = false;
   private vehicleEngineSoundAccum = 0;
+  private vehicleRpmNorm = 0;
+  private vehicleGear = 1;
+  private vehicleShiftTimer = 0;
+  private vehiclePrevThrottle = 0;
+  private vehicleSuspHeave = 0;
+  private vehicleSuspVelY = 0;
+  private vehiclePitchDyn = 0;
+  private vehicleRollDyn = 0;
+  private vehiclePrevLandY = 0;
   private hydraulicMode: HydraulicMode = 'level';
   private hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
   private vehicleInteriorCamera = false;
@@ -2183,6 +2193,7 @@ export class GameEngine {
     if (mode !== 'playing') {
       this.clearMovementInputs();
       this.sound.stopTrunkBass();
+      this.sound.stopVehicleEngine();
       if (mode === 'menu' && prevMode !== 'menu') {
         this.menuCameraSnapped = false;
         this.applyMenuCullImmediate();
@@ -4115,6 +4126,7 @@ export class GameEngine {
     this.elevatorSteamAccum = 0;
     this.autoParkJobs.clear();
     this.sound.stopTrunkBass();
+    this.sound.stopVehicleEngine();
     CABIN_BASS_AND_FIRST_PERSON.setCameraMode('CHASE');
   }
 
@@ -15237,6 +15249,7 @@ export class GameEngine {
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.trunkBassPulse = 0;
     this.sound.stopTrunkBass();
+    this.sound.stopVehicleEngine();
   }
 
   private setupStarterEngineeringShowcase(
@@ -16083,6 +16096,15 @@ export class GameEngine {
     this.vehicleAltitudeVel = 0;
     this.vehicleAscendHold = false;
     this.vehicleDescendHold = false;
+    this.vehicleRpmNorm = 0.08;
+    this.vehicleGear = 1;
+    this.vehicleShiftTimer = 0;
+    this.vehiclePrevThrottle = 0;
+    this.vehicleSuspHeave = 0;
+    this.vehicleSuspVelY = 0;
+    this.vehiclePitchDyn = 0;
+    this.vehicleRollDyn = 0;
+    this.vehiclePrevLandY = v.y;
     this.hydraulicMode = 'level';
     this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
@@ -16223,6 +16245,14 @@ export class GameEngine {
     this.touchSprint = false;
     this.vehicleVisualPitch = 0;
     this.vehicleVisualRoll = 0;
+    this.vehicleRpmNorm = 0;
+    this.vehicleGear = 1;
+    this.vehicleShiftTimer = 0;
+    this.vehiclePrevThrottle = 0;
+    this.vehicleSuspHeave = 0;
+    this.vehicleSuspVelY = 0;
+    this.vehiclePitchDyn = 0;
+    this.vehicleRollDyn = 0;
     this.gamepadGas = 0;
     this.gamepadBrake = 0;
     this.gamepadHandbrake = false;
@@ -16232,6 +16262,7 @@ export class GameEngine {
     this.trunkBassPulse = 0;
     this.chestThumpPulse = 0;
     this.sound.stopTrunkBass();
+    this.sound.stopVehicleEngine();
     try {
       if (typeof document !== 'undefined' && document.pointerLockElement) {
         document.exitPointerLock();
@@ -16900,6 +16931,7 @@ export class GameEngine {
       return;
     }
     const specs = this.getVehicleSpecs(v);
+    const profile = resolveVehicleProfile(v);
 
     let moveRight = 0;
     let moveForward = 0;
@@ -16939,43 +16971,75 @@ export class GameEngine {
     const airborne = specs.canFly && (this.vehicleAscendHold || v.y > Math.max(surfY, waterY) + 0.55);
 
     const vSpeedMult = (v.turboBoost ?? 1) * (this.modSystem?.tweaks.vehicleSpeedMultiplier ?? 1);
+    const landBaseTop = Math.max(specs.topLandSpeed * 0.72, profile.handling.topLandSpeedMs);
     const topSpeed =
       (airborne
         ? specs.topAirSpeed * boostMult * fuelMult
         : isInWater
           ? specs.topWaterSpeed * boostMult * fuelMult
-          : specs.topLandSpeed * boostMult * fuelMult) * vSpeedMult;
+          : landBaseTop * boostMult * fuelMult) * vSpeedMult;
 
-    // Braking / Throttle
-    if (this.gamepadHandbrake || (!specs.canFly && !hasHyd && this.vehicleAscendHold)) {
-      this.vehicleForwardSpeed = THREE.MathUtils.damp(this.vehicleForwardSpeed, 0, 9, dt);
+    const prevForwardSpeed = this.vehicleForwardSpeed;
+    const handbraking = Boolean(
+      this.gamepadHandbrake || (!specs.canFly && !hasHyd && this.vehicleAscendHold),
+    );
+
+    // Braking / Throttle per vehicle powertrain & braking profile
+    if (handbraking) {
+      this.vehicleForwardSpeed = THREE.MathUtils.damp(
+        this.vehicleForwardSpeed,
+        0,
+        profile.handling.brakeRate * 0.78,
+        dt,
+      );
     } else if (Math.abs(moveForward) > 0.08) {
+      const opposingDir =
+        (moveForward > 0 && this.vehicleForwardSpeed < -0.6) ||
+        (moveForward < 0 && this.vehicleForwardSpeed > 0.6);
       const targetSpd =
-        moveForward >= 0 ? moveForward * topSpeed : moveForward * topSpeed * 0.55;
+        moveForward >= 0
+          ? moveForward * topSpeed
+          : moveForward * topSpeed * profile.handling.reverseRatio;
+      const responseRate = airborne
+        ? 2.6
+        : opposingDir
+          ? profile.handling.brakeRate * 0.68
+          : profile.handling.accelRate * 0.66;
       this.vehicleForwardSpeed = THREE.MathUtils.damp(
         this.vehicleForwardSpeed,
         targetSpd,
-        airborne ? 2.6 : 4.2,
+        responseRate,
         dt,
       );
     } else {
       this.vehicleForwardSpeed = THREE.MathUtils.damp(
         this.vehicleForwardSpeed,
         0,
-        airborne ? 1.8 : 3.2,
+        airborne ? 1.8 : profile.handling.coastDrag,
         dt,
       );
     }
 
-    // Steering yaw & smooth follow camera
-    const targetSteer = THREE.MathUtils.clamp(-moveRight * 0.55, -0.55, 0.55);
-    this.vehicleSteerAngle = THREE.MathUtils.damp(this.vehicleSteerAngle, targetSteer, 10, dt);
+    // Steering yaw & speed-sensitive aero stability
+    const steerMax = profile.handling.steerMaxRad;
+    const targetSteer = THREE.MathUtils.clamp(-moveRight * steerMax, -steerMax, steerMax);
+    this.vehicleSteerAngle = THREE.MathUtils.damp(this.vehicleSteerAngle, targetSteer, 11, dt);
 
+    const speedRatio =
+      topSpeed > 0.1
+        ? THREE.MathUtils.clamp(Math.abs(this.vehicleForwardSpeed) / topSpeed, 0, 1.2)
+        : 0;
     if (Math.abs(moveRight) > 0.08) {
       const revSign = !airborne && this.vehicleForwardSpeed < -0.5 ? -1 : 1;
+      const highSpeedDamp = THREE.MathUtils.lerp(
+        1.0,
+        profile.handling.highSpeedSteerFactor,
+        Math.min(1, speedRatio),
+      );
       const turnPower =
-        specs.turnRate *
-        (airborne || isInWater ? 1.0 : Math.min(1, 0.35 + Math.abs(this.vehicleForwardSpeed) / 7)) *
+        profile.handling.steerTurnRate *
+        highSpeedDamp *
+        (airborne || isInWater ? 1.0 : Math.min(1, 0.35 + Math.abs(this.vehicleForwardSpeed) / 6.5)) *
         revSign;
       const yawDelta = -moveRight * turnPower * dt;
       v.yaw += yawDelta;
@@ -17142,11 +17206,91 @@ export class GameEngine {
       dt,
     );
 
-    this.vehicleEngineSoundAccum += dt;
-    if ((spd > 2 || airborne) && this.vehicleEngineSoundAccum >= 0.45) {
-      this.vehicleEngineSoundAccum = 0;
-      this.sound.playKineticGearTick();
+    // Dynamic chassis squat / brake dive / cornering body roll / sprung bump suspension
+    const longAccel =
+      dt > 0.0005
+        ? THREE.MathUtils.clamp((this.vehicleForwardSpeed - prevForwardSpeed) / dt, -26, 26)
+        : 0;
+    const targetDynPitch = airborne
+      ? 0
+      : THREE.MathUtils.clamp(
+          -longAccel * profile.handling.pitchSquat * 0.14,
+          -profile.handling.pitchSquat * 1.4,
+          profile.handling.pitchDive * 1.4,
+        );
+    const targetDynRoll = airborne
+      ? 0
+      : THREE.MathUtils.clamp(
+          moveRight * Math.min(1.15, spd / 14) * profile.handling.rollGain,
+          -0.22,
+          0.22,
+        );
+    this.vehiclePitchDyn = THREE.MathUtils.damp(this.vehiclePitchDyn, targetDynPitch, 9.5, dt);
+    this.vehicleRollDyn = THREE.MathUtils.damp(this.vehicleRollDyn, targetDynRoll, 9.5, dt);
+
+    const bumpVel =
+      dt > 0.0005 && !airborne
+        ? THREE.MathUtils.clamp((v.y - this.vehiclePrevLandY) / dt, -8, 8)
+        : 0;
+    this.vehiclePrevLandY = v.y;
+    const springAccel =
+      -profile.handling.suspensionStiffness * 6.5 * this.vehicleSuspHeave -
+      profile.handling.suspensionDamping * 1.4 * this.vehicleSuspVelY -
+      bumpVel * 0.45;
+    this.vehicleSuspVelY += springAccel * dt;
+    this.vehicleSuspHeave = THREE.MathUtils.clamp(
+      this.vehicleSuspHeave + this.vehicleSuspVelY * dt,
+      -0.14,
+      0.14,
+    );
+
+    // Multi-gear transmission simulation + real-time authentic per-car engine sound
+    const gears = Math.max(1, profile.audio.gearCount);
+    const absSpeedNorm =
+      topSpeed > 0.1
+        ? THREE.MathUtils.clamp(Math.abs(this.vehicleForwardSpeed) / (topSpeed * 0.96), 0, 1.05)
+        : 0;
+    const targetGear = Math.max(1, Math.min(gears, Math.floor(absSpeedNorm * gears) + 1));
+    const justShifted = targetGear > this.vehicleGear && moveForward > 0.2;
+    if (targetGear !== this.vehicleGear) {
+      this.vehicleGear = targetGear;
+      this.vehicleShiftTimer = 0.13;
     }
+    if (this.vehicleShiftTimer > 0) {
+      this.vehicleShiftTimer = Math.max(0, this.vehicleShiftTimer - dt);
+    }
+    const gearLow = (this.vehicleGear - 1) / gears;
+    const gearSpan = 1 / gears;
+    const gearProgress =
+      gearSpan > 0
+        ? THREE.MathUtils.clamp((absSpeedNorm - gearLow) / gearSpan, 0, 1.05)
+        : absSpeedNorm;
+    const freeRev = Math.abs(moveForward) > 0.12 && absSpeedNorm < 0.06 ? 0.34 : 0;
+    const targetRpm = THREE.MathUtils.clamp(
+      0.08 +
+        gearProgress * (this.vehicleGear === 1 ? 0.88 : 0.62) +
+        (this.vehicleGear > 1 ? 0.28 : 0) +
+        freeRev +
+        (boosting ? 0.08 : 0),
+      0.06,
+      1.04,
+    );
+    this.vehicleRpmNorm = THREE.MathUtils.damp(this.vehicleRpmNorm, targetRpm, 11, dt);
+    const throttleVal = Math.abs(moveForward) > 0.08 ? Math.abs(moveForward) : 0;
+    const throttleReleased = this.vehiclePrevThrottle > 0.45 && throttleVal < 0.1;
+    this.vehiclePrevThrottle = throttleVal;
+    this.vehicleEngineSoundAccum = 0;
+
+    this.sound.updateVehicleEngine(dt, profile.audio, {
+      rpmNorm: this.vehicleRpmNorm,
+      throttle: throttleVal,
+      braking: handbraking,
+      speedRatio: absSpeedNorm,
+      boosting,
+      shifting: this.vehicleShiftTimer > 0,
+      justShifted,
+      throttleReleased,
+    });
     this.nearbyInteraction = null;
   }
 
@@ -17399,7 +17543,9 @@ export class GameEngine {
         ? Math.max(0.075, 0.38 + (v.suspensionOffset ?? -0.3))
         : isCustomShowCar
           ? Math.max(0.26, 0.38 + (v.suspensionOffset ?? 0))
-          : (v.suspensionOffset ?? 0);
+          : v.preset === 'sports_car'
+            ? Math.max(-0.04, (v.suspensionOffset ?? -0.1) + 0.1)
+            : (v.suspensionOffset ?? 0);
       const minChassisY = isTahoeShow ? 0.075 : 0.18;
       const vIsOldSchool = this.isOldSchoolVehicle(v);
       const showBassPulse =
@@ -17426,9 +17572,11 @@ export class GameEngine {
         }
       } else if (isActive && activeHasHyd) {
         const { fl, fr, rl, rr } = this.hydCorners;
-        const avgHeave = (fl + fr + rl + rr) * 0.25;
-        const hydPitch = activeIsDonk ? 0 : ((rl + rr) - (fl + fr)) * 0.21;
-        const hydRoll = ((fr + rr) - (fl + rl)) * (activeIsDonk ? 0.16 : 0.24);
+        const avgHeave = (fl + fr + rl + rr) * 0.25 + this.vehicleSuspHeave * 0.85;
+        const hydPitch =
+          (activeIsDonk ? 0 : ((rl + rr) - (fl + fr)) * 0.21) + this.vehiclePitchDyn;
+        const hydRoll =
+          ((fr + rr) - (fl + rl)) * (activeIsDonk ? 0.16 : 0.24) + this.vehicleRollDyn;
         handles.chassisGroup.position.y =
           Math.max(minChassisY, baseBodyY + avgHeave) + showBassPulse * 0.025;
         handles.chassisGroup.rotation.x = hydPitch;
@@ -17446,9 +17594,12 @@ export class GameEngine {
           }
         }
       } else {
-        handles.chassisGroup.position.y = baseBodyY + showBassPulse * 0.032;
-        handles.chassisGroup.rotation.x = 0;
-        handles.chassisGroup.rotation.z = 0;
+        const dynHeave = isActive ? this.vehicleSuspHeave : 0;
+        const dynPitch = isActive ? this.vehiclePitchDyn : 0;
+        const dynRoll = isActive ? this.vehicleRollDyn : 0;
+        handles.chassisGroup.position.y = baseBodyY + dynHeave + showBassPulse * 0.032;
+        handles.chassisGroup.rotation.x = dynPitch;
+        handles.chassisGroup.rotation.z = dynRoll;
         for (const wc of handles.wheelCorners) {
           wc.obj.position.y = wc.baseY;
         }
@@ -17705,7 +17856,9 @@ export class GameEngine {
         }
       }
 
-      const wheelRadius = 0.42 * (v.wheelScale ?? 1.0);
+      const vProfile = resolveVehicleProfile(v);
+      const wheelRadius =
+        v.preset === 'sports_car' ? vProfile.wheelRadius : 0.42 * (v.wheelScale ?? 1.0);
       const spd = isActive
         ? this.vehicleForwardSpeed
         : autoJob
@@ -19725,11 +19878,17 @@ export class GameEngine {
       UNDERGROUND_ELEVATOR_POS.z,
       0,
     );
+    spawned.carId = car.id;
     spawned.name = car.name;
     spawned.paintColor = car.paintColor;
+    spawned.accentColor = car.accentColor;
     spawned.rimColor = car.rimColor;
     spawned.underglowColor = car.underglowColor;
     spawned.turboBoost = car.turboBoost;
+    spawned.horsepower = car.horsepower;
+    spawned.topSpeedMph = car.topSpeedMph;
+    spawned.zeroToSixtySec = Number.parseFloat(car.zeroToSixty) || undefined;
+    spawned.engineLabel = car.engine;
     if (car.livery) {
       spawned.livery = { ...car.livery };
     }

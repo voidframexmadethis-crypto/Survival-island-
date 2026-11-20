@@ -62,6 +62,8 @@ export class WorldChunkManager {
       const group = new THREE.Group();
       group.name = `world_chunk_${cx}_${cz}`;
       // Kept at (0,0,0) so reparented world-space objects preserve exact coordinates & matrices
+      group.updateMatrix();
+      group.matrixAutoUpdate = false;
       this.parentGroup.add(group);
       chunk = { group, x: cx, z: cz };
       this.chunkMap.set(key, chunk);
@@ -78,6 +80,8 @@ export class WorldChunkManager {
     if (!chunk) {
       const group = new THREE.Group();
       group.name = `world_foliage_chunk_${cx}_${cz}`;
+      group.updateMatrix();
+      group.matrixAutoUpdate = false;
       this.parentGroup.add(group);
       chunk = { group, x: cx, z: cz };
       this.foliageChunkMap.set(key, chunk);

@@ -193,6 +193,8 @@ export interface WorldHandles {
   undergroundElevator: UndergroundElevatorHandles;
   overworldGroup: THREE.Group;
   worldChunks: WorldChunk[];
+  foliageChunks: WorldChunk[];
+  largeLandmarkObjs: THREE.Object3D[];
   activateInteractiveNode: (nodeId: string) => ResourceVisualHandle | undefined;
   restoreBatchedNode: (nodeId: string) => void;
   setBatchedNodeVisible: (nodeId: string, visible: boolean) => void;
@@ -6507,12 +6509,22 @@ gl_Position = projectionMatrix * mvPosition;`,
     }
   });
 
-  // Freeze static matrices on terrain and instanced resources to skip per-frame matrix recomputation
+  // Freeze static matrices on terrain, instanced resources, foliage & decor batches to skip per-frame matrix recomputation
   terrainMesh.updateMatrix();
   terrainMesh.matrixAutoUpdate = false;
   for (const im of builtBatchMeshes.values()) {
     im.updateMatrix();
     im.matrixAutoUpdate = false;
+  }
+  for (let i = 0; i < foliageBatchMeshes.length; i++) {
+    const fb = foliageBatchMeshes[i];
+    fb.mesh.updateMatrix();
+    fb.mesh.matrixAutoUpdate = false;
+  }
+  for (let i = 0; i < chunkedDecorEntries.length; i++) {
+    const dc = chunkedDecorEntries[i];
+    dc.mesh.updateMatrix();
+    dc.mesh.matrixAutoUpdate = false;
   }
 
   // Register every biome landmark and static feature child of overworldGroup for fast squared-distance culling
@@ -6797,6 +6809,19 @@ gl_Position = projectionMatrix * mvPosition;`,
     const existing = resourceHandles.get(nodeId);
     if (existing) {
       overworldGroup.remove(existing.root);
+      existing.root.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          if (obj.geometry && !obj.geometry.userData?.sharedAsset && !disposableGeos.includes(obj.geometry)) {
+            obj.geometry.dispose();
+          }
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          for (const m of mats) {
+            if (m && !m.userData?.sharedAsset && !disposableMats.includes(m)) {
+              m.dispose();
+            }
+          }
+        }
+      });
       resourceHandles.delete(nodeId);
       resourceMeshes.delete(nodeId);
     }
@@ -6871,6 +6896,8 @@ gl_Position = projectionMatrix * mvPosition;`,
     undergroundElevator,
     overworldGroup,
     worldChunks: worldChunkManager.chunks,
+    foliageChunks: worldChunkManager.foliageChunks,
+    largeLandmarkObjs: largeLandmarks.map((e) => e.obj),
     activateInteractiveNode,
     restoreBatchedNode,
     setBatchedNodeVisible,

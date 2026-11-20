@@ -82,10 +82,9 @@ export function applyRealisticMeshLightingPass(
         ) {
           usesTextureMaps = true;
         }
-        if (!object.userData?.preserveEnvMapIntensity) {
+        if (!object.userData?.preserveEnvMapIntensity && !material.userData?.preserveEnvMapIntensity) {
           if (Math.abs(material.envMapIntensity - envMapIntensity) > 0.001) {
             material.envMapIntensity = envMapIntensity;
-            material.needsUpdate = true;
           }
         }
       }

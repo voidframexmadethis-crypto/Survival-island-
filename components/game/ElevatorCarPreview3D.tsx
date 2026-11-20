@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { RotateCcw } from 'lucide-react';
 import { ExoticElevatorCar } from '@/game/systems/undergroundElevator';
+import { resolveVehicleProfile } from '@/game/systems/vehicleProfiles';
 import {
   buildRealLifeCarRig,
   GarageCarVisualConfig,
@@ -18,28 +19,32 @@ interface ElevatorCarPreview3DProps {
 }
 
 export function toGarageVisualConfig(car: ExoticElevatorCar): GarageCarVisualConfig {
-  let archetype: VehicleArchetype = normalizeCarArchetype(
-    `${car.id} ${car.name} ${car.rarity}`,
-  );
+  const profile = resolveVehicleProfile({
+    id: car.id,
+    carId: car.id,
+    name: car.name,
+    preset: car.preset,
+  });
+  let archetype: VehicleArchetype =
+    profile.archetype !== 'generic_car'
+      ? profile.archetype
+      : normalizeCarArchetype(`${car.id} ${car.name} ${car.rarity}`);
   if (archetype === 'generic_car' && car.class !== 'Show & Hydraulics') {
     archetype = 'mclaren';
   }
-  const isTahoe = archetype === 'chevy_tahoe';
-  const isCadillac = archetype === 'cadillac';
-  const isDonk = archetype === 'donk';
 
   return {
     id: car.id,
     displayName: car.name,
     archetype,
-    paintColor: car.livery?.bodyColor ?? car.paintColor,
-    secondaryColor: car.accentColor,
-    rimColor: car.rimColor,
-    underglowColor: car.underglowColor,
-    wheelRadius: isTahoe ? 0.56 : isDonk ? 0.6 : isCadillac ? 0.36 : 0.38,
-    wheelWidth: isTahoe ? 0.34 : isCadillac ? 0.24 : 0.3,
-    wheelBaseZ: isTahoe ? 1.44 : isCadillac ? 1.42 : 1.38,
-    trackWidthX: isTahoe ? 1.98 : isCadillac ? 1.88 : 1.84,
+    paintColor: car.livery?.bodyColor ?? car.paintColor ?? profile.paintColor,
+    secondaryColor: car.accentColor ?? profile.accentColor,
+    rimColor: car.rimColor ?? profile.rimColor,
+    underglowColor: car.underglowColor ?? profile.underglowColor,
+    wheelRadius: profile.wheelRadius,
+    wheelWidth: profile.wheelWidth,
+    wheelBaseZ: profile.wheelBaseZ,
+    trackWidthX: profile.trackWidthX,
     hasSubwooferWall: Boolean(car.hasSubwooferWall),
     liveryText: car.livery
       ? {

@@ -1,4 +1,5 @@
 import { CreatureSpecies, WeatherType } from '../types';
+import type { EngineAudioConfig } from '../systems/vehicleProfiles';
 
 /**
  * 100% Procedural Web Audio API Sound Engine (Zero external MP3/WAV 404s).
@@ -27,6 +28,22 @@ export class SoundEngine {
   private trunkBassPulse = 0;
   private whiteNoiseBuf: AudioBuffer | null = null;
   private brownNoiseBuf: AudioBuffer | null = null;
+
+  // Continuous real-time multi-powertrain vehicle engine synthesizer
+  private engineOsc1: OscillatorNode | null = null;
+  private engineOsc2: OscillatorNode | null = null;
+  private engineSubOsc: OscillatorNode | null = null;
+  private engineForcedOsc: OscillatorNode | null = null;
+  private engineLfo: OscillatorNode | null = null;
+  private engineLfoGain: GainNode | null = null;
+  private engineFilter: BiquadFilterNode | null = null;
+  private engineHarmGain: GainNode | null = null;
+  private engineSubGain: GainNode | null = null;
+  private engineForcedGain: GainNode | null = null;
+  private engineMasterGain: GainNode | null = null;
+  private engineRunning = false;
+  private activeEngineProfileId: string | null = null;
+  private lastBlowOffAt = 0;
 
   public configure(opts: {
     masterVolume: number;
@@ -1909,7 +1926,368 @@ export class SoundEngine {
     osc.stop(now + 0.8);
   }
 
+  private startEngineNodes(config: EngineAudioConfig): void {
+    if (!this.ctx || !this.masterGain) return;
+    this.stopVehicleEngine();
+
+    const now = this.ctx.currentTime;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.Q.value = 2.1;
+    filter.frequency.setValueAtTime(
+      Math.max(80, config.exhaustCutoffMin),
+      now,
+    );
+
+    const master = this.ctx.createGain();
+    master.gain.setValueAtTime(0.0001, now);
+    filter.connect(master);
+    master.connect(this.masterGain);
+
+    const osc1 = this.ctx.createOscillator();
+    osc1.type = config.primaryWave;
+    osc1.frequency.setValueAtTime(Math.max(20, config.idleHz), now);
+    osc1.connect(filter);
+
+    const osc2 = this.ctx.createOscillator();
+    osc2.type = config.secondaryWave;
+    osc2.frequency.setValueAtTime(
+      Math.max(20, config.idleHz * config.harmonicRatio),
+      now,
+    );
+    const harmGain = this.ctx.createGain();
+    harmGain.gain.setValueAtTime(0.46, now);
+    osc2.connect(harmGain);
+    harmGain.connect(filter);
+
+    const subOsc = this.ctx.createOscillator();
+    subOsc.type = 'sine';
+    subOsc.frequency.setValueAtTime(Math.max(18, config.idleHz * 0.5), now);
+    const subGain = this.ctx.createGain();
+    subGain.gain.setValueAtTime(
+      Math.max(0.1, Math.min(1.0, config.subHarmonicMix * 0.55)),
+      now,
+    );
+    subOsc.connect(subGain);
+    subGain.connect(filter);
+
+    const lfo = this.ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.setValueAtTime(Math.max(2, config.lopeHz), now);
+    const lfoGain = this.ctx.createGain();
+    lfoGain.gain.setValueAtTime(
+      config.lopeDepth * config.exhaustCutoffMin * 0.65,
+      now,
+    );
+    lfo.connect(lfoGain);
+    lfoGain.connect(filter.frequency);
+
+    const forcedOsc = this.ctx.createOscillator();
+    forcedOsc.type =
+      config.forcedInduction === 'supercharger'
+        ? 'triangle'
+        : config.forcedInduction === 'steam_chug'
+          ? 'sawtooth'
+          : 'sine';
+    forcedOsc.frequency.setValueAtTime(320, now);
+    const forcedGain = this.ctx.createGain();
+    forcedGain.gain.setValueAtTime(0.0001, now);
+    forcedOsc.connect(forcedGain);
+    forcedGain.connect(master);
+
+    osc1.start(now);
+    osc2.start(now);
+    subOsc.start(now);
+    lfo.start(now);
+    forcedOsc.start(now);
+
+    this.engineOsc1 = osc1;
+    this.engineOsc2 = osc2;
+    this.engineSubOsc = subOsc;
+    this.engineForcedOsc = forcedOsc;
+    this.engineLfo = lfo;
+    this.engineLfoGain = lfoGain;
+    this.engineFilter = filter;
+    this.engineHarmGain = harmGain;
+    this.engineSubGain = subGain;
+    this.engineForcedGain = forcedGain;
+    this.engineMasterGain = master;
+    this.engineRunning = true;
+    this.activeEngineProfileId = config.profileId;
+  }
+
+  private playExhaustShiftPop(gainScale: number): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain || gainScale <= 0.02) return;
+    const now = this.ctx.currentTime;
+    const dur = 0.095;
+    const src = this.createNoiseSource('brown');
+    if (src) {
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(380, now);
+      bp.frequency.exponentialRampToValueAtTime(140, now + dur);
+      bp.Q.value = 1.4;
+      const g = this.ctx.createGain();
+      const peak = Math.min(0.32, gainScale * 0.48);
+      g.gain.setValueAtTime(peak, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+      src.connect(bp);
+      bp.connect(g);
+      g.connect(this.masterGain);
+      src.start(now, Math.random() * 1.4, dur + 0.02);
+    }
+
+    const thump = this.ctx.createOscillator();
+    const tg = this.ctx.createGain();
+    thump.type = 'triangle';
+    thump.frequency.setValueAtTime(125, now);
+    thump.frequency.exponentialRampToValueAtTime(42, now + 0.08);
+    tg.gain.setValueAtTime(Math.min(0.22, gainScale * 0.34), now);
+    tg.gain.exponentialRampToValueAtTime(0.001, now + 0.085);
+    thump.connect(tg);
+    tg.connect(this.masterGain);
+    thump.start(now);
+    thump.stop(now + 0.09);
+  }
+
+  private playTurboBlowOff(isQuadTurbo: boolean): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastBlowOffAt < 0.35) return;
+    this.lastBlowOffAt = now;
+
+    const dur = isQuadTurbo ? 0.24 : 0.17;
+    const src = this.createNoiseSource('white');
+    if (!src) return;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = 3.2;
+    bp.frequency.setValueAtTime(isQuadTurbo ? 4600 : 3800, now);
+    bp.frequency.exponentialRampToValueAtTime(1400, now + dur);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.001, now);
+    g.gain.linearRampToValueAtTime(isQuadTurbo ? 0.14 : 0.1, now + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(this.masterGain);
+    src.start(now, Math.random() * 2.0, dur + 0.02);
+  }
+
+  public updateVehicleEngine(
+    _dt: number,
+    config: EngineAudioConfig,
+    telemetry: {
+      rpmNorm: number;
+      throttle: number;
+      braking: boolean;
+      speedRatio: number;
+      boosting: boolean;
+      shifting: boolean;
+      justShifted?: boolean;
+      throttleReleased?: boolean;
+    },
+  ): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) {
+      if (this.engineRunning) this.stopVehicleEngine();
+      return;
+    }
+
+    if (!this.engineRunning || this.activeEngineProfileId !== config.profileId) {
+      this.startEngineNodes(config);
+    }
+
+    if (
+      !this.engineOsc1 ||
+      !this.engineOsc2 ||
+      !this.engineSubOsc ||
+      !this.engineForcedOsc ||
+      !this.engineLfo ||
+      !this.engineLfoGain ||
+      !this.engineFilter ||
+      !this.engineHarmGain ||
+      !this.engineSubGain ||
+      !this.engineForcedGain ||
+      !this.engineMasterGain
+    ) {
+      return;
+    }
+
+    const now = this.ctx.currentTime;
+    const rpm = Math.max(0, Math.min(1.08, telemetry.rpmNorm));
+    const throttle = Math.max(0, Math.min(1, telemetry.throttle));
+    const speedRatio = Math.max(0, Math.min(1.2, telemetry.speedRatio));
+    const loadBoost = throttle * 0.55 + (telemetry.boosting ? 0.3 : 0);
+
+    // Non-linear realistic RPM pitch curve
+    const pitchNorm = Math.pow(rpm, 1.08);
+    const fundamental = Math.max(
+      18,
+      config.idleHz + (config.maxHz - config.idleHz) * pitchNorm,
+    );
+
+    if (Number.isFinite(fundamental)) {
+      this.engineOsc1.frequency.setTargetAtTime(fundamental, now, 0.032);
+      this.engineOsc2.frequency.setTargetAtTime(
+        Math.max(18, fundamental * config.harmonicRatio),
+        now,
+        0.032,
+      );
+      this.engineSubOsc.frequency.setTargetAtTime(
+        Math.max(16, fundamental * 0.5),
+        now,
+        0.035,
+      );
+    }
+
+    // Filter opens wide under throttle & high RPM for rich exhaust bark vs smooth idle murmur
+    const cutoffRange = Math.max(100, config.exhaustCutoffMax - config.exhaustCutoffMin);
+    const targetCutoff = Math.max(
+      90,
+      Math.min(
+        6500,
+        config.exhaustCutoffMin +
+          cutoffRange * (0.28 * rpm + 0.72 * rpm * (0.45 + 0.55 * loadBoost)) +
+          throttle * 180,
+      ),
+    );
+    if (Number.isFinite(targetCutoff)) {
+      this.engineFilter.frequency.setTargetAtTime(targetCutoff, now, 0.045);
+    }
+
+    // Cam lope thump is strongest at idle and smooths out as engine climbs into powerband
+    const lopeFreq = Math.max(3, config.lopeHz * (0.85 + rpm * 1.65));
+    const lopeAmount =
+      config.lopeDepth * targetCutoff * (1.0 - rpm * 0.62) * 0.52;
+    if (Number.isFinite(lopeFreq)) {
+      this.engineLfo.frequency.setTargetAtTime(lopeFreq, now, 0.06);
+    }
+    if (Number.isFinite(lopeAmount)) {
+      this.engineLfoGain.gain.setTargetAtTime(Math.max(0, lopeAmount), now, 0.06);
+    }
+
+    // Harmonic richness scales under throttle
+    this.engineHarmGain.gain.setTargetAtTime(
+      0.34 + throttle * 0.24 + rpm * 0.14,
+      now,
+      0.04,
+    );
+    this.engineSubGain.gain.setTargetAtTime(
+      config.subHarmonicMix * (0.48 + (1 - rpm) * 0.18),
+      now,
+      0.04,
+    );
+
+    // Forced induction / hybrid e-motor / steam / rotor layer
+    let forcedFreq = 400;
+    let forcedGain = 0.0001;
+    if (config.forcedInduction === 'supercharger') {
+      forcedFreq = Math.max(180, fundamental * 5.2 + rpm * 1400);
+      forcedGain = config.forcedInductionGain * (0.08 + rpm * 0.48 + throttle * 0.35);
+    } else if (
+      config.forcedInduction === 'twin_turbo' ||
+      config.forcedInduction === 'quad_turbo'
+    ) {
+      const quadMult = config.forcedInduction === 'quad_turbo' ? 1.24 : 1.0;
+      forcedFreq = (740 + rpm * 2050 + (telemetry.boosting ? 350 : 0)) * quadMult;
+      const spool = Math.max(0, (rpm - 0.24) * 1.32);
+      forcedGain = config.forcedInductionGain * spool * (0.28 + throttle * 0.55);
+    } else if (config.forcedInduction === 'hybrid_e') {
+      forcedFreq = 390 + speedRatio * 1250 + rpm * 480;
+      forcedGain = config.forcedInductionGain * (0.14 + speedRatio * 0.42 + throttle * 0.24);
+    } else if (config.forcedInduction === 'steam_chug') {
+      forcedFreq = 75 + rpm * 165;
+      forcedGain = config.forcedInductionGain * (0.2 + throttle * 0.38);
+    } else if (config.forcedInduction === 'rotor_prop') {
+      forcedFreq = 110 + rpm * 145;
+      forcedGain = config.forcedInductionGain * (0.3 + speedRatio * 0.4 + throttle * 0.25);
+    }
+
+    if (Number.isFinite(forcedFreq) && Number.isFinite(forcedGain)) {
+      this.engineForcedOsc.frequency.setTargetAtTime(forcedFreq, now, 0.045);
+      this.engineForcedGain.gain.setTargetAtTime(
+        Math.max(0.0001, Math.min(0.18, forcedGain)),
+        now,
+        0.045,
+      );
+    }
+
+    // Overall engine presence: warm idle + commanding pull under load + brief dip during gear shift
+    const shiftDip = telemetry.shifting ? 0.62 : 1.0;
+    const masterLevel =
+      (0.052 + rpm * 0.068 + throttle * 0.052 + (telemetry.boosting ? 0.025 : 0)) *
+      shiftDip;
+    if (Number.isFinite(masterLevel)) {
+      this.engineMasterGain.gain.setTargetAtTime(
+        Math.max(0.001, Math.min(0.24, masterLevel)),
+        now,
+        0.04,
+      );
+    }
+
+    if (telemetry.justShifted) {
+      this.playExhaustShiftPop(config.shiftPopGain);
+    }
+    if (
+      telemetry.throttleReleased &&
+      rpm > 0.48 &&
+      (config.forcedInduction === 'twin_turbo' ||
+        config.forcedInduction === 'quad_turbo')
+    ) {
+      this.playTurboBlowOff(config.forcedInduction === 'quad_turbo');
+    }
+  }
+
+  public stopVehicleEngine(): void {
+    const nodes: Array<OscillatorNode | null> = [
+      this.engineOsc1,
+      this.engineOsc2,
+      this.engineSubOsc,
+      this.engineForcedOsc,
+      this.engineLfo,
+    ];
+    for (const node of nodes) {
+      if (!node) continue;
+      try {
+        node.stop();
+        node.disconnect();
+      } catch {
+        // Ignore already stopped oscillators
+      }
+    }
+    const gains: Array<AudioNode | null> = [
+      this.engineLfoGain,
+      this.engineHarmGain,
+      this.engineSubGain,
+      this.engineForcedGain,
+      this.engineFilter,
+      this.engineMasterGain,
+    ];
+    for (const g of gains) {
+      if (!g) continue;
+      try {
+        g.disconnect();
+      } catch {
+        // Ignore already disconnected nodes
+      }
+    }
+    this.engineOsc1 = null;
+    this.engineOsc2 = null;
+    this.engineSubOsc = null;
+    this.engineForcedOsc = null;
+    this.engineLfo = null;
+    this.engineLfoGain = null;
+    this.engineFilter = null;
+    this.engineHarmGain = null;
+    this.engineSubGain = null;
+    this.engineForcedGain = null;
+    this.engineMasterGain = null;
+    this.engineRunning = false;
+    this.activeEngineProfileId = null;
+  }
+
   public dispose(): void {
+    this.stopVehicleEngine();
     try {
       this.surfNoiseSrc?.stop();
       this.surfNoiseSrc?.disconnect();
