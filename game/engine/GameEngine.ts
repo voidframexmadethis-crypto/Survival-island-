@@ -175,9 +175,11 @@ import {
   KineticNodeKind,
   ModularVehicleData,
   MomentumHudState,
+  NavigatorTask,
   NearbyInteraction,
   PlacedStructure,
   PlantedCrop,
+  PlayerGender,
   PlayerVitals,
   ResourceNodeKind,
   ResourceNodeState,
@@ -222,6 +224,13 @@ import {
   FirstPersonHandsRig,
   SkyCelestialHandles,
 } from '../world/models';
+import { PirateCinematicRig } from '../world/pirateCinematicRig';
+import { NavigatorCompanionController } from '../systems/navigatorCompanionSystem';
+import {
+  createGamePerformanceMonitor,
+  GamePerformanceRecorder,
+} from '../systems/performanceMonitor';
+import { RealisticRainSystem } from '../world/realisticRainSystem';
 import {
   AUTUMN_GROVE_POS,
   BIOME_INFO,
@@ -456,6 +465,7 @@ export interface EngineCallbacks {
       | 'saturn_rocket'
       | 'underground_elevator'
       | 'car_radio'
+      | 'navigator_companion'
     >,
     structureId?: string,
   ) => void;
@@ -535,12 +545,12 @@ export class GameEngine {
   private skyBodies!: SkyCelestialHandles;
   private handsRig!: FirstPersonHandsRig;
   private shipModel!: THREE.Group;
-  private rainPoints!: THREE.Points;
-  private rainGeo!: THREE.BufferGeometry;
+  private rainSystem!: RealisticRainSystem;
   private creatures!: CreatureManager;
   private structureManager!: StructureManager;
 
   private readonly fpsController = new Permanent60FpsController();
+  private perfMonitor: GamePerformanceRecorder | null = null;
   private disposed = false;
   private rafPausedByVisibility = false;
   private clock = new THREE.Clock();
@@ -745,10 +755,15 @@ export class GameEngine {
   // Game Mode & Intro Cinematic
   private mode: 'menu' | 'playing' | 'paused' = 'menu';
   private settings: GameSettings;
+  private pirateCinematic!: PirateCinematicRig;
+  private navigatorCompanion!: NavigatorCompanionController;
+  private playerGender: PlayerGender = 'boy';
   private cinematicActive = false;
   private cinematicTimer = 0;
   private cinematicSubtitle = '';
+  private cinematicCrewShout = '';
   private lastCinematicHudSubtitle = '';
+  private lastCinematicHudCrewShout = '';
   private cinematicCameraInitialized = false;
   private readonly _cinematicPosTarget = new THREE.Vector3();
   private readonly _cinematicLookTarget = new THREE.Vector3();
@@ -1233,6 +1248,7 @@ export class GameEngine {
       powerPreference: 'high-performance',
       stencil: false,
     });
+    this.perfMonitor = createGamePerformanceMonitor(this.renderer);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.06;
@@ -1439,29 +1455,26 @@ export class GameEngine {
     this.shipModel.visible = false;
     this.scene.add(this.shipModel);
 
-    // Lightweight 3D Rain Particle Field
-    const rainCount = 340;
-    const rainPositions = new Float32Array(rainCount * 3);
-    for (let i = 0; i < rainCount; i++) {
-      rainPositions[i * 3] = (Math.random() - 0.5) * 32;
-      rainPositions[i * 3 + 1] = Math.random() * 18;
-      rainPositions[i * 3 + 2] = (Math.random() - 0.5) * 32;
-    }
-    this.rainGeo = new THREE.BufferGeometry();
-    this.rainGeo.setAttribute(
-      'position',
-      new THREE.BufferAttribute(rainPositions, 3),
+    this.pirateCinematic = new PirateCinematicRig();
+    this.pirateCinematic.root.visible = false;
+    this.scene.add(this.pirateCinematic.root);
+
+    // Non-playable Ship Navigator Companion (Boy or Girl) with backpack, gun, axe & autonomous AI
+    this.navigatorCompanion = new NavigatorCompanionController();
+    const navX = PLAYER_SPAWN.x + 4.2;
+    const navZ = PLAYER_SPAWN.z - 5.2;
+    this.navigatorCompanion.resetAtSpawn(
+      PLAYER_SPAWN.x,
+      PLAYER_SPAWN.z,
+      getTerrainHeight(navX, navZ),
     );
-    const rainMat = new THREE.PointsMaterial({
-      color: 0xcbd5e1,
-      size: 0.12,
-      transparent: true,
-      opacity: 0.65,
-    });
-    this.rainPoints = new THREE.Points(this.rainGeo, rainMat);
-    this.rainPoints.visible = false;
-    this.rainPoints.userData.ignoreLightingPass = true;
-    this.scene.add(this.rainPoints);
+    this.navigatorCompanion.group.visible = false;
+    this.scene.add(this.navigatorCompanion.group);
+    this.scene.add(this.navigatorCompanion.droppedGunGroup);
+
+    // Ultra-realistic GPU-driven Volumetric Rain Streaks + Ground Splash Ripples (0 CPU loop, 2 draw calls)
+    this.rainSystem = new RealisticRainSystem();
+    this.scene.add(this.rainSystem.group);
 
     this.creatures = new CreatureManager(this.scene);
     this.structureManager = new StructureManager(this.scene);
@@ -1542,17 +1555,17 @@ export class GameEngine {
       // Temporarily mark hidden worlds/ship/storm FX visible during boot compilation so shaders pre-warm
       const prevFlatVis = this.flatWorld.flatGroup.visible;
       const prevShipVis = this.shipModel.visible;
-      const prevRainVis = this.rainPoints.visible;
+      const prevRainVis = this.rainSystem.group.visible;
       const prevStarVis = this.skyBodies.starPoints.visible;
       this.flatWorld.setVisible(true);
       this.shipModel.visible = true;
-      this.rainPoints.visible = true;
+      this.rainSystem.group.visible = true;
       this.skyBodies.starPoints.visible = true;
       this.renderer.compile(this.scene, this.camera);
       this.prewarmSceneTextures(this.scene);
       this.flatWorld.setVisible(prevFlatVis);
       this.shipModel.visible = prevShipVis;
-      this.rainPoints.visible = prevRainVis;
+      this.rainSystem.group.visible = prevRainVis;
       this.skyBodies.starPoints.visible = prevStarVis;
     }
   }
@@ -2168,24 +2181,22 @@ export class GameEngine {
       this.settings.graphicsQuality,
     );
 
-    // Tier 0: Full preset quality; Tier 1: Keep shadows ON with tighter frustum & lower DPR/ocean shader LOD;
-    // Tier 2: Disable dynamic shadows (shadow discs activate cleanly), DPR=1, reduced ocean/particle load;
-    // Tier 3: Minimum shader & light floor while preserving horizon landmarks (>= 160m unless user chose 'near')
-    let shadowsOn =
+    // Stable Hardware-Calibrated Graphics Profile (zero mid-game shader recompilations or framebuffer resizes):
+    // Respects the user's chosen preset, shadows, and draw distance permanently without oscillating.
+    const shadowsOn =
       this.settings.shadowsEnabled !== false &&
       preset !== 'low' &&
       !this.isSoftwareGl;
-    if (this.autoFpsTier >= 2) {
-      shadowsOn = false;
-    }
 
     const shadowMapSize =
-      preset === 'ultra' && this.autoFpsTier === 0
+      preset === 'ultra' && !this.isTouchDevice
         ? 2048
         : 1024;
-    let shadowHalfExtent =
+    const shadowHalfExtent =
       preset === 'ultra'
-        ? 84
+        ? this.isTouchDevice
+          ? 52
+          : 80
         : preset === 'high'
           ? this.isTouchDevice
             ? 46
@@ -2195,31 +2206,26 @@ export class GameEngine {
               ? 40
               : 48
             : 36;
-    if (this.autoFpsTier >= 1) {
-      shadowHalfExtent = Math.min(shadowHalfExtent, 34);
-    }
     const shadowFar =
-      preset === 'ultra' && this.autoFpsTier === 0
-        ? 280
-        : preset === 'high' && this.autoFpsTier === 0
-          ? 220
-          : 185;
-    const shadowRadius =
-      this.autoFpsTier >= 1 || this.isTouchDevice
-        ? 1.0
-        : preset === 'ultra'
-          ? 3
-          : 2;
+      preset === 'ultra' && !this.isTouchDevice
+        ? 260
+        : preset === 'high' && !this.isTouchDevice
+          ? 210
+          : 175;
+    const shadowRadius = this.isTouchDevice
+      ? 1.0
+      : preset === 'ultra'
+        ? 2.5
+        : 2.0;
 
     let dpr = 1;
     if (!this.isSoftwareGl) {
       const nativeDpr = window.devicePixelRatio || 1;
-      if (this.autoFpsTier >= 2 || preset === 'low') {
+      if (preset === 'low') {
         dpr = 1;
-      } else if (this.autoFpsTier === 1) {
-        dpr = this.isTouchDevice ? Math.min(nativeDpr, 1.05) : Math.min(nativeDpr, 1.25);
       } else if (this.isTouchDevice) {
-        dpr = Math.min(nativeDpr, preset === 'ultra' || preset === 'high' ? 1.25 : 1.15);
+        // Crisp iPhone/mobile Retina clarity without 3x pixel fillrate meltdown (9x fewer fragments than 3x DPR)
+        dpr = Math.min(nativeDpr, preset === 'ultra' || preset === 'high' ? 1.3 : 1.15);
       } else if (preset === 'medium' || preset === 'high') {
         dpr = Math.min(nativeDpr, 1.5);
       } else {
@@ -2232,70 +2238,54 @@ export class GameEngine {
       preset !== 'low' &&
       !this.isSoftwareGl;
     const particlesOn = this.settings.particlesEnabled !== false;
-    let particleScale = !particlesOn
+    const particleScale = !particlesOn
       ? 0
       : preset === 'low'
         ? 0.5
         : preset === 'medium'
           ? 0.8
           : preset === 'ultra'
-            ? 1.25
-            : 1.0;
-    if (this.autoFpsTier === 1) particleScale *= 0.85;
-    else if (this.autoFpsTier === 2) particleScale *= 0.6;
-    else if (this.autoFpsTier >= 3) particleScale *= 0.4;
-    this.effectiveParticleScale = particleScale;
-
-    let baseShaderTier =
-      this.isSoftwareGl || preset === 'low'
-        ? 0
-        : preset === 'ultra'
-          ? 2.5
-          : preset === 'high'
-            ? 2
-            : 1;
-    if (this.autoFpsTier === 1) baseShaderTier = Math.min(baseShaderTier, 1);
-    else if (this.autoFpsTier === 2) baseShaderTier = Math.min(baseShaderTier, 0.5);
-    else if (this.autoFpsTier >= 3) baseShaderTier = 0;
-    this.shaderQualityTier = baseShaderTier;
-
-    this.oceanDetailLevel =
-      this.isSoftwareGl || preset === 'low' || this.autoFpsTier >= 3
-        ? 0.35
-        : this.autoFpsTier === 2
-          ? 0.48
-          : this.autoFpsTier === 1
-            ? 0.65
+            ? this.isTouchDevice
+              ? 1.0
+              : 1.25
             : this.isTouchDevice
               ? 0.85
               : 1.0;
+    this.effectiveParticleScale = particleScale;
+
+    this.shaderQualityTier =
+      this.isSoftwareGl || preset === 'low'
+        ? 0
+        : preset === 'ultra'
+          ? this.isTouchDevice
+            ? 1.5
+            : 2.5
+          : preset === 'high'
+            ? this.isTouchDevice
+              ? 1.25
+              : 2
+            : 1;
+
+    this.oceanDetailLevel =
+      this.isSoftwareGl || preset === 'low'
+        ? 0.4
+        : this.isTouchDevice
+          ? 0.72
+          : 1.0;
     this.realisticOcean?.setDetailLevel(this.oceanDetailLevel);
 
-    this.maxActivePointLights =
-      this.isSoftwareGl || this.autoFpsTier >= 3
-        ? 1
-        : this.autoFpsTier === 2
-          ? 2
-          : this.autoFpsTier === 1
-            ? this.isTouchDevice
-              ? 3
-              : 4
-            : this.isTouchDevice
-              ? 4
-              : 6;
+    this.maxActivePointLights = this.isSoftwareGl
+      ? 1
+      : this.isTouchDevice
+        ? 3
+        : 6;
 
     const userDistTier =
       this.settings.drawDistance ??
       (preset === 'high' ? 'far' : preset === 'low' ? 'near' : 'medium');
     let cullDist = userDistTier === 'near' ? 135 : userDistTier === 'far' ? 310 : 215;
     if (this.isTouchDevice && userDistTier === 'far') {
-      cullDist = 250;
-    }
-    if (this.autoFpsTier >= 3 && userDistTier !== 'near') {
-      // Trim only modestly so distant hills & landmarks never vanish leaving an empty island
-      cullDist = Math.max(165, Math.round(cullDist * 0.78));
-    } else if (this.autoFpsTier === 2 && userDistTier === 'far') {
-      cullDist = 205;
+      cullDist = 240;
     }
     const camFar =
       cullDist <= 145
@@ -2708,6 +2698,70 @@ export class GameEngine {
     }
   }
 
+  public setPlayerGender(gender: PlayerGender): void {
+    this.playerGender = gender === 'girl' ? 'girl' : 'boy';
+    this.pirateCinematic?.setPlayerGender(this.playerGender);
+    this.navigatorCompanion?.setGenderForPlayer(this.playerGender);
+    this.emitHud();
+  }
+
+  public setNavigatorTask(task: NavigatorTask): void {
+    this.navigatorCompanion?.setTask(task);
+    this.emitHud();
+  }
+
+  public setNavigatorAllowDriving(allowed: boolean): void {
+    this.navigatorCompanion?.setAllowDriving(allowed);
+    this.toast(
+      allowed
+        ? `${this.navigatorCompanion.getName()} is now allowed to drive your cars!`
+        : `${this.navigatorCompanion.getName()} will no longer drive cars.`,
+      'info',
+    );
+    this.emitHud();
+  }
+
+  public setNavigatorGender(gender: PlayerGender): void {
+    this.navigatorCompanion?.setGender(gender);
+    this.emitHud();
+  }
+
+  public collectNavigatorSharedLoot(): void {
+    if (!this.navigatorCompanion) return;
+    const items = this.navigatorCompanion.collectAllSharedLoot();
+    if (items.length === 0) return;
+    for (const slot of items) {
+      this.addItem(slot.itemId, slot.quantity, false);
+    }
+    this.sound.playPickup();
+    this.toast(
+      `Collected ${items.reduce((s, x) => s + x.quantity, 0)} shared supplies from ${this.navigatorCompanion.getName()}'s backpack!`,
+      'craft',
+    );
+    this.emitHud();
+  }
+
+  public replayPirateIntro(): void {
+    if (this.worldType !== 'island') return;
+    this.cinematicActive = true;
+    this.cinematicCameraInitialized = false;
+    this.cinematicTimer = 0;
+    this.cinematicSubtitle =
+      'Thunder splits the sky! Broadside cannons BOOM as the pirate crew battles the storm!';
+    this.cinematicCrewShout = 'CAPTAIN: "HOLD FAST! MAN THE DECK!" · CANNONS BOOMING';
+    this.lastCinematicHudSubtitle = this.cinematicSubtitle;
+    this.lastCinematicHudCrewShout = this.cinematicCrewShout;
+    this.weather = 'storm';
+    this.shipModel.visible = false;
+    this.pirateCinematic.setPlayerGender(this.playerGender);
+    this.pirateCinematic.reset(OCEAN_LEVEL);
+    this.pirateCinematic.root.visible = true;
+    this.shipModel.position.set(-34, OCEAN_LEVEL - 0.15, 846);
+    this.applyCinematicCullImmediate();
+    this.mode = 'playing';
+    this.emitHud();
+  }
+
   public skipCinematic(): void {
     if (!this.cinematicActive) return;
     this.finishCinematic();
@@ -2717,8 +2771,13 @@ export class GameEngine {
     this.cinematicActive = false;
     this.cinematicCameraInitialized = false;
     this.cinematicSubtitle = '';
+    this.cinematicCrewShout = '';
     this.lastCinematicHudSubtitle = '';
+    this.lastCinematicHudCrewShout = '';
     this.shipModel.visible = false;
+    if (this.pirateCinematic) {
+      this.pirateCinematic.root.visible = false;
+    }
     this.weather = 'clear';
     this.weatherTimer = 85;
     this.lightningFlash = 0;
@@ -3538,9 +3597,24 @@ export class GameEngine {
       worldName?: string;
       flatSurfaceStyle?: FlatSurfaceStyle;
       gameMode?: GameMode;
+      playerGender?: PlayerGender;
     },
   ): void {
     this.currentSlotId = slotId;
+    if (options?.playerGender) {
+      this.playerGender = options.playerGender === 'girl' ? 'girl' : 'boy';
+    }
+    this.pirateCinematic?.setPlayerGender(this.playerGender);
+    if (this.navigatorCompanion) {
+      this.navigatorCompanion.setGenderForPlayer(this.playerGender);
+      const navX = PLAYER_SPAWN.x + 4.2;
+      const navZ = PLAYER_SPAWN.z - 5.2;
+      this.navigatorCompanion.resetAtSpawn(
+        PLAYER_SPAWN.x,
+        PLAYER_SPAWN.z,
+        getTerrainHeight(navX, navZ),
+      );
+    }
     const nextWorldType: WorldType = options?.worldType === 'flat' ? 'flat' : 'island';
     const nextSurfaceStyle: FlatSurfaceStyle =
       options?.flatSurfaceStyle === 'concrete_plaza' ? 'concrete_plaza' : 'turf_grid';
@@ -3673,7 +3747,9 @@ export class GameEngine {
       this.stats = this.createEmptyStats();
       this.cinematicActive = false;
       this.cinematicSubtitle = '';
+      this.cinematicCrewShout = '';
       this.shipModel.visible = false;
+      if (this.pirateCinematic) this.pirateCinematic.root.visible = false;
 
       // Starter Coaster Station & Park Cyclone roller coaster right beside the Park Plaza
       this.spawnStructure({
@@ -3932,19 +4008,27 @@ export class GameEngine {
       this.cinematicCameraInitialized = false;
       this.cinematicTimer = 0;
       this.cinematicSubtitle =
-        'A violent storm strikes your pirate galleon in uncharted tropical waters...';
+        'Thunder splits the sky! Broadside cannons BOOM as the pirate crew battles the storm!';
+      this.cinematicCrewShout = 'CAPTAIN: "HOLD FAST! MAN THE DECK!" · CANNONS BOOMING';
       this.lastCinematicHudSubtitle = this.cinematicSubtitle;
-      this.shipModel.visible = true;
-      // Start far offshore in deep open ocean (coastline is ~z=740) so the ship always stays on water
-      this.shipModel.position.set(-34, OCEAN_LEVEL - 0.15, 850);
+      this.lastCinematicHudCrewShout = this.cinematicCrewShout;
+      this.shipModel.visible = false;
+      this.pirateCinematic.setPlayerGender(this.playerGender);
+      this.pirateCinematic.reset(OCEAN_LEVEL);
+      this.pirateCinematic.root.visible = true;
+      // Keep shipModel position synced for rain/lightning centering during cinematic
+      this.shipModel.position.set(-34, OCEAN_LEVEL - 0.15, 846);
       this.shipModel.rotation.set(0, Math.PI * 0.82, 0);
       this.applyCinematicCullImmediate();
     } else {
       this.cinematicActive = false;
       this.cinematicCameraInitialized = false;
       this.cinematicSubtitle = '';
+      this.cinematicCrewShout = '';
       this.lastCinematicHudSubtitle = '';
+      this.lastCinematicHudCrewShout = '';
       this.shipModel.visible = false;
+      if (this.pirateCinematic) this.pirateCinematic.root.visible = false;
       if (this.mode === 'menu') {
         this.applyMenuCullImmediate();
       } else {
@@ -4053,6 +4137,18 @@ export class GameEngine {
     this.playerZ = save.player.z;
     this.playerYaw = save.player.yaw;
     this.playerVelY = 0;
+    this.playerGender = save.player.gender === 'girl' ? 'girl' : 'boy';
+    this.pirateCinematic?.setPlayerGender(this.playerGender);
+    if (this.navigatorCompanion && loadedWorldType === 'island') {
+      this.navigatorCompanion.setGenderForPlayer(this.playerGender);
+      const navX = this.playerX + 3.6;
+      const navZ = this.playerZ - 3.2;
+      this.navigatorCompanion.resetAtSpawn(
+        this.playerX,
+        this.playerZ,
+        getTerrainHeight(navX, navZ),
+      );
+    }
     this.camYaw = this.playerYaw - Math.PI;
     this.camPitch = save.player.pitch ?? -0.05;
     this.snapPlayerCamera();
@@ -4141,7 +4237,9 @@ export class GameEngine {
     }
     this.cinematicActive = false;
     this.cinematicSubtitle = '';
+    this.cinematicCrewShout = '';
     this.shipModel.visible = false;
+    if (this.pirateCinematic) this.pirateCinematic.root.visible = false;
     this.gameOver = false;
     this.gameOverReason = '';
 
@@ -4996,6 +5094,7 @@ export class GameEngine {
         equippedSlot: this.equippedSlot,
         hotbarItemIds: [...this.hotbarItemIds],
         hudBarCapacity: this.hotbarItemIds.length,
+        gender: this.playerGender,
       },
       dayCount: this.dayCount,
       timeOfDay: this.timeOfDay,
@@ -6685,6 +6784,25 @@ export class GameEngine {
       if (near.kind === 'kinetic_node') {
         this.interactKineticNode(near.id);
         this.actionCooldown = 0.38;
+        return;
+      }
+      if (near.id === 'ship_navigator_npc') {
+        this.callbacks.onOpenStation('navigator_companion', 'ship_navigator_npc');
+        this.actionCooldown = 0.35;
+        return;
+      }
+      if (near.id === 'navigator_dropped_gun') {
+        if (this.navigatorCompanion?.pickupDroppedGun()) {
+          this.addItem('gun', 1, false);
+          this.addItem('ammo', 24, false);
+          this.sound.playPickup();
+          this.toast(
+            `Picked up ${this.navigatorCompanion.getName()}'s Survival Gun & 24 Ammo from the island floor.`,
+            'discovery',
+          );
+          this.emitHud();
+        }
+        this.actionCooldown = 0.35;
         return;
       }
       if (near.kind === 'farmer') {
@@ -8843,7 +8961,7 @@ export class GameEngine {
     this._sunDirScratch.set(sunOffX, sunOffY, sunOffZ).normalize();
 
     if (this.currentDimension !== 'overworld') {
-      this.rainPoints.visible = false;
+      this.rainSystem.group.visible = false;
       this.skyBodies.skyDome.visible = false;
       this.skyBodies.sunMesh.visible = false;
       this.skyBodies.moonMesh.visible = false;
@@ -9033,36 +9151,32 @@ export class GameEngine {
       );
     }
 
-    // Rain particle drop animation (disabled on title menu & scaled cleanly by particle profile)
-    const activeRainCount = Math.max(
-      0,
-      Math.min(this.rainCount, Math.round(this.rainCount * Math.min(1, this.effectiveParticleScale))),
-    );
+    // GPU-driven volumetric raindrop streaks + expanding ground splash ripples (zero FPS drop)
     const showRain =
       this.mode !== 'menu' &&
       !isFlat &&
-      activeRainCount > 0 &&
+      this.effectiveParticleScale > 0.05 &&
       (this.weather === 'rain' ||
         this.weather === 'storm' ||
         this.cinematicActive);
-    this.rainPoints.visible = showRain;
-    if (showRain) {
-      this.rainGeo.setDrawRange(0, activeRainCount);
-      const center = this.cinematicActive
-        ? this.shipModel.position
-        : this.camera.position;
-      this.rainPoints.position.set(center.x, Math.max(0, center.y - 6), center.z);
-      const posAttr = this.rainGeo.attributes.position as THREE.BufferAttribute;
-      const arr = posAttr.array as Float32Array;
-      const fallDelta = (this.weather === 'storm' || this.cinematicActive ? 24 : 18) * dt;
-      const maxRainIdx = activeRainCount * 3;
-      for (let i = 1; i < maxRainIdx; i += 3) {
-        let ry = arr[i] - fallDelta;
-        if (ry < 0) ry = 18;
-        arr[i] = ry;
-      }
-      posAttr.needsUpdate = true;
-    }
+    const rainCenter = this.cinematicActive
+      ? this.shipModel.position
+      : this.camera.position;
+    const rainGroundY = this.cinematicActive
+      ? OCEAN_LEVEL
+      : Math.max(OCEAN_LEVEL, getTerrainHeight(rainCenter.x, rainCenter.z));
+    this.rainSystem.update({
+      visible: showRain,
+      elapsed: this.elapsed,
+      centerX: rainCenter.x,
+      centerY: rainCenter.y,
+      centerZ: rainCenter.z,
+      groundY: rainGroundY,
+      isStorm: this.weather === 'storm' || this.cinematicActive,
+      isNight: sunElev < 0.05,
+      densityScale: Math.min(1, this.effectiveParticleScale),
+      showSplashes: !this.cinematicActive,
+    });
 
     if (this.mode === 'playing' && !this.gameOver && !this.cinematicActive) {
       for (const st of this.structures) {
@@ -9085,102 +9199,42 @@ export class GameEngine {
     }
     const t = this.cinematicTimer;
 
-    // Giant pirate galleon stays strictly on deep open water (z >= 802, far offshore from the ~740m coastline)
-    // Continuous ship swell, heel & camera targets across all 3 beats (zero cuts, zero teleports, zero GC)
-    const swellY = Math.sin(t * 2.1) * 0.72;
-    const pitchWave = Math.sin(t * 2.3) * 0.085;
-    const rollWave = Math.cos(t * 1.9) * 0.11;
+    const frame = this.pirateCinematic.update(
+      t,
+      OCEAN_LEVEL,
+      PLAYER_SPAWN,
+      getTerrainHeight,
+      this._cinematicPosTarget,
+      this._cinematicLookTarget,
+      {
+        onCannonBoom: () => this.sound.playCannonBoom(),
+        onHullCrack: () => this.sound.playStructuralCreak(),
+        onWaterSeep: () => this.sound.playWaterRush(),
+        onPlayerSplash: () => this.sound.playOceanSplash(),
+        onShipBreakup: () => {
+          this.sound.playCollapseCrash();
+          this.sound.playExplosion();
+        },
+        onThunder: () => this.sound.playThunder(),
+      },
+    );
 
-    if (t < 3.4) {
-      const e = THREE.MathUtils.smoothstep(t / 3.4, 0, 1);
-      this.cinematicSubtitle =
-        'A violent tropical storm tears across the open sea...';
-      const shipX = THREE.MathUtils.lerp(-34, -16, e);
-      const shipZ = THREE.MathUtils.lerp(850, 816, e);
-      this.shipModel.position.set(shipX, OCEAN_LEVEL + swellY, shipZ);
-      this.shipModel.rotation.set(
-        pitchWave,
-        Math.PI * 0.82 + Math.sin(t * 0.7) * 0.035,
-        rollWave,
-      );
-      this._cinematicPosTarget.set(
-        shipX + THREE.MathUtils.lerp(34, 30, e),
-        13.2 + Math.sin(t * 1.6) * 0.45,
-        shipZ + THREE.MathUtils.lerp(22, 18, e),
-      );
-      this._cinematicLookTarget.set(shipX, 8.0, shipZ - 2);
-    } else if (t < 6.6) {
-      const e = THREE.MathUtils.smoothstep((t - 3.4) / 3.2, 0, 1);
-      this.cinematicSubtitle =
-        'A colossal rogue wave slams the galleon — you are swept overboard into the surf!';
-      const shipX = THREE.MathUtils.lerp(-16, -10, e);
-      const shipZ = THREE.MathUtils.lerp(816, 802, e);
-      const waveHeel = THREE.MathUtils.lerp(0, 0.28, e);
-      const waveDip = THREE.MathUtils.lerp(0, -0.55, e);
-      this.shipModel.position.set(shipX, OCEAN_LEVEL + swellY * 0.8 + waveDip, shipZ);
-      this.shipModel.rotation.set(
-        pitchWave * 1.15,
-        Math.PI * 0.82 + e * 0.18 + Math.sin(t * 0.7) * 0.035 * (1 - e),
-        rollWave + waveHeel,
-      );
-      // Continuous glide from Beat 1 end (shipX+30, ~13, shipZ+18) down toward coastal surf
-      this._cinematicPosTarget.set(
-        shipX + THREE.MathUtils.lerp(30, 16, e),
-        THREE.MathUtils.lerp(13.0, 5.2, e),
-        shipZ + THREE.MathUtils.lerp(18, -18, e),
-      );
-      this._cinematicLookTarget.set(
-        shipX,
-        THREE.MathUtils.lerp(8.0, 4.2, e),
-        THREE.MathUtils.lerp(shipZ - 2, shipZ - 14, e),
-      );
-    } else if (t < 9.8) {
-      const p = (t - 6.6) / 3.2;
-      const e = THREE.MathUtils.smoothstep(p, 0, 1);
-      this.cinematicSubtitle =
-        'Carried by the tide, you wash ashore on the island while the pirate ship drifts offshore...';
-      // Giant pirate ship stays offshore on deep water (z = 802 -> 810) — ONLY the player goes onto land!
-      this.shipModel.position.set(
-        -10 - e * 4,
-        OCEAN_LEVEL - 0.55 + swellY * 0.65,
-        802 + e * 8,
-      );
-      this.shipModel.rotation.set(
-        pitchWave * 0.75,
-        Math.PI * 1.0 + e * 0.12,
-        0.28 + rollWave * 0.65,
-      );
-      // Smooth continuous shore-wash arc from Beat 2 end (6, 5.2, 784) to PLAYER_SPAWN (0, ground+1.62, 680)
-      const camX = THREE.MathUtils.lerp(6, PLAYER_SPAWN.x, e);
-      const camZ = THREE.MathUtils.lerp(784, PLAYER_SPAWN.z, e);
-      const groundY = Math.max(OCEAN_LEVEL + 0.35, getTerrainHeight(camX, camZ));
-      const surfLift = Math.sin(e * Math.PI) * 1.1;
-      this._cinematicPosTarget.set(
-        camX,
-        THREE.MathUtils.lerp(5.2, groundY + 1.62, e) + surfLift,
-        camZ,
-      );
-      // Smoothly swing gaze from offshore surf around toward the beach landing direction (camYaw=0.12)
-      const endGroundY = getTerrainHeight(PLAYER_SPAWN.x, PLAYER_SPAWN.z);
-      const endLookX = PLAYER_SPAWN.x - Math.sin(0.12) * 52;
-      const endLookY = endGroundY + 1.62 - Math.sin(0.05) * 52;
-      const endLookZ = PLAYER_SPAWN.z - Math.cos(0.12) * 52;
-      this._cinematicLookTarget.set(
-        THREE.MathUtils.lerp(-10, endLookX, e),
-        THREE.MathUtils.lerp(4.2, endLookY, e),
-        THREE.MathUtils.lerp(788, endLookZ, e),
-      );
-    } else {
+    if (frame.finished) {
       this.finishCinematic();
       return;
     }
+
+    this.cinematicSubtitle = frame.subtitle;
+    this.cinematicCrewShout = frame.crewShout;
+    // Keep shipModel coordinates updated so storm rain & lightning center on the pirate galleon
+    this.shipModel.position.set(frame.shipWorldX, OCEAN_LEVEL, frame.shipWorldZ);
 
     if (!this.cinematicCameraInitialized) {
       this.camera.position.copy(this._cinematicPosTarget);
       this._cinematicLookCurrent.copy(this._cinematicLookTarget);
       this.cinematicCameraInitialized = true;
     } else {
-      const camAlpha = 1 - Math.exp(-8.5 * dt);
+      const camAlpha = 1 - Math.exp(-7.5 * dt);
       const lookAlpha = 1 - Math.exp(-7.0 * dt);
       this.camera.position.lerp(this._cinematicPosTarget, camAlpha);
       this._cinematicLookCurrent.lerp(this._cinematicLookTarget, lookAlpha);
@@ -11670,6 +11724,53 @@ export class GameEngine {
         };
       }
 
+      // Check Ship Navigator Companion NPC & Dropped Gun on Island Floor
+      if (
+        this.navigatorCompanion &&
+        this.worldType === 'island' &&
+        this.currentDimension === 'overworld'
+      ) {
+        const droppedGun = this.navigatorCompanion.getDroppedGunPos();
+        if (droppedGun) {
+          const gunDist = Math.hypot(
+            droppedGun.x - this.playerX,
+            droppedGun.z - this.playerZ,
+          );
+          if (gunDist < 4.0 && Math.abs(droppedGun.y - this.playerY) < 2.8) {
+            return {
+              id: 'navigator_dropped_gun',
+              label: `Pick Up ${this.navigatorCompanion.getName().split(' ')[0]}'s Gun`,
+              sublabel: 'Dropped on the island floor before walking into the ocean (+Gun, +24 Ammo)',
+              kind: 'shipwreck',
+              actionCategory: 'gather',
+              distance: gunDist,
+              targetX: droppedGun.x,
+              targetY: droppedGun.y,
+              targetZ: droppedGun.z,
+            };
+          }
+        }
+        if (!this.navigatorCompanion.isGone() && !this.navigatorCompanion.isDeparting()) {
+          const navDist = Math.hypot(
+            this.navigatorCompanion.x - this.playerX,
+            this.navigatorCompanion.z - this.playerZ,
+          );
+          if (navDist < 4.4 && Math.abs(this.navigatorCompanion.y - this.playerY) < 2.8) {
+            return {
+              id: 'ship_navigator_npc',
+              label: `Talk to ${this.navigatorCompanion.getName()}`,
+              sublabel: 'Commands, Shared Backpack, Chop/Hunt/Shelter/Drive',
+              kind: 'shipwreck',
+              actionCategory: 'use',
+              distance: navDist,
+              targetX: this.navigatorCompanion.x,
+              targetY: this.navigatorCompanion.y,
+              targetZ: this.navigatorCompanion.z,
+            };
+          }
+        }
+      }
+
       // Check Farmer NPC beside the Farm Market
       const farmerDist = Math.hypot(
         this.world.farmerNpcPos.x - this.playerX,
@@ -13257,6 +13358,13 @@ export class GameEngine {
       trackedSightings: this.trackedSightings,
       cinematicActive: this.cinematicActive,
       cinematicSubtitle: this.cinematicSubtitle,
+      cinematicCrewShout: this.cinematicCrewShout,
+      playerGender: this.playerGender,
+      navigatorCompanion: this.navigatorCompanion?.getHudState(
+        this.playerX,
+        this.playerZ,
+        HILL_HOUSE_POS,
+      ),
       gameOver: this.gameOver,
       gameOverReason: this.gameOverReason,
       currentDimension: this.currentDimension,
@@ -13445,75 +13553,9 @@ export class GameEngine {
       this.fpsDisplayAccumMs = 0;
     }
 
-    // Bi-Directional Adaptive Auto-FPS Guard: steps down GPU load cleanly under sustained frame pressure and restores quality when performance recovers
-    if (
-      this.mode === 'playing' &&
-      !this.gameOver &&
-      !this.cinematicActive &&
-      !this.isSoftwareGl &&
-      this.settings.dynamicAutoFps !== false
-    ) {
-      const clampedMs = Math.min(100, Math.max(1, rawFrameMs));
-      this.fpsSampleAccumMs += clampedMs;
-      this.fpsSampleFrames += 1;
-      this.fpsSampleTimer += frameTime;
-      if (this.fpsSampleTimer >= 1.0) {
-        const avgMs = this.fpsSampleAccumMs / Math.max(1, this.fpsSampleFrames);
-        this.fpsSampleTimer = 0;
-        this.fpsSampleFrames = 0;
-        this.fpsSampleAccumMs = 0;
-
-        if (this.autoFpsRestoreCooldown > 0) {
-          this.autoFpsRestoreCooldown = Math.max(0, this.autoFpsRestoreCooldown - 1);
-        }
-
-        let steppedDown = false;
-        if (this.autoFpsTier < 3) {
-          if (avgMs > 20.8) {
-            this.consecutiveSlowSeconds += avgMs > 32.0 ? 2 : 1;
-          } else {
-            this.consecutiveSlowSeconds = 0;
-          }
-
-          if (this.consecutiveSlowSeconds >= 2) {
-            this.consecutiveSlowSeconds = 0;
-            this.consecutiveFastSeconds = 0;
-            this.autoFpsRestoreCooldown = 14;
-            this.autoFpsTier = Math.min(3, this.autoFpsTier + 1);
-            this.applyGraphicsProfile();
-            steppedDown = true;
-            const msg =
-              this.autoFpsTier === 1
-                ? 'Auto-FPS Guard: Tightened shadow range & resolution to hold 60 FPS'
-                : this.autoFpsTier === 2
-                  ? 'Auto-FPS Guard: Disabled dynamic shadows to sustain smooth FPS'
-                  : 'Auto-FPS Guard: Trimmed shader & particle detail for smooth FPS';
-            this.toast(msg, 'info');
-          }
-        }
-
-        if (!steppedDown && this.autoFpsTier > 0 && this.autoFpsRestoreCooldown <= 0) {
-          if (avgMs <= 18.0) {
-            this.consecutiveFastSeconds += 1;
-          } else if (avgMs > 19.6) {
-            this.consecutiveFastSeconds = 0;
-          }
-          if (this.consecutiveFastSeconds >= 5) {
-            this.consecutiveFastSeconds = 0;
-            this.consecutiveSlowSeconds = 0;
-            this.autoFpsRestoreCooldown = 8;
-            this.autoFpsTier = Math.max(0, this.autoFpsTier - 1);
-            this.applyGraphicsProfile();
-            this.toast(
-              this.autoFpsTier === 0
-                ? 'Auto-FPS Guard: Restored full visual quality'
-                : 'Auto-FPS Guard: Restored higher visual quality',
-              'info',
-            );
-          }
-        }
-      }
-    }
+    // Stable Graphics Policy: Auto-FPS Guard no longer flips shadows, DPR, or draw distance mid-gameplay
+    // (which previously caused shader recompilation & framebuffer reallocation freezes on iPhone/mobile).
+    this.autoFpsTier = 0;
 
     this.lastSimDt = Math.min(
       0.05,
@@ -13592,8 +13634,12 @@ export class GameEngine {
     if (this.mode === 'playing' && !this.gameOver) {
       if (this.cinematicActive) {
         this.updateCinematic(dt);
-        if (this.cinematicSubtitle !== this.lastCinematicHudSubtitle) {
+        if (
+          this.cinematicSubtitle !== this.lastCinematicHudSubtitle ||
+          this.cinematicCrewShout !== this.lastCinematicHudCrewShout
+        ) {
           this.lastCinematicHudSubtitle = this.cinematicSubtitle;
+          this.lastCinematicHudCrewShout = this.cinematicCrewShout;
           this.emitHud();
         }
       } else {
@@ -13807,7 +13853,7 @@ export class GameEngine {
         this.nocturnalActiveCount = nocturnalActiveCount;
 
         this.hudSyncTimer += dt;
-        const hudInterval = 0.25;
+        const hudInterval = this.isTouchDevice ? 0.35 : 0.25;
         if (this.hudSyncTimer >= hudInterval) {
           this.hudSyncTimer = 0;
           this.emitHud();
@@ -13844,6 +13890,55 @@ export class GameEngine {
       } else {
         this.world.farmerArmR.rotation.z = Math.sin(this.elapsed * 1.6) * 0.05;
         this.world.farmerHead.rotation.y = Math.sin(this.elapsed * 0.8) * 0.22;
+      }
+    }
+
+    // Autonomous Ship Navigator Companion AI on Survival Island
+    if (this.navigatorCompanion) {
+      const showNavOnIsland =
+        !this.cinematicActive &&
+        this.worldType === 'island' &&
+        this.currentDimension === 'overworld';
+      this.navigatorCompanion.group.visible =
+        showNavOnIsland && !this.navigatorCompanion.isGone();
+      this.navigatorCompanion.droppedGunGroup.visible =
+        showNavOnIsland && this.navigatorCompanion.getDroppedGunPos() !== null;
+      if (showNavOnIsland && this.mode === 'playing' && !this.gameOver) {
+        this.navigatorCompanion.update({
+          dt,
+          elapsed: this.elapsed,
+          playerX: this.playerX,
+          playerY: this.playerY,
+          playerZ: this.playerZ,
+          activePlayerVehicleId: this.activeVehicleId,
+          playerIsFlying: this.flightAndTeleport.flying || this.dragonFlight.flying,
+          shelterPos: HILL_HOUSE_POS,
+          shipwreckPos: SHIPWRECK_POS,
+          getTerrainHeight,
+          oceanLevel: OCEAN_LEVEL,
+          resourceNodes: this.world.resourceNodes,
+          creatures: this.creatures.creatures,
+          vehicles: this.vehicles,
+          vehicleMeshes: this.vehicleMeshes,
+          onChopHit: () => {
+            this.sound.playGather('wood', 0.45);
+          },
+          onTreeFelled: (node) => {
+            this.sound.playTreeFall();
+            this.activeFellingNodeIds.add(node.id);
+            this.syncResourceVisual(node);
+          },
+          onShootCreature: (creature, dmg, fromX, fromZ) => {
+            this.sound.playGunshot('rifle');
+            this.spawnParticles(creature.x, creature.y + 1.0, creature.z, 0xfef08a, 7);
+            const res = this.creatures.damageCreature(creature, dmg, fromX, fromZ);
+            return Boolean(res?.killed);
+          },
+          onToast: (msg, tone) => this.toast(msg, tone),
+          onSpawnParticles: (x, y, z, color, count) =>
+            this.spawnParticles(x, y, z, color, count),
+          onPlaySplash: () => this.sound.playOceanSplash(),
+        });
       }
     }
 
@@ -14048,17 +14143,32 @@ export class GameEngine {
         // Shadow frustum is centered & texel-snapped around player/camera XZ, independent of look yaw/pitch.
         // Skipping shadow updates on camera panning eliminates frame spikes during fast look turns.
         const distSq = dx * dx + dz * dz;
-        const farMoved = Number.isNaN(this.shadowLastCamX) || distSq > 2.25;
-        const walkingMoved = distSq > 0.025;
+        const isFastTravel = Boolean(
+          this.activeVehicleId || this.flightAndTeleport.flying || this.dragonFlight.flying,
+        );
+        // Prevent shadow map from re-rendering every single frame at 60Hz while driving or flying fast
+        const farThresholdSq = isFastTravel
+          ? this.isTouchDevice
+            ? 36.0
+            : 20.0
+          : this.isTouchDevice
+            ? 9.0
+            : 4.0;
+        const farMoved = Number.isNaN(this.shadowLastCamX) || distSq > farThresholdSq;
+        const walkingMoved = distSq > 0.04;
         const cadence = this.cinematicActive
           ? this.isTouchDevice
             ? 8
             : 6
-          : walkingMoved
+          : isFastTravel
             ? this.isTouchDevice
-              ? 12
-              : 10
-            : 24;
+              ? 10
+              : 8
+            : walkingMoved
+              ? this.isTouchDevice
+                ? 12
+                : 10
+              : 24;
         this.shadowUpdateFrame = (this.shadowUpdateFrame + 1) % cadence;
         if (farMoved || this.shadowUpdateFrame === 0) {
           this.renderer.shadowMap.needsUpdate = true;
@@ -14072,6 +14182,7 @@ export class GameEngine {
       }
     }
     this.renderer.render(this.scene, this.camera);
+    this.perfMonitor?.(performance.now());
   }
 
   // =========================================================================
@@ -19962,6 +20073,8 @@ export class GameEngine {
   public dispose(): void {
     this.disposed = true;
     this.fpsController.stop();
+    this.perfMonitor?.dispose();
+    this.perfMonitor = null;
     window.removeEventListener('resize', this.onResize);
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp, true);

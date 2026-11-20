@@ -137,6 +137,7 @@ import { DragonSanctuaryModal } from './DragonSanctuaryModal';
 import { ExchangeModal } from './ExchangeModal';
 import { PayhipMarketplaceModal } from './PayhipMarketplaceModal';
 import { BlankPhoneMarketplaceModal } from './BlankPhoneMarketplaceModal';
+import { NavigatorCompanionModal } from './NavigatorCompanionModal';
 import {
   CustomPhoneMarketplaceState,
   VaultPayhipState,
@@ -884,6 +885,7 @@ export function SurvivalGameClient() {
     worldName: string;
     gameMode: GameMode;
     flatSurfaceStyle?: FlatSurfaceStyle;
+    playerGender?: 'boy' | 'girl';
   }) => {
     if (!engineRef.current) return;
     engineRef.current.unlockAudio();
@@ -895,6 +897,7 @@ export function SurvivalGameClient() {
       worldName: opts.worldName,
       flatSurfaceStyle: opts.flatSurfaceStyle,
       gameMode: safeMode,
+      playerGender: opts.playerGender ?? 'boy',
     });
     if (opts.worldType === 'island') {
       engineRef.current.ensurePlayerHasGun(true);
@@ -1311,9 +1314,16 @@ export function SurvivalGameClient() {
             </button>
           </div>
 
-          <div className="max-w-2xl mx-auto text-center pb-4">
-            <div className="inline-block rounded-xl bg-stone-950/85 border border-stone-700/80 px-5 py-3 text-sm sm:text-base font-medium text-stone-100 shadow-2xl">
-              {hud.cinematicSubtitle}
+          <div className="max-w-2xl mx-auto text-center pb-4 space-y-2">
+            {hud.cinematicCrewShout && (
+              <div className="inline-block rounded-lg bg-red-950/90 border border-amber-500/70 px-4 py-1.5 text-xs sm:text-sm font-extrabold tracking-wide uppercase text-amber-200 shadow-lg">
+                {hud.cinematicCrewShout}
+              </div>
+            )}
+            <div className="block">
+              <div className="inline-block rounded-xl bg-stone-950/90 border border-stone-700/80 px-5 py-3 text-sm sm:text-base font-medium text-stone-100 shadow-2xl">
+                {hud.cinematicSubtitle}
+              </div>
             </div>
           </div>
         </div>
@@ -1460,6 +1470,36 @@ export function SurvivalGameClient() {
                   </span>
                 </span>
               </div>
+
+              {hud.worldType !== 'flat' &&
+                hud.navigatorCompanion &&
+                !hud.navigatorCompanion.gone && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (hud.navigatorCompanion?.departurePhase === 'active') {
+                        openModal('navigator_companion');
+                      }
+                    }}
+                    className={`w-full px-2 py-1 rounded border text-left flex items-center justify-between gap-1.5 text-[10px] transition ${
+                      hud.navigatorCompanion.departurePhase !== 'active'
+                        ? 'bg-rose-950/85 border-rose-500/60 text-rose-100 cursor-default'
+                        : 'bg-teal-950/85 hover:bg-teal-900/90 border-teal-500/55 text-teal-100 cursor-pointer'
+                    }`}
+                  >
+                    <span className="flex items-center gap-1 truncate font-semibold">
+                      <Compass className="w-3 h-3 text-amber-300 shrink-0" />
+                      <span className="truncate">
+                        {hud.navigatorCompanion.name.split(' ')[0]}
+                      </span>
+                    </span>
+                    <span className="text-[9px] uppercase font-bold text-amber-300 shrink-0">
+                      {hud.navigatorCompanion.departurePhase !== 'active'
+                        ? 'Returning to Shipwreck'
+                        : `${hud.navigatorCompanion.task.replace('_', ' ')} · ${hud.navigatorCompanion.distanceToPlayer}m`}
+                    </span>
+                  </button>
+                )}
 
               {hud.worldType === 'flat' ? (
                 <div className="space-y-1.5">
@@ -3411,6 +3451,38 @@ export function SurvivalGameClient() {
           onClose={closeModal}
         />
       )}
+
+      {hud?.navigatorCompanion?.speechLine && !hud.cinematicActive && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-28 z-40 flex justify-center px-4">
+          <div className="max-w-lg rounded-xl border border-amber-400/45 bg-stone-950/90 px-5 py-3 text-center shadow-2xl backdrop-blur-md">
+            <div className="text-[11px] font-bold uppercase tracking-widest text-amber-300">
+              {hud.navigatorCompanion.name}
+            </div>
+            <div className="mt-1 text-base font-semibold text-stone-100 italic">
+              &ldquo;{hud.navigatorCompanion.speechLine}&rdquo;
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeModal === 'navigator_companion' &&
+        hud?.navigatorCompanion &&
+        !hud.navigatorCompanion.gone && (
+          <NavigatorCompanionModal
+            companion={hud.navigatorCompanion}
+            onClose={closeModal}
+            onSetTask={(task) => engineRef.current?.setNavigatorTask(task)}
+            onSetAllowDriving={(allowed) =>
+              engineRef.current?.setNavigatorAllowDriving(allowed)
+            }
+            onSetNavigatorGender={(gender) =>
+              engineRef.current?.setNavigatorGender(gender)
+            }
+            onCollectSharedLoot={() =>
+              engineRef.current?.collectNavigatorSharedLoot()
+            }
+          />
+        )}
 
       {activeModal === 'fridge' && hud && (
         <FridgeModal

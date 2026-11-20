@@ -18,6 +18,17 @@ import {
   ensureGeometryHasUv,
   getCrossDrilledRotorTexture,
 } from './textures';
+import {
+  buildDetailedSteeringWheel,
+  createAutomotiveCarpetMaterial,
+  createAutomotiveGlassMaterial,
+  createAutomotiveLeatherMaterial,
+  createAutomotivePaintMaterial,
+  createCarbonFiberMaterial,
+  createConvertibleFabricMaterial,
+  createWalnutWoodMaterial,
+  getGaugeClusterMap,
+} from './automotiveMaterials';
 
 export {
   buildRealLifeCarRig,
@@ -1028,59 +1039,32 @@ function buildCustomStreetShowCar(
           ? -0.14
           : -0.12);
 
-  const candyPaintMat = new THREE.MeshPhysicalMaterial({
-    color: vehicle.paintColor || (isDeville ? '#f8fafc' : '#7e22ce'),
-    metalness: isDeville ? 0.36 : 0.7,
-    roughness: isDeville ? 0.14 : 0.16,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.06,
-    envMapIntensity: 1.48,
-  });
+  const candyPaintMat = createAutomotivePaintMaterial(
+    vehicle.paintColor || (isDeville ? '#f8fafc' : '#7e22ce'),
+    { isPearl: isDeville },
+  );
   const chromeMat = new THREE.MeshStandardMaterial({
     color: rimColor,
-    metalness: 0.96,
-    roughness: 0.06,
-    envMapIntensity: 1.65,
+    metalness: 0.98,
+    roughness: 0.04,
+    envMapIntensity: 1.85,
   });
   const goldTrimMat = new THREE.MeshStandardMaterial({
     color: 0xeab308,
-    metalness: 0.92,
-    roughness: 0.14,
-    envMapIntensity: 1.5,
+    metalness: 0.95,
+    roughness: 0.1,
+    envMapIntensity: 1.7,
   });
   const darkTrimMat = new THREE.MeshStandardMaterial({
     color: 0x111827,
-    roughness: 0.72,
-    metalness: 0.25,
+    roughness: 0.62,
+    metalness: 0.3,
   });
-  const leatherMat = new THREE.MeshStandardMaterial({
-    color: isDeville ? 0xe7dcc8 : 0x262626,
-    roughness: 0.54,
-    metalness: 0.08,
-  });
-  const seatBolsterMat = new THREE.MeshStandardMaterial({
-    color: isDeville ? 0xd8cab2 : 0x18181b,
-    roughness: 0.58,
-    metalness: 0.08,
-  });
-  const carpetMat = new THREE.MeshStandardMaterial({
-    color: isDeville ? 0x292524 : 0x18181b,
-    roughness: 0.95,
-  });
-  const dashMat = new THREE.MeshStandardMaterial({
-    color: isDeville ? 0x1c1917 : 0x1f2937,
-    roughness: 0.48,
-    metalness: 0.22,
-  });
-  const glassMat = new THREE.MeshPhysicalMaterial({
-    color: 0x0f172a,
-    roughness: 0.05,
-    metalness: 0.2,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.04,
-    transparent: true,
-    opacity: 0.46,
-  });
+  const leatherMat = createAutomotiveLeatherMaterial(isDeville ? 0xe7dcc8 : 0x262626);
+  const seatBolsterMat = createAutomotiveLeatherMaterial(isDeville ? 0xd8cab2 : 0x18181b);
+  const carpetMat = createAutomotiveCarpetMaterial(isDeville ? 0x292524 : 0x18181b);
+  const dashMat = isDeville ? createWalnutWoodMaterial() : createCarbonFiberMaterial();
+  const glassMat = createAutomotiveGlassMaterial(0.42);
   const headlightMat = new THREE.MeshStandardMaterial({
     color: 0xfef9c3,
     emissive: 0xfef08a,
@@ -1378,23 +1362,28 @@ function buildCustomStreetShowCar(
   });
   handles.chassisGroup.add(rearCushion, rearBack);
 
-  // Detailed 3-spoke steering wheel + hub
-  const helmWheel = new THREE.Group();
+  // Photorealistic Luxury Wood-and-Chrome Steering Wheel + Backlit Instrument Cluster
+  const helmWheel = buildDetailedSteeringWheel({
+    style: 'classic_luxury',
+    radius: 0.175,
+    chromeMat,
+    leatherMat,
+  });
   helmWheel.position.set(-0.42, lowerBodyH + 0.18, 0.42);
   helmWheel.rotation.x = 0.45;
-  const wheelRim = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.024, 8, 18), chromeMat);
-  const wheelHub = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.04, 12), dashMat);
-  wheelHub.rotation.x = Math.PI / 2;
-  for (let sp = 0; sp < 3; sp++) {
-    const a = (sp / 3) * Math.PI * 2 + Math.PI / 6;
-    const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.16, 0.02), chromeMat);
-    spoke.position.set(Math.cos(a) * 0.08, Math.sin(a) * 0.08, 0);
-    spoke.rotation.z = a + Math.PI / 2;
-    helmWheel.add(spoke);
-  }
-  helmWheel.add(wheelRim, wheelHub);
   handles.chassisGroup.add(helmWheel);
   handles.helmWheel = helmWheel;
+
+  const classicGaugeTex = getGaugeClusterMap();
+  if (classicGaugeTex) {
+    const gaugeScreen = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.44, 0.16),
+      new THREE.MeshBasicMaterial({ map: classicGaugeTex }),
+    );
+    gaugeScreen.position.set(-0.42, lowerBodyH + 0.14, 0.61);
+    gaugeScreen.rotation.y = Math.PI;
+    handles.chassisGroup.add(gaugeScreen);
+  }
 
   // 4. REAL WORKING HINGED LEFT & RIGHT DOORS (Contoured Skin, Chrome Handles, Gold/Chrome Trim, Wing Mirrors!)
   const doorLen = 1.66;
@@ -1467,22 +1456,25 @@ function buildCustomStreetShowCar(
   });
 
   if (isDeville) {
-    const blackTopMat = new THREE.MeshStandardMaterial({
-      color: 0x111111,
-      roughness: 0.84,
+    // Real-life Haartz Stayfast woven twill convertible canvas fabric with stitched seams & cloth sheen
+    const blackTopMat = createConvertibleFabricMaterial(0x181a20);
+    const headlinerMat = createConvertibleFabricMaterial(0x2d2a26);
+    const weatherstripMat = new THREE.MeshStandardMaterial({
+      color: 0x090a0d,
+      roughness: 0.85,
       metalness: 0.08,
     });
     const ribMat = new THREE.MeshStandardMaterial({
-      color: 0x262626,
-      roughness: 0.55,
-      metalness: 0.45,
+      color: 0x475569,
+      roughness: 0.34,
+      metalness: 0.82,
     });
 
     const topPivot = new THREE.Group();
     topPivot.position.set(0, lowerBodyH + 0.16, -0.92);
 
     const rearSailL = new THREE.Mesh(
-      new THREE.BoxGeometry(0.14, cabinH * 0.98, 0.34),
+      new THREE.BoxGeometry(0.16, cabinH * 0.98, 0.36),
       blackTopMat,
     );
     rearSailL.position.set(-0.79, cabinH * 0.48, 0.08);
@@ -1490,11 +1482,19 @@ function buildCustomStreetShowCar(
     const rearSailR = rearSailL.clone();
     rearSailR.position.x = 0.79;
     const rearGlass = new THREE.Mesh(
-      new THREE.BoxGeometry(1.36, cabinH * 0.76, 0.05),
+      new THREE.BoxGeometry(1.34, cabinH * 0.74, 0.045),
       glassMat,
     );
     rearGlass.position.set(0, cabinH * 0.48, 0.02);
     rearGlass.rotation.x = 0.24;
+
+    // Rubber weatherstrip bezel & copper defroster lines on the rear convertible glass
+    const rearGasket = new THREE.Mesh(
+      new THREE.BoxGeometry(1.42, cabinH * 0.8, 0.03),
+      weatherstripMat,
+    );
+    rearGasket.position.set(0, cabinH * 0.48, 0.012);
+    rearGasket.rotation.x = 0.24;
 
     [-0.75, 0.75].forEach((lx) => {
       const linkArm = new THREE.Mesh(
@@ -1510,16 +1510,32 @@ function buildCustomStreetShowCar(
     frontSection.position.set(0, cabinH * 0.96, 0.16);
     const frontCanopyLen = cabinLen * 0.82;
     const roofCap = new THREE.Mesh(
-      createContouredPanelGeo(1.72, 0.075, frontCanopyLen, 0.03, 0.02),
+      createContouredPanelGeo(1.72, 0.075, frontCanopyLen, 0.032, 0.022),
       blackTopMat,
     );
     roofCap.position.set(0, 0, frontCanopyLen * 0.5);
-    [0.25, 0.58, 0.88].forEach((frac) => {
+    // Interior acoustic cloth headliner underneath the Stayfast outer canvas
+    const roofHeadliner = new THREE.Mesh(
+      new THREE.BoxGeometry(1.62, 0.024, frontCanopyLen * 0.94),
+      headlinerMat,
+    );
+    roofHeadliner.position.set(0, -0.036, frontCanopyLen * 0.5);
+    // Exterior raised rain-rail seam beads along left & right edges of the cloth top
+    [-0.78, 0.78].forEach((rx) => {
+      const rainSeam = new THREE.Mesh(
+        new THREE.BoxGeometry(0.036, 0.026, frontCanopyLen * 0.96),
+        weatherstripMat,
+      );
+      rainSeam.position.set(rx, 0.03, frontCanopyLen * 0.5);
+      frontSection.add(rainSeam);
+    });
+    // Folding aluminum roof bows visible across the underside
+    [0.24, 0.56, 0.86].forEach((frac) => {
       const bow = new THREE.Mesh(
-        new THREE.BoxGeometry(1.66, 0.035, 0.05),
+        new THREE.BoxGeometry(1.66, 0.032, 0.048),
         ribMat,
       );
-      bow.position.set(0, -0.04, frontCanopyLen * frac);
+      bow.position.set(0, -0.048, frontCanopyLen * frac);
       frontSection.add(bow);
     });
     const headerChrome = new THREE.Mesh(
@@ -1527,24 +1543,33 @@ function buildCustomStreetShowCar(
       chromeMat,
     );
     headerChrome.position.set(0, 0.005, frontCanopyLen + 0.01);
-    frontSection.add(roofCap, headerChrome);
+    frontSection.add(roofCap, roofHeadliner, headerChrome);
 
-    topPivot.add(rearSailL, rearSailR, rearGlass, frontSection);
+    topPivot.add(rearSailL, rearSailR, rearGasket, rearGlass, frontSection);
     handles.chassisGroup.add(topPivot);
     handles.convertibleTop = topPivot;
     handles.convertibleFrontSection = frontSection;
 
+    // Matching Stayfast woven canvas tonneau boot cover with chrome snap fasteners when top is down
     const foldedBoot = new THREE.Group();
     foldedBoot.position.set(0, lowerBodyH + 0.2, -0.94);
     const bootMain = new THREE.Mesh(
-      createContouredPanelGeo(1.74, 0.16, 0.42, 0.025, 0.025),
+      createContouredPanelGeo(1.74, 0.16, 0.44, 0.028, 0.028),
       blackTopMat,
     );
     const bootChromeTrim = new THREE.Mesh(
       new THREE.BoxGeometry(1.76, 0.04, 0.06),
       chromeMat,
     );
-    bootChromeTrim.position.set(0, 0.07, 0.2);
+    bootChromeTrim.position.set(0, 0.07, 0.21);
+    [-0.72, -0.36, 0, 0.36, 0.72].forEach((sx) => {
+      const snap = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.016, 0.016, 0.014, 10),
+        chromeMat,
+      );
+      snap.position.set(sx, 0.088, -0.17);
+      foldedBoot.add(snap);
+    });
     foldedBoot.add(bootMain, bootChromeTrim);
     foldedBoot.visible = false;
     handles.chassisGroup.add(foldedBoot);
@@ -1861,57 +1886,32 @@ function buildChevyTahoeShowSuv(
   );
   const paintColor = livery?.bodyColor || vehicle.paintColor || '#111318';
 
-  const paintMat = new THREE.MeshPhysicalMaterial({
-    color: paintColor,
-    metalness: 0.7,
-    roughness: 0.16,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.06,
-    envMapIntensity: 1.48,
-  });
+  const paintMat = createAutomotivePaintMaterial(paintColor);
   const chromeMat = new THREE.MeshStandardMaterial({
     color: rimColor,
-    metalness: 0.96,
-    roughness: 0.06,
-    envMapIntensity: 1.65,
+    metalness: 0.98,
+    roughness: 0.04,
+    envMapIntensity: 1.85,
   });
   const goldBowtieMat = new THREE.MeshStandardMaterial({
     color: 0xfacc15,
-    metalness: 0.85,
-    roughness: 0.18,
+    metalness: 0.92,
+    roughness: 0.12,
   });
   const darkTrimMat = new THREE.MeshStandardMaterial({
     color: 0x0f172a,
-    roughness: 0.78,
-    metalness: 0.2,
+    roughness: 0.68,
+    metalness: 0.25,
   });
-  const leatherMat = new THREE.MeshStandardMaterial({
-    color: 0x1c1917,
-    roughness: 0.58,
-    metalness: 0.1,
-  });
+  const leatherMat = createAutomotiveLeatherMaterial(0x1c1917);
   const stitchMat = new THREE.MeshStandardMaterial({
     color: 0x38bdf8,
     roughness: 0.45,
     metalness: 0.25,
   });
-  const carpetMat = new THREE.MeshStandardMaterial({
-    color: 0x09090b,
-    roughness: 0.95,
-  });
-  const dashMat = new THREE.MeshStandardMaterial({
-    color: 0x18181b,
-    roughness: 0.5,
-    metalness: 0.25,
-  });
-  const glassMat = new THREE.MeshPhysicalMaterial({
-    color: 0x0f172a,
-    roughness: 0.08,
-    metalness: 0.22,
-    clearcoat: 1.0,
-    transparent: true,
-    opacity: 0.36,
-  });
+  const carpetMat = createAutomotiveCarpetMaterial(0x0d0e12);
+  const dashMat = createCarbonFiberMaterial();
+  const glassMat = createAutomotiveGlassMaterial(0.36);
   const headlightMat = new THREE.MeshStandardMaterial({
     color: 0xe0f2fe,
     emissive: 0xbae6fd,
@@ -2223,21 +2223,16 @@ function buildChevyTahoeShowSuv(
   handles.liftButton = liftButtonGroup;
   handles.liftButtonCap = liftBtnCap;
 
-  // 3-Spoke Leather & Chrome Steering Wheel
-  const helmWheel = new THREE.Group();
+  // Photorealistic Leather, Chrome & Paddle-Shift Sport SUV Steering Wheel
+  const helmWheel = buildDetailedSteeringWheel({
+    style: 'sport_suv',
+    radius: 0.18,
+    chromeMat,
+    leatherMat,
+    accentColor: 0x38bdf8,
+  });
   helmWheel.position.set(-0.44, 0.84, 0.42);
   helmWheel.rotation.x = 0.44;
-  const helmRim = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.026, 8, 20), leatherMat);
-  const helmHub = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.04, 12), chromeMat);
-  helmHub.rotation.x = Math.PI / 2;
-  helmWheel.add(helmRim, helmHub);
-  for (let s = 0; s < 3; s++) {
-    const sa = (s * Math.PI * 2) / 3 + Math.PI / 2;
-    const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.16, 0.018), chromeMat);
-    spoke.position.set(Math.cos(sa) * 0.08, Math.sin(sa) * 0.08, 0);
-    spoke.rotation.z = sa - Math.PI / 2;
-    helmWheel.add(spoke);
-  }
   handles.helmWheel = helmWheel;
 
   handles.chassisGroup.add(
@@ -2530,14 +2525,7 @@ function buildModulePart(
   const cellY = 0.82;
   part.position.set(m.gx * cellXZ, m.gy * cellY + 0.42, m.gz * cellXZ);
 
-  const paintMat = new THREE.MeshPhysicalMaterial({
-    color: paintColor,
-    roughness: 0.16,
-    metalness: 0.68,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.06,
-    envMapIntensity: 1.45,
-  });
+  const paintMat = createAutomotivePaintMaterial(paintColor);
   const steelMat = new THREE.MeshStandardMaterial({
     color: 0x334155,
     roughness: 0.34,
@@ -2897,39 +2885,16 @@ function buildExoticSupercarMesh(
 
   handles.chassisGroup.position.y = Math.max(0.02, (vehicle.suspensionOffset ?? -0.1) + 0.14);
 
-  const paintMat = new THREE.MeshPhysicalMaterial({
-    color: paintColor,
-    metalness: 0.7,
-    roughness: 0.16,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.06,
-    envMapIntensity: 1.48,
-  });
-  const carbonMat = new THREE.MeshStandardMaterial({
-    color: 0x111827,
-    metalness: 0.55,
-    roughness: 0.3,
-  });
+  const paintMat = createAutomotivePaintMaterial(paintColor);
+  const carbonMat = createCarbonFiberMaterial();
   const chromeMat = new THREE.MeshStandardMaterial({
     color: rimColor,
-    metalness: 0.96,
-    roughness: 0.06,
-    envMapIntensity: 1.65,
+    metalness: 0.98,
+    roughness: 0.04,
+    envMapIntensity: 1.85,
   });
-  const glassMat = new THREE.MeshPhysicalMaterial({
-    color: 0x0b1420,
-    metalness: 0.18,
-    roughness: 0.05,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.04,
-    transparent: true,
-    opacity: 0.44,
-  });
-  const leatherMat = new THREE.MeshStandardMaterial({
-    color: 0x18181b,
-    roughness: 0.58,
-    metalness: 0.1,
-  });
+  const glassMat = createAutomotiveGlassMaterial(0.4);
+  const leatherMat = createAutomotiveLeatherMaterial(0x18181b);
   const headlightMat = new THREE.MeshStandardMaterial({
     color: 0xe0f2fe,
     emissive: 0x7dd3fc,
@@ -3008,21 +2973,27 @@ function buildExoticSupercarMesh(
     seat.rotation.x = -0.18;
     handles.chassisGroup.add(seat);
   });
-  const helmWheel = new THREE.Group();
+  const helmWheel = buildDetailedSteeringWheel({
+    style: 'supercar',
+    radius: 0.155,
+    chromeMat,
+    leatherMat,
+    accentColor: 0xf97316,
+  });
   helmWheel.position.set(-0.4, 0.7, 0.28);
   helmWheel.rotation.x = 0.42;
-  const helmRim = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.024, 8, 18), carbonMat);
-  const helmHub = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.036, 12), chromeMat);
-  helmHub.rotation.x = Math.PI / 2;
-  helmWheel.add(helmRim, helmHub);
-  for (let s = 0; s < 3; s++) {
-    const sa = (s * Math.PI * 2) / 3 + Math.PI / 2;
-    const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.13, 0.016), chromeMat);
-    spoke.position.set(Math.cos(sa) * 0.065, Math.sin(sa) * 0.065, 0);
-    spoke.rotation.z = sa - Math.PI / 2;
-    helmWheel.add(spoke);
-  }
   handles.helmWheel = helmWheel;
+
+  const superGaugeTex = getGaugeClusterMap();
+  if (superGaugeTex) {
+    const gaugeScreen = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.38, 0.14),
+      new THREE.MeshBasicMaterial({ map: superGaugeTex }),
+    );
+    gaugeScreen.position.set(-0.4, 0.72, 0.48);
+    gaugeScreen.rotation.y = Math.PI;
+    handles.chassisGroup.add(gaugeScreen);
+  }
 
   handles.chassisGroup.add(
     canopy,

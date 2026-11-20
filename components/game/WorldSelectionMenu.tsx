@@ -28,6 +28,7 @@ import {
 import {
   FlatSurfaceStyle,
   GameMode,
+  PlayerGender,
   SaveSlotSummary,
   WorldType,
   resolveAllowedGameMode,
@@ -45,6 +46,7 @@ interface WorldSelectionMenuProps {
     worldName: string;
     gameMode: GameMode;
     flatSurfaceStyle?: FlatSurfaceStyle;
+    playerGender?: PlayerGender;
   }) => void;
   onOpenMultiplayer: () => void;
   onOpenExchange: () => void;
@@ -106,6 +108,7 @@ export function WorldSelectionMenu({
   const [selectedWorldType, setSelectedWorldType] = useState<WorldType | null>(null);
   const [selectedIslandMode, setSelectedIslandMode] = useState<GameMode>('survival');
   const [flatSurfaceStyle, setFlatSurfaceStyle] = useState<FlatSurfaceStyle>('turf_grid');
+  const [playerGender, setPlayerGender] = useState<PlayerGender>('boy');
   const [worldNameInput, setWorldNameInput] = useState('');
 
   const handleSelectWorldType = (nextType: WorldType) => {
@@ -148,6 +151,7 @@ export function WorldSelectionMenu({
       worldName: worldNameInput.trim() || defaultName,
       gameMode: effectiveMode,
       flatSurfaceStyle: selectedWorldType === 'flat' ? flatSurfaceStyle : undefined,
+      playerGender,
     });
   };
 
@@ -545,6 +549,36 @@ export function WorldSelectionMenu({
                         }
                         className="w-full min-h-[42px] px-3 rounded-lg bg-stone-900 border border-stone-600 focus:border-amber-400 focus:outline-none text-sm text-stone-100"
                       />
+                    </div>
+
+                    <div className="space-y-1.5 shrink-0">
+                      <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+                        Survivor Character
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setPlayerGender('boy')}
+                          className={`min-h-[42px] px-4 rounded-lg border text-xs font-bold transition cursor-pointer ${
+                            playerGender === 'boy'
+                              ? 'bg-sky-950/85 border-sky-400 text-sky-100'
+                              : 'bg-stone-900/80 hover:bg-stone-900 border-stone-700 text-stone-300'
+                          }`}
+                        >
+                          Boy Survivor
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPlayerGender('girl')}
+                          className={`min-h-[42px] px-4 rounded-lg border text-xs font-bold transition cursor-pointer ${
+                            playerGender === 'girl'
+                              ? 'bg-rose-950/85 border-rose-400 text-rose-100'
+                              : 'bg-stone-900/80 hover:bg-stone-900 border-stone-700 text-stone-300'
+                          }`}
+                        >
+                          Girl Survivor
+                        </button>
+                      </div>
                     </div>
                   </div>
 

@@ -1309,6 +1309,71 @@ export class SoundEngine {
     osc.stop(now + 0.5);
   }
 
+  public playCannonBoom(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const dur = 0.95;
+    const src = this.createNoiseSource('brown');
+    if (src) {
+      const lp = this.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(640, now);
+      lp.frequency.exponentialRampToValueAtTime(75, now + dur);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.58, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+      src.connect(lp);
+      lp.connect(g);
+      g.connect(this.masterGain);
+      src.start(now, Math.random() * 1.2, dur + 0.02);
+    }
+
+    const osc = this.ctx.createOscillator();
+    const og = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(145, now);
+    osc.frequency.exponentialRampToValueAtTime(34, now + 0.36);
+    og.gain.setValueAtTime(0.62, now);
+    og.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+    osc.connect(og);
+    og.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.42);
+  }
+
+  public playOceanSplash(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const dur = 0.9;
+    const src = this.createNoiseSource('white');
+    if (src) {
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(1600, now);
+      bp.frequency.exponentialRampToValueAtTime(340, now + dur);
+      bp.Q.value = 0.7;
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.45, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+      src.connect(bp);
+      bp.connect(g);
+      g.connect(this.masterGain);
+      src.start(now, Math.random() * 1.4, dur + 0.02);
+    }
+
+    const thump = this.ctx.createOscillator();
+    const tg = this.ctx.createGain();
+    thump.type = 'sine';
+    thump.frequency.setValueAtTime(120, now);
+    thump.frequency.exponentialRampToValueAtTime(42, now + 0.22);
+    tg.gain.setValueAtTime(0.32, now);
+    tg.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+    thump.connect(tg);
+    tg.connect(this.masterGain);
+    thump.start(now);
+    thump.stop(now + 0.26);
+  }
+
   public playStructuralCreak(): void {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;

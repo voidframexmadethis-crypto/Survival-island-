@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { ResourceNodeKind, ResourceNodeState } from '../types';
 import { FrameBudgetQueue } from '../systems/frameBudgetQueue';
+import { WorldChunk, WorldChunkManager } from './worldChunkSystem';
 import {
   ALL_FLOWING_RIVERS,
   AUTUMN_GROVE_POS,
@@ -190,6 +191,7 @@ export interface WorldHandles {
   saturnRocket: SaturnVRocketHandles;
   undergroundElevator: UndergroundElevatorHandles;
   overworldGroup: THREE.Group;
+  worldChunks: WorldChunk[];
   activateInteractiveNode: (nodeId: string) => ResourceVisualHandle | undefined;
   restoreBatchedNode: (nodeId: string) => void;
   setBatchedNodeVisible: (nodeId: string, visible: boolean) => void;
@@ -3583,41 +3585,35 @@ export function buildIslandWorld(
   garageGroup.position.set(VEHICLE_GARAGE_POS.x, garageGroundY, VEHICLE_GARAGE_POS.z);
 
   const concretePbr = getPolishedConcretePbr(maxAniso);
-  const concreteBaseMat = new THREE.MeshPhysicalMaterial({
+  const concreteBaseMat = new THREE.MeshStandardMaterial({
     color: 0x6b7280,
     map: concretePbr.map,
     normalMap: concretePbr.normalMap,
     normalScale: new THREE.Vector2(0.45, 0.45),
     roughnessMap: concretePbr.roughnessMap,
-    roughness: 0.16,
+    roughness: 0.22,
     metalness: 0.28,
-    clearcoat: 0.82,
-    clearcoatRoughness: 0.12,
-    envMapIntensity: 1.55,
+    envMapIntensity: 1.35,
   });
-  const concreteBayPadMat = new THREE.MeshPhysicalMaterial({
+  const concreteBayPadMat = new THREE.MeshStandardMaterial({
     color: 0x4b5563,
     map: concretePbr.map,
     normalMap: concretePbr.normalMap,
     normalScale: new THREE.Vector2(0.35, 0.35),
     roughnessMap: concretePbr.roughnessMap,
-    roughness: 0.14,
+    roughness: 0.2,
     metalness: 0.32,
-    clearcoat: 0.88,
-    clearcoatRoughness: 0.1,
-    envMapIntensity: 1.65,
+    envMapIntensity: 1.45,
   });
-  const apronMat = new THREE.MeshPhysicalMaterial({
+  const apronMat = new THREE.MeshStandardMaterial({
     color: 0x78716c,
     map: concretePbr.map,
     normalMap: concretePbr.normalMap,
     normalScale: new THREE.Vector2(0.48, 0.48),
     roughnessMap: concretePbr.roughnessMap,
-    roughness: 0.22,
+    roughness: 0.28,
     metalness: 0.22,
-    clearcoat: 0.65,
-    clearcoatRoughness: 0.16,
-    envMapIntensity: 1.4,
+    envMapIntensity: 1.25,
   });
   const steelFrameMat = new THREE.MeshStandardMaterial({
     color: 0x1e293b,
@@ -6419,6 +6415,24 @@ gl_Position = projectionMatrix * mvPosition;`,
     }
   }
 
+  // Minecraft-style spatial WorldChunk partitioning (64m x 64m grid cells)
+  // Reparents foliage InstancedMeshes & localized biome landmarks into chunk groups at (0,0,0)
+  // preserving 100% of world transforms, graphics, and colliders while updating visibility ONLY on chunk changes.
+  const worldChunkManager = new WorldChunkManager(overworldGroup, 64);
+  for (let i = 0; i < foliageChunkEntries.length; i++) {
+    const fc = foliageChunkEntries[i];
+    worldChunkManager.addObjectAt(fc.mesh, fc.cx, fc.cz);
+  }
+  const largeLandmarks: typeof cullableLandmarks = [];
+  for (let i = 0; i < cullableLandmarks.length; i++) {
+    const entry = cullableLandmarks[i];
+    if (entry.radius < 110) {
+      worldChunkManager.addObjectAt(entry.obj, entry.cx, entry.cz);
+    } else {
+      largeLandmarks.push(entry);
+    }
+  }
+
   const cullablePointLights: {
     light: THREE.PointLight;
     wx: number;
@@ -6441,6 +6455,12 @@ gl_Position = projectionMatrix * mvPosition;`,
 
   const bestLightIdx: number[] = [];
   const bestLightDistSq: number[] = [];
+  const tmpChunkPlayerPos = new THREE.Vector3();
+
+  let lastLightCullX = Number.NaN;
+  let lastLightCullZ = Number.NaN;
+  let lastLightCullDist = -1;
+  let lastLightCullCap = -1;
 
   const cullWorldByDistance = (
     px: number,
@@ -6449,18 +6469,28 @@ gl_Position = projectionMatrix * mvPosition;`,
     budgetQueue?: FrameBudgetQueue,
     maxActivePointLights = 6,
   ): void => {
-    const chunkRange = Math.min(maxDist + 85, 335);
-    const chunkRangeSq = chunkRange * chunkRange;
-    for (let i = 0; i < foliageChunkEntries.length; i++) {
-      const fc = foliageChunkEntries[i];
-      const dx = fc.cx - px;
-      const dz = fc.cz - pz;
-      const showChunk = dx * dx + dz * dz <= chunkRangeSq;
-      if (fc.mesh.visible !== showChunk) {
-        fc.mesh.visible = showChunk;
-      }
-    }
+    // 1. Minecraft-style WorldChunk culling: ONLY runs when player crosses into a new 64m chunk or render distance changes
+    tmpChunkPlayerPos.set(px, 0, pz);
+    const chunkChanged = worldChunkManager.updateIfChunkChanged(tmpChunkPlayerPos, maxDist);
 
+    const movedSq =
+      (px - lastLightCullX) * (px - lastLightCullX) +
+      (pz - lastLightCullZ) * (pz - lastLightCullZ);
+    if (
+      !chunkChanged &&
+      !Number.isNaN(lastLightCullX) &&
+      movedSq < 16.0 &&
+      maxDist === lastLightCullDist &&
+      maxActivePointLights === lastLightCullCap
+    ) {
+      return;
+    }
+    lastLightCullX = px;
+    lastLightCullZ = pz;
+    lastLightCullDist = maxDist;
+    lastLightCullCap = maxActivePointLights;
+
+    // 2. Active PointLight cap (nearest N point lights stay lit around player)
     const lightCap = Math.max(0, maxActivePointLights);
     bestLightIdx.length = 0;
     bestLightDistSq.length = 0;
@@ -6495,8 +6525,9 @@ gl_Position = projectionMatrix * mvPosition;`,
       cullablePointLights[bestLightIdx[k]].light.visible = true;
     }
 
-    for (let i = 0; i < cullableLandmarks.length; i++) {
-      const entry = cullableLandmarks[i];
+    // 3. Large multi-chunk mega-landmarks (radius >= 110m) keep smooth radius culling
+    for (let i = 0; i < largeLandmarks.length; i++) {
+      const entry = largeLandmarks[i];
       const dx = entry.cx - px;
       const dz = entry.cz - pz;
       const limit = maxDist + entry.radius + 36;
@@ -6649,6 +6680,7 @@ gl_Position = projectionMatrix * mvPosition;`,
     saturnRocket: saturnBuilt,
     undergroundElevator,
     overworldGroup,
+    worldChunks: worldChunkManager.chunks,
     activateInteractiveNode,
     restoreBatchedNode,
     setBatchedNodeVisible,

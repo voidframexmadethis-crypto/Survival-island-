@@ -632,6 +632,44 @@ export type WorldType = 'island' | 'flat';
 
 export type FlatSurfaceStyle = 'turf_grid' | 'concrete_plaza';
 
+export type PlayerGender = 'boy' | 'girl';
+
+export type NavigatorTask =
+  | 'follow'
+  | 'chop_trees'
+  | 'hunt_animals'
+  | 'lead_shelter'
+  | 'drive_car'
+  | 'stay';
+
+export type NavigatorDeparturePhase =
+  | 'active'
+  | 'heartbroken_notice'
+  | 'returning_to_shore'
+  | 'dropping_gun'
+  | 'walking_into_ocean'
+  | 'fading_away'
+  | 'gone';
+
+export interface NavigatorCompanionHudState {
+  gender: PlayerGender;
+  name: string;
+  task: NavigatorTask;
+  statusText: string;
+  allowDriving: boolean;
+  isDrivingVehicleId: string | null;
+  distanceToPlayer: number;
+  distanceToShelter: number;
+  equippedTool: 'gun' | 'axe' | 'map';
+  backpackItems: InventorySlot[];
+  treesChopped: number;
+  animalsHunted: number;
+  departurePhase: NavigatorDeparturePhase;
+  speechLine: string | null;
+  droppedGunPos: { x: number; y: number; z: number } | null;
+  gone: boolean;
+}
+
 export function resolveAllowedGameMode(
   worldType: WorldType,
   requestedMode?: GameMode,
@@ -1036,6 +1074,7 @@ export interface SaveSlotSummary {
   worldName?: string;
   flatSurfaceStyle?: FlatSurfaceStyle;
   gameMode?: GameMode;
+  playerGender?: PlayerGender;
   dayCount: number;
   timeOfDay: number;
   biome: BiomeId;
@@ -1069,6 +1108,7 @@ export interface GameSaveData {
     equippedSlot: number;
     hotbarItemIds: (ItemId | null)[];
     hudBarCapacity?: number;
+    gender?: PlayerGender;
   };
   dayCount: number;
   timeOfDay: number;
@@ -1168,7 +1208,8 @@ export type ActiveModal =
   | 'custom_marketplace'
   | 'saturn_rocket'
   | 'underground_elevator'
-  | 'car_radio';
+  | 'car_radio'
+  | 'navigator_companion';
 
 export interface NearbyInteraction {
   id: string;
@@ -1313,6 +1354,9 @@ export interface HUDStateSnapshot {
   trackedSightings: TrackedSighting[];
   cinematicActive: boolean;
   cinematicSubtitle: string;
+  cinematicCrewShout?: string;
+  playerGender?: PlayerGender;
+  navigatorCompanion?: NavigatorCompanionHudState;
   gameOver: boolean;
   gameOverReason?: string;
   structuralSummary?: {

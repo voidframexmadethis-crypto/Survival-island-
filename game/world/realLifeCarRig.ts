@@ -1,5 +1,12 @@
 import * as THREE from 'three';
 import { ensureGeometryHasUv, getCrossDrilledRotorTexture } from './textures';
+import {
+  buildDetailedSteeringWheel,
+  createAutomotiveGlassMaterial,
+  createAutomotiveLeatherMaterial,
+  createAutomotivePaintMaterial,
+  createConvertibleFabricMaterial,
+} from './automotiveMaterials';
 
 export type VehicleArchetype =
   | 'mclaren'
@@ -203,39 +210,20 @@ export function buildRealLifeCarRig(config: GarageCarVisualConfig): RealLifeCarR
   const disposables: Array<{ dispose: () => void }> = [];
   const isPearl = config.archetype === 'cadillac';
 
-  const paintMat = new THREE.MeshPhysicalMaterial({
-    color: config.paintColor,
-    metalness: isPearl ? 0.35 : 0.7,
-    roughness: isPearl ? 0.14 : 0.16,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.06,
-    envMapIntensity: 1.45,
-  });
+  const paintMat = createAutomotivePaintMaterial(config.paintColor, { isPearl });
   const chromeMat = new THREE.MeshStandardMaterial({
     color: config.rimColor ?? '#f8fafc',
-    metalness: 0.96,
-    roughness: 0.06,
-    envMapIntensity: 1.65,
+    metalness: 0.98,
+    roughness: 0.04,
+    envMapIntensity: 1.85,
   });
   const trimMat = new THREE.MeshStandardMaterial({
     color: config.secondaryColor ?? '#1a1e26',
-    metalness: 0.82,
-    roughness: 0.22,
+    metalness: 0.85,
+    roughness: 0.18,
   });
-  const glassMat = new THREE.MeshPhysicalMaterial({
-    color: '#0b1420',
-    metalness: 0.16,
-    roughness: 0.05,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.04,
-    transparent: true,
-    opacity: 0.56,
-  });
-  const leatherMat = new THREE.MeshStandardMaterial({
-    color: isPearl ? '#e7dcc8' : '#18181b',
-    roughness: 0.58,
-    metalness: 0.08,
-  });
+  const glassMat = createAutomotiveGlassMaterial(0.46);
+  const leatherMat = createAutomotiveLeatherMaterial(isPearl ? '#e7dcc8' : '#18181b');
   const tireMat = new THREE.MeshStandardMaterial({
     color: '#111215',
     metalness: 0.08,
@@ -330,12 +318,26 @@ export function buildRealLifeCarRig(config: GarageCarVisualConfig): RealLifeCarR
     hr.position.set(sx, seatY + 0.26, -0.24);
     bodyGroup.add(seat, hr);
   });
-  const steerGeo = new THREE.TorusGeometry(0.14, 0.022, 6, 16);
-  const steerWheel = new THREE.Mesh(steerGeo, chromeMat);
+  const steerWheel = buildDetailedSteeringWheel({
+    style: isWedge ? 'supercar' : isSuv ? 'sport_suv' : 'classic_luxury',
+    radius: 0.15,
+    chromeMat,
+    leatherMat,
+  });
   steerWheel.position.set(-0.4, seatY + 0.18, 0.26);
   steerWheel.rotation.x = 0.45;
   bodyGroup.add(steerWheel);
-  disposables.push(seatGeo, headrestGeo, steerGeo);
+
+  // Real-life Haartz Stayfast woven canvas droptop soft-top on Cadillac showroom cars
+  if (isPearl) {
+    const stayfastTopMat = createConvertibleFabricMaterial(0x181a20);
+    const softTopGeo = new THREE.BoxGeometry(glassW + 0.06, 0.08, 1.32);
+    const softTop = new THREE.Mesh(softTopGeo, stayfastTopMat);
+    softTop.position.set(0, 1.29, -0.25);
+    bodyGroup.add(softTop);
+    disposables.push(stayfastTopMat, softTopGeo);
+  }
+  disposables.push(seatGeo, headrestGeo);
 
   // Chrome side spear molding & door handles
   const spearGeo = new THREE.BoxGeometry(bodyW + 0.14, 0.036, 3.8);

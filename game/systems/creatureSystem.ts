@@ -2408,20 +2408,26 @@ export class CreatureManager {
         continue;
       }
 
-      // Stagger far (>48m) ambient creatures to 30Hz (accumulated 2x dt) while keeping close/mounted/aggro creatures at full 60Hz
+      // Stagger far ambient creatures (42-56m at 30Hz, >56m at 20Hz) while keeping close/mounted/aggro creatures at full 60Hz
       const isFarAmbient =
-        distSqP > 2304 &&
+        distSqP > 1764 &&
         !c.mounted &&
         !c.tamed &&
         c.state !== 'chase' &&
         c.state !== 'flee' &&
         c.state !== 'takeoff' &&
         c.state !== 'swoop';
-      if (isFarAmbient && ((i + this.updateFrameParity) & 1) !== 0) {
+      const isVeryFarAmbient = isFarAmbient && distSqP > 3136;
+      if (isVeryFarAmbient) {
+        if ((i + Math.floor(elapsed * 60)) % 3 !== 0) {
+          this.setRigShadow(c, false);
+          continue;
+        }
+      } else if (isFarAmbient && ((i + this.updateFrameParity) & 1) !== 0) {
         this.setRigShadow(c, false);
         continue;
       }
-      const stepDt = isFarAmbient ? dt * 2 : dt;
+      const stepDt = isVeryFarAmbient ? dt * 3 : isFarAmbient ? dt * 2 : dt;
       const distToPlayer = Math.sqrt(distSqP);
 
       this.setRigShadow(c, this.shadowsEnabled && distToPlayer < 32);
