@@ -133,21 +133,21 @@ export function UndergroundElevatorModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-2 sm:p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-2 sm:p-4 safe-top safe-bottom"
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <div className="relative w-full max-w-5xl max-h-[92vh] overflow-hidden rounded-2xl bg-slate-950 border border-cyan-500/50 shadow-2xl flex flex-col">
+      <div className="relative w-full max-w-5xl max-h-[92dvh] overflow-hidden rounded-2xl bg-slate-950 border border-cyan-500/50 shadow-2xl flex flex-col">
         {/* Computer Terminal Header */}
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-3 bg-gradient-to-r from-slate-950 via-slate-900 to-cyan-950/70 border-b border-white/10">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-cyan-500/15 border border-cyan-400/50 flex items-center justify-center text-cyan-300 shrink-0">
+        <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3 px-3.5 sm:px-6 py-2.5 sm:py-3 bg-gradient-to-r from-slate-950 via-slate-900 to-cyan-950/70 border-b border-white/10">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-cyan-500/15 border border-cyan-400/50 flex items-center justify-center text-cyan-300 shrink-0">
               <Monitor className="w-5 h-5" />
             </div>
             <div className="min-w-0">
               <div className="text-[10px] font-bold uppercase tracking-widest text-cyan-400">
                 UNDERGROUND GARAGE ELEVATOR COMPUTER · VOICE AI
               </div>
-              <h2 className="text-base sm:text-lg font-black text-white truncate">
+              <h2 className="text-sm sm:text-lg font-black text-white truncate">
                 Subterranean Exotic &amp; Show Vault Terminal ({ELEVATOR_EXOTIC_LIFT.cars.length} Cars)
               </h2>
             </div>
@@ -161,7 +161,7 @@ export function UndergroundElevatorModal({
                   key={title}
                   type="button"
                   onClick={() => handleChangeHonorific(title)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition ${
+                  className={`min-h-[36px] px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition ${
                     honorific === title
                       ? 'bg-cyan-400 text-slate-950'
                       : 'text-stone-300 hover:text-white'
@@ -175,7 +175,7 @@ export function UndergroundElevatorModal({
             <button
               type="button"
               onClick={handleToggleVoice}
-              className={`h-9 px-2.5 rounded-xl border flex items-center gap-1.5 text-xs font-bold transition ${
+              className={`min-h-[40px] px-2.5 rounded-xl border flex items-center gap-1.5 text-xs font-bold transition ${
                 voiceEnabled
                   ? 'bg-emerald-500/15 border-emerald-400/50 text-emerald-300'
                   : 'bg-slate-800 border-white/15 text-stone-400'
@@ -195,7 +195,7 @@ export function UndergroundElevatorModal({
             <button
               type="button"
               onClick={onClose}
-              className="w-9 h-9 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/15 flex items-center justify-center text-stone-200 transition"
+              className="w-10 h-10 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/15 flex items-center justify-center text-stone-200 transition"
               aria-label="Close Underground Elevator Computer"
             >
               <X className="w-4 h-4" />
@@ -342,7 +342,7 @@ export function UndergroundElevatorModal({
                   }
                 }}
                 placeholder="Type car or command (Chevy Tahoe, Savage Life, Cadillac, Bugatti...)"
-                className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-white/15 text-xs sm:text-sm text-white placeholder:text-stone-500 focus:outline-none focus:border-cyan-400"
+                className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-white/15 text-base sm:text-sm text-white placeholder:text-stone-500 focus:outline-none focus:border-cyan-400"
               />
             </div>
 
@@ -357,7 +357,7 @@ export function UndergroundElevatorModal({
                   onBringCarToSurface(queryResolvedCar.id);
                   onClose();
                 }}
-                className="w-full px-3 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 text-left text-[11px] font-bold text-emerald-200 flex items-center justify-between gap-2 transition"
+                className="w-full min-h-[40px] px-3 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 text-left text-[11px] font-bold text-emerald-200 flex items-center justify-between gap-2 transition"
               >
                 <span className="truncate">
                   Instant Match: Bring up {queryResolvedCar.name}
@@ -374,7 +374,7 @@ export function UndergroundElevatorModal({
                   key={cls}
                   type="button"
                   onClick={() => setFilterClass(cls)}
-                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-extrabold border transition ${
+                  className={`min-h-[36px] px-2.5 py-1.5 rounded-lg text-[11px] font-extrabold border transition ${
                     filterClass === cls
                       ? 'bg-cyan-400 border-cyan-200 text-slate-950'
                       : 'bg-slate-900 border-white/10 text-stone-300 hover:border-cyan-400/50'
@@ -385,7 +385,7 @@ export function UndergroundElevatorModal({
               ))}
             </div>
 
-            <div className="flex-1 overflow-y-auto max-h-[340px] lg:max-h-[415px] space-y-2 pr-1">
+            <div className="flex-1 overflow-y-auto max-h-[260px] sm:max-h-[340px] lg:max-h-[415px] space-y-2 pr-1">
               {filteredCars.map((car) => {
                 const isSelected = car.id === selectedCar.id;
                 const isOnSurface = ELEVATOR_EXOTIC_LIFT.activeSurfaceCarId === car.id;

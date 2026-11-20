@@ -1006,10 +1006,8 @@ export class VolumetricTerrainEngine {
           }
         }
         norm.needsUpdate = true;
-        if (geo.boundingBox && maxUpdatedY >= minUpdatedY) {
-          if (minUpdatedY < geo.boundingBox.min.y) geo.boundingBox.min.y = minUpdatedY;
-          if (maxUpdatedY > geo.boundingBox.max.y) geo.boundingBox.max.y = maxUpdatedY;
-        }
+        geo.computeBoundingBox();
+        geo.computeBoundingSphere();
       }
     }
   }

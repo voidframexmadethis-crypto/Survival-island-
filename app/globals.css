@@ -48,6 +48,22 @@
   padding-bottom: max(env(safe-area-inset-bottom), 12px);
 }
 
+.safe-left {
+  padding-left: max(env(safe-area-inset-left), 8px);
+}
+
+.safe-right {
+  padding-right: max(env(safe-area-inset-right), 8px);
+}
+
+@media (orientation: landscape) and (max-height: 480px) {
+  .joystick-pad,
+  .action-wheel {
+    bottom: max(env(safe-area-inset-bottom), 10px) !important;
+    padding-bottom: 0 !important;
+  }
+}
+
 /* Custom clean scrollbar for the whole game & HUD panels */
 html::-webkit-scrollbar,
 body::-webkit-scrollbar,

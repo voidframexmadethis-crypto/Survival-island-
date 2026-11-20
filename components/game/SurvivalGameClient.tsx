@@ -232,6 +232,10 @@ export function SurvivalGameClient() {
 
   const [quickTpInput, setQuickTpInput] = useState('');
   const [walkingControlsMinimized, setWalkingControlsMinimized] = useState(false);
+  const [vehicleDeckExpandedForId, setVehicleDeckExpandedForId] = useState<string | null>(null);
+  const activeVehicleIdForDeck = hud?.activeVehicle?.id ?? null;
+  const vehicleDeckExpanded =
+    Boolean(activeVehicleIdForDeck) && vehicleDeckExpandedForId === activeVehicleIdForDeck;
   const stickMinimized = walkingControlsMinimized && Boolean(hud?.activeVehicle);
   const controlsMinimizerRef = useRef<PlayerControlsMinimizer | null>(null);
 
@@ -242,6 +246,8 @@ export function SurvivalGameClient() {
         touchControlsRef.current?.resetTouchJoystick();
         touchControlsRef.current?.setGamepadKnobOffset(0, 0);
         engineRef.current?.setTouchJoystick(0, 0);
+        engineRef.current?.setTouchDrivePedals(0, 0, false);
+        engineRef.current?.setVehicleVerticalHold(null);
         engineRef.current?.setTouchSprint(false);
         engineRef.current?.setTouchCrouch(false);
         engineRef.current?.setTouchFlyAscend(false);
@@ -1076,6 +1082,39 @@ export function SurvivalGameClient() {
   const handleTouchTeleportBiome = useCallback((dest: string) => {
     if (activeModalRef.current !== null) return;
     engineRef.current?.teleportToBiome(dest);
+  }, []);
+  const handleTouchVehiclePedals = useCallback(
+    (gas: number, brake: number, handbrake = false) => {
+      if (activeModalRef.current !== null) {
+        engineRef.current?.setTouchDrivePedals(0, 0, false);
+        return;
+      }
+      engineRef.current?.setTouchDrivePedals(gas, brake, handbrake);
+    },
+    [],
+  );
+  const handleTouchVehicleExit = useCallback(() => {
+    if (activeModalRef.current !== null) return;
+    engineRef.current?.setTouchDrivePedals(0, 0, false);
+    engineRef.current?.exitVehicle();
+  }, []);
+  const handleTouchVehicleHop = useCallback(() => {
+    if (activeModalRef.current !== null) return;
+    engineRef.current?.triggerHydraulicAction('front_hop');
+  }, []);
+  const handleTouchVehicleAscend = useCallback((active: boolean) => {
+    if (activeModalRef.current !== null) {
+      engineRef.current?.setVehicleVerticalHold(null);
+      return;
+    }
+    engineRef.current?.setVehicleVerticalHold(active ? 'up' : null);
+  }, []);
+  const handleTouchVehicleDescend = useCallback((active: boolean) => {
+    if (activeModalRef.current !== null) {
+      engineRef.current?.setVehicleVerticalHold(null);
+      return;
+    }
+    engineRef.current?.setVehicleVerticalHold(active ? 'down' : null);
   }, []);
   const handleTouchOpenBackpack = useCallback(() => {
     openModal('inventory');
@@ -2113,29 +2152,30 @@ export function SurvivalGameClient() {
               </div>
             )}
 
-            {/* Active Vehicle Driving HUD — Never renders when Elevator Computer or another modal is open */}
-            {hud.activeVehicle && !activeModal && activeModal !== 'underground_elevator' && (
+            {/* Active Vehicle Driving HUD — Never renders when Elevator Computer, another modal, or mobile Minimize HUD is active */}
+            {hud.activeVehicle &&
+              !activeModal &&
+              !hudMinimizedMobile &&
+              activeModal !== 'underground_elevator' && (
               <div
                 id="car-hydraulics-deck"
                 onPointerDown={(e) => e.stopPropagation()}
-                className={`pointer-events-auto relative z-30 rounded-xl bg-stone-950/95 border border-amber-500/50 px-3 py-2 shadow-2xl space-y-1.5 transition-all ${
+                className={`pointer-events-auto relative z-30 rounded-xl bg-stone-950/95 border border-amber-500/50 px-2.5 sm:px-3 py-1.5 sm:py-2 shadow-2xl space-y-1.5 transition-all ${
                   stickMinimized
-                    ? 'controls-minimized-mode w-[min(96vw,680px)] mb-1'
-                    : showTouchControls
-                      ? 'w-[min(94vw,560px)] mb-48 sm:mb-40'
-                      : 'w-[min(95vw,600px)]'
+                    ? 'controls-minimized-mode w-[min(96vw,680px)]'
+                    : 'w-[min(96vw,580px)]'
                 }`}
               >
-                <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-1.5 sm:gap-2">
                   <div className="flex items-center gap-2 min-w-0">
-                    <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300 shrink-0">
+                    <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300 shrink-0">
                       <Car className="w-4 h-4" />
                     </div>
                     <div className="min-w-0">
                       <div className="text-xs sm:text-sm font-bold text-stone-100 truncate flex items-center gap-1.5">
-                        <span>{hud.activeVehicle.name}</span>
+                        <span className="truncate">{hud.activeVehicle.name}</span>
                         {hud.activeVehicle.highClearance && (
-                          <span className="px-1.5 py-0.5 rounded bg-sky-950 border border-sky-500/60 text-[9px] font-bold text-sky-300 uppercase shrink-0">
+                          <span className="hidden sm:inline px-1.5 py-0.5 rounded bg-sky-950 border border-sky-500/60 text-[9px] font-bold text-sky-300 uppercase shrink-0">
                             30&quot; Lifted
                           </span>
                         )}
@@ -2143,11 +2183,11 @@ export function SurvivalGameClient() {
                           hud.activeVehicle.preset === 'chevy_2000_sub' ||
                           hud.activeVehicle.slammedStance) && (
                           <>
-                            <span className="px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-400/60 text-[9px] font-bold text-cyan-200 uppercase shrink-0">
+                            <span className="hidden sm:inline px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-400/60 text-[9px] font-bold text-cyan-200 uppercase shrink-0">
                               40&quot; Forgiato 44s
                             </span>
                             <span
-                              className={`px-1.5 py-0.5 rounded border text-[9px] font-bold uppercase shrink-0 ${
+                              className={`hidden sm:inline px-1.5 py-0.5 rounded border text-[9px] font-bold uppercase shrink-0 ${
                                 hud.activeVehicle.slammedStance
                                   ? 'bg-pink-950 border-pink-400/60 text-pink-200'
                                   : 'bg-emerald-950 border-emerald-400/60 text-emerald-200'
@@ -2165,12 +2205,12 @@ export function SurvivalGameClient() {
                           </span>
                         )}
                       </div>
-                      <div className="text-[11px] font-mono-tabular text-stone-400 flex items-center gap-2.5">
+                      <div className="text-[11px] font-mono-tabular text-stone-400 flex items-center gap-2">
                         <span className="text-amber-300 font-bold">
                           {hud.activeVehicle.speedKmh} km/h
                         </span>
                         <span>Fuel {hud.activeVehicle.fuel}%</span>
-                        <span>
+                        <span className="hidden sm:inline">
                           HP {hud.activeVehicle.hp}/{hud.activeVehicle.maxHp}
                         </span>
                         {hud.activeVehicle.canFly && (
@@ -2182,7 +2222,41 @@ export function SurvivalGameClient() {
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                  <div className="flex flex-wrap items-center gap-1 sm:gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => engineRef.current?.openCarRadio()}
+                      className={`min-h-[34px] px-2 sm:px-2.5 py-1 rounded-lg border text-[11px] sm:text-xs font-bold flex items-center gap-1 transition cursor-pointer ${
+                        hud.activeVehicle.isOldSchool
+                          ? 'bg-pink-950/90 hover:bg-pink-900 border-pink-400/60 text-pink-200'
+                          : 'bg-sky-950/90 hover:bg-sky-900 border-sky-400/60 text-sky-200'
+                      }`}
+                      title="Open Car Radio / Pandora [B]"
+                    >
+                      <Radio className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Radio</span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-expanded={vehicleDeckExpanded}
+                      onClick={() =>
+                        setVehicleDeckExpandedForId((prev) =>
+                          prev === activeVehicleIdForDeck ? null : activeVehicleIdForDeck,
+                        )
+                      }
+                      className={`min-h-[34px] px-2 sm:px-2.5 py-1 rounded-lg border text-[11px] sm:text-xs font-bold flex items-center gap-1 transition cursor-pointer ${
+                        vehicleDeckExpanded
+                          ? 'bg-amber-500 border-amber-200 text-stone-950'
+                          : 'bg-stone-800 hover:bg-stone-700 border-amber-500/40 text-amber-200'
+                      }`}
+                    >
+                      <span>Tuning</span>
+                      {vehicleDeckExpanded ? (
+                        <ChevronUp className="w-3.5 h-3.5" />
+                      ) : (
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      )}
+                    </button>
                     <button
                       id="minimize-controls-btn"
                       type="button"
@@ -2196,13 +2270,16 @@ export function SurvivalGameClient() {
                         e.preventDefault();
                         e.stopPropagation();
                       }}
-                      className={`min-h-[34px] px-2.5 py-1 rounded-lg border text-xs font-bold flex items-center gap-1 transition cursor-pointer ${
+                      className={`min-h-[34px] px-2 sm:px-2.5 py-1 rounded-lg border text-[11px] sm:text-xs font-bold flex items-center gap-1 transition cursor-pointer ${
                         stickMinimized
                           ? 'bg-emerald-500 border-emerald-200 text-stone-950'
                           : 'bg-purple-900/90 hover:bg-purple-800 border-purple-400/70 text-purple-100'
                       }`}
                     >
-                      {stickMinimized ? 'Show Controls' : 'Minimize HUD'}
+                      <span className="sm:hidden">{stickMinimized ? 'Pad' : 'Hide Pad'}</span>
+                      <span className="hidden sm:inline">
+                        {stickMinimized ? 'Show Controls' : 'Minimize HUD'}
+                      </span>
                     </button>
                     <button
                       type="button"
@@ -2216,10 +2293,10 @@ export function SurvivalGameClient() {
                         e.stopPropagation();
                         engineRef.current?.openVehicleCargo(hud.activeVehicle!.id);
                       }}
-                      className="min-h-[34px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-600 text-stone-100 text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
+                      className="min-h-[34px] px-2 sm:px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-600 text-stone-100 text-[11px] sm:text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
                     >
                       <Box className="w-3.5 h-3.5 text-amber-300" />
-                      <span>Cargo [F]</span>
+                      <span className="hidden sm:inline">Cargo [F]</span>
                     </button>
                     <button
                       type="button"
@@ -2233,16 +2310,18 @@ export function SurvivalGameClient() {
                         e.stopPropagation();
                         engineRef.current?.exitVehicle();
                       }}
-                      className="min-h-[34px] px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-stone-950 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                      className="min-h-[34px] px-2.5 sm:px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-stone-950 text-[11px] sm:text-xs font-bold flex items-center gap-1 transition cursor-pointer"
                     >
                       <LogOut className="w-3.5 h-3.5" />
-                      <span>Exit [E]</span>
+                      <span>Exit</span>
                     </button>
                   </div>
                 </div>
 
+                {vehicleDeckExpanded && (
+                <div className="max-h-[34dvh] sm:max-h-[40dvh] overflow-y-auto survival-scroll space-y-2 pt-1.5 border-t border-stone-800">
                 {/* Universal Car Doors, Pop Trunk, Interior Camera & Interior Droptop Switch */}
-                <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-stone-800">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => engineRef.current?.toggleVehicleInteriorCamera()}
@@ -2713,6 +2792,8 @@ export function SurvivalGameClient() {
                     </button>
                   </div>
                 )}
+                </div>
+                )}
               </div>
             )}
 
@@ -3181,6 +3262,9 @@ export function SurvivalGameClient() {
               isSprinting={hud.isSprinting}
               isCrouching={hud.isCrouching}
               isFlying={Boolean(hud.isFlying)}
+              isDriving={Boolean(hud.activeVehicle)}
+              vehicleCanFly={Boolean(hud.activeVehicle?.canFly)}
+              vehicleHasHydraulics={Boolean(hud.activeVehicle?.hasHydraulics)}
               onJoystickMove={handleTouchJoystickMove}
               onCameraDrag={handleTouchCameraDrag}
               onAction={handleTouchAction}
@@ -3195,6 +3279,11 @@ export function SurvivalGameClient() {
               onFlightToggle={handleTouchFlightToggle}
               onFlyAscendChange={handleTouchFlyAscend}
               onFlyDescendChange={handleTouchFlyDescend}
+              onVehiclePedals={handleTouchVehiclePedals}
+              onVehicleExit={handleTouchVehicleExit}
+              onVehicleHydraulicHop={handleTouchVehicleHop}
+              onVehicleAscendChange={handleTouchVehicleAscend}
+              onVehicleDescendChange={handleTouchVehicleDescend}
               onTeleportBiome={handleTouchTeleportBiome}
               onOpenBackpack={handleTouchOpenBackpack}
               onOpenCraft={handleTouchOpenCraft}
@@ -3205,7 +3294,8 @@ export function SurvivalGameClient() {
               screen === 'playing' &&
               !activeModal &&
               !hud.gameOver &&
-              !hud.cinematicActive && (
+              !hud.cinematicActive &&
+              !hud.activeVehicle && (
                 <div className="pointer-events-auto fixed bottom-[86px] left-5 z-20 flex items-center gap-2">
                   <button
                     type="button"
@@ -3568,7 +3658,7 @@ export function SurvivalGameClient() {
           <div
             id="hud-mode-switch"
             onPointerDown={(e) => e.stopPropagation()}
-            className="fixed right-3 bottom-[110px] z-[999] flex gap-2 pointer-events-auto"
+            className="fixed right-2.5 sm:right-5 top-[calc(max(env(safe-area-inset-top),12px)+44px)] sm:top-[calc(max(env(safe-area-inset-top),12px)+48px)] safe-right z-30 flex items-center gap-1.5 pointer-events-auto"
           >
             <button
               id="rocket-mode-btn"
@@ -3578,7 +3668,7 @@ export function SurvivalGameClient() {
                   !MOBILE_HUD_ROCKET_CONTROLS.rocketModeActive,
                 )
               }
-              className={`min-h-[36px] px-3 py-1.5 rounded-xl border text-xs font-extrabold shadow-lg transition ${
+              className={`min-h-[36px] px-2.5 sm:px-3 py-1.5 rounded-xl border text-[11px] sm:text-xs font-extrabold shadow-lg transition ${
                 rocketControlsActive
                   ? 'bg-orange-500 border-orange-300 text-stone-950'
                   : 'bg-slate-950/90 border-sky-400/60 text-sky-200 hover:bg-slate-900'
@@ -3590,7 +3680,7 @@ export function SurvivalGameClient() {
               id="minimize-hud-btn"
               type="button"
               onClick={() => MOBILE_HUD_ROCKET_CONTROLS.toggleMinimize()}
-              className={`min-h-[36px] px-3 py-1.5 rounded-xl border text-xs font-extrabold shadow-lg transition ${
+              className={`min-h-[36px] px-2.5 sm:px-3 py-1.5 rounded-xl border text-[11px] sm:text-xs font-extrabold shadow-lg transition ${
                 hudMinimizedMobile
                   ? 'bg-amber-400 border-amber-200 text-stone-950'
                   : 'bg-slate-950/90 border-white/25 text-stone-100 hover:bg-slate-900'
@@ -3600,34 +3690,35 @@ export function SurvivalGameClient() {
             </button>
           </div>
 
-          <div
-            id="rocket-controls-bar"
-            onPointerDown={(e) => e.stopPropagation()}
-            style={{ display: rocketControlsActive && !hudMinimizedMobile ? 'flex' : 'none' }}
-            className="fixed left-3 right-3 bottom-6 z-[998] items-center justify-around gap-2 p-2.5 rounded-2xl bg-[rgba(10,14,24,0.92)] border border-white/20 shadow-2xl pointer-events-auto"
-          >
-            <button
-              type="button"
-              onClick={() => engineRef.current?.igniteSaturnVQuickLaunch()}
-              className="flex-1 min-h-[44px] px-4 py-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 hover:from-orange-400 hover:to-amber-300 text-stone-950 font-black text-sm shadow-lg transition"
+          {rocketControlsActive && !hudMinimizedMobile && (
+            <div
+              id="rocket-controls-bar"
+              onPointerDown={(e) => e.stopPropagation()}
+              className="fixed left-1/2 -translate-x-1/2 bottom-2.5 safe-bottom w-[min(95vw,520px)] z-40 flex items-center justify-around gap-2 p-2 rounded-2xl bg-[rgba(10,14,24,0.94)] border border-white/20 shadow-2xl pointer-events-auto"
             >
-              Launch
-            </button>
-            <button
-              type="button"
-              onClick={() => openModal('saturn_rocket')}
-              className="flex-1 min-h-[44px] px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-stone-950 font-extrabold text-sm shadow-lg transition"
-            >
-              Flight Console
-            </button>
-            <button
-              type="button"
-              onClick={() => MOBILE_HUD_ROCKET_CONTROLS.setRocketControls(false)}
-              className="flex-1 min-h-[44px] px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/20 text-white font-bold text-sm transition"
-            >
-              Exit Rocket
-            </button>
-          </div>
+              <button
+                type="button"
+                onClick={() => engineRef.current?.igniteSaturnVQuickLaunch()}
+                className="flex-1 min-h-[44px] px-3 sm:px-4 py-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 hover:from-orange-400 hover:to-amber-300 text-stone-950 font-black text-xs sm:text-sm shadow-lg transition"
+              >
+                Launch
+              </button>
+              <button
+                type="button"
+                onClick={() => openModal('saturn_rocket')}
+                className="flex-1 min-h-[44px] px-3 sm:px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-stone-950 font-extrabold text-xs sm:text-sm shadow-lg transition"
+              >
+                Flight Console
+              </button>
+              <button
+                type="button"
+                onClick={() => MOBILE_HUD_ROCKET_CONTROLS.setRocketControls(false)}
+                className="flex-1 min-h-[44px] px-3 sm:px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/20 text-white font-bold text-xs sm:text-sm transition"
+              >
+                Exit Rocket
+              </button>
+            </div>
+          )}
         </>
       )}
 

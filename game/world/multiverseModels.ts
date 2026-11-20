@@ -685,6 +685,8 @@ export function buildDimensionWorld(
   }
   terrainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   terrainGeo.computeVertexNormals();
+  terrainGeo.computeBoundingBox();
+  terrainGeo.computeBoundingSphere();
 
   const terrainMat = new THREE.MeshStandardMaterial({
     vertexColors: true,

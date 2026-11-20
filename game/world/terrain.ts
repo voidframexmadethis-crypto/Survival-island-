@@ -156,16 +156,18 @@ export function getHilltopBaseFloorY(
   x: number,
   z: number,
   footY: number,
+  prevFootY = footY,
 ): number {
   if (activeTerrainWorldType === 'flat') return -9999;
   const dx = x - HILL_HOUSE_POS.x;
   const dz = z - HILL_HOUSE_POS.z;
+  const sweepFootY = Math.max(footY, prevFootY);
   let bestY = -9999;
 
   // Main Premade House + Dedicated Music Studio Wing interior floor (X: -5.35..+4.35, Z: -4.35..+8.55)
   if (dx >= -5.35 && dx <= 4.35 && dz >= -4.35 && dz <= 8.55) {
     const floorTop = HILL_HOUSE_Y + 0.08;
-    if (footY >= floorTop - 1.5 && floorTop > bestY) {
+    if (sweepFootY >= floorTop - 1.65 && floorTop > bestY) {
       bestY = floorTop;
     }
   }
@@ -173,7 +175,7 @@ export function getHilltopBaseFloorY(
   // East Front Porch deck (X: +4.2..+6.45, Z: -3.15..+3.15)
   if (dx >= 4.2 && dx <= 6.45 && dz >= -3.15 && dz <= 3.15) {
     const porchTop = HILL_HOUSE_Y + 0.07;
-    if (footY >= porchTop - 1.5 && porchTop > bestY) {
+    if (sweepFootY >= porchTop - 1.65 && porchTop > bestY) {
       bestY = porchTop;
     }
   }
@@ -181,7 +183,7 @@ export function getHilltopBaseFloorY(
   // Porch East Entry Step (X: +6.4..+7.05, Z: -1.65..+1.65)
   if (dx >= 6.4 && dx <= 7.05 && dz >= -1.65 && dz <= 1.65) {
     const stepTop = HILL_HOUSE_Y + 0.03;
-    if (footY >= stepTop - 1.5 && stepTop > bestY) {
+    if (sweepFootY >= stepTop - 1.65 && stepTop > bestY) {
       bestY = stepTop;
     }
   }
@@ -216,8 +218,10 @@ export function getLandmarkFloorY(
   x: number,
   z: number,
   footY: number,
+  prevFootY = footY,
 ): number {
   if (activeTerrainWorldType === 'flat') return -9999;
+  const sweepFootY = Math.max(footY, prevFootY);
   let bestY = -9999;
 
   // 1. Woodland Mansion Plinth & Ground Hall Floor (14.4m x 10.6m centered at WOODLAND_MANSION_POS)
@@ -225,12 +229,12 @@ export function getLandmarkFloorY(
   const mdz = z - WOODLAND_MANSION_POS.z;
   if (mdx >= -7.3 && mdx <= 7.3 && mdz >= -5.4 && mdz <= 5.4) {
     const mansionFloorTop = 4.1 + 0.14;
-    if (footY >= mansionFloorTop - 1.5 && mansionFloorTop > bestY) {
+    if (sweepFootY >= mansionFloorTop - 1.65 && mansionFloorTop > bestY) {
       bestY = mansionFloorTop;
     }
   } else if (mdx >= -1.7 && mdx <= 1.7 && mdz >= 5.3 && mdz <= 6.2) {
     const stepTop = 4.1 + 0.07;
-    if (footY >= stepTop - 1.5 && stepTop > bestY) {
+    if (sweepFootY >= stepTop - 1.65 && stepTop > bestY) {
       bestY = stepTop;
     }
   }
@@ -240,7 +244,7 @@ export function getLandmarkFloorY(
   const podz = z - PILLAGER_OUTPOST_POS.z;
   if (Math.abs(podx) <= 2.9 && Math.abs(podz) <= 2.9) {
     const poFloorTop = 5.0 + 0.12;
-    if (footY >= poFloorTop - 1.5 && poFloorTop > bestY) {
+    if (sweepFootY >= poFloorTop - 1.65 && poFloorTop > bestY) {
       bestY = poFloorTop;
     }
   }
@@ -257,7 +261,7 @@ export function getLandmarkFloorY(
     const lz = ddx * s + ddz * c;
     if (Math.abs(lx) <= 2.45 && Math.abs(lz) <= 2.25) {
       const floorTop = cab.baseY + 0.12;
-      if (footY >= floorTop - 1.5 && floorTop > bestY) {
+      if (sweepFootY >= floorTop - 1.65 && floorTop > bestY) {
         bestY = floorTop;
       }
     }
@@ -268,12 +272,188 @@ export function getLandmarkFloorY(
   const igdz = z - SNOWY_IGLOO_POS.z;
   if (igdx * igdx + igdz * igdz <= 8.7025 || (Math.abs(igdx) <= 0.9 && igdz >= 2.2 && igdz <= 4.1)) {
     const igFloorTop = 9.0 + 0.05;
-    if (footY >= igFloorTop - 1.5 && igFloorTop > bestY) {
+    if (sweepFootY >= igFloorTop - 1.65 && igFloorTop > bestY) {
       bestY = igFloorTop;
     }
   }
 
   return bestY;
+}
+
+/**
+ * Exact walkable surface heights for raised structural pads, ramps, decks, and platforms
+ * placed in worldBuilder.ts so characters and vehicles match the rendered 3D slabs cleanly.
+ */
+export function getOverworldStructureSurfaceY(
+  x: number,
+  z: number,
+  footY: number,
+  prevFootY = footY,
+): number {
+  if (activeTerrainWorldType === 'flat') return -9999;
+  const sweepFootY = Math.max(footY, prevFootY);
+  let bestY = -9999;
+
+  // 1. Custom 4-Bay Vehicle Garage Pad, Bay Pads & Driveway Apron
+  const gdx = x - VEHICLE_GARAGE_POS.x;
+  const gdz = z - VEHICLE_GARAGE_POS.z;
+  if (Math.abs(gdx) <= 14.35 && gdz >= -6.6 && gdz <= 9.75) {
+    if (Math.abs(gdx) <= 14.05 && Math.abs(gdz) <= 6.55) {
+      const padTop = VEHICLE_GARAGE_Y + 0.13;
+      if (sweepFootY >= padTop - 1.65 && padTop > bestY) {
+        bestY = padTop;
+      }
+    }
+    if (gdz >= -3.55 && gdz <= 4.75) {
+      for (let i = 0; i < 4; i++) {
+        const bx = -9.0 + i * 6.0;
+        if (Math.abs(gdx - bx) <= 2.55) {
+          const bayTop = VEHICLE_GARAGE_Y + 0.165;
+          if (sweepFootY >= bayTop - 1.65 && bayTop > bestY) {
+            bestY = bayTop;
+          }
+          break;
+        }
+      }
+    }
+    if (gdz >= 5.9 && gdz <= 9.75) {
+      const apronTop = VEHICLE_GARAGE_Y + 0.07 - (gdz - 7.8) * 0.045;
+      if (sweepFootY >= apronTop - 1.65 && apronTop > bestY) {
+        bestY = apronTop;
+      }
+    }
+  }
+
+  // 2. Hilltop House East Access Ramp (continuous analytical ramp bridging 7.5m terrain step)
+  const hdx = x - HILL_HOUSE_POS.x;
+  const hdzAbs = Math.abs(z - HILL_HOUSE_POS.z);
+  if (hdx >= 6.4 && hdx <= 21.5 && hdzAbs <= 2.9) {
+    const rampT = smoothstep(HILL_HOUSE_POS.x + 6.8, HILL_HOUSE_POS.x + 20.5, x);
+    const rampY = HILL_HOUSE_Y * (1 - rampT) + 3.25 * rampT;
+    if (sweepFootY >= rampY - 1.65 && rampY > bestY) {
+      bestY = rampY;
+    }
+  }
+
+  // 3. Saturn V Concrete Launch Pad & Boarding Ramp
+  const sdx = x - SATURN_ROCKET_POS.x;
+  const sdz = z - SATURN_ROCKET_POS.z;
+  const saturnDistSq = sdx * sdx + sdz * sdz;
+  if (saturnDistSq <= 9.5 * 9.5) {
+    const saturnBaseY = getTerrainHeight(SATURN_ROCKET_POS.x, SATURN_ROCKET_POS.z);
+    if (saturnDistSq <= 9.15 * 9.15) {
+      const padTop = saturnBaseY + 0.6;
+      if (sweepFootY >= padTop - 1.65 && padTop > bestY) {
+        bestY = padTop;
+      }
+    }
+    if (Math.abs(sdx) <= 1.15 && sdz >= 3.1 && sdz <= 7.35) {
+      const rampT = Math.max(0, Math.min(1, (7.35 - sdz) / 4.25));
+      const rampTop = saturnBaseY + 0.55 + rampT * 0.45;
+      if (sweepFootY >= rampTop - 1.65 && rampTop > bestY) {
+        bestY = rampTop;
+      }
+    }
+  }
+
+  // 4. Badlands Surface Mineshaft Plank Deck
+  const mdx = x - BADLANDS_MINESHAFT_POS.x;
+  const mdz = z - BADLANDS_MINESHAFT_POS.z;
+  if (Math.abs(mdx) <= 1.95 && Math.abs(mdz) <= 8.3) {
+    const deckTop = getTerrainHeight(BADLANDS_MINESHAFT_POS.x, BADLANDS_MINESHAFT_POS.z) + 0.2;
+    if (sweepFootY >= deckTop - 1.65 && deckTop > bestY) {
+      bestY = deckTop;
+    }
+  }
+
+  // 5. Swamp Hut Raised Wooden Deck
+  const swdx = x - SWAMP_HUT_POS.x;
+  const swdz = z - SWAMP_HUT_POS.z;
+  if (Math.abs(swdx) <= 2.65 && Math.abs(swdz) <= 2.65) {
+    const hutDeckTop = getTerrainHeight(SWAMP_HUT_POS.x, SWAMP_HUT_POS.z) + 2.575;
+    if (sweepFootY >= hutDeckTop - 1.65 && hutDeckTop > bestY) {
+      bestY = hutDeckTop;
+    }
+  }
+
+  // 6. Resort Corner Tiki Lounge Deck
+  const rcdx = x - RESORT_CORNER_POS.x;
+  const rcdz = z - RESORT_CORNER_POS.z;
+  if (Math.abs(rcdx) <= 5.8 && Math.abs(rcdz) <= 4.3) {
+    const tikiTop = getTerrainHeight(RESORT_CORNER_POS.x, RESORT_CORNER_POS.z) + 0.6;
+    if (sweepFootY >= tikiTop - 1.65 && tikiTop > bestY) {
+      bestY = tikiTop;
+    }
+  }
+
+  // 7. Ruined Castle Obsidian Throne Dais
+  const csdx = x - RUINED_CASTLE_POS.x;
+  const csdz = z - RUINED_CASTLE_POS.z;
+  if (Math.abs(csdx) <= 3.3 && csdz >= -9.3 && csdz <= -3.7) {
+    const daisTop = getTerrainHeight(RUINED_CASTLE_POS.x, RUINED_CASTLE_POS.z) + 1.2;
+    if (sweepFootY >= daisTop - 1.65 && daisTop > bestY) {
+      bestY = daisTop;
+    }
+  }
+
+  return bestY;
+}
+
+/**
+ * Exact barycentric height sampler matching Three.js PlaneGeometry(size, size, segs, segs)
+ * rotated -PI/2 around X (where quads split along the (ix, iz+1)-(ix+1, iz) diagonal).
+ * Keeps physics 100% flush with rendered ground triangles on steep slopes and craters.
+ */
+export function samplePlaneGeometryHeight(
+  geometry:
+    | {
+        attributes?: {
+          position?: {
+            count: number;
+            getY: (index: number) => number;
+          };
+        };
+      }
+    | null
+    | undefined,
+  size: number,
+  segs: number,
+  x: number,
+  z: number,
+): number | null {
+  const posAttr = geometry?.attributes?.position;
+  if (!posAttr || segs <= 0 || size <= 0) return null;
+  const verts = segs + 1;
+  if (posAttr.count < verts * verts) return null;
+
+  const half = size * 0.5;
+  const step = size / segs;
+  const gx = Math.max(0, Math.min(segs - 1e-6, (x + half) / step));
+  const gz = Math.max(0, Math.min(segs - 1e-6, (z + half) / step));
+  const ix = Math.min(segs - 1, Math.floor(gx));
+  const iz = Math.min(segs - 1, Math.floor(gz));
+  const fx = gx - ix;
+  const fz = gz - iz;
+
+  const idxA = iz * verts + ix;
+  const idxD = idxA + 1;
+  const idxB = idxA + verts;
+  const idxC = idxB + 1;
+
+  const ha = posAttr.getY(idxA);
+  const hb = posAttr.getY(idxB);
+  const hc = posAttr.getY(idxC);
+  const hd = posAttr.getY(idxD);
+
+  if (!Number.isFinite(ha) || !Number.isFinite(hb) || !Number.isFinite(hc) || !Number.isFinite(hd)) {
+    return null;
+  }
+
+  // PlaneGeometry triangle winding: (a, b, d) when fx + fz <= 1, (b, c, d) when fx + fz > 1
+  if (fx + fz <= 1) {
+    return ha + fx * (hd - ha) + fz * (hb - ha);
+  }
+  return hc + (1 - fx) * (hb - hc) + (1 - fz) * (hd - hc);
 }
 
 export function sampleGridBilinear(grid: Float32Array, x: number, z: number): number {

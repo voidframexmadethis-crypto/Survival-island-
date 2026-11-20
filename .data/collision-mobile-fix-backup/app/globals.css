@@ -1,0 +1,260 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Cinzel', Georgia, serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  html,
+  body {
+    width: 100%;
+    min-height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+    overflow-y: scroll;
+    scrollbar-gutter: stable;
+    overscroll-behavior-x: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    font-family: var(--font-sans);
+    background-color: #0c0a09;
+    color: #f5f5f4;
+  }
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono-tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.touch-surface {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.safe-top {
+  padding-top: max(env(safe-area-inset-top), 12px);
+}
+
+.safe-bottom {
+  padding-bottom: max(env(safe-area-inset-bottom), 12px);
+}
+
+/* Custom clean scrollbar for the whole game & HUD panels */
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+.survival-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 6px;
+}
+
+html::-webkit-scrollbar-track,
+body::-webkit-scrollbar-track,
+.survival-scroll::-webkit-scrollbar-track {
+  background: rgba(12, 10, 9, 0.85);
+}
+
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb,
+.survival-scroll::-webkit-scrollbar-thumb {
+  background: rgba(168, 162, 158, 0.45);
+  border-radius: 9999px;
+}
+
+html::-webkit-scrollbar-thumb:hover,
+body::-webkit-scrollbar-thumb:hover,
+.survival-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(217, 119, 6, 0.75);
+}
+
+/* MUSIC PRO DAW Controls */
+.daw-step-pad {
+  transition: transform 0.05s ease, background-color 0.08s ease, box-shadow 0.08s ease;
+}
+.daw-step-pad:active {
+  transform: scale(0.92);
+}
+.daw-step-pad.active {
+  background: linear-gradient(180deg, #fde68a 0%, #f97316 55%, #c2410c 100%);
+  border-color: #fed7aa;
+  box-shadow: 0 0 7px rgba(249, 115, 22, 0.55);
+}
+.daw-step-pad.beat-group {
+  background-color: #6b5359;
+  border-color: #82676e;
+}
+.daw-step-pad.step-playhead {
+  outline: 2px solid #4ade80;
+  outline-offset: -1px;
+  filter: brightness(1.22);
+}
+
+input[type="range"].daw-mixer-fader {
+  -webkit-appearance: none;
+  appearance: none;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 16px;
+  height: 76px;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"].daw-mixer-fader::-webkit-slider-runnable-track {
+  width: 5px;
+  border-radius: 999px;
+  background: #14181f;
+  border: 1px solid #3c4452;
+}
+input[type="range"].daw-mixer-fader::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 11px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #e2e8f0 0%, #64748b 100%);
+  border: 1px solid #f8fafc;
+  margin-left: -5px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.65);
+}
+
+input[type="range"].daw-mini-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 5px;
+  border-radius: 999px;
+  background: #14181f;
+  border: 1px solid #2f3846;
+  cursor: pointer;
+}
+input[type="range"].daw-mini-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #38bdf8;
+  border: 1px solid #e0f2fe;
+  cursor: pointer;
+}
+
+.daw-playlist-clip {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.daw-playlist-clip:hover {
+  filter: brightness(1.12);
+}
+
+/* Survival Island Carved Stone & Weathered Timber Menu Surfaces */
+.island-stone-slab {
+  background:
+    radial-gradient(circle at 18% 20%, rgba(120, 113, 108, 0.22), transparent 52%),
+    radial-gradient(circle at 82% 78%, rgba(38, 46, 30, 0.36), transparent 55%),
+    repeating-linear-gradient(
+      115deg,
+      rgba(255, 255, 255, 0.025) 0px,
+      rgba(255, 255, 255, 0.025) 2px,
+      rgba(0, 0, 0, 0.14) 2px,
+      rgba(0, 0, 0, 0.14) 7px
+    ),
+    linear-gradient(172deg, #3c3a37 0%, #262523 48%, #191816 100%);
+  box-shadow:
+    inset 0 2px 1px rgba(231, 229, 228, 0.18),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.72),
+    inset 0 0 26px rgba(20, 42, 18, 0.38),
+    0 16px 36px rgba(0, 0, 0, 0.72);
+}
+
+.island-wood-plank {
+  background:
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 228, 184, 0.045) 0px,
+      rgba(255, 228, 184, 0.045) 2px,
+      rgba(12, 7, 4, 0.22) 2px,
+      rgba(12, 7, 4, 0.22) 6px
+    ),
+    linear-gradient(90deg, #2d1c11 0%, #4b3120 24%, #573a25 52%, #3f2818 82%, #28180e 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(254, 215, 170, 0.24),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.78),
+    0 6px 16px rgba(0, 0, 0, 0.62);
+}
+
+.island-wood-plank:hover {
+  background:
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 232, 196, 0.065) 0px,
+      rgba(255, 232, 196, 0.065) 2px,
+      rgba(12, 7, 4, 0.18) 2px,
+      rgba(12, 7, 4, 0.18) 6px
+    ),
+    linear-gradient(90deg, #382315 0%, #5b3c27 24%, #6a472e 52%, #4d321e 82%, #311e12 100%);
+}
+
+.island-wood-plank-play {
+  background:
+    repeating-linear-gradient(
+      180deg,
+      rgba(187, 247, 208, 0.055) 0px,
+      rgba(187, 247, 208, 0.055) 2px,
+      rgba(8, 22, 11, 0.26) 2px,
+      rgba(8, 22, 11, 0.26) 6px
+    ),
+    linear-gradient(90deg, #1b321d 0%, #345229 30%, #4b3a22 68%, #28361c 100%);
+  box-shadow:
+    0 0 22px rgba(74, 222, 128, 0.42),
+    inset 0 0 14px rgba(74, 222, 128, 0.24),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.75),
+    0 8px 20px rgba(0, 0, 0, 0.7);
+}
+
+.island-wood-plank-play:hover {
+  box-shadow:
+    0 0 30px rgba(74, 222, 128, 0.62),
+    inset 0 0 18px rgba(74, 222, 128, 0.34),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.75),
+    0 10px 24px rgba(0, 0, 0, 0.75);
+}
+
+.island-stone-title {
+  background: linear-gradient(180deg, #f5f5f4 0%, #d6d3d1 38%, #a8a29e 74%, #78716c 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 3px 0 #1c1917) drop-shadow(0 6px 12px rgba(0, 0, 0, 0.85));
+}
+
+.island-lostworld-title {
+  background: linear-gradient(180deg, #fca5a5 0%, #ef4444 42%, #b91c1c 80%, #7f1d1d 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 3px 0 #1c0808) drop-shadow(0 8px 16px rgba(0, 0, 0, 0.9));
+}
+
+

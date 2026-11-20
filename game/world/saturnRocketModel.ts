@@ -367,8 +367,11 @@ export function buildSpacePlanetArena(
     new THREE.CylinderGeometry(95, 95, 1.2, 48),
     groundMat,
   );
+  ground.geometry.computeBoundingBox();
+  ground.geometry.computeBoundingSphere();
   ground.position.y = -0.6;
   ground.receiveShadow = true;
+  ground.userData.isSpacePlanetGround = true;
   root.add(ground);
 
   // 2. Biome Surface Formations (Craters, Glowing Alien Crystals, Spires)

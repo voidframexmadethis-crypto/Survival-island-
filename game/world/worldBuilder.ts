@@ -443,6 +443,8 @@ export function buildIslandWorld(
   const baseTerrainColors = new Float32Array(colors);
   terrainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   terrainGeo.computeVertexNormals();
+  terrainGeo.computeBoundingBox();
+  terrainGeo.computeBoundingSphere();
 
   const terrainMat = enhanceSurfaceMaterial(
     applySafeStandardMaps(

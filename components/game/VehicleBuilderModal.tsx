@@ -173,19 +173,22 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4">
-      <div className="relative w-full max-w-5xl bg-stone-900 border border-amber-500/40 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-2 sm:p-4 safe-top safe-bottom"
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <div className="relative w-full max-w-5xl bg-stone-900 border border-amber-500/40 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92dvh]">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 bg-stone-950/90 border-b border-stone-800">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
-              <Car className="w-6 h-6" />
+        <div className="flex items-center justify-between gap-2 px-3.5 py-3 sm:px-6 sm:py-4 bg-stone-950/90 border-b border-stone-800">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="p-2 sm:p-2.5 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 shrink-0">
+              <Car className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
-            <div>
-              <h2 className="text-xl font-bold font-display text-amber-100 tracking-wide">
+            <div className="min-w-0">
+              <h2 className="text-base sm:text-xl font-bold font-display text-amber-100 tracking-wide truncate">
                 Vehicle Garage &amp; Modular Assembly Bay
               </h2>
-              <p className="text-xs text-stone-400">
+              <p className="text-[11px] sm:text-xs text-stone-400 line-clamp-1 sm:line-clamp-none">
                 Build &amp; customize Chevy Tahoes on 40&quot; Forgiatos, Lowriders, DONKs, SLABs, Coupe DeVilles, Sports Cars, Buggies &amp; Boats
               </p>
             </div>
@@ -193,18 +196,18 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 text-sm font-semibold transition"
+            className="min-h-[40px] px-3.5 sm:px-4 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 text-sm font-semibold transition shrink-0"
           >
             Close
           </button>
         </div>
 
         {/* Navigation Tabs */}
-        <div className="flex border-b border-stone-800 bg-stone-950/50 px-6 pt-2 gap-4 overflow-x-auto">
+        <div className="flex border-b border-stone-800 bg-stone-950/50 px-3 sm:px-6 pt-2 gap-2 sm:gap-4 overflow-x-auto shrink-0">
           <button
             type="button"
             onClick={() => setActiveTab('preset')}
-            className={`pb-3 px-3 text-sm font-semibold border-b-2 whitespace-nowrap transition ${
+            className={`min-h-[40px] pb-2.5 px-2.5 sm:px-3 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition ${
               activeTab === 'preset'
                 ? 'border-amber-500 text-amber-400'
                 : 'border-transparent text-stone-400 hover:text-stone-200'
@@ -215,7 +218,7 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab('customize')}
-            className={`pb-3 px-3 text-sm font-semibold border-b-2 whitespace-nowrap transition ${
+            className={`min-h-[40px] pb-2.5 px-2.5 sm:px-3 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition ${
               activeTab === 'customize'
                 ? 'border-amber-500 text-amber-400'
                 : 'border-transparent text-stone-400 hover:text-stone-200'
@@ -226,7 +229,7 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab('modules')}
-            className={`pb-3 px-3 text-sm font-semibold border-b-2 whitespace-nowrap transition ${
+            className={`min-h-[40px] pb-2.5 px-2.5 sm:px-3 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition ${
               activeTab === 'modules'
                 ? 'border-amber-500 text-amber-400'
                 : 'border-transparent text-stone-400 hover:text-stone-200'
@@ -237,7 +240,7 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-6 survival-scroll">
+        <div className="flex-1 overflow-y-auto p-3.5 sm:p-6 grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 survival-scroll">
           {/* Left / Main Workspace */}
           <div className="lg:col-span-2 space-y-5">
             {activeTab === 'preset' ? (
@@ -357,21 +360,21 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                         type="text"
                         value={presetName}
                         onChange={(e) => setPresetName(e.target.value)}
-                        className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-stone-100 text-sm focus:outline-none focus:border-amber-500"
+                        className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-stone-100 text-base sm:text-sm focus:outline-none focus:border-amber-500"
                       />
                     </div>
                     <div>
                       <label className="block text-xs font-semibold text-stone-300 mb-1.5">
                         Body Paint &amp; Rim Finish
                       </label>
-                      <div className="flex flex-wrap items-center gap-1.5">
+                      <div className="flex flex-wrap items-center gap-2">
                         {PAINT_SWATCHES.map((c) => (
                           <button
                             type="button"
                             key={c}
                             onClick={() => setPaintColor(c)}
                             aria-label={`Body color ${c}`}
-                            className={`w-6 h-6 rounded-md border-2 transition ${
+                            className={`w-8 h-8 sm:w-6 sm:h-6 rounded-md border-2 transition ${
                               paintColor === c ? 'border-white scale-110' : 'border-stone-700'
                             }`}
                             style={{ backgroundColor: c }}
@@ -384,7 +387,7 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                             key={r}
                             onClick={() => setRimColor(r)}
                             aria-label={`Rim color ${r}`}
-                            className={`w-5 h-5 rounded-full border-2 transition ${
+                            className={`w-7 h-7 sm:w-5 sm:h-5 rounded-full border-2 transition ${
                               rimColor === r ? 'border-amber-400 scale-110' : 'border-stone-700'
                             }`}
                             style={{ backgroundColor: r }}
@@ -450,13 +453,13 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                             <span>Customizing: {activeGarageVehicle.name}</span>
                           </h4>
                           {onParkInGarage && (
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex flex-wrap items-center gap-1.5">
                               {(['A', 'B', 'C', 'D'] as const).map((bay) => (
                                 <button
                                   type="button"
                                   key={bay}
                                   onClick={() => onParkInGarage(activeGarageVehicle.id, bay)}
-                                  className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-amber-600 hover:text-stone-950 text-[11px] font-bold text-stone-200 flex items-center gap-1 transition"
+                                  className="min-h-[38px] px-2.5 py-1.5 rounded-lg bg-stone-800 hover:bg-amber-600 hover:text-stone-950 text-[11px] font-bold text-stone-200 flex items-center gap-1 transition"
                                 >
                                   <ParkingSquare className="w-3.5 h-3.5" />
                                   <span>Bay {bay}</span>
@@ -721,7 +724,7 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                       <select
                         value={selectedKindToAdd}
                         onChange={(e) => setSelectedKindToAdd(e.target.value as VehicleModuleKind)}
-                        className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-stone-200 text-sm focus:outline-none focus:border-amber-500"
+                        className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-stone-200 text-base sm:text-sm focus:outline-none focus:border-amber-500"
                       >
                         {Object.entries(VEHICLE_MODULE_SPECS).map(([k, sp]) => (
                           <option key={k} value={k}>
@@ -739,7 +742,7 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                           max={2}
                           value={addGx}
                           onChange={(e) => setAddGx(Number(e.target.value))}
-                          className="w-full bg-stone-900 border border-stone-700 rounded-lg px-2 py-2 text-stone-200 text-sm text-center"
+                          className="w-full bg-stone-900 border border-stone-700 rounded-lg px-2 py-2 text-stone-200 text-base sm:text-sm text-center"
                         />
                       </div>
                       <div>
@@ -750,7 +753,7 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                           max={3}
                           value={addGy}
                           onChange={(e) => setAddGy(Number(e.target.value))}
-                          className="w-full bg-stone-900 border border-stone-700 rounded-lg px-2 py-2 text-stone-200 text-sm text-center"
+                          className="w-full bg-stone-900 border border-stone-700 rounded-lg px-2 py-2 text-stone-200 text-base sm:text-sm text-center"
                         />
                       </div>
                       <div>
@@ -761,7 +764,7 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
                           max={2}
                           value={addGz}
                           onChange={(e) => setAddGz(Number(e.target.value))}
-                          className="w-full bg-stone-900 border border-stone-700 rounded-lg px-2 py-2 text-stone-200 text-sm text-center"
+                          className="w-full bg-stone-900 border border-stone-700 rounded-lg px-2 py-2 text-stone-200 text-base sm:text-sm text-center"
                         />
                       </div>
                     </div>

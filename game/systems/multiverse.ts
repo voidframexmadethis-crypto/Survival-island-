@@ -328,6 +328,46 @@ function pointToSegmentDistAndT(
   return { dist: Math.hypot(px - cx, pz - cz), t };
 }
 
+/**
+ * Analytical deck surface collider for Space dimension floating asteroid pads
+ * and narrow connecting bridges so players and vehicles never slip between
+ * diagonal PlaneGeometry terrain triangles.
+ */
+export function getSpacePlatformSurfaceY(
+  x: number,
+  z: number,
+  footY: number,
+  prevFootY = footY,
+): number {
+  const sweepFootY = Math.max(footY, prevFootY);
+  let bestY = -9999;
+
+  for (const pad of SPACE_ASTEROID_PADS) {
+    const d = Math.hypot(x - pad.x, z - pad.z);
+    if (d <= pad.radius * 0.96) {
+      const edge = Math.max(0, Math.min(1, (pad.radius - d) / 2.2));
+      const bump =
+        Math.sin(x * 0.19) * Math.cos(z * 0.17) * 0.32 * Math.max(0, Math.min(1, (d - 6) / 6));
+      const h = pad.y * edge + bump * edge - (1 - edge) * 3.0;
+      if (sweepFootY >= h - 1.75 && h > bestY) {
+        bestY = h;
+      }
+    }
+  }
+
+  for (const br of SPACE_BRIDGES) {
+    const { dist, t } = pointToSegmentDistAndT(x, z, br.ax, br.az, br.bx, br.bz);
+    if (dist <= br.width * 0.56) {
+      const h = br.ay + (br.by - br.ay) * t;
+      if (sweepFootY >= h - 1.75 && h > bestY) {
+        bestY = h;
+      }
+    }
+  }
+
+  return bestY;
+}
+
 export function getDimensionTerrainHeight(dim: DimensionId, x: number, z: number): number {
   if (dim === 'overworld') {
     return getTerrainHeight(x, z);

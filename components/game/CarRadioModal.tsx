@@ -143,7 +143,7 @@ export function CarRadioModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-2 sm:p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-2 sm:p-4 safe-top safe-bottom"
       onPointerDown={(e) => e.stopPropagation()}
     >
       <input
@@ -156,13 +156,13 @@ export function CarRadioModal({
 
       <div
         id="car-radio-modal"
-        className="relative w-full max-w-4xl max-h-[92vh] overflow-hidden rounded-2xl bg-[#111522] border border-indigo-500/40 text-white shadow-2xl flex flex-col"
+        className="relative w-full max-w-4xl max-h-[92dvh] overflow-hidden rounded-2xl bg-[#111522] border border-indigo-500/40 text-white shadow-2xl flex flex-col"
       >
         {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-5 py-3 bg-gradient-to-r from-[#0b0e17] via-[#13192b] to-[#1e1b4b]/80 border-b border-white/10">
-          <div className="flex items-center gap-3 min-w-0">
+        <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3 px-3.5 sm:px-5 py-2.5 sm:py-3 bg-gradient-to-r from-[#0b0e17] via-[#13192b] to-[#1e1b4b]/80 border-b border-white/10">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
             <div
-              className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
+              className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shrink-0 border ${
                 isOldSchool
                   ? 'bg-pink-500/20 border-pink-400/50 text-pink-300'
                   : 'bg-sky-500/20 border-sky-400/50 text-sky-300'
@@ -171,7 +171,7 @@ export function CarRadioModal({
               <Radio className="w-5 h-5" />
             </div>
             <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                 <span className="text-[10px] font-black uppercase tracking-widest text-indigo-300">
                   CAR RADIO &amp; PANDORA AUDIO DECK
                 </span>
@@ -197,7 +197,7 @@ export function CarRadioModal({
             <button
               type="button"
               onClick={onToggleInteriorView}
-              className={`px-3 py-1.5 rounded-xl border text-xs font-extrabold flex items-center gap-1.5 transition ${
+              className={`min-h-[38px] px-3 py-1.5 rounded-xl border text-xs font-extrabold flex items-center gap-1.5 transition ${
                 cameraMode === 'FIRST_PERSON'
                   ? 'bg-indigo-500 border-indigo-200 text-white'
                   : 'bg-slate-900 border-white/15 text-stone-200 hover:bg-slate-800'
@@ -216,7 +216,7 @@ export function CarRadioModal({
                 CAR_RADIO_TRUNK_SYSTEM.closePandora();
                 onClose();
               }}
-              className="w-9 h-9 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/15 flex items-center justify-center text-stone-200 transition"
+              className="w-10 h-10 rounded-xl bg-slate-800 hover:bg-slate-700 border border-white/15 flex items-center justify-center text-stone-200 transition"
               aria-label="Close Car Radio"
             >
               <X className="w-4 h-4" />
@@ -477,8 +477,8 @@ export function CarRadioModal({
               </button>
             </div>
 
-            <form onSubmit={handlePandoraSearch} className="flex gap-2">
-              <div className="relative flex-1">
+            <form onSubmit={handlePandoraSearch} className="flex flex-wrap sm:flex-nowrap gap-2">
+              <div className="relative flex-1 min-w-[180px]">
                 <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   id="pandora-song-input"
@@ -486,12 +486,12 @@ export function CarRadioModal({
                   value={pandoraQuery}
                   onChange={(e) => setPandoraQuery(e.target.value)}
                   placeholder="Search song or artist on Pandora..."
-                  className="w-full pl-9 pr-3 py-2 rounded-lg border border-[#334] bg-[#070910] text-xs sm:text-sm text-white placeholder:text-stone-500 focus:outline-none focus:border-sky-400"
+                  className="w-full pl-9 pr-3 py-2 rounded-lg border border-[#334] bg-[#070910] text-base sm:text-sm text-white placeholder:text-stone-500 focus:outline-none focus:border-sky-400"
                 />
               </div>
               <button
                 type="submit"
-                className="px-3.5 py-2 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-black text-xs shrink-0 transition"
+                className="min-h-[40px] px-3.5 py-2 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-black text-xs shrink-0 transition"
               >
                 Search Pandora
               </button>
@@ -501,7 +501,7 @@ export function CarRadioModal({
               id="pandora-frame"
               title="Pandora Car Radio"
               src={pandoraUrl}
-              className="w-full flex-1 min-h-[260px] rounded-lg border border-white/10 bg-black"
+              className="w-full flex-1 min-h-[200px] sm:min-h-[260px] rounded-lg border border-white/10 bg-black"
               allow="autoplay; encrypted-media"
             />
           </div>

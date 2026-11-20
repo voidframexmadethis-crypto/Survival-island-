@@ -28,6 +28,8 @@ import * as THREE from 'three';
 import {
   HILL_HOUSE_POS,
   HILL_HOUSE_Y,
+  VEHICLE_GARAGE_POS,
+  VEHICLE_GARAGE_Y,
   getHilltopBaseFloorY,
   getTerrainHeight,
   isTerrainProtectedAt,
@@ -163,11 +165,12 @@ test('premade hilltop base, porch, entry step, and music studio wing have solid 
     );
   }
 
-  // Ensure the 3-Bay Vehicle Garage stays completely flat at VEHICLE_GARAGE_Y (3.25)
-  for (const gx of [-34, -28, -22]) {
+  // Ensure the Custom Vehicle Garage stays completely flat at VEHICLE_GARAGE_Y (3.25)
+  for (const dx of [-6, 0, 6]) {
+    const gx = VEHICLE_GARAGE_POS.x + dx;
     assert.ok(
-      Math.abs(getTerrainHeight(gx, 93) - 3.25) < 0.05,
-      `Expected garage bay at x=${gx} to stay flat at 3.25`,
+      Math.abs(getTerrainHeight(gx, VEHICLE_GARAGE_POS.z) - VEHICLE_GARAGE_Y) < 0.05,
+      `Expected garage bay at x=${gx} to stay flat at ${VEHICLE_GARAGE_Y}`,
     );
   }
 });
