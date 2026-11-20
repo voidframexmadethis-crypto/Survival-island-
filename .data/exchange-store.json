@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "localDevAdminPassphraseHash": null,
+  "products": [],
+  "coinPackages": [],
+  "players": {
+    "guest_survivor": {
+      "playerId": "guest_survivor",
+      "coinBalance": 0,
+      "ownedProductIds": [],
+      "ownedProductSnapshots": {},
+      "equippedGunSkinsByClass": {},
+      "equippedBackpackSkinId": null,
+      "updatedAt": 1795135282734
+    }
+  },
+  "transactions": []
+}
