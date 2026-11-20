@@ -1320,3 +1320,132 @@ export function buildCabinDetailKit(options: {
   });
   return g;
 }
+
+/**
+ * Builds a photorealistic multi-component steering wheel assembly with:
+ * - Contoured leather or burled-walnut rim + 12-o'clock centering stripe
+ * - Brushed chrome/aluminum 3-spoke core + thumb button pods
+ * - Sculpted leather airbag/horn hub with metallic emblem ring
+ * - Steering column shroud + twin stalk levers + shift paddles (on sport/SUV)
+ */
+export function buildDetailedSteeringWheel(options: {
+  style: 'classic_luxury' | 'sport_suv' | 'supercar';
+  radius?: number;
+  chromeMat: THREE.Material;
+  leatherMat: THREE.Material;
+  accentColor?: THREE.ColorRepresentation;
+}): THREE.Group {
+  const { style, chromeMat, leatherMat } = options;
+  const r = options.radius ?? (style === 'supercar' ? 0.155 : 0.175);
+  const wheel = new THREE.Group();
+
+  const isLuxury = style === 'classic_luxury';
+  const rimMat = isLuxury ? createWalnutWoodMaterial() : leatherMat;
+  const darkMetalMat = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    metalness: 0.72,
+    roughness: 0.3,
+  });
+  const stripeMat = new THREE.MeshStandardMaterial({
+    color: options.accentColor ?? (style === 'supercar' ? 0xf97316 : 0xef4444),
+    roughness: 0.4,
+    metalness: 0.15,
+  });
+
+  // Main contoured steering rim
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(r, 0.023, 12, 28), rimMat);
+  wheel.add(rim);
+
+  // Inner metallic accent ring (classic luxury) or top 12-o'clock motorsport centering stripe
+  if (isLuxury) {
+    const innerChromeRing = new THREE.Mesh(
+      new THREE.TorusGeometry(r - 0.022, 0.006, 8, 24),
+      chromeMat,
+    );
+    wheel.add(innerChromeRing);
+  } else {
+    const topMarker = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.0255, 0.0255, 0.028, 12),
+      stripeMat,
+    );
+    topMarker.rotation.z = Math.PI / 2;
+    topMarker.position.set(0, r, 0);
+    wheel.add(topMarker);
+  }
+
+  // Sculpted central airbag/horn pad + chrome emblem bezel
+  const hubPad = new THREE.Mesh(
+    new THREE.CylinderGeometry(r * 0.32, r * 0.35, 0.044, 18),
+    leatherMat,
+  );
+  hubPad.rotation.x = Math.PI / 2;
+  hubPad.position.z = 0.01;
+  const emblemRing = new THREE.Mesh(
+    new THREE.TorusGeometry(r * 0.14, 0.005, 8, 18),
+    chromeMat,
+  );
+  emblemRing.position.z = 0.034;
+  wheel.add(hubPad, emblemRing);
+
+  // 3 sculpted spokes with thumb control button pods
+  const spokeAngles = [Math.PI, 0, -Math.PI / 2];
+  spokeAngles.forEach((ang, idx) => {
+    const spokeLen = r * 0.72;
+    const spoke = new THREE.Mesh(
+      new THREE.BoxGeometry(idx === 2 ? 0.034 : 0.028, spokeLen, 0.018),
+      style === 'supercar' ? darkMetalMat : chromeMat,
+    );
+    spoke.position.set(
+      Math.cos(ang) * (spokeLen * 0.52),
+      Math.sin(ang) * (spokeLen * 0.52),
+      0.002,
+    );
+    spoke.rotation.z = ang - Math.PI / 2;
+    wheel.add(spoke);
+
+    // Thumb control pod on left & right spokes
+    if (idx < 2) {
+      const pod = new THREE.Mesh(
+        new THREE.BoxGeometry(0.038, 0.026, 0.024),
+        darkMetalMat,
+      );
+      pod.position.set(Math.cos(ang) * (r * 0.56), 0.004, 0.012);
+      wheel.add(pod);
+    }
+  });
+
+  // Steering column shroud + twin stalks (turn signal & wipers) behind hub
+  const column = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.044, 0.052, 0.24, 12),
+    darkMetalMat,
+  );
+  column.rotation.x = Math.PI / 2;
+  column.position.z = -0.12;
+  wheel.add(column);
+
+  [-1, 1].forEach((side) => {
+    const stalk = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.007, 0.008, 0.13, 8),
+      darkMetalMat,
+    );
+    stalk.rotation.z = side * 1.32;
+    stalk.position.set(side * 0.085, 0.015, -0.055);
+    wheel.add(stalk);
+
+    // Brushed aluminum paddle shifters on sport SUV & supercar
+    if (!isLuxury) {
+      const paddle = new THREE.Mesh(
+        new THREE.BoxGeometry(0.022, 0.075, 0.008),
+        chromeMat,
+      );
+      paddle.position.set(side * (r * 0.52), 0.025, -0.028);
+      wheel.add(paddle);
+    }
+  });
+
+  wheel.traverse((obj) => {
+    if (obj instanceof THREE.Mesh) obj.userData.noShadowCast = true;
+  });
+  return wheel;
+}
+
