@@ -1746,6 +1746,9 @@ export function getPolishedConcretePbr(anisotropy = 4): PbrTextureSet {
     anisotropy,
   );
 
+  map.userData = { sharedAsset: true };
+  normalMap.userData = { sharedAsset: true };
+  roughnessMap.userData = { sharedAsset: true };
   cachedPolishedConcretePbr = { map, normalMap, roughnessMap };
   return cachedPolishedConcretePbr;
 }
@@ -1800,6 +1803,7 @@ export function getCrossDrilledRotorTexture(anisotropy = 4): THREE.CanvasTexture
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = anisotropy;
+  tex.userData = { sharedAsset: true };
   tex.needsUpdate = true;
   cachedCrossDrilledRotorTex = tex;
   return tex;

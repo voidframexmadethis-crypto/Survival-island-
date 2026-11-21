@@ -6,7 +6,6 @@ import {
 } from '../types';
 import { GarageVehicleSpec } from '../systems/undergroundElevator';
 import { createVehicleFromPreset } from '../systems/modularVehicle';
-import { resolveVehicleProfile } from '../systems/vehicleProfiles';
 import {
   buildRealLifeCarRig,
   buildSilhouetteGeometry,
@@ -16,31 +15,12 @@ import {
   VehicleArchetype,
 } from './realLifeCarRig';
 import {
-  createCadillacTailfinGeometry,
-  createCurvedDashboardGeometry,
-  createCurvedDeckPanelGeometry,
-  createCurvedDoorSkinGeometry,
-  createCurvedRearGlassGeometry,
-  createCurvedSideGlassGeometry,
-  createCurvedWheelhouseTubGeometry,
-  createCurvedWindshieldGeometry,
-  createSculptedBodyHullGeometry,
-  createSculptedRoofCanopyGeometry,
-  createSculptedSeatBucketGeometry,
-  createSweptTubeGeometry,
-  createWrapAroundBumperGeometry,
-  evaluateHullStation,
-  getVehicleHullSurfaceSpec,
-} from './automotiveSurfaceGeo';
-import {
   ensureGeometryHasUv,
   getCrossDrilledRotorTexture,
 } from './textures';
 import {
   buildCabinDetailKit,
-  buildCadillacFenderBadges,
   buildDetailedSteeringWheel,
-  buildDoorHandleAssembly,
   buildRealisticGrilleAssembly,
   buildRealisticHeadlightPod,
   buildRealisticSideMirror,
@@ -53,17 +33,10 @@ import {
   createCarbonFiberMaterial,
   createChromeMaterial,
   createConvertibleFabricMaterial,
-  createMultiPistonCaliperMesh,
   createTireRubberMaterial,
   createTireSidewallMaterial,
   createWalnutWoodMaterial,
-  getAmberSignalLensTextureSet,
-  getCadillacCrestEmblemMap,
-  getChevyBowtieMap,
   getGaugeClusterMap,
-  getLicensePlateMap,
-  getSculptedSpokeGeometry,
-  markVehicleLightingPreserved,
 } from './automotiveMaterials';
 
 export {
@@ -128,6 +101,7 @@ export interface ModularVehicleMeshHandles {
   rimLightMeshes?: THREE.Mesh[];
   rimLightMaterials?: THREE.MeshStandardMaterial[];
   subwooferCones?: THREE.Object3D[];
+  quarterPanels?: THREE.Object3D[];
   subGlowMeshes?: THREE.Mesh[];
   underglowLight?: THREE.PointLight;
   underglowMeshes?: THREE.Mesh[];
@@ -551,9 +525,7 @@ interface SharedShowroomAssets {
   caliperLimeMat: THREE.MeshPhysicalMaterial;
   caliperRedMat: THREE.MeshPhysicalMaterial;
   caliperOrangeMat: THREE.MeshPhysicalMaterial;
-  caliperChromeMat: THREE.MeshPhysicalMaterial;
   whitewallMat: THREE.MeshStandardMaterial;
-  darkInnerMat: THREE.MeshStandardMaterial;
   bevelArchCache: Map<string, THREE.ExtrudeGeometry>;
 }
 
@@ -564,7 +536,6 @@ function getSharedShowroomAssets(): SharedShowroomAssets {
   const rotorTex = typeof document !== 'undefined' ? getCrossDrilledRotorTexture() : null;
   const tireMat = createTireRubberMaterial();
   const tireSidewallMat = createTireSidewallMaterial();
-  const caliperChromeMat = createChromeMaterial(0xf8fafc);
   cachedShowroomAssets = {
     tireMat,
     tireSidewallMat,
@@ -592,16 +563,10 @@ function getSharedShowroomAssets(): SharedShowroomAssets {
       roughness: 0.2,
       clearcoat: 0.85,
     }),
-    caliperChromeMat,
     whitewallMat: new THREE.MeshStandardMaterial({
       color: 0xf8fafc,
       roughness: 0.44,
       metalness: 0.04,
-    }),
-    darkInnerMat: new THREE.MeshStandardMaterial({
-      color: 0x07090d,
-      roughness: 0.9,
-      metalness: 0.1,
     }),
     bevelArchCache: new Map(),
   };
@@ -611,9 +576,7 @@ function getSharedShowroomAssets(): SharedShowroomAssets {
   cachedShowroomAssets.caliperLimeMat.userData = { sharedAsset: true };
   cachedShowroomAssets.caliperRedMat.userData = { sharedAsset: true };
   cachedShowroomAssets.caliperOrangeMat.userData = { sharedAsset: true };
-  cachedShowroomAssets.caliperChromeMat.userData = { sharedAsset: true, preserveEnvMapIntensity: true };
   cachedShowroomAssets.whitewallMat.userData = { sharedAsset: true };
-  cachedShowroomAssets.darkInnerMat.userData = { sharedAsset: true };
   return cachedShowroomAssets;
 }
 
@@ -694,12 +657,11 @@ function attachBrakeAssembly(
   caliperTone: 'lime' | 'red' | 'orange' = 'lime',
 ): void {
   const assets = getSharedShowroomAssets();
-  const rotorGeo = new THREE.CylinderGeometry(rotorRadius, rotorRadius, 0.026, 26);
+  const rotorGeo = new THREE.CylinderGeometry(rotorRadius, rotorRadius, 0.026, 24);
   rotorGeo.rotateZ(Math.PI / 2);
   ensureGeometryHasUv(rotorGeo);
   const rotor = new THREE.Mesh(rotorGeo, assets.rotorMat);
   rotor.position.x = sideSign * offsetX;
-  rotor.userData.noShadowCast = true;
 
   const caliperMat =
     caliperTone === 'orange'
@@ -707,7 +669,10 @@ function attachBrakeAssembly(
       : caliperTone === 'red'
         ? assets.caliperRedMat
         : assets.caliperLimeMat;
-  const caliper = createMultiPistonCaliperMesh(caliperMat, assets.caliperChromeMat, rotorRadius);
+  const caliper = new THREE.Mesh(
+    ensureGeometryHasUv(new THREE.BoxGeometry(0.068, rotorRadius * 0.58, rotorRadius * 0.34)),
+    caliperMat,
+  );
   caliper.position.set(sideSign * (offsetX + 0.008), rotorRadius * 0.42, -rotorRadius * 0.46);
   caliper.rotation.x = 0.45;
   steerPivot.add(rotor, caliper);
@@ -746,7 +711,6 @@ function buildCustomWheel(
       new THREE.CylinderGeometry(0.43, 0.43, 0.34, 28, 1, true),
       tireMat,
     );
-    tireOuter.userData.isVehicleShadowHull = true;
     tireOuter.rotation.z = Math.PI / 2;
     [-0.165, 0.165].forEach((sx) => {
       const sidewall = new THREE.Mesh(new THREE.TorusGeometry(0.408, 0.024, 8, 28), sidewallMat);
@@ -790,8 +754,8 @@ function buildCustomWheel(
       spinGroup.add(bolt);
     }
 
-    // 8 Sculpted Forgiato Y-spokes inside the main wheel barrel (revealing cross-drilled rotor behind!)
-    const spokeGeo = getSculptedSpokeGeometry(0.34, 0.044, 0.026, 0.036);
+    // 8 Forged Forgiato Y-spokes inside the main wheel barrel (revealing cross-drilled rotor behind!)
+    const spokeGeo = new THREE.BoxGeometry(0.042, 0.345, 0.036);
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2;
       const spoke = new THREE.Mesh(spokeGeo, rimMat);
@@ -833,17 +797,21 @@ function buildCustomWheel(
     spinnerOuterRing.rotation.y = Math.PI / 2;
     spinnerHub.add(spinnerOuterRing);
 
-    const bladeAGeo = getSculptedSpokeGeometry(0.265, 0.048, 0.028, 0.028);
-    const bladeBGeo = getSculptedSpokeGeometry(0.245, 0.036, 0.022, 0.024);
     for (let i = 0; i < 4; i++) {
       const a = (i / 4) * Math.PI * 2;
-      const bladeA = new THREE.Mesh(bladeAGeo, chromeMat);
+      const bladeA = new THREE.Mesh(
+        new THREE.BoxGeometry(0.032, 0.27, 0.048),
+        chromeMat,
+      );
       bladeA.position.set(sideSign * 0.012, Math.cos(a) * 0.145, Math.sin(a) * 0.145);
       bladeA.rotation.x = a + 0.18;
       spinnerHub.add(bladeA);
 
       const bAngle = a + Math.PI / 4;
-      const bladeB = new THREE.Mesh(bladeBGeo, rimMat);
+      const bladeB = new THREE.Mesh(
+        new THREE.BoxGeometry(0.026, 0.25, 0.034),
+        rimMat,
+      );
       bladeB.position.set(
         sideSign * 0.004,
         Math.cos(bAngle) * 0.138,
@@ -897,7 +865,6 @@ function buildCustomWheel(
       new THREE.CylinderGeometry(0.42, 0.42, 0.3, 28, 1, true),
       tireMat,
     );
-    tireOuter.userData.isVehicleShadowHull = true;
     tireOuter.rotation.z = Math.PI / 2;
     [-0.145, 0.145].forEach((sx) => {
       const sidewall = new THREE.Mesh(new THREE.TorusGeometry(0.392, 0.03, 8, 28), sidewallMat);
@@ -916,19 +883,8 @@ function buildCustomWheel(
 
     spinGroup.add(tireOuter, rimBarrel, rimLip);
 
-    // 16 perimeter billet hardware bolts
-    const boltGeo = new THREE.CylinderGeometry(0.007, 0.007, 0.018, 6);
-    boltGeo.rotateZ(Math.PI / 2);
-    for (let b = 0; b < 16; b++) {
-      const ba = (b / 16) * Math.PI * 2;
-      const bolt = new THREE.Mesh(boltGeo, chromeMat);
-      bolt.position.set(sideSign * 0.165, Math.cos(ba) * 0.34, Math.sin(ba) * 0.34);
-      bolt.userData.noShadowCast = true;
-      spinGroup.add(bolt);
-    }
-
-    // 7 sculpted chrome turbine spokes + billet center cap + 5 lug bolts
-    const spokeGeo = getSculptedSpokeGeometry(0.335, 0.052, 0.032, 0.038);
+    // 7 deep chrome turbine spokes + billet center cap + 5 lug bolts
+    const spokeGeo = new THREE.BoxGeometry(0.045, 0.34, 0.052);
     for (let i = 0; i < 7; i++) {
       const a = (i / 7) * Math.PI * 2;
       const spoke = new THREE.Mesh(spokeGeo, rimMat);
@@ -961,7 +917,6 @@ function buildCustomWheel(
     new THREE.CylinderGeometry(0.41, 0.41, 0.27, 26, 1, true),
     tireMat,
   );
-  tire.userData.isVehicleShadowHull = true;
   tire.rotation.z = Math.PI / 2;
   [-0.13, 0.13].forEach((sx) => {
     const sidewall = new THREE.Mesh(new THREE.TorusGeometry(0.345, 0.068, 10, 26), sidewallMat);
@@ -986,78 +941,7 @@ function buildCustomWheel(
   rimLip.position.x = sideSign * 0.145;
   spinGroup.add(tire, whitewall, rimDish, rimLip);
 
-  if (style === 'spinner_13') {
-    // 1960s Cadillac Deep-Dish 7-Spoke Chrome Forged Rim w/ Lip Bolts, 5 Lugs & Crest Center Cap
-    const boltGeo = new THREE.CylinderGeometry(0.006, 0.006, 0.016, 6);
-    boltGeo.rotateZ(Math.PI / 2);
-    for (let b = 0; b < 14; b++) {
-      const ba = (b / 14) * Math.PI * 2;
-      const bolt = new THREE.Mesh(boltGeo, chromeMat);
-      bolt.position.set(sideSign * 0.154, Math.cos(ba) * 0.236, Math.sin(ba) * 0.236);
-      bolt.userData.noShadowCast = true;
-      spinGroup.add(bolt);
-    }
-
-    const baseSpokeGeo = getSculptedSpokeGeometry(0.24, 0.04, 0.025, 0.028);
-    for (let i = 0; i < 7; i++) {
-      const a = (i / 7) * Math.PI * 2;
-      const spoke = new THREE.Mesh(baseSpokeGeo, rimMat);
-      spoke.position.set(sideSign * 0.11, Math.cos(a) * 0.125, Math.sin(a) * 0.125);
-      spoke.rotation.x = a;
-      spinGroup.add(spoke);
-    }
-
-    const classicLugGeo = new THREE.CylinderGeometry(0.01, 0.01, 0.024, 6);
-    classicLugGeo.rotateZ(Math.PI / 2);
-    for (let l = 0; l < 5; l++) {
-      const la = (l / 5) * Math.PI * 2;
-      const lug = new THREE.Mesh(classicLugGeo, chromeMat);
-      lug.position.set(sideSign * 0.145, Math.cos(la) * 0.052, Math.sin(la) * 0.052);
-      spinGroup.add(lug);
-    }
-
-    const spinnerHub = new THREE.Group();
-    spinnerHub.position.set(sideSign * 0.16, 0, 0);
-    const hubRing = new THREE.Mesh(
-      new THREE.TorusGeometry(0.21, 0.018, 8, 24),
-      chromeMat,
-    );
-    hubRing.rotation.y = Math.PI / 2;
-    spinnerHub.add(hubRing);
-
-    const bladeGeo = getSculptedSpokeGeometry(0.205, 0.036, 0.022, 0.024);
-    for (let i = 0; i < 7; i++) {
-      const a = (i / 7) * Math.PI * 2;
-      const blade = new THREE.Mesh(bladeGeo, chromeMat);
-      blade.position.set(0.008 * sideSign, Math.cos(a) * 0.106, Math.sin(a) * 0.106);
-      blade.rotation.x = a + 0.18;
-      spinnerHub.add(blade);
-    }
-    const centerCap = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.058, 0.076, 0.068, 16),
-      chromeMat,
-    );
-    centerCap.rotation.z = Math.PI / 2;
-    centerCap.position.x = sideSign * 0.02;
-    spinnerHub.add(centerCap);
-
-    const crestTex = getCadillacCrestEmblemMap();
-    if (crestTex) {
-      const medallion = new THREE.Mesh(
-        new THREE.CircleGeometry(0.044, 16),
-        new THREE.MeshBasicMaterial({ map: crestTex, transparent: true, alphaTest: 0.15 }),
-      );
-      medallion.rotation.y = sideSign > 0 ? Math.PI / 2 : -Math.PI / 2;
-      medallion.position.x = sideSign * 0.056;
-      medallion.userData.noShadowCast = true;
-      spinnerHub.add(medallion);
-    }
-
-    spinGroup.add(spinnerHub);
-    return { steerPivot, spinGroup, spinnerHub };
-  }
-
-  // Sculpted Wire spokes + 5 lug bolts for wire_whitewall & swanger
+  // Sculpted Wire spokes + 5 lug bolts
   const wireGeo = new THREE.CylinderGeometry(0.008, 0.008, 0.47, 6);
   for (let i = 0; i < 12; i++) {
     const a = (i / 12) * Math.PI * 2;
@@ -1108,6 +992,34 @@ function buildCustomWheel(
       ear.rotation.x = (k * Math.PI) / 2;
       spinGroup.add(ear);
     }
+  } else if (style === 'spinner_13') {
+    // Cadillac Showroom Multi-Spoke Chrome Spinners (matching reference image 7-spoke deep chrome dish!)
+    const spinnerHub = new THREE.Group();
+    spinnerHub.position.set(sideSign * 0.16, 0, 0);
+    const hubRing = new THREE.Mesh(
+      new THREE.TorusGeometry(0.21, 0.022, 8, 22),
+      chromeMat,
+    );
+    hubRing.rotation.y = Math.PI / 2;
+    spinnerHub.add(hubRing);
+
+    const bladeGeo = new THREE.BoxGeometry(0.03, 0.215, 0.04);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const blade = new THREE.Mesh(bladeGeo, chromeMat);
+      blade.position.set(0.01 * sideSign, Math.cos(a) * 0.108, Math.sin(a) * 0.108);
+      blade.rotation.x = a + 0.22;
+      spinnerHub.add(blade);
+    }
+    const centerCap = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.058, 0.078, 0.07, 16),
+      chromeMat,
+    );
+    centerCap.rotation.z = Math.PI / 2;
+    centerCap.position.x = sideSign * 0.02;
+    spinnerHub.add(centerCap);
+    spinGroup.add(spinnerHub);
+    return { steerPivot, spinGroup, spinnerHub };
   } else {
     const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.09, 0.14, 14), chromeMat);
     cap.rotation.z = Math.PI / 2;
@@ -1171,121 +1083,155 @@ function buildCustomStreetShowCar(
     metalness: 0.08,
   });
   const glassMat = createAutomotiveGlassMaterial(0.38);
+  const headlightMat = new THREE.MeshStandardMaterial({
+    color: 0xfef9c3,
+    emissive: 0xfef08a,
+    emissiveIntensity: 1.5,
+    roughness: 0.14,
+  });
+  const amberSignalMat = new THREE.MeshStandardMaterial({
+    color: 0xfbbf24,
+    emissive: 0xf59e0b,
+    emissiveIntensity: 1.15,
+    roughness: 0.2,
+  });
+  const taillightMat = new THREE.MeshStandardMaterial({
+    color: 0xef4444,
+    emissive: 0xdc2626,
+    emissiveIntensity: 1.35,
+    roughness: 0.18,
+  });
 
   // Grounded axle reference height; chassisGroup lifts/drops by suspensionOffset
   const baseWheelY = 0.41 * wheelScale;
   const bodyRideY = Math.max(0.28, 0.38 + susp);
   handles.chassisGroup.position.y = bodyRideY;
 
-  const hullArch: VehicleArchetype = isDeville
-    ? 'cadillac'
-    : preset === 'donk'
-      ? 'donk'
-      : preset === 'slab'
-        ? 'slab'
-        : 'lowrider';
-  const hullSpec = getVehicleHullSurfaceSpec(hullArch);
-  const yOff = preset === 'donk' ? -0.28 : -0.18;
-  const frontZ = hullSpec.frontZ;
-  const rearZ = hullSpec.rearZ;
-  const lowerBodyH = hullSpec.beltY + yOff; // beltline shoulder in chassisGroup local Y
+  const lowerBodyLen = isDeville
+    ? 4.95
+    : preset === 'slab'
+      ? 4.75
+      : preset === 'donk'
+        ? 4.6
+        : 4.65;
+  const lowerBodyH = preset === 'lowrider' ? 0.52 : preset === 'donk' ? 0.58 : 0.56;
+  const frontZ = 0.08 + lowerBodyLen * 0.5;
+  const rearZ = 0.08 - lowerBodyLen * 0.5;
 
-  // 1. Compound-Curved 3D Lofted Automotive Body Hull + Recessed Wheelhouse Tubs & Flared Chrome Arch Lips
-  const hullGeo = createSculptedBodyHullGeometry(hullArch);
-  const hullMesh = new THREE.Mesh(hullGeo, candyPaintMat);
-  hullMesh.position.y = yOff;
-  hullMesh.castShadow = true;
-  hullMesh.receiveShadow = true;
-  hullMesh.userData.isVehicleShadowHull = true;
-  handles.chassisGroup.add(hullMesh);
-
-  const cabinFloor = new THREE.Mesh(
-    createCurvedDeckPanelGeometry({
-      key: `${hullArch}_floor`,
-      width: 1.56,
-      length: 1.95,
-      crownY: 0.015,
-      dropRearY: 0,
-      taperRear: 0.04,
-      forwardZ: false,
-    }),
-    carpetMat,
+  // 1. Lower chassis pan & open recessed cabin floor (so real interior is visible!)
+  const underPan = new THREE.Mesh(
+    new THREE.BoxGeometry(1.82, 0.14, lowerBodyLen - 0.15),
+    darkTrimMat,
   );
-  cabinFloor.position.set(0, hullSpec.cockpitFloorY + yOff + 0.01, hullSpec.cockpitFrontZ + 0.1);
-  handles.chassisGroup.add(cabinFloor);
+  underPan.position.set(0, 0.08, 0.08);
+  const cabinFloor = new THREE.Mesh(new THREE.BoxGeometry(1.66, 0.06, 2.05), carpetMat);
+  cabinFloor.position.set(0, 0.18, -0.04);
+  handles.chassisGroup.add(underPan, cabinFloor);
 
-  // Sculpted Curved Wheelhouse Liners & Mirror Chrome Arch Trim Moldings
-  const archR = hullSpec.archRadius;
-  const streetAssets = getSharedShowroomAssets();
-  const tubGeo = createCurvedWheelhouseTubGeometry(hullArch, archR * 0.97, 0.34);
-  const lipTorusGeo = new THREE.TorusGeometry(archR * 1.01, 0.015, 10, 24, Math.PI);
-  lipTorusGeo.rotateY(Math.PI / 2);
-  const innerWheelMat = new THREE.MeshStandardMaterial({
-    color: 0x05070b,
-    roughness: 0.92,
-    metalness: 0.08,
-    side: THREE.DoubleSide,
+  // 2. Sculpted Contoured Front Engine Bay + Wheel Arch Flares + Rear Quarter Body
+  const frontBodyLen = frontZ - 0.82;
+  const frontEngineCore = new THREE.Mesh(
+    createContouredPanelGeo(1.48, lowerBodyH, frontBodyLen, 0.03, 0.04),
+    candyPaintMat,
+  );
+  frontEngineCore.position.set(0, lowerBodyH * 0.5 + 0.12, 0.82 + frontBodyLen * 0.5);
+  const frontNoseHeader = new THREE.Mesh(
+    createContouredPanelGeo(1.94, lowerBodyH * 0.92, 0.34, 0.03, 0.04),
+    candyPaintMat,
+  );
+  frontNoseHeader.position.set(0, lowerBodyH * 0.48 + 0.12, frontZ - 0.18);
+  handles.chassisGroup.add(frontEngineCore, frontNoseHeader);
+
+  // Contoured rocker sills with chrome lower spear molding beneath doors
+  [-0.91, 0.91].forEach((sx) => {
+    const sill = new THREE.Mesh(
+      createContouredPanelGeo(0.14, 0.18, 1.72, 0.02, 0.025),
+      candyPaintMat,
+    );
+    sill.position.set(sx, 0.21, -0.04);
+    const lowerSpear = new THREE.Mesh(
+      new THREE.BoxGeometry(0.03, 0.038, 4.35),
+      isDeville ? goldTrimMat : chromeMat,
+    );
+    lowerSpear.position.set(sx + (sx < 0 ? -0.07 : 0.07), 0.24, 0.08);
+    handles.chassisGroup.add(sill, lowerSpear);
   });
 
-  [hullSpec.archZFront, hullSpec.archZRear].forEach((az) => {
-    const st = evaluateHullStation(hullSpec, az);
-    const sideX = st.halfW * hullSpec.shoulderTuck + hullSpec.archLipFlare * 0.65;
-    ([-1, 1] as const).forEach((side) => {
-      const liner = new THREE.Mesh(tubGeo, innerWheelMat);
-      liner.position.set(side * (sideX - 0.14), hullSpec.archY + yOff, az);
-      liner.userData.noShadowCast = true;
-      const archTrim = new THREE.Mesh(lipTorusGeo, chromeMat);
-      archTrim.position.set(side * (sideX + 0.008), hullSpec.archY + yOff, az);
-      handles.chassisGroup.add(liner, archTrim);
+  // Sculpted Curved Wheel Arch Flares over all 4 wheel wells (eliminating boxy blocks!)
+  const archOuterR = Math.min(0.64, Math.max(0.46, 0.44 * wheelScale + 0.08));
+  const archInnerR = Math.max(0.32, archOuterR - 0.14);
+  const archGeo = getFlaredWheelArchGeo(archOuterR, archInnerR, 0.24);
+  [1.38, -1.24].forEach((az) => {
+    [-0.9, 0.9].forEach((fx) => {
+      const arch = new THREE.Mesh(archGeo, candyPaintMat);
+      arch.position.set(fx, 0.2, az);
+      const archTrim = new THREE.Mesh(
+        new THREE.TorusGeometry((archInnerR + archOuterR) * 0.5, 0.018, 8, 20, Math.PI),
+        chromeMat,
+      );
+      archTrim.rotation.y = Math.PI / 2;
+      archTrim.position.set(fx + (fx < 0 ? -0.125 : 0.125), 0.2, az);
+      handles.chassisGroup.add(arch, archTrim);
     });
   });
 
-  // Curved lower rocker spear molding hugging the sculpted hull flank
-  ([-1, 1] as const).forEach((side) => {
-    const spearZPts = [-2.15, -1.25, -0.2, 0.85, 1.92];
-    const lowerSpearGeo = createSweptTubeGeometry(
-      `${hullArch}_lowspear:${side}`,
-      spearZPts.map((sz) => {
-        const st = evaluateHullStation(hullSpec, sz);
-        return [side * (st.halfW * 1.01), hullSpec.sillY + yOff + 0.06, sz];
-      }),
-      0.016,
-      20,
-      8,
+  // Rear Quarter Panels + Rear Trunk Tub (hollowed so popping the trunk shows air tanks & subs!)
+  const rearStartZ = -0.88;
+  const rearLen = Math.max(1.2, rearStartZ - rearZ);
+  const rearCenterZ = rearZ + rearLen * 0.5;
+  handles.quarterPanels = handles.quarterPanels ?? [];
+  [-0.84, 0.84].forEach((rx) => {
+    const quarter = new THREE.Mesh(
+      createContouredPanelGeo(0.28, lowerBodyH, rearLen, 0.03, 0.04),
+      candyPaintMat,
     );
-    handles.chassisGroup.add(new THREE.Mesh(lowerSpearGeo, isDeville ? goldTrimMat : chromeMat));
+    quarter.position.set(rx, lowerBodyH * 0.5 + 0.12, rearCenterZ);
+    quarter.userData.baseX = rx;
+    quarter.userData.flexSide = rx < 0 ? -1 : 1;
+    handles.chassisGroup.add(quarter);
+    handles.quarterPanels!.push(quarter);
   });
+  const rearBulkhead = new THREE.Mesh(
+    new THREE.BoxGeometry(1.68, lowerBodyH * 0.92, 0.12),
+    darkTrimMat,
+  );
+  rearBulkhead.position.set(0, lowerBodyH * 0.5 + 0.12, rearStartZ + 0.04);
+  const rearValance = new THREE.Mesh(
+    createContouredPanelGeo(1.94, lowerBodyH * 0.85, 0.18, 0.02, 0.03),
+    candyPaintMat,
+  );
+  rearValance.position.set(0, lowerBodyH * 0.45 + 0.12, rearZ + 0.08);
+  handles.chassisGroup.add(rearBulkhead, rearValance);
 
-  // Trunk Interior Equipment (visible when you pop the curved trunk!)
+  // Trunk Interior Equipment (visible when you pop the trunk!)
   const tankMat = new THREE.MeshStandardMaterial({
     color: 0xe2e8f0,
     metalness: 0.94,
     roughness: 0.1,
   });
-  const rearStartZ = -0.94;
-  const subBox = new THREE.Mesh(new THREE.BoxGeometry(1.14, 0.28, 0.44), darkTrimMat);
-  subBox.position.set(0, 0.26, rearStartZ - 0.34);
+  const subBox = new THREE.Mesh(new THREE.BoxGeometry(1.18, 0.34, 0.48), darkTrimMat);
+  subBox.position.set(0, 0.34, rearStartZ - 0.32);
   handles.chassisGroup.add(subBox);
   [-0.32, 0.32].forEach((sx) => {
     const subCone = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.12, 0.12, 0.06, 14),
+      new THREE.CylinderGeometry(0.14, 0.14, 0.06, 14),
       chromeMat,
     );
     subCone.rotation.x = Math.PI / 2;
-    subCone.position.set(sx, 0.28, rearStartZ - 0.57);
+    subCone.position.set(sx, 0.36, rearStartZ - 0.57);
     handles.chassisGroup.add(subCone);
   });
   [-0.44, 0.44].forEach((tx) => {
     const airTank = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.095, 0.095, 0.62, 14),
+      new THREE.CylinderGeometry(0.11, 0.11, 0.66, 14),
       tankMat,
     );
     airTank.rotation.z = Math.PI / 2;
-    airTank.position.set(tx, 0.26, rearZ + 0.48);
+    airTank.position.set(tx, 0.34, rearZ + 0.46);
     handles.chassisGroup.add(airTank);
   });
   const valveBlock = new THREE.Mesh(
-    new THREE.BoxGeometry(0.32, 0.1, 0.18),
+    new THREE.BoxGeometry(0.32, 0.12, 0.2),
     new THREE.MeshStandardMaterial({
       color: 0xf59e0b,
       emissive: 0xd97706,
@@ -1294,83 +1240,62 @@ function buildCustomStreetShowCar(
       roughness: 0.25,
     }),
   );
-  valveBlock.position.set(0, 0.2, rearZ + 0.48);
+  valveBlock.position.set(0, 0.26, rearZ + 0.46);
   handles.chassisGroup.add(valveBlock);
 
-  // Animated Hinged Contoured Curved Trunk Lid (pivoted at rear deck front edge so it swings UP smoothly!)
-  const rearDeckLen = Math.max(1.15, rearStartZ - rearZ - 0.14);
-  const trunkHinge = new THREE.Group();
-  trunkHinge.position.set(0, lowerBodyH + 0.01, rearStartZ);
-  const trunkPanel = new THREE.Mesh(
-    createCurvedDeckPanelGeometry({
-      key: `${hullArch}_trunk`,
-      width: 1.54,
-      length: rearDeckLen,
-      crownY: 0.048,
-      dropRearY: 0.035,
-      taperRear: 0.16,
-      forwardZ: false,
-    }),
+  // Sculpted contoured beveled hood with crown
+  const hood = new THREE.Mesh(
+    createContouredPanelGeo(1.86, 0.1, Math.max(1.35, frontBodyLen - 0.04), 0.055, 0.035),
     candyPaintMat,
   );
-  const trunkTrimGeo = createSweptTubeGeometry(
-    `${hullArch}_trunktrim`,
-    [
-      [-0.64, -0.02, -(rearDeckLen - 0.06)],
-      [0, 0.015, -(rearDeckLen - 0.02)],
-      [0.64, -0.02, -(rearDeckLen - 0.06)],
-    ],
-    0.016,
-    12,
-    8,
+  hood.position.set(0, lowerBodyH + 0.15, 0.82 + frontBodyLen * 0.5);
+  handles.chassisGroup.add(hood);
+
+  // Animated Hinged Contoured Trunk Lid (pivoted at rear deck front edge so it swings UP smoothly!)
+  const trunkHinge = new THREE.Group();
+  trunkHinge.position.set(0, lowerBodyH + 0.16, rearStartZ);
+  const trunkPanel = new THREE.Mesh(
+    createContouredPanelGeo(1.78, 0.08, rearLen - 0.06, 0.035, 0.03),
+    candyPaintMat,
   );
-  trunkHinge.add(trunkPanel, new THREE.Mesh(trunkTrimGeo, chromeMat));
+  trunkPanel.position.set(0, 0, -(rearLen - 0.06) * 0.5);
+  const trunkChromeTrim = new THREE.Mesh(
+    new THREE.BoxGeometry(1.72, 0.042, 0.055),
+    chromeMat,
+  );
+  trunkChromeTrim.position.set(0, 0.02, -(rearLen - 0.1));
+  trunkHinge.add(trunkPanel, trunkChromeTrim);
   handles.chassisGroup.add(trunkHinge);
   handles.trunkLid = trunkHinge;
 
-  // 3. REAL WORKING INTERIOR (Swept Curved Wrap Dash, Sculpted Bucket Seats & Bench, Console, Droptop Switch)
-  const seatBaseY = hullSpec.cockpitFloorY + yOff + 0.18;
+  // 3. REAL WORKING INTERIOR (Padded Dash Brow, Gauges, Radio/Vents, Rearview Mirror, Visors, Pedals, Bolstered Leather Seats, 3-Spoke Steering Wheel, Droptop Switch!)
   const dash = new THREE.Mesh(
-    createCurvedDashboardGeometry(`${hullArch}_dash`, 1.54, 0.34),
+    createContouredPanelGeo(1.66, 0.3, 0.34, 0.035, 0.03),
+    dashMat,
+  );
+  dash.position.set(0, lowerBodyH + 0.04, 0.64);
+  const dashBrow = new THREE.Mesh(
+    createContouredPanelGeo(1.68, 0.065, 0.38, 0.025, 0.02),
     dashPadMat,
   );
-  dash.position.set(0, lowerBodyH + 0.03, 0.54);
-  const dashTrimArc = new THREE.Mesh(
-    createSweptTubeGeometry(
-      `${hullArch}_dashtrim`,
-      [
-        [-0.72, lowerBodyH + 0.01, 0.37],
-        [0, lowerBodyH + 0.03, 0.42],
-        [0.72, lowerBodyH + 0.01, 0.37],
-      ],
-      0.03,
-      12,
-      8,
-    ),
-    dashMat,
-  );
-  const centerConsole = new THREE.Mesh(
-    createCurvedDeckPanelGeometry({
-      key: `${hullArch}_console`,
-      width: 0.26,
-      length: 1.25,
-      crownY: 0.04,
-      dropRearY: 0.01,
-      taperRear: 0.12,
-      forwardZ: false,
-    }),
-    dashMat,
-  );
-  centerConsole.position.set(0, seatBaseY - 0.02, 0.58);
+  dashBrow.position.set(0, lowerBodyH + 0.21, 0.64);
+  const gaugeBezel = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.18, 0.03), chromeMat);
+  gaugeBezel.position.set(-0.42, lowerBodyH + 0.14, 0.625);
+  const radioGrill = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.12, 0.03), chromeMat);
+  radioGrill.position.set(0.02, lowerBodyH + 0.06, 0.46);
+  const gloveBoxTrim = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.024, 0.03), chromeMat);
+  gloveBoxTrim.position.set(0.46, lowerBodyH + 0.08, 0.46);
+  const centerConsole = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.24, 1.35), dashMat);
+  centerConsole.position.set(0, 0.32, 0.05);
   const shifterGate = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.022, 0.22), chromeMat);
-  shifterGate.position.set(0, seatBaseY + 0.03, 0.24);
-  const shifter = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.018, 0.2, 10), chromeMat);
-  shifter.position.set(0, seatBaseY + 0.12, 0.24);
-  const shifterKnob = new THREE.Mesh(new THREE.SphereGeometry(0.034, 12, 10), chromeMat);
-  shifterKnob.position.set(0, seatBaseY + 0.22, 0.24);
+  shifterGate.position.set(0, 0.445, 0.24);
+  const shifter = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.22, 8), chromeMat);
+  shifter.position.set(0, 0.52, 0.24);
+  const shifterKnob = new THREE.Mesh(new THREE.SphereGeometry(0.036, 10, 10), chromeMat);
+  shifterKnob.position.set(0, 0.63, 0.24);
 
   const droptopSwitchGroup = new THREE.Group();
-  droptopSwitchGroup.position.set(0, seatBaseY + 0.03, 0.44);
+  droptopSwitchGroup.position.set(0, 0.44, 0.44);
   const switchBezel = new THREE.Mesh(
     new THREE.BoxGeometry(0.14, 0.032, 0.14),
     chromeMat,
@@ -1402,7 +1327,10 @@ function buildCustomStreetShowCar(
   }
   handles.chassisGroup.add(
     dash,
-    dashTrimArc,
+    dashBrow,
+    gaugeBezel,
+    radioGrill,
+    gloveBoxTrim,
     centerConsole,
     shifterGate,
     shifter,
@@ -1410,43 +1338,59 @@ function buildCustomStreetShowCar(
     droptopSwitchGroup,
   );
 
-  // Sculpted Curved Bucket Seats with Crest Accents (Driver + Passenger)
-  const classicBucketGeo = createSculptedSeatBucketGeometry('luxury_cruiser', 0.5);
-  [-0.42, 0.42].forEach((sx) => {
-    const seat = new THREE.Mesh(classicBucketGeo, leatherMat);
-    seat.position.set(sx, seatBaseY + 0.04, 0.02);
-    handles.chassisGroup.add(seat);
+  // Sculpted Bolstered Bucket Seats with Crest Accents (Driver + Passenger)
+  [-0.44, 0.44].forEach((sx) => {
+    const cushion = new THREE.Mesh(
+      createContouredPanelGeo(0.54, 0.15, 0.52, 0.02, 0.03),
+      leatherMat,
+    );
+    cushion.position.set(sx, 0.3, 0.08);
+    const backrest = new THREE.Mesh(
+      createContouredPanelGeo(0.54, 0.14, 0.56, 0.02, 0.03),
+      leatherMat,
+    );
+    backrest.rotation.x = Math.PI / 2 - 0.14;
+    backrest.position.set(sx, 0.6, -0.14);
+    [-0.22, 0.22].forEach((bx) => {
+      const bolster = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.52, 0.16), seatBolsterMat);
+      bolster.position.set(sx + bx, 0.58, -0.11);
+      bolster.rotation.x = -0.14;
+      handles.chassisGroup.add(bolster);
+    });
+    const headrest = new THREE.Mesh(
+      createContouredPanelGeo(0.3, 0.16, 0.11, 0.025, 0.02),
+      leatherMat,
+    );
+    headrest.position.set(sx, 0.94, -0.19);
     if (isDeville) {
-      const crestTex = getCadillacCrestEmblemMap();
-      const crestPlate = crestTex
-        ? new THREE.Mesh(
-            new THREE.PlaneGeometry(0.095, 0.095),
-            new THREE.MeshBasicMaterial({ map: crestTex, transparent: true, alphaTest: 0.15 }),
-          )
-        : new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.075, 0.02), goldTrimMat);
-      crestPlate.position.set(sx, seatBaseY + 0.45, -0.17);
-      crestPlate.userData.noShadowCast = true;
+      const crestPlate = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.075, 0.02), goldTrimMat);
+      crestPlate.position.set(sx, 0.94, -0.13);
       handles.chassisGroup.add(crestPlate);
     }
+    handles.chassisGroup.add(cushion, backrest, headrest);
   });
 
-  // Contoured Rear Luxury Bench Seat with Cadillac Crest Medallions
-  const rearBenchGeo = createSculptedSeatBucketGeometry('luxury_cruiser', 1.44);
-  const rearBench = new THREE.Mesh(rearBenchGeo, leatherMat);
-  rearBench.position.set(0, seatBaseY + 0.05, -0.58);
-  handles.chassisGroup.add(rearBench);
-  const rearCrestTex = isDeville ? getCadillacCrestEmblemMap() : null;
-  [-0.42, 0.42].forEach((hx) => {
-    if (rearCrestTex) {
-      const rCrest = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.088, 0.088),
-        new THREE.MeshBasicMaterial({ map: rearCrestTex, transparent: true, alphaTest: 0.15 }),
-      );
-      rCrest.position.set(hx, seatBaseY + 0.46, -0.78);
-      rCrest.userData.noShadowCast = true;
-      handles.chassisGroup.add(rCrest);
-    }
+  // Rear Luxury Bench Seat with Twin Headrests
+  const rearCushion = new THREE.Mesh(
+    createContouredPanelGeo(1.52, 0.16, 0.48, 0.02, 0.03),
+    leatherMat,
+  );
+  rearCushion.position.set(0, 0.32, -0.56);
+  const rearBack = new THREE.Mesh(
+    createContouredPanelGeo(1.52, 0.14, 0.52, 0.02, 0.03),
+    leatherMat,
+  );
+  rearBack.rotation.x = Math.PI / 2 - 0.12;
+  rearBack.position.set(0, 0.62, -0.78);
+  [-0.45, 0.45].forEach((hx) => {
+    const rHeadrest = new THREE.Mesh(
+      createContouredPanelGeo(0.3, 0.15, 0.1, 0.02, 0.02),
+      leatherMat,
+    );
+    rHeadrest.position.set(hx, 0.93, -0.82);
+    handles.chassisGroup.add(rHeadrest);
   });
+  handles.chassisGroup.add(rearCushion, rearBack);
 
   // Photorealistic Luxury Wood-and-Chrome Steering Wheel + Backlit Instrument Cluster
   const helmWheel = buildDetailedSteeringWheel({
@@ -1455,7 +1399,7 @@ function buildCustomStreetShowCar(
     chromeMat,
     leatherMat,
   });
-  helmWheel.position.set(-0.42, lowerBodyH + 0.08, 0.36);
+  helmWheel.position.set(-0.42, lowerBodyH + 0.18, 0.42);
   helmWheel.rotation.x = 0.45;
   handles.chassisGroup.add(helmWheel);
   handles.helmWheel = helmWheel;
@@ -1463,92 +1407,80 @@ function buildCustomStreetShowCar(
   const classicGaugeTex = getGaugeClusterMap();
   if (classicGaugeTex) {
     const gaugeScreen = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.4, 0.14),
+      new THREE.PlaneGeometry(0.44, 0.16),
       new THREE.MeshBasicMaterial({ map: classicGaugeTex }),
     );
-    gaugeScreen.position.set(-0.42, lowerBodyH + 0.04, 0.44);
+    gaugeScreen.position.set(-0.42, lowerBodyH + 0.14, 0.605);
     gaugeScreen.rotation.y = Math.PI;
     handles.chassisGroup.add(gaugeScreen);
   }
 
-  // 4. REAL WORKING HINGED CURVED LEFT & RIGHT DOORS (Contoured Skin, Handles, Armrests, Wing Mirrors!)
-  const doorLen = 1.56;
-  const doorH = Math.max(0.38, lowerBodyH - (hullSpec.sillY + yOff + 0.04));
-  const doorMidSt = evaluateHullStation(hullSpec, 0.05);
-  const doorX = doorMidSt.halfW * 0.99;
+  // 4. REAL WORKING HINGED LEFT & RIGHT DOORS (Contoured Skin, Recessed Handles, Armrests, Wing Mirrors!)
+  const doorLen = 1.66;
+  const doorH = lowerBodyH - 0.08;
   ([-1, 1] as const).forEach((side) => {
     const doorPivot = new THREE.Group();
-    doorPivot.position.set(side * doorX, hullSpec.sillY + yOff + 0.04, 0.72);
+    doorPivot.position.set(side * 0.93, 0.3, 0.8);
     const outerSkin = new THREE.Mesh(
-      createCurvedDoorSkinGeometry({
-        key: `${hullArch}_door`,
-        side,
-        length: doorLen,
-        height: doorH,
-        bowOut: 0.052,
-        tumblehomeTopIn: 0.045,
-      }),
+      createContouredPanelGeo(0.085, doorH, doorLen, 0.015, 0.02),
       candyPaintMat,
     );
+    outerSkin.position.set(0, doorH * 0.5, -doorLen * 0.5);
     const innerCard = new THREE.Mesh(
-      createCurvedDoorSkinGeometry({
-        key: `${hullArch}_door_in`,
-        side: (side < 0 ? 1 : -1) as -1 | 1,
-        length: doorLen * 0.92,
-        height: doorH * 0.85,
-        bowOut: 0.02,
-        tumblehomeTopIn: 0.02,
-      }),
+      new THREE.BoxGeometry(0.05, doorH * 0.86, doorLen * 0.92),
       leatherMat,
     );
-    innerCard.position.set(-side * 0.04, doorH * 0.06, -0.04);
-    const armrest = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.065, 0.48), seatBolsterMat);
-    armrest.position.set(-side * 0.06, doorH * 0.46, -doorLen * 0.55);
+    innerCard.position.set(-side * 0.045, doorH * 0.5, -doorLen * 0.5);
+    const armrest = new THREE.Mesh(
+      new THREE.BoxGeometry(0.065, 0.075, 0.52),
+      seatBolsterMat,
+    );
+    armrest.position.set(-side * 0.072, doorH * 0.46, -doorLen * 0.55);
     const speakerRing = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.08, 0.08, 0.018, 12),
+      new THREE.CylinderGeometry(0.085, 0.085, 0.018, 12),
       chromeMat,
     );
     speakerRing.rotation.z = Math.PI / 2;
-    speakerRing.position.set(-side * 0.06, doorH * 0.24, -0.32);
+    speakerRing.position.set(-side * 0.072, doorH * 0.24, -0.32);
 
-    const handleAssy = buildDoorHandleAssembly({
-      side,
+    const handlePocket = new THREE.Mesh(
+      new THREE.BoxGeometry(0.024, 0.055, 0.2),
+      darkTrimMat,
+    );
+    handlePocket.position.set(side * 0.045, doorH * 0.78, -doorLen * 0.72);
+    const chromeHandle = new THREE.Mesh(
+      new THREE.BoxGeometry(0.032, 0.028, 0.17),
       chromeMat,
-      pocketMat: darkTrimMat,
-      withKeyCylinder: true,
-    });
-    handleAssy.position.set(side * 0.022, doorH * 0.76, -doorLen * 0.72);
-
+    );
+    chromeHandle.position.set(side * 0.062, doorH * 0.78, -doorLen * 0.72);
+    const sideTrim = new THREE.Mesh(
+      new THREE.BoxGeometry(0.032, 0.038, doorLen * 0.96),
+      isDeville ? chromeMat : goldTrimMat,
+    );
+    sideTrim.position.set(side * 0.052, doorH * 0.54, -doorLen * 0.5);
     const doorGlass = new THREE.Mesh(
-      createCurvedSideGlassGeometry({
-        key: `${hullArch}_dglass`,
-        side,
-        frontZ: -0.08,
-        rearZ: -doorLen * 0.9,
-        bottomY: doorH - 0.02,
-        topY: doorH + 0.34,
-        bottomX: 0.01,
-        topX: 0.065,
-        midBowOut: 0.025,
-      }),
+      new THREE.BoxGeometry(0.028, 0.36, doorLen * 0.84),
       glassMat,
     );
-    doorGlass.position.x = -side * 0.03;
+    doorGlass.position.set(-side * 0.01, doorH + 0.16, -doorLen * 0.52);
 
+    // Classic round chrome wing mirror on front door corner with mirror glass face
     const mirrorAssy = buildRealisticSideMirror({
       side,
       housingMat: candyPaintMat,
       chromeMat,
       style: isDeville || preset === 'lowrider' ? 'classic_round' : 'aero',
     });
-    mirrorAssy.position.set(side * 0.02, doorH + 0.02, -0.18);
+    mirrorAssy.position.set(side * 0.045, doorH + 0.03, -0.18);
 
     doorPivot.add(
       outerSkin,
       innerCard,
       armrest,
       speakerRing,
-      handleAssy,
+      handlePocket,
+      chromeHandle,
+      sideTrim,
       doorGlass,
       mirrorAssy,
     );
@@ -1557,232 +1489,157 @@ function buildCustomStreetShowCar(
     else handles.doorRight = doorPivot;
   });
 
-  // 5. Panoramic Wrap-Around Curved Windshield + Swept Chrome A-Pillars + Retractable Black Convertible Top
-  const cowlZ = hullSpec.windshieldZ;
-  const roofFrontZ = cowlZ - 0.36;
-  const cabinRoofY = hullSpec.roofHeight + yOff;
-  const cowlSt = evaluateHullStation(hullSpec, cowlZ);
-  const baseWsW = cowlSt.halfW * hullSpec.shoulderTuck * 1.84;
-  const topWsW = hullSpec.roofHalfWidth * 1.9;
-  const pillarMat = chromeMat;
+  // 5. Panoramic Windshield + Chrome Surround + Wipers + Cabin Detail Kit / Retractable Black Convertible Top
+  const cabinLen = preset === 'lowrider' ? 1.85 : isDeville ? 1.98 : 2.05;
+  const cabinH = preset === 'lowrider' ? 0.46 : 0.54;
+  const cabinY = lowerBodyH + 0.12 + cabinH * 0.5;
 
   const windshield = new THREE.Mesh(
-    createCurvedWindshieldGeometry({
-      key: `${hullArch}_ws`,
-      baseWidth: baseWsW,
-      topWidth: topWsW,
-      bottomY: lowerBodyH - 0.02,
-      topY: cabinRoofY - 0.02,
-      bottomZ: cowlZ,
-      topZ: roofFrontZ,
-      wrapZ: hullSpec.windshieldWrap,
-      crown: 0.04,
-    }),
+    new THREE.BoxGeometry(1.62, cabinH * 0.96, 0.045),
     glassMat,
   );
-  const topHeaderRail = new THREE.Mesh(
-    createSweptTubeGeometry(
-      `${hullArch}_wsheader`,
-      [
-        [-topWsW * 0.5, cabinRoofY - 0.015, roofFrontZ],
-        [0, cabinRoofY + 0.032, roofFrontZ + hullSpec.windshieldWrap],
-        [topWsW * 0.5, cabinRoofY - 0.015, roofFrontZ],
-      ],
-      0.024,
-      14,
-      8,
-    ),
-    pillarMat,
-  );
-  const cowlWipers = buildWindshieldWipers(baseWsW * 0.76);
-  cowlWipers.position.set(0, lowerBodyH + 0.02, cowlZ + hullSpec.windshieldWrap * 0.82);
+  windshield.position.set(0, cabinY, 0.76);
+  windshield.rotation.x = -0.34;
+  const topHeaderRail = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.055, 0.08), chromeMat);
+  topHeaderRail.position.set(0, cabinY + cabinH * 0.46, 0.66);
+  const cowlWipers = buildWindshieldWipers(1.38);
+  cowlWipers.position.set(0, lowerBodyH + 0.21, 0.84);
   const cabinKit = buildCabinDetailKit({
-    mirrorY: cabinRoofY - 0.09,
-    mirrorZ: roofFrontZ - 0.06,
-    dashY: lowerBodyH + 0.05,
-    pedalZ: cowlZ,
+    mirrorY: cabinY + cabinH * 0.28,
+    mirrorZ: 0.62,
+    dashY: lowerBodyH + 0.14,
+    pedalZ: 0.74,
     driverX: -0.42,
     trimMat: dashPadMat,
     chromeMat,
   });
   handles.chassisGroup.add(windshield, topHeaderRail, cowlWipers, cabinKit);
 
-  ([-1, 1] as const).forEach((side) => {
+  [-0.81, 0.81].forEach((px) => {
     const aPillar = new THREE.Mesh(
-      createSweptTubeGeometry(
-        `${hullArch}_apillar:${side}`,
-        [
-          [side * (baseWsW * 0.5), lowerBodyH - 0.01, cowlZ],
-          [
-            side * THREE.MathUtils.lerp(baseWsW * 0.5, topWsW * 0.5, 0.52),
-            THREE.MathUtils.lerp(lowerBodyH, cabinRoofY, 0.52),
-            THREE.MathUtils.lerp(cowlZ, roofFrontZ, 0.5) + hullSpec.windshieldWrap * 0.22,
-          ],
-          [side * (topWsW * 0.5), cabinRoofY - 0.015, roofFrontZ],
-        ],
-        0.028,
-        14,
-        8,
-      ),
-      pillarMat,
+      new THREE.BoxGeometry(0.068, cabinH * 1.05, 0.082),
+      chromeMat,
     );
+    aPillar.position.set(px, cabinY, 0.76);
+    aPillar.rotation.x = -0.34;
     handles.chassisGroup.add(aPillar);
   });
 
   if (isDeville) {
-    // Articulated 2-stage Haartz Stayfast curved convertible top + rear curved glass + chrome folding boot
+    // Real-life Haartz Stayfast woven twill convertible canvas fabric with stitched seams & cloth sheen
     const blackTopMat = createConvertibleFabricMaterial(0x181a20);
     const headlinerMat = createConvertibleFabricMaterial(0x2d2a26);
+    const weatherstripMat = new THREE.MeshStandardMaterial({
+      color: 0x090a0d,
+      roughness: 0.85,
+      metalness: 0.08,
+    });
     const ribMat = new THREE.MeshStandardMaterial({
       color: 0x475569,
       roughness: 0.34,
       metalness: 0.82,
     });
 
-    const cabinH = Math.max(0.42, cabinRoofY - lowerBodyH);
     const topPivot = new THREE.Group();
-    topPivot.position.set(0, lowerBodyH, -0.94);
+    topPivot.position.set(0, lowerBodyH + 0.16, -0.92);
 
-    ([-1, 1] as const).forEach((side) => {
-      const sailGeo = createCurvedSideGlassGeometry({
-        key: `caddy_sail`,
-        side,
-        frontZ: 0.45,
-        rearZ: -0.02,
-        bottomY: 0,
-        topY: cabinH,
-        bottomX: baseWsW * 0.48,
-        topX: topWsW * 0.48,
-        midBowOut: 0.03,
-      });
-      topPivot.add(new THREE.Mesh(sailGeo, blackTopMat));
+    const rearSailL = new THREE.Mesh(
+      new THREE.BoxGeometry(0.16, cabinH * 0.98, 0.36),
+      blackTopMat,
+    );
+    rearSailL.position.set(-0.79, cabinH * 0.48, 0.08);
+    rearSailL.rotation.x = 0.24;
+    const rearSailR = rearSailL.clone();
+    rearSailR.position.x = 0.79;
+    const rearGlass = new THREE.Mesh(
+      new THREE.BoxGeometry(1.34, cabinH * 0.74, 0.045),
+      glassMat,
+    );
+    rearGlass.position.set(0, cabinH * 0.48, 0.02);
+    rearGlass.rotation.x = 0.24;
 
+    // Rubber weatherstrip bezel & copper defroster lines on the rear convertible glass
+    const rearGasket = new THREE.Mesh(
+      new THREE.BoxGeometry(1.42, cabinH * 0.8, 0.03),
+      weatherstripMat,
+    );
+    rearGasket.position.set(0, cabinH * 0.48, 0.012);
+    rearGasket.rotation.x = 0.24;
+
+    [-0.75, 0.75].forEach((lx) => {
       const linkArm = new THREE.Mesh(
-        createSweptTubeGeometry(
-          `caddy_link:${side}`,
-          [
-            [side * (topWsW * 0.46), 0.02, 0.16],
-            [side * (topWsW * 0.46), cabinH * 0.94, 0.28],
-          ],
-          0.018,
-          8,
-          6,
-        ),
+        new THREE.BoxGeometry(0.035, cabinH * 0.92, 0.05),
         chromeMat,
       );
+      linkArm.position.set(lx, cabinH * 0.48, 0.14);
+      linkArm.rotation.x = 0.22;
       topPivot.add(linkArm);
     });
 
-    const rearGlass = new THREE.Mesh(
-      createCurvedRearGlassGeometry({
-        key: 'caddy_top_rglass',
-        topWidth: topWsW * 0.72,
-        bottomWidth: baseWsW * 0.76,
-        topY: cabinH * 0.88,
-        bottomY: cabinH * 0.16,
-        topZ: 0.14,
-        bottomZ: 0.0,
-        wrapZ: 0.08,
-      }),
-      glassMat,
-    );
-
     const frontSection = new THREE.Group();
-    frontSection.position.set(0, cabinH, 0.28);
-    const frontCanopyLen = Math.max(0.95, roofFrontZ - (-0.94 + 0.28));
+    frontSection.position.set(0, cabinH * 0.96, 0.16);
+    const frontCanopyLen = cabinLen * 0.82;
     const roofCap = new THREE.Mesh(
-      createSculptedRoofCanopyGeometry({
-        key: 'caddy_softtop_cap',
-        frontZ: frontCanopyLen,
-        rearZ: 0,
-        frontHalfW: topWsW * 0.5,
-        rearHalfW: topWsW * 0.48,
-        frontY: 0,
-        peakY: 0.04,
-        rearY: -0.01,
-        crown: 0.045,
-      }),
+      createContouredPanelGeo(1.72, 0.075, frontCanopyLen, 0.032, 0.022),
       blackTopMat,
     );
-    roofCap.userData.isVehicleShadowHull = true;
+    roofCap.position.set(0, 0, frontCanopyLen * 0.5);
+    // Interior acoustic cloth headliner underneath the Stayfast outer canvas
     const roofHeadliner = new THREE.Mesh(
-      createSculptedRoofCanopyGeometry({
-        key: 'caddy_softtop_liner',
-        frontZ: frontCanopyLen * 0.94,
-        rearZ: 0.04,
-        frontHalfW: topWsW * 0.46,
-        rearHalfW: topWsW * 0.44,
-        frontY: -0.02,
-        peakY: 0.01,
-        rearY: -0.025,
-        crown: 0.03,
-      }),
+      new THREE.BoxGeometry(1.62, 0.024, frontCanopyLen * 0.94),
       headlinerMat,
     );
-    [0.24, 0.56, 0.86].forEach((frac) => {
-      const bowGeo = createSweptTubeGeometry(
-        `caddy_bow:${frac}`,
-        [
-          [-topWsW * 0.45, -0.02, frontCanopyLen * frac],
-          [0, 0.02, frontCanopyLen * frac + 0.02],
-          [topWsW * 0.45, -0.02, frontCanopyLen * frac],
-        ],
-        0.016,
-        10,
-        6,
+    roofHeadliner.position.set(0, -0.036, frontCanopyLen * 0.5);
+    // Exterior raised rain-rail seam beads along left & right edges of the cloth top
+    [-0.78, 0.78].forEach((rx) => {
+      const rainSeam = new THREE.Mesh(
+        new THREE.BoxGeometry(0.036, 0.026, frontCanopyLen * 0.96),
+        weatherstripMat,
       );
-      frontSection.add(new THREE.Mesh(bowGeo, ribMat));
+      rainSeam.position.set(rx, 0.03, frontCanopyLen * 0.5);
+      frontSection.add(rainSeam);
+    });
+    // Folding aluminum roof bows visible across the underside
+    [0.24, 0.56, 0.86].forEach((frac) => {
+      const bow = new THREE.Mesh(
+        new THREE.BoxGeometry(1.66, 0.032, 0.048),
+        ribMat,
+      );
+      bow.position.set(0, -0.048, frontCanopyLen * frac);
+      frontSection.add(bow);
     });
     const headerChrome = new THREE.Mesh(
-      createSweptTubeGeometry(
-        'caddy_top_header',
-        [
-          [-topWsW * 0.5, -0.01, frontCanopyLen],
-          [0, 0.03, frontCanopyLen + hullSpec.windshieldWrap],
-          [topWsW * 0.5, -0.01, frontCanopyLen],
-        ],
-        0.022,
-        12,
-        8,
-      ),
+      new THREE.BoxGeometry(1.74, 0.055, 0.085),
       chromeMat,
     );
+    headerChrome.position.set(0, 0.005, frontCanopyLen + 0.01);
     frontSection.add(roofCap, roofHeadliner, headerChrome);
 
-    topPivot.add(rearGlass, frontSection);
+    topPivot.add(rearSailL, rearSailR, rearGasket, rearGlass, frontSection);
     handles.chassisGroup.add(topPivot);
     handles.convertibleTop = topPivot;
     handles.convertibleFrontSection = frontSection;
 
-    // Matching contoured Stayfast woven canvas tonneau boot cover when top is down
+    // Matching Stayfast woven canvas tonneau boot cover with chrome snap fasteners when top is down
     const foldedBoot = new THREE.Group();
-    foldedBoot.position.set(0, lowerBodyH + 0.03, -0.84);
+    foldedBoot.position.set(0, lowerBodyH + 0.2, -0.94);
     const bootMain = new THREE.Mesh(
-      createCurvedDeckPanelGeometry({
-        key: 'caddy_world_boot',
-        width: baseWsW * 0.92,
-        length: 0.42,
-        crownY: 0.048,
-        dropRearY: 0.025,
-        taperRear: 0.06,
-        forwardZ: false,
-      }),
+      createContouredPanelGeo(1.74, 0.16, 0.44, 0.028, 0.028),
       blackTopMat,
     );
     const bootChromeTrim = new THREE.Mesh(
-      createSweptTubeGeometry(
-        'caddy_world_boottrim',
-        [
-          [-baseWsW * 0.44, 0.01, 0],
-          [0, 0.055, 0.03],
-          [baseWsW * 0.44, 0.01, 0],
-        ],
-        0.016,
-        12,
-        8,
-      ),
+      new THREE.BoxGeometry(1.76, 0.04, 0.06),
       chromeMat,
     );
+    bootChromeTrim.position.set(0, 0.07, 0.21);
+    [-0.72, -0.36, 0, 0.36, 0.72].forEach((sx) => {
+      const snap = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.016, 0.016, 0.014, 10),
+        chromeMat,
+      );
+      snap.position.set(sx, 0.088, -0.17);
+      foldedBoot.add(snap);
+    });
     foldedBoot.add(bootMain, bootChromeTrim);
     foldedBoot.visible = false;
     handles.chassisGroup.add(foldedBoot);
@@ -1792,239 +1649,121 @@ function buildCustomStreetShowCar(
       preset === 'slab'
         ? new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.72, metalness: 0.15 })
         : candyPaintMat;
-    const roofTailZ = -0.82;
     const roofCap = new THREE.Mesh(
-      createSculptedRoofCanopyGeometry({
-        key: `${hullArch}_roof`,
-        frontZ: roofFrontZ,
-        rearZ: roofTailZ,
-        frontHalfW: topWsW * 0.5,
-        rearHalfW: hullSpec.roofHalfWidth * 0.94,
-        frontY: cabinRoofY - 0.01,
-        peakY: cabinRoofY + 0.025,
-        rearY: cabinRoofY - 0.06,
-        crown: 0.05,
-      }),
+      createContouredPanelGeo(1.7, 0.09, cabinLen * 0.84, 0.04, 0.03),
       roofMat,
     );
-    roofCap.userData.isVehicleShadowHull = true;
-    const rearSt = evaluateHullStation(hullSpec, hullSpec.cabinRearZ);
+    roofCap.position.set(0, cabinY + cabinH * 0.46, -0.08);
     const rearGlass = new THREE.Mesh(
-      createCurvedRearGlassGeometry({
-        key: `${hullArch}_rglass`,
-        topWidth: topWsW * 0.86,
-        bottomWidth: rearSt.halfW * 1.48,
-        topY: cabinRoofY - 0.06,
-        bottomY: lowerBodyH + 0.01,
-        topZ: roofTailZ,
-        bottomZ: hullSpec.cabinRearZ,
-        wrapZ: 0.12,
-      }),
+      new THREE.BoxGeometry(1.48, cabinH * 0.86, 0.05),
       glassMat,
     );
+    rearGlass.position.set(0, cabinY, -0.92);
+    rearGlass.rotation.x = 0.28;
     handles.chassisGroup.add(roofCap, rearGlass);
-    ([-1, 1] as const).forEach((side) => {
+    [-0.78, 0.78].forEach((px) => {
       const cPillar = new THREE.Mesh(
-        createSweptTubeGeometry(
-          `${hullArch}_cpillar:${side}`,
-          [
-            [side * (hullSpec.roofHalfWidth * 0.92), cabinRoofY - 0.06, roofTailZ],
-            [side * (rearSt.halfW * 0.84), lowerBodyH + 0.01, hullSpec.cabinRearZ],
-          ],
-          0.045,
-          10,
-          8,
-        ),
+        new THREE.BoxGeometry(0.1, cabinH * 1.05, 0.16),
         candyPaintMat,
       );
-      const qGlass = new THREE.Mesh(
-        createCurvedSideGlassGeometry({
-          key: `${hullArch}_qglass`,
-          side,
-          frontZ: cowlZ - 0.12,
-          rearZ: roofTailZ + 0.04,
-          bottomY: lowerBodyH,
-          topY: cabinRoofY - 0.04,
-          bottomX: baseWsW * 0.49,
-          topX: topWsW * 0.48,
-          midBowOut: 0.032,
-        }),
-        glassMat,
-      );
-      handles.chassisGroup.add(cPillar, qGlass);
+      cPillar.position.set(px, cabinY, -0.92);
+      cPillar.rotation.x = 0.28;
+      handles.chassisGroup.add(cPillar);
     });
   }
 
   // 6. Sculpted Wrap-Around Chrome Bumpers, 3D Jeweled Grille, Quad Crystal Headlights, Cadillac Tailfins & Bullet Taillights
   const frontBumper = new THREE.Mesh(
-    createWrapAroundBumperGeometry({
-      key: `${hullArch}_fbump`,
-      halfWidth: hullSpec.width * 0.5 + 0.06,
-      wrapBackZ: 0.34,
-      centerCurveZ: 0.14,
-      height: 0.18,
-      thickness: 0.16,
-    }),
+    createContouredPanelGeo(2.08, 0.19, 0.22, 0.025, 0.03),
     chromeMat,
   );
-  frontBumper.position.set(0, 0.42 + yOff, frontZ - 0.02);
+  frontBumper.position.set(0, 0.26, frontZ + 0.08);
   const rearBumper = new THREE.Mesh(
-    createWrapAroundBumperGeometry({
-      key: `${hullArch}_rbump`,
-      halfWidth: hullSpec.width * 0.5 + 0.06,
-      wrapBackZ: 0.34,
-      centerCurveZ: 0.12,
-      height: 0.18,
-      thickness: 0.16,
-      isRear: true,
-    }),
+    createContouredPanelGeo(2.08, 0.19, 0.22, 0.025, 0.03),
     chromeMat,
   );
-  rearBumper.position.set(0, 0.44 + yOff, rearZ + 0.02);
+  rearBumper.position.set(0, 0.26, rearZ - 0.08);
 
   const grilleAssy = buildRealisticGrilleAssembly({
     width: isDeville ? 1.18 : 1.32,
     height: isDeville ? 0.3 : 0.24,
     chromeMat,
     horizontalBars: isDeville ? 2 : 3,
-    emblemTexture: isDeville ? getCadillacCrestEmblemMap() : null,
   });
-  grilleAssy.position.set(0, 0.48, frontZ + 0.02);
+  grilleAssy.position.set(0, 0.46, frontZ + 0.04);
 
-  // Stamped front license plate frame & recessed plate
-  const plateLabel = isDeville
-    ? 'DE VILLE'
-    : preset === 'donk'
-      ? 'DONK 30'
-      : preset === 'slab'
-        ? 'SWANGER'
-        : '64 IMPALA';
-  const plateTex = getLicensePlateMap(plateLabel);
-  const plateFrame = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, 0.03), chromeMat);
-  plateFrame.position.set(0, 0.26, frontZ + 0.16);
-  const plateInner = new THREE.Mesh(
-    new THREE.BoxGeometry(0.28, 0.13, 0.036),
-    plateTex
-      ? new THREE.MeshStandardMaterial({ map: plateTex, roughness: 0.28, metalness: 0.2 })
-      : darkTrimMat,
-  );
-  plateInner.position.set(0, 0.26, frontZ + 0.165);
-  plateInner.userData.noShadowCast = true;
+  // Front license plate frame & backing pocket in lower bumper
+  const plateFrame = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, 0.032), chromeMat);
+  plateFrame.position.set(0, 0.26, frontZ + 0.19);
+  const plateInner = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.13, 0.036), darkTrimMat);
+  plateInner.position.set(0, 0.26, frontZ + 0.192);
 
   handles.chassisGroup.add(frontBumper, rearBumper, grilleAssy, plateFrame, plateInner);
 
   // Multi-layer hooded crystal quad round headlights
-  [-0.78, -0.62, 0.62, 0.78].forEach((hx) => {
+  [-0.81, -0.65, 0.65, 0.81].forEach((hx) => {
     const pod = buildRealisticHeadlightPod({
       shape: 'round',
       radius: 0.068,
       chromeMat,
       withHood: isDeville || preset === 'lowrider',
     });
-    pod.position.set(hx, 0.5, frontZ + 0.01);
+    pod.position.set(hx, 0.49, frontZ + 0.04);
     handles.chassisGroup.add(pod);
   });
 
   if (isDeville) {
-    // 1959/1960s White Pearl Cadillac details: Dagmar bumper cones, fender script & crest, fluted amber corner signals
-    const amberLensTex = getAmberSignalLensTextureSet();
-    const flutedAmberMat = new THREE.MeshPhysicalMaterial({
-      color: 0xfbbf24,
-      map: amberLensTex.map,
-      normalMap: amberLensTex.normalMap,
-      normalScale: new THREE.Vector2(0.45, 0.45),
-      emissive: 0xd97706,
-      emissiveIntensity: 0.65,
-      metalness: 0.08,
-      roughness: 0.06,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.02,
-      envMapIntensity: 2.2,
-    });
-    flutedAmberMat.userData.preserveEnvMapIntensity = true;
-
+    // 1959/1960s White Pearl Cadillac details: Dagmar bumper cones, fender spears, V-crest, whip antenna, sweeping tailfins & bullet taillights!
     [-0.58, 0.58].forEach((dx) => {
       const dagmar = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.042, 0.085, 0.16, 16),
+        new THREE.CylinderGeometry(0.054, 0.085, 0.16, 14),
         chromeMat,
       );
       dagmar.rotation.x = Math.PI / 2;
-      dagmar.position.set(dx, 0.26, frontZ + 0.14);
-      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.042, 12, 8), chromeMat);
-      cap.position.set(dx, 0.26, frontZ + 0.22);
-      handles.chassisGroup.add(dagmar, cap);
+      dagmar.position.set(dx, 0.27, frontZ + 0.2);
+      handles.chassisGroup.add(dagmar);
     });
 
-    ([-1, 1] as const).forEach((sideSign) => {
-      const fSt = evaluateHullStation(hullSpec, frontZ - 0.16);
-      const cx = sideSign * fSt.halfW * 0.98;
-      const amberBezel = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.16, 0.14), chromeMat);
-      amberBezel.position.set(cx, 0.47, frontZ - 0.16);
-      const amberMarker = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.135, 0.115), flutedAmberMat);
-      amberMarker.position.set(cx + sideSign * 0.004, 0.47, frontZ - 0.16);
-      amberMarker.userData.noShadowCast = true;
+    [-0.95, 0.95].forEach((cx) => {
+      const amberMarker = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.14, 0.12), amberSignalMat);
+      amberMarker.position.set(cx, 0.46, frontZ - 0.12);
+      const sideBadge = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.075, 0.12), goldTrimMat);
+      sideBadge.position.set(cx + (cx < 0 ? -0.02 : 0.02), 0.48, 0.96);
+      const fenderOrnament = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.045, 0.38), chromeMat);
+      fenderOrnament.position.set(cx * 0.88, lowerBodyH + 0.2, frontZ - 0.32);
+      handles.chassisGroup.add(amberMarker, sideBadge, fenderOrnament);
+    });
 
-      const badgeSt = evaluateHullStation(hullSpec, 0.94);
-      const fenderBadges = buildCadillacFenderBadges(sideSign);
-      fenderBadges.position.set(sideSign * (badgeSt.halfW * 1.045), 0.49, 0.94);
-
-      const fenderOrnament = new THREE.Mesh(
-        createSweptTubeGeometry(
-          'caddy_world_ornament',
-          [
-            [0, 0, -0.18],
-            [0, 0.018, 0.04],
-            [0, 0.004, 0.18],
-          ],
-          0.014,
-          10,
-          8,
-        ),
-        chromeMat,
+    // Iconic 1959/1960s Cadillac Sweeping Rear Tailfins + Chrome Spears + Twin Bullet Rocket-Pod Taillights
+    [-0.86, 0.86].forEach((tx) => {
+      const finBody = new THREE.Mesh(
+        createContouredPanelGeo(0.11, 0.26, 1.32, 0.02, 0.02),
+        candyPaintMat,
       );
-      fenderOrnament.position.set(sideSign * 0.78, lowerBodyH + 0.06, frontZ - 0.32);
-      handles.chassisGroup.add(amberBezel, amberMarker, fenderBadges, fenderOrnament);
-    });
-
-    // Iconic 1959/1960s Cadillac Sweeping Razor-Tapered Tailfins + Chrome Spears + Twin Bullet Taillights
-    const tailfinGeo = createCadillacTailfinGeometry({
-      key: 'caddy_world_tailfin',
-      length: 1.38,
-      frontHeight: 0.06,
-      rearHeight: 0.36,
-      baseThickness: 0.13,
-      crestThickness: 0.024,
-    });
-    const finSpearGeo = createSweptTubeGeometry(
-      'caddy_world_finspear',
-      [
-        [0, 0.055, 0.68],
-        [0, 0.21, 0.0],
-        [0, 0.355, -0.68],
-      ],
-      0.014,
-      12,
-      8,
-    );
-    const finSt = evaluateHullStation(hullSpec, rearZ + 0.65);
-    const finX = finSt.halfW * 0.85;
-    [-finX, finX].forEach((tx) => {
-      const finBody = new THREE.Mesh(tailfinGeo, candyPaintMat);
-      finBody.position.set(tx, lowerBodyH - 0.02, rearZ + 0.7);
-      const finSpear = new THREE.Mesh(finSpearGeo, chromeMat);
-      finSpear.position.set(tx, lowerBodyH - 0.02, rearZ + 0.7);
+      finBody.position.set(tx, lowerBodyH + 0.26, rearZ + 0.68);
+      finBody.rotation.x = -0.13;
+      const finSpear = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.036, 1.34), chromeMat);
+      finSpear.position.set(tx, lowerBodyH + 0.4, rearZ + 0.68);
+      finSpear.rotation.x = -0.13;
 
       const upperRocket = buildRealisticTaillightPod({
         style: 'cadillac_bullet',
         chromeMat,
       });
-      upperRocket.position.set(tx, lowerBodyH + 0.2, rearZ + 0.02);
+      upperRocket.position.set(tx, lowerBodyH + 0.31, rearZ + 0.02);
       const lowerRocket = buildRealisticTaillightPod({
         style: 'cadillac_bullet',
         chromeMat,
       });
-      lowerRocket.position.set(tx, lowerBodyH - 0.06, rearZ + 0.02);
-      handles.chassisGroup.add(finBody, finSpear, upperRocket, lowerRocket);
+      lowerRocket.position.set(tx, lowerBodyH + 0.06, rearZ + 0.02);
+
+      // Rear fender skirt trim accent
+      const skirtPanel = new THREE.Mesh(
+        createContouredPanelGeo(0.05, 0.16, 0.72, 0.01, 0.015),
+        candyPaintMat,
+      );
+      skirtPanel.position.set(tx + (tx < 0 ? -0.12 : 0.12), 0.28, -1.24);
+      handles.chassisGroup.add(finBody, finSpear, upperRocket, lowerRocket, skirtPanel);
     });
 
     // Gold V-crest on hood & rear-right slim chrome whip antenna
@@ -2082,31 +1821,12 @@ function buildCustomStreetShowCar(
     });
   }
 
-  // Dual mirror chrome exhaust tips with dark recessed bores + rear license plate
-  const rearPlateFrame = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, 0.03), chromeMat);
-  rearPlateFrame.position.set(0, 0.46, rearZ - 0.02);
-  const rearPlateTex = getLicensePlateMap(plateLabel);
-  if (rearPlateTex) {
-    const rearPlateFace = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.28, 0.13),
-      new THREE.MeshBasicMaterial({ map: rearPlateTex }),
-    );
-    rearPlateFace.rotation.y = Math.PI;
-    rearPlateFace.position.set(0, 0.46, rearZ - 0.038);
-    rearPlateFace.userData.noShadowCast = true;
-    handles.chassisGroup.add(rearPlateFace);
-  }
-  handles.chassisGroup.add(rearPlateFrame);
-
+  // Dual mirror chrome exhaust tips
   [-0.58, 0.58].forEach((ex) => {
     const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.044, 0.044, 0.38, 12), chromeMat);
     pipe.rotation.x = Math.PI / 2;
     pipe.position.set(ex, 0.14, rearZ - 0.14);
-    const bore = new THREE.Mesh(new THREE.CircleGeometry(0.036, 12), streetAssets.darkInnerMat);
-    bore.rotation.y = Math.PI;
-    bore.position.set(ex, 0.14, rearZ - 0.332);
-    bore.userData.noShadowCast = true;
-    handles.chassisGroup.add(pipe, bore);
+    handles.chassisGroup.add(pipe);
   });
 
   if (preset === 'lowrider') {
@@ -2317,12 +2037,14 @@ function buildChevyTahoeShowSuv(
 
   const paintMat = createAutomotivePaintMaterial(paintColor);
   const chromeMat = createChromeMaterial(rimColor);
+  const goldBowtieMat = createChromeMaterial(0xfacc15);
   const darkTrimMat = new THREE.MeshStandardMaterial({
     color: 0x0f172a,
-    roughness: 0.68,
-    metalness: 0.25,
+    roughness: 0.62,
+    metalness: 0.3,
   });
   const leatherMat = createAutomotiveLeatherMaterial(0x1c1917);
+  const dashPadMat = createAutomotiveLeatherMaterial(0x111318);
   const stitchMat = new THREE.MeshStandardMaterial({
     color: 0x38bdf8,
     roughness: 0.45,
@@ -2337,86 +2059,85 @@ function buildChevyTahoeShowSuv(
   const bodyRideY = Math.max(0.075, 0.38 + susp);
   handles.chassisGroup.position.y = bodyRideY;
 
-  const tahoeSpec = getVehicleHullSurfaceSpec('chevy_tahoe');
-  const tahoeYOff = -0.06;
-  const frontZ = tahoeSpec.frontZ;
-  const rearZ = tahoeSpec.rearZ;
+  const frontZ = 2.48;
+  const rearZ = -2.38;
+  const lowerBodyH = 0.68;
 
-  // 1. Compound-Curved 3D Sculpted Tahoe SUV Body Hull + Flared Arches + Slammed Ground Skirts
-  const tahoeHullMesh = new THREE.Mesh(createSculptedBodyHullGeometry('chevy_tahoe'), paintMat);
-  tahoeHullMesh.position.y = tahoeYOff;
-  tahoeHullMesh.castShadow = true;
-  tahoeHullMesh.receiveShadow = true;
-  tahoeHullMesh.userData.isVehicleShadowHull = true;
-  handles.chassisGroup.add(tahoeHullMesh);
+  // 1. Ground-hugging 3-inch slammed underpan, cabin floor & ground-effect rocker skirts
+  const underPan = new THREE.Mesh(new THREE.BoxGeometry(1.88, 0.1, 4.78), darkTrimMat);
+  underPan.position.set(0, 0.05, 0.05);
+  const cabinFloor = new THREE.Mesh(new THREE.BoxGeometry(1.76, 0.06, 3.05), carpetMat);
+  cabinFloor.position.set(0, 0.13, -0.45);
+  handles.chassisGroup.add(underPan, cabinFloor);
 
-  const cabinFloor = new THREE.Mesh(
-    createCurvedDeckPanelGeometry({
-      key: 'tahoe_floor',
-      width: 1.66,
-      length: 2.95,
-      crownY: 0.01,
-      dropRearY: 0,
-      taperRear: 0.04,
-      forwardZ: false,
-    }),
-    carpetMat,
-  );
-  cabinFloor.position.set(0, tahoeSpec.cockpitFloorY + tahoeYOff - 0.08, 0.72);
-  handles.chassisGroup.add(cabinFloor);
-
-  // Curved slammed rocker skirts + curved front chin splitter
-  ([-1, 1] as const).forEach((side) => {
-    const skirtGeo = createSweptTubeGeometry(
-      `tahoe_skirt:${side}`,
-      [
-        [side * 0.96, 0.12, -0.78],
-        [side * 0.99, 0.11, 0.05],
-        [side * 0.96, 0.12, 0.85],
-      ],
-      0.045,
-      12,
-      8,
-    );
-    handles.chassisGroup.add(new THREE.Mesh(skirtGeo, paintMat));
+  // Slammed rocker skirts + front chin splitter (3 inches above ground!)
+  [-0.99, 0.99].forEach((sx) => {
+    const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.14, 1.56), paintMat);
+    skirt.position.set(sx, 0.09, 0.05);
+    handles.chassisGroup.add(skirt);
   });
-  const frontLip = new THREE.Mesh(
-    createWrapAroundBumperGeometry({
-      key: 'tahoe_chin',
-      halfWidth: 0.98,
-      wrapBackZ: 0.28,
-      centerCurveZ: 0.12,
-      height: 0.075,
-      thickness: 0.15,
-    }),
-    darkTrimMat,
-  );
-  frontLip.position.set(0, 0.07, frontZ - 0.04);
+  const frontLip = new THREE.Mesh(new THREE.BoxGeometry(2.04, 0.1, 0.24), darkTrimMat);
+  frontLip.position.set(0, 0.06, frontZ + 0.02);
   handles.chassisGroup.add(frontLip);
 
-  // Dark inner wheelhouse tubs & chrome/painted flared arch moldings over 40" wheels
-  const tahoeAssets = getSharedShowroomAssets();
-  const tahoeTubGeo = createCurvedWheelhouseTubGeometry('chevy_tahoe_world', 0.56, 0.42);
-  const tahoeArchRimGeo = new THREE.TorusGeometry(0.55, 0.022, 10, 24, Math.PI);
-  tahoeArchRimGeo.rotateY(Math.PI / 2);
-  const tahoeLinerMat = new THREE.MeshStandardMaterial({
-    color: 0x05070b,
-    roughness: 0.92,
-    metalness: 0.08,
-    side: THREE.DoubleSide,
-  });
-  [tahoeSpec.archZFront, tahoeSpec.archZRear].forEach((az) => {
-    const st = evaluateHullStation(tahoeSpec, az);
-    const fx = st.halfW * tahoeSpec.shoulderTuck + tahoeSpec.archLipFlare * 0.65;
-    ([-1, 1] as const).forEach((side) => {
-      const flare = new THREE.Mesh(tahoeArchRimGeo, paintMat);
-      flare.position.set(side * (fx + 0.01), tahoeSpec.archY + tahoeYOff, az);
-      const liner = new THREE.Mesh(tahoeTubGeo, tahoeLinerMat);
-      liner.position.set(side * (fx - 0.16), tahoeSpec.archY + tahoeYOff, az);
-      liner.userData.noShadowCast = true;
-      handles.chassisGroup.add(flare, liner);
+  // 2. Sculpted Front Clip & Engine Bay (narrowed at wheel wells so 40" Forgiatos tuck clean!)
+  const engineCore = new THREE.Mesh(
+    ensureGeometryHasUv(new THREE.BoxGeometry(1.36, 0.58, 1.62)),
+    paintMat,
+  );
+  engineCore.position.set(0, 0.44, 1.64);
+  const frontFascia = new THREE.Mesh(
+    createContouredPanelGeo(2.02, 0.54, 0.36, 0.025, 0.03),
+    paintMat,
+  );
+  frontFascia.position.set(0, 0.44, frontZ - 0.16);
+  const hood = new THREE.Mesh(
+    createContouredPanelGeo(1.98, 0.12, 1.68, 0.055, 0.035),
+    paintMat,
+  );
+  hood.position.set(0, 0.78, 1.66);
+  const powerDome = new THREE.Mesh(
+    createContouredPanelGeo(1.16, 0.06, 1.44, 0.04, 0.025),
+    paintMat,
+  );
+  powerDome.position.set(0, 0.86, 1.64);
+  handles.chassisGroup.add(engineCore, frontFascia, hood, powerDome);
+
+  // Smooth curved SUV wheel arch flares tucked cleanly over the 40" Forgiatos
+  const tahoeArchGeo = getFlaredWheelArchGeo(0.7, 0.56, 0.24);
+  [1.44, -1.32].forEach((az) => {
+    [-0.97, 0.97].forEach((fx) => {
+      const flare = new THREE.Mesh(tahoeArchGeo, paintMat);
+      flare.position.set(fx, 0.28, az);
+      handles.chassisGroup.add(flare);
     });
   });
+
+  // 3. Rear SUV Cargo Tub + Rear Quarter Corners + Liftgate Opening
+  const rearInnerTub = new THREE.Mesh(new THREE.BoxGeometry(1.38, 0.56, 1.62), darkTrimMat);
+  rearInnerTub.position.set(0, 0.42, -1.52);
+  handles.quarterPanels = handles.quarterPanels ?? [];
+  [-0.94, 0.94].forEach((rx) => {
+    const rearUpperQuarter = new THREE.Mesh(
+      new THREE.BoxGeometry(0.22, 0.34, 1.56),
+      paintMat,
+    );
+    rearUpperQuarter.position.set(rx, 0.72, -1.56);
+    rearUpperQuarter.userData.baseX = rx;
+    rearUpperQuarter.userData.flexSide = rx < 0 ? -1 : 1;
+    const rearCornerPillar = new THREE.Mesh(
+      new THREE.BoxGeometry(0.24, 0.64, 0.44),
+      paintMat,
+    );
+    rearCornerPillar.position.set(rx, 0.44, -2.14);
+    rearCornerPillar.userData.baseX = rx;
+    rearCornerPillar.userData.flexSide = rx < 0 ? -1 : 1;
+    handles.chassisGroup.add(rearUpperQuarter, rearCornerPillar);
+    handles.quarterPanels!.push(rearUpperQuarter, rearCornerPillar);
+  });
+  const rearLowerValance = new THREE.Mesh(new THREE.BoxGeometry(2.02, 0.28, 0.22), paintMat);
+  rearLowerValance.position.set(0, 0.22, rearZ + 0.08);
+  handles.chassisGroup.add(rearInnerTub, rearLowerValance);
 
   // Exterior Side "SAVAGE LIFE GAMING" / "SUBSCRIBE" Livery Panels on Left & Right Body Sides
   if (livery) {
@@ -2555,71 +2276,67 @@ function buildChevyTahoeShowSuv(
   handles.subwooferCones = subwooferCones;
   handles.subGlowMeshes = subGlowMeshes;
 
-  // 5. Tahoe Interior Cabin (Swept Curved Wrap Dash, Backlit Gauge Cluster, Console, Buttons)
+  // 5. Tahoe Interior Cabin (Padded Dash Brow, Backlit Gauges, Nav Screen, Rearview Mirror, Pedals, Console + Pressable Light & Lift Buttons!)
   const dash = new THREE.Mesh(
-    createCurvedDashboardGeometry('tahoe_world_dash', 1.62, 0.36),
-    darkTrimMat,
-  );
-  dash.position.set(0, 0.86, 0.6);
-  const dashTrim = new THREE.Mesh(
-    createSweptTubeGeometry(
-      'tahoe_world_dashtrim',
-      [
-        [-0.76, 0.82, 0.42],
-        [0, 0.84, 0.46],
-        [0.76, 0.82, 0.42],
-      ],
-      0.03,
-      12,
-      8,
-    ),
+    createContouredPanelGeo(1.74, 0.34, 0.38, 0.035, 0.03),
     dashMat,
   );
-
-  const gaugeBezel = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.03), chromeMat);
-  gaugeBezel.position.set(-0.44, 0.78, 0.44);
+  dash.position.set(0, 0.68, 0.64);
+  const dashBrow = new THREE.Mesh(
+    createContouredPanelGeo(1.76, 0.07, 0.42, 0.025, 0.02),
+    dashPadMat,
+  );
+  dashBrow.position.set(0, 0.87, 0.64);
+  const gaugeBezel = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.16, 0.03), chromeMat);
+  gaugeBezel.position.set(-0.44, 0.74, 0.445);
   const tahoeGaugeTex = getGaugeClusterMap();
   const gaugeCluster = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.46, 0.14),
+    new THREE.PlaneGeometry(0.49, 0.13),
     tahoeGaugeTex
       ? new THREE.MeshBasicMaterial({ map: tahoeGaugeTex })
-      : new THREE.MeshStandardMaterial({ color: 0x0f172a, emissive: 0x38bdf8, emissiveIntensity: 0.9 }),
+      : new THREE.MeshStandardMaterial({
+          color: 0x0f172a,
+          emissive: 0x38bdf8,
+          emissiveIntensity: 0.9,
+        }),
   );
-  gaugeCluster.position.set(-0.44, 0.78, 0.422);
+  gaugeCluster.position.set(-0.44, 0.74, 0.425);
   gaugeCluster.rotation.y = Math.PI;
-  gaugeCluster.userData.noShadowCast = true;
-
-  const centerBezel = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.2, 0.035), chromeMat);
-  centerBezel.position.set(0, 0.74, 0.45);
+  const centerScreenBezel = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.21, 0.03), chromeMat);
+  centerScreenBezel.position.set(0, 0.72, 0.445);
   const centerScreen = new THREE.Mesh(
-    new THREE.BoxGeometry(0.28, 0.16, 0.042),
+    new THREE.BoxGeometry(0.28, 0.17, 0.04),
     new THREE.MeshStandardMaterial({
       color: 0x020617,
       emissive: 0x6366f1,
-      emissiveIntensity: 0.9,
-      roughness: 0.12,
+      emissiveIntensity: 0.95,
     }),
   );
-  centerScreen.position.set(0, 0.74, 0.44);
-  handles.chassisGroup.add(dashTrim, gaugeBezel, centerBezel);
+  centerScreen.position.set(0, 0.72, 0.435);
 
   const centerConsole = new THREE.Mesh(
-    createCurvedDeckPanelGeometry({
-      key: 'tahoe_console',
-      width: 0.3,
-      length: 1.08,
-      crownY: 0.045,
-      dropRearY: 0.01,
-      taperRear: 0.1,
-      forwardZ: false,
-    }),
+    createContouredPanelGeo(0.34, 0.28, 1.14, 0.015, 0.02),
     dashMat,
   );
-  centerConsole.position.set(0, 0.42, 0.64);
-  const shifter = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.02, 0.2, 10), chromeMat);
-  shifter.position.set(0, 0.5, 0.26);
-  const shifterKnob = new THREE.Mesh(new THREE.SphereGeometry(0.04, 12, 10), chromeMat);
-  shifterKnob.position.set(0, 0.6, 0.26);
+  centerConsole.position.set(0, 0.3, 0.14);
+  const shifterGate = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.022, 0.22), chromeMat);
+  shifterGate.position.set(0, 0.445, 0.26);
+  const shifter = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.2, 10), chromeMat);
+  shifter.position.set(0, 0.48, 0.26);
+  const shifterKnob = new THREE.Mesh(new THREE.SphereGeometry(0.04, 12, 12), chromeMat);
+  shifterKnob.position.set(0, 0.58, 0.26);
+
+  const tahoeCabinKit = buildCabinDetailKit({
+    mirrorY: 1.38,
+    mirrorZ: 0.54,
+    visorWidth: 0.62,
+    dashY: 0.74,
+    pedalZ: 0.78,
+    driverX: -0.44,
+    trimMat: dashPadMat,
+    chromeMat,
+  });
+  handles.chassisGroup.add(dashBrow, gaugeBezel, centerScreenBezel, shifterGate, tahoeCabinKit);
 
   // Pressable Interior Console Button 1: 40" Rim Lights & Underglow (Lit / Blink / Music Sync / Off)
   const rimLightButtonGroup = new THREE.Group();
@@ -2695,385 +2412,219 @@ function buildChevyTahoeShowSuv(
     helmWheel,
   );
 
-  // Driver & Front Passenger Sculpted Bolstered Bucket Seats
-  const tahoeSeatGeo = createSculptedSeatBucketGeometry('racing_bucket', 0.52);
+  // Driver & Front Passenger Bolstered Bucket Seats (positioned right in front of the subwoofer wall)
   [-0.44, 0.44].forEach((sx) => {
-    const seat = new THREE.Mesh(tahoeSeatGeo, leatherMat);
-    seat.position.set(sx, 0.42, 0.08);
-    const stripe = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.06, 0.06, 0.36, 8, 1, false, 0, Math.PI),
-      stitchMat,
-    );
-    stripe.position.set(sx, 0.56, -0.09);
-    stripe.rotation.x = -0.12;
-    handles.chassisGroup.add(seat, stripe);
-  });
-
-  // 6. Real Working Hinged Curved Front Doors (Contoured Skin, Handle, Armrest, Aero Mirror!)
-  const doorLen = 1.46;
-  const doorH = 0.66;
-  const tDoorMid = evaluateHullStation(tahoeSpec, 0.05);
-  ([-1, 1] as const).forEach((side) => {
-    const doorPivot = new THREE.Group();
-    doorPivot.position.set(side * (tDoorMid.halfW * 0.99), 0.18, 0.76);
-    const outerSkin = new THREE.Mesh(
-      createCurvedDoorSkinGeometry({
-        key: 'tahoe_world_door',
-        side,
-        length: doorLen,
-        height: doorH,
-        bowOut: 0.048,
-        tumblehomeTopIn: 0.04,
-      }),
-      paintMat,
-    );
-    const innerCard = new THREE.Mesh(
-      createCurvedDoorSkinGeometry({
-        key: 'tahoe_world_door_in',
-        side: (side < 0 ? 1 : -1) as -1 | 1,
-        length: doorLen * 0.92,
-        height: doorH * 0.85,
-        bowOut: 0.02,
-        tumblehomeTopIn: 0.02,
-      }),
+    const cushion = new THREE.Mesh(
+      createContouredPanelGeo(0.56, 0.15, 0.52, 0.02, 0.025),
       leatherMat,
     );
-    innerCard.position.set(-side * 0.04, doorH * 0.06, -0.04);
-    const armrest = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.065, 0.46), darkTrimMat);
-    armrest.position.set(-side * 0.06, doorH * 0.46, -doorLen * 0.55);
+    cushion.position.set(sx, 0.26, 0.12);
+    const backrest = new THREE.Mesh(
+      createContouredPanelGeo(0.54, 0.56, 0.14, 0.02, 0.025),
+      leatherMat,
+    );
+    backrest.position.set(sx, 0.58, -0.1);
+    backrest.rotation.x = -0.12;
+    [-0.23, 0.23].forEach((bx) => {
+      const bolster = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.48, 0.16), leatherMat);
+      bolster.position.set(sx + bx, 0.56, -0.07);
+      bolster.rotation.x = -0.12;
+      handles.chassisGroup.add(bolster);
+    });
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.46, 0.15), stitchMat);
+    stripe.position.set(sx, 0.58, -0.1);
+    stripe.rotation.x = -0.12;
+    const headrest = new THREE.Mesh(
+      createContouredPanelGeo(0.28, 0.17, 0.1, 0.02, 0.02),
+      leatherMat,
+    );
+    headrest.position.set(sx, 0.94, -0.15);
+    handles.chassisGroup.add(cushion, backrest, stripe, headrest);
+  });
+
+  // 6. Real Working Hinged Front Doors (with contoured skins, mirrors, armrests, speaker rings & recessed handles)
+  const doorLen = 1.48;
+  const doorH = 0.64;
+  ([-1, 1] as const).forEach((side) => {
+    const doorPivot = new THREE.Group();
+    doorPivot.position.set(side * 0.99, 0.18, 0.78);
+    const outerSkin = new THREE.Mesh(
+      createContouredPanelGeo(0.085, doorH, doorLen, 0.015, 0.02),
+      paintMat,
+    );
+    outerSkin.position.set(0, doorH * 0.5, -doorLen * 0.5);
+    const innerCard = new THREE.Mesh(
+      new THREE.BoxGeometry(0.05, doorH * 0.88, doorLen * 0.92),
+      leatherMat,
+    );
+    innerCard.position.set(-side * 0.048, doorH * 0.5, -doorLen * 0.5);
+    const armrest = new THREE.Mesh(
+      new THREE.BoxGeometry(0.06, 0.06, doorLen * 0.52),
+      dashPadMat,
+    );
+    armrest.position.set(-side * 0.075, doorH * 0.46, -doorLen * 0.48);
     const speakerRing = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.08, 0.08, 0.018, 12),
+      new THREE.TorusGeometry(0.095, 0.012, 8, 18),
       chromeMat,
     );
-    speakerRing.rotation.z = Math.PI / 2;
-    speakerRing.position.set(-side * 0.06, doorH * 0.24, -0.32);
-
-    const handleAssy = buildDoorHandleAssembly({
-      side,
+    speakerRing.rotation.y = Math.PI / 2;
+    speakerRing.position.set(-side * 0.078, doorH * 0.26, -doorLen * 0.25);
+    const handlePocket = new THREE.Mesh(
+      new THREE.BoxGeometry(0.022, 0.06, 0.2),
+      darkTrimMat,
+    );
+    handlePocket.position.set(side * 0.042, doorH * 0.76, -doorLen * 0.72);
+    const chromeHandle = new THREE.Mesh(
+      new THREE.BoxGeometry(0.045, 0.04, 0.17),
       chromeMat,
-      pocketMat: darkTrimMat,
-      withKeyCylinder: true,
-    });
-    handleAssy.position.set(side * 0.022, doorH * 0.76, -doorLen * 0.72);
+    );
+    chromeHandle.position.set(side * 0.058, doorH * 0.76, -doorLen * 0.72);
+    const sideTrim = new THREE.Mesh(
+      new THREE.BoxGeometry(0.032, 0.055, doorLen * 0.95),
+      chromeMat,
+    );
+    sideTrim.position.set(side * 0.054, doorH * 0.42, -doorLen * 0.5);
     const doorGlass = new THREE.Mesh(
-      createCurvedSideGlassGeometry({
-        key: 'tahoe_dglass',
-        side,
-        frontZ: -0.08,
-        rearZ: -doorLen * 0.88,
-        bottomY: doorH - 0.02,
-        topY: doorH + 0.48,
-        bottomX: 0.01,
-        topX: 0.075,
-        midBowOut: 0.02,
-      }),
+      new THREE.BoxGeometry(0.03, 0.46, doorLen * 0.86),
       glassMat,
     );
-    doorGlass.position.x = -side * 0.03;
-    const mirrorAssy = buildRealisticSideMirror({
+    doorGlass.position.set(-side * 0.01, doorH + 0.22, -doorLen * 0.52);
+    const mirror = buildRealisticSideMirror({
       side,
       housingMat: paintMat,
       chromeMat,
       style: 'aero',
     });
-    mirrorAssy.position.set(side * 0.02, doorH + 0.04, -0.18);
+    mirror.position.set(side * 0.03, doorH + 0.02, -0.18);
 
     doorPivot.add(
       outerSkin,
       innerCard,
       armrest,
       speakerRing,
-      handleAssy,
+      handlePocket,
+      chromeHandle,
+      sideTrim,
       doorGlass,
-      mirrorAssy,
+      mirror,
     );
     handles.chassisGroup.add(doorPivot);
     if (side < 0) handles.doorLeft = doorPivot;
     else handles.doorRight = doorPivot;
   });
 
-  // 7. Curved Chevy Tahoe SUV Greenhouse, Windshield, Swept Pillars, Curved Roof & Roof Rack
-  const tRoofY = tahoeSpec.roofHeight + tahoeYOff; // ~1.48m in chassis local
-  const tCowlY = tahoeSpec.beltY + tahoeYOff - 0.04; // ~0.86m
-  const tCowlZ = tahoeSpec.windshieldZ;
-  const tRoofFrontZ = tCowlZ - 0.28;
-  const tCowlSt = evaluateHullStation(tahoeSpec, tCowlZ);
-  const tBaseWsW = tCowlSt.halfW * tahoeSpec.shoulderTuck * 1.84;
-  const tTopWsW = tahoeSpec.roofHalfWidth * 1.9;
+  // 7. Boxy Full-Size Chevy Tahoe SUV Cabin, Pillars, Wipers, Rear Glass & Roof Rack
+  const cabinH = 0.66;
+  const roofY = 0.86 + cabinH; // ~1.52m in chassis local
+  const windshield = new THREE.Mesh(new THREE.BoxGeometry(1.74, cabinH, 0.05), glassMat);
+  windshield.position.set(0, 0.86 + cabinH * 0.5, 0.76);
+  windshield.rotation.x = -0.32;
+  const tahoeWipers = buildWindshieldWipers(1.56);
+  tahoeWipers.position.set(0, 0.88, 0.84);
+  tahoeWipers.rotation.x = -0.32;
+  handles.chassisGroup.add(windshield, tahoeWipers);
 
-  const windshield = new THREE.Mesh(
-    createCurvedWindshieldGeometry({
-      key: 'tahoe_world_ws',
-      baseWidth: tBaseWsW,
-      topWidth: tTopWsW,
-      bottomY: tCowlY,
-      topY: tRoofY - 0.02,
-      bottomZ: tCowlZ,
-      topZ: tRoofFrontZ,
-      wrapZ: tahoeSpec.windshieldWrap,
-      crown: 0.04,
-    }),
-    glassMat,
-  );
-  const tahoeWipers = buildWindshieldWipers(tBaseWsW * 0.78);
-  tahoeWipers.position.set(0, tCowlY + 0.03, tCowlZ + tahoeSpec.windshieldWrap * 0.82);
-  const tahoeCabinKit = buildCabinDetailKit({
-    mirrorY: tRoofY - 0.1,
-    mirrorZ: tRoofFrontZ - 0.06,
-    dashY: 0.84,
-    pedalZ: tCowlZ,
-    driverX: -0.44,
-    trimMat: darkTrimMat,
-    chromeMat,
-  });
-  handles.chassisGroup.add(windshield, tahoeWipers, tahoeCabinKit);
-
-  // Swept Curved A, B, C, D SUV Pillars
-  ([-1, 1] as const).forEach((side) => {
-    const aPillar = new THREE.Mesh(
-      createSweptTubeGeometry(
-        `tahoe_apillar:${side}`,
-        [
-          [side * (tBaseWsW * 0.5), tCowlY, tCowlZ],
-          [side * (tTopWsW * 0.5), tRoofY - 0.02, tRoofFrontZ],
-        ],
-        0.04,
-        10,
-        8,
-      ),
-      paintMat,
-    );
-    handles.chassisGroup.add(aPillar);
-
-    [-0.1, -1.06, -2.14].forEach((pz, pIdx) => {
-      const pSt = evaluateHullStation(tahoeSpec, pz);
-      const pillarGeo = createSweptTubeGeometry(
-        `tahoe_pillar:${side}:${pIdx}`,
-        [
-          [side * (pSt.halfW * 0.92), tCowlY, pz],
-          [side * (tahoeSpec.roofHalfWidth + 0.02), tRoofY - 0.03, pz + (pIdx === 2 ? 0.08 : 0)],
-        ],
-        pIdx === 2 ? 0.065 : 0.048,
-        8,
-        8,
+  // A, B, C, D SUV Pillars
+  const pillarZList = [0.76, -0.08, -1.06, -2.18];
+  pillarZList.forEach((pz, idx) => {
+    [-0.9, 0.9].forEach((px) => {
+      const pMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.09, cabinH * 1.04, idx === 0 ? 0.1 : 0.16),
+        idx === 0 ? paintMat : darkTrimMat,
       );
-      handles.chassisGroup.add(new THREE.Mesh(pillarGeo, pIdx === 2 ? paintMat : darkTrimMat));
+      pMesh.position.set(px, 0.86 + cabinH * 0.5, pz);
+      if (idx === 0) pMesh.rotation.x = -0.32;
+      handles.chassisGroup.add(pMesh);
     });
+  });
 
-    // Tinted Curved Rear SUV Side Windows (showing subwoofer wall silhouette inside!)
-    const rearSideGlass = new THREE.Mesh(
-      createCurvedSideGlassGeometry({
-        key: 'tahoe_rear_sglass',
-        side,
-        frontZ: -0.08,
-        rearZ: -2.12,
-        bottomY: tCowlY + 0.01,
-        topY: tRoofY - 0.04,
-        bottomX: tBaseWsW * 0.495,
-        topX: tTopWsW * 0.485,
-        midBowOut: 0.028,
-      }),
-      glassMat,
-    );
+  // Tinted Rear SUV Side Windows (showing subwoofer wall silhouette inside!)
+  [-0.91, 0.91].forEach((gx) => {
+    const rearSideGlass = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.52, 2.02), glassMat);
+    rearSideGlass.position.set(gx, 0.86 + cabinH * 0.48, -1.14);
     handles.chassisGroup.add(rearSideGlass);
   });
 
-  // Sculpted Compound-Curved SUV Roof + Chrome Roof Rack Rails
+  // Full-length Contoured SUV Roof + Chrome Roof Rack Rails
   const roofCap = new THREE.Mesh(
-    createSculptedRoofCanopyGeometry({
-      key: 'tahoe_world_roof',
-      frontZ: tRoofFrontZ,
-      rearZ: -2.16,
-      frontHalfW: tTopWsW * 0.5,
-      rearHalfW: tahoeSpec.roofHalfWidth + 0.02,
-      frontY: tRoofY - 0.01,
-      peakY: tRoofY + 0.03,
-      rearY: tRoofY - 0.02,
-      crown: 0.048,
-      isSuv: true,
-    }),
+    createContouredPanelGeo(1.88, 0.1, 2.94, 0.03, 0.03),
     paintMat,
   );
-  roofCap.userData.isVehicleShadowHull = true;
+  roofCap.position.set(0, roofY, -0.8);
   handles.chassisGroup.add(roofCap);
 
-  [-0.72, 0.72].forEach((rx) => {
-    const rail = new THREE.Mesh(
-      createSweptTubeGeometry(
-        `tahoe_rack:${rx}`,
-        [
-          [rx, tRoofY + 0.05, -2.02],
-          [rx, tRoofY + 0.075, -0.8],
-          [rx, tRoofY + 0.055, 0.35],
-        ],
-        0.024,
-        14,
-        8,
-      ),
-      chromeMat,
-    );
+  [-0.74, 0.74].forEach((rx) => {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 2.55), chromeMat);
+    rail.position.set(rx, roofY + 0.075, -0.82);
     handles.chassisGroup.add(rail);
   });
   [-0.1, -1.55].forEach((cz) => {
-    const crossBar = new THREE.Mesh(
-      createSweptTubeGeometry(
-        `tahoe_cross:${cz}`,
-        [
-          [-0.72, tRoofY + 0.07, cz],
-          [0, tRoofY + 0.095, cz],
-          [0.72, tRoofY + 0.07, cz],
-        ],
-        0.018,
-        10,
-        6,
-      ),
-      darkTrimMat,
-    );
+    const crossBar = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.035, 0.07), darkTrimMat);
+    crossBar.position.set(0, roofY + 0.085, cz);
     handles.chassisGroup.add(crossBar);
   });
 
-  // Animated Hinged Contoured Rear Liftgate / Hatch
-  const bowtieTex = getChevyBowtieMap();
-  const savagePlateTex = getLicensePlateMap('SAVAGE');
+  // Animated Hinged Rear Liftgate / Hatch (pivoted at top rear roofline so rotation.x > 0 swings it UP & OUT!)
   const liftgateHinge = new THREE.Group();
-  liftgateHinge.position.set(0, tRoofY - 0.02, rearZ + 0.08);
-  const liftgateUpperGlass = new THREE.Mesh(
-    createCurvedRearGlassGeometry({
-      key: 'tahoe_liftglass',
-      topWidth: tTopWsW * 0.82,
-      bottomWidth: 1.66,
-      topY: -0.04,
-      bottomY: -0.54,
-      topZ: 0.06,
-      bottomZ: -0.02,
-      wrapZ: 0.07,
-    }),
-    glassMat,
-  );
+  liftgateHinge.position.set(0, roofY - 0.02, rearZ + 0.06);
+  const liftgateUpperGlass = new THREE.Mesh(new THREE.BoxGeometry(1.68, 0.52, 0.06), glassMat);
+  liftgateUpperGlass.position.set(0, -0.3, 0);
   const liftgateLowerPanel = new THREE.Mesh(
-    createCurvedRearGlassGeometry({
-      key: 'tahoe_liftpanel',
-      topWidth: 1.72,
-      bottomWidth: 1.78,
-      topY: -0.54,
-      bottomY: -1.1,
-      topZ: -0.02,
-      bottomZ: -0.04,
-      wrapZ: 0.07,
-    }),
+    createContouredPanelGeo(1.84, 0.62, 0.1, 0.02, 0.02),
     paintMat,
   );
-  const liftgateBadge = bowtieTex
-    ? new THREE.Mesh(
-        new THREE.PlaneGeometry(0.24, 0.12),
-        new THREE.MeshBasicMaterial({ map: bowtieTex, transparent: true, alphaTest: 0.12 }),
-      )
-    : new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.08, 0.04), chromeMat);
-  liftgateBadge.position.set(0, -0.66, -0.1);
-  if (bowtieTex) liftgateBadge.rotation.y = Math.PI;
-  liftgateBadge.userData.noShadowCast = true;
-  const liftgateChromeBar = new THREE.Mesh(
-    createSweptTubeGeometry(
-      'tahoe_liftbar',
-      [
-        [-0.68, -0.78, -0.06],
-        [0, -0.78, -0.1],
-        [0.68, -0.78, -0.06],
-      ],
-      0.018,
-      10,
-      8,
-    ),
-    chromeMat,
-  );
-  const rearPlateFrame = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, 0.03), chromeMat);
-  rearPlateFrame.position.set(0, -0.96, -0.092);
+  liftgateLowerPanel.position.set(0, -0.86, 0);
+  const liftgateBadge = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.08, 0.04), goldBowtieMat);
+  liftgateBadge.position.set(0, -0.68, -0.06);
+  const liftgateChromeBar = new THREE.Mesh(new THREE.BoxGeometry(1.42, 0.05, 0.04), chromeMat);
+  liftgateChromeBar.position.set(0, -0.78, -0.05);
+  const liftgatePlateFrame = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, 0.03), chromeMat);
+  liftgatePlateFrame.position.set(0, -0.94, -0.055);
   liftgateHinge.add(
     liftgateUpperGlass,
     liftgateLowerPanel,
     liftgateBadge,
     liftgateChromeBar,
-    rearPlateFrame,
+    liftgatePlateFrame,
   );
-  if (savagePlateTex) {
-    const rPlate = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.28, 0.13),
-      new THREE.MeshBasicMaterial({ map: savagePlateTex }),
-    );
-    rPlate.rotation.y = Math.PI;
-    rPlate.position.set(0, -0.96, -0.11);
-    rPlate.userData.noShadowCast = true;
-    liftgateHinge.add(rPlate);
-  }
   handles.chassisGroup.add(liftgateHinge);
   handles.trunkLid = liftgateHinge;
 
-  // 8. Chevy Front 3D Chrome Split-Bar Grille, Bowtie, Wrap-Around Chrome Bumpers, Projector Headlights & LED Taillights
+  // 8. Chevy Front 3D Recessed Chrome Split-Bar Grille, Bowtie, Crystal Quad Headlights, Blade Taillights & Sculpted Bumpers
   const frontBumper = new THREE.Mesh(
-    createWrapAroundBumperGeometry({
-      key: 'tahoe_fbump',
-      halfWidth: 1.0,
-      wrapBackZ: 0.32,
-      centerCurveZ: 0.14,
-      height: 0.19,
-      thickness: 0.17,
-    }),
+    createContouredPanelGeo(2.08, 0.2, 0.24, 0.02, 0.025),
     chromeMat,
   );
-  frontBumper.position.set(0, 0.2, frontZ);
+  frontBumper.position.set(0, 0.18, frontZ + 0.06);
+  const frontPlateFrame = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 0.04), chromeMat);
+  frontPlateFrame.position.set(0, 0.2, frontZ + 0.18);
   const rearBumper = new THREE.Mesh(
-    createWrapAroundBumperGeometry({
-      key: 'tahoe_rbump',
-      halfWidth: 1.0,
-      wrapBackZ: 0.32,
-      centerCurveZ: 0.12,
-      height: 0.19,
-      thickness: 0.17,
-      isRear: true,
-    }),
+    createContouredPanelGeo(2.08, 0.2, 0.24, 0.02, 0.025),
     chromeMat,
   );
-  rearBumper.position.set(0, 0.2, rearZ);
+  rearBumper.position.set(0, 0.18, rearZ - 0.06);
 
-  const frontPlateFrame = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, 0.03), chromeMat);
-  frontPlateFrame.position.set(0, 0.19, frontZ + 0.185);
-  if (savagePlateTex) {
-    const fPlate = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.28, 0.13),
-      new THREE.MeshBasicMaterial({ map: savagePlateTex }),
-    );
-    fPlate.position.set(0, 0.19, frontZ + 0.203);
-    fPlate.userData.noShadowCast = true;
-    handles.chassisGroup.add(fPlate);
-  }
-
-  const grilleAssy = buildRealisticGrilleAssembly({
-    width: 1.36,
+  const grilleAssembly = buildRealisticGrilleAssembly({
+    width: 1.34,
     height: 0.34,
     chromeMat,
-    horizontalBars: 2,
-    emblemTexture: bowtieTex,
+    horizontalBars: 3,
   });
-  grilleAssy.position.set(0, 0.52, frontZ + 0.035);
-  handles.chassisGroup.add(frontBumper, rearBumper, frontPlateFrame, grilleAssy);
+  grilleAssembly.position.set(0, 0.52, frontZ + 0.01);
+  const grilleCrossBar = new THREE.Mesh(new THREE.BoxGeometry(1.36, 0.058, 0.06), chromeMat);
+  grilleCrossBar.position.set(0, 0.52, frontZ + 0.04);
+  const bowtie = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.085, 0.045), goldBowtieMat);
+  bowtie.position.set(0, 0.52, frontZ + 0.07);
+  handles.chassisGroup.add(
+    frontBumper,
+    frontPlateFrame,
+    rearBumper,
+    grilleAssembly,
+    grilleCrossBar,
+    bowtie,
+  );
 
-  // Stacked Chevy Quad HID Projector Headlights + Fluted Amber Corners + Tall Fluted SUV Taillights
-  const tahoeAmberTex = getAmberSignalLensTextureSet();
-  const tahoeAmberMat = new THREE.MeshPhysicalMaterial({
-    color: 0xfbbf24,
-    map: tahoeAmberTex.map,
-    normalMap: tahoeAmberTex.normalMap,
-    normalScale: new THREE.Vector2(0.42, 0.42),
-    emissive: 0xf59e0b,
-    emissiveIntensity: 0.72,
-    metalness: 0.08,
-    roughness: 0.06,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.02,
-    envMapIntensity: 2.2,
-  });
-  tahoeAmberMat.userData.preserveEnvMapIntensity = true;
-
+  // Stacked Chevy Multi-Layer Crystal Quad Headlights + Amber Corners + Tall SUV Blade Taillights
   [-0.84, 0.84].forEach((hx) => {
     const upperBeam = buildRealisticHeadlightPod({
       shape: 'quad_bar',
@@ -3082,38 +2633,34 @@ function buildChevyTahoeShowSuv(
       chromeMat,
       tintColor: 0xe0f2fe,
     });
-    upperBeam.position.set(hx, 0.58, frontZ + 0.025);
-    const lowerBezel = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.105, 0.05), chromeMat);
-    lowerBezel.position.set(hx, 0.44, frontZ + 0.018);
-    const lowerAmber = new THREE.Mesh(new THREE.BoxGeometry(0.235, 0.082, 0.056), tahoeAmberMat);
-    lowerAmber.position.set(hx, 0.44, frontZ + 0.024);
-    lowerAmber.userData.noShadowCast = true;
-    handles.chassisGroup.add(upperBeam, lowerBezel, lowerAmber);
+    upperBeam.position.set(hx, 0.58, frontZ + 0.02);
+    const lowerAmber = buildRealisticHeadlightPod({
+      shape: 'quad_bar',
+      width: 0.25,
+      height: 0.088,
+      chromeMat,
+      tintColor: 0xfbbf24,
+    });
+    lowerAmber.position.set(hx, 0.44, frontZ + 0.02);
+    handles.chassisGroup.add(upperBeam, lowerAmber);
   });
   [-0.9, 0.9].forEach((tx) => {
     const tail = buildRealisticTaillightPod({
       style: 'blade',
-      width: 0.145,
-      height: 0.34,
+      width: 0.15,
+      height: 0.48,
       chromeMat,
     });
-    tail.position.set(tx, 0.68, rearZ - 0.02);
-    const turnCell = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.1, 0.05), tahoeAmberMat);
-    turnCell.position.set(tx, 0.44, rearZ - 0.022);
-    turnCell.userData.noShadowCast = true;
-    handles.chassisGroup.add(tail, turnCell);
+    tail.position.set(tx, 0.62, rearZ - 0.02);
+    handles.chassisGroup.add(tail);
   });
 
-  // Dual Chrome Exhaust Tips with dark recessed inner bores
+  // Dual Chrome Exhaust Tips
   [-0.64, 0.64].forEach((ex) => {
-    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.048, 0.38, 12), chromeMat);
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.048, 0.38, 10), chromeMat);
     pipe.rotation.x = Math.PI / 2;
     pipe.position.set(ex, 0.1, rearZ - 0.14);
-    const bore = new THREE.Mesh(new THREE.CircleGeometry(0.04, 12), tahoeAssets.darkInnerMat);
-    bore.rotation.y = Math.PI;
-    bore.position.set(ex, 0.1, rearZ - 0.332);
-    bore.userData.noShadowCast = true;
-    handles.chassisGroup.add(pipe, bore);
+    handles.chassisGroup.add(pipe);
   });
 
   // 9. Undercarriage Glow (Full-Perimeter Neon Tubes + Ground PointLight)
@@ -3213,132 +2760,140 @@ function buildModulePart(
 
   const paintMat = createAutomotivePaintMaterial(paintColor);
   const steelMat = new THREE.MeshStandardMaterial({
-    color: 0x334155,
-    roughness: 0.34,
-    metalness: 0.84,
+    color: 0x263244,
+    roughness: 0.3,
+    metalness: 0.85,
+    envMapIntensity: 1.4,
   });
-  const chromeMat = createChromeMaterial(rimColor);
-  const brassMat = createChromeMaterial(0xf59e0b);
-  const woodMat = createWalnutWoodMaterial();
-  const leatherMat = createAutomotiveLeatherMaterial(0x27201a);
-  const glassMat = createAutomotiveGlassMaterial(0.38);
-  const assets = getSharedShowroomAssets();
+  const brassMat = createChromeMaterial(rimColor);
+  const chromeMat = createChromeMaterial(0xf1f5f9);
+  const leatherMat = createAutomotiveLeatherMaterial(0x1c1917);
+  const walnutMat = createWalnutWoodMaterial();
+  const carbonMat = createCarbonFiberMaterial();
 
   if (m.kind === 'chassis_frame') {
-    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.14, 0.98), steelMat);
-    const barL = new THREE.Mesh(createContouredPanelGeo(0.12, 0.2, 1.02, 0.015, 0.018), paintMat);
-    barL.position.x = -0.43;
-    const barR = barL.clone();
-    barR.position.x = 0.43;
-    [-0.36, 0.36].forEach((cz) => {
-      const crossRail = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.1, 0.08), steelMat);
-      crossRail.position.set(0, -0.02, cz);
-      part.add(crossRail);
-    });
-    part.add(plate, barL, barR);
-  } else if (m.kind === 'cockpit_seat') {
-    const tub = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.18, 0.96), steelMat);
-    const seatCushion = new THREE.Mesh(
-      createContouredPanelGeo(0.56, 0.14, 0.5, 0.02, 0.025),
-      leatherMat,
+    const plate = new THREE.Mesh(
+      createContouredPanelGeo(0.98, 0.16, 0.98, 0.015, 0.02),
+      steelMat,
     );
-    seatCushion.position.set(0, 0.14, -0.08);
-    const seatBack = new THREE.Mesh(
-      createContouredPanelGeo(0.58, 0.6, 0.15, 0.02, 0.025),
-      leatherMat,
-    );
-    seatBack.position.set(0, 0.44, -0.32);
-    seatBack.rotation.x = -0.14;
-    const headrest = new THREE.Mesh(
-      createContouredPanelGeo(0.28, 0.16, 0.1, 0.02, 0.02),
-      leatherMat,
-    );
-    headrest.position.set(0, 0.8, -0.37);
-
-    const dash = new THREE.Mesh(
-      createContouredPanelGeo(0.92, 0.32, 0.28, 0.025, 0.02),
+    const barL = new THREE.Mesh(
+      createContouredPanelGeo(0.12, 0.22, 1.02, 0.012, 0.018),
       paintMat,
     );
-    dash.position.set(0, 0.3, 0.34);
+    barL.position.x = -0.42;
+    const barR = barL.clone();
+    barR.position.x = 0.42;
+    const crossBeam = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.08, 0.12), chromeMat);
+    crossBeam.position.set(0, 0.06, 0);
+    part.add(plate, barL, barR, crossBeam);
+  } else if (m.kind === 'cockpit_seat') {
+    const tub = new THREE.Mesh(
+      createContouredPanelGeo(0.98, 0.2, 0.98, 0.015, 0.02),
+      steelMat,
+    );
+    const seatCushion = new THREE.Mesh(
+      createContouredPanelGeo(0.66, 0.12, 0.5, 0.02, 0.02),
+      leatherMat,
+    );
+    seatCushion.position.set(0, 0.14, -0.06);
+    const seatBack = new THREE.Mesh(
+      createContouredPanelGeo(0.66, 0.56, 0.14, 0.02, 0.025),
+      leatherMat,
+    );
+    seatBack.position.set(0, 0.42, -0.32);
+    seatBack.rotation.x = -0.14;
+    const headrest = new THREE.Mesh(
+      createContouredPanelGeo(0.28, 0.16, 0.1, 0.015, 0.018),
+      leatherMat,
+    );
+    headrest.position.set(0, 0.74, -0.37);
+    const dash = new THREE.Mesh(
+      createContouredPanelGeo(0.88, 0.34, 0.26, 0.025, 0.025),
+      paintMat,
+    );
+    dash.position.set(0, 0.28, 0.35);
+    const dashBrow = new THREE.Mesh(
+      createContouredPanelGeo(0.9, 0.06, 0.28, 0.015, 0.015),
+      carbonMat,
+    );
+    dashBrow.position.set(0, 0.46, 0.35);
     const gaugeTex = getGaugeClusterMap();
-    if (gaugeTex) {
-      const gauge = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.4, 0.14),
-        new THREE.MeshBasicMaterial({ map: gaugeTex }),
-      );
-      gauge.position.set(0, 0.34, 0.195);
-      gauge.rotation.y = Math.PI;
-      gauge.userData.noShadowCast = true;
-      part.add(gauge);
-    }
-
-    const helmWheel = buildDetailedSteeringWheel({
+    const gaugeBezel = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.13, 0.025), chromeMat);
+    gaugeBezel.position.set(0, 0.35, 0.225);
+    const gaugeFace = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.38, 0.1),
+      gaugeTex
+        ? new THREE.MeshBasicMaterial({ map: gaugeTex })
+        : new THREE.MeshStandardMaterial({ color: 0x0f172a, emissive: 0x38bdf8 }),
+    );
+    gaugeFace.position.set(0, 0.35, 0.21);
+    gaugeFace.rotation.y = Math.PI;
+    const wheelGroup = buildDetailedSteeringWheel({
       style: 'sport_suv',
-      radius: 0.175,
-      chromeMat,
+      radius: 0.17,
+      chromeMat: brassMat,
       leatherMat,
       accentColor: 0xf59e0b,
     });
-    helmWheel.position.set(0, 0.48, 0.18);
-    helmWheel.rotation.x = 0.45;
-    handles.helmWheel = helmWheel;
-
-    // Sloped framed safety-glass windshield & dual round chrome headlamps
-    const wsFrame = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.46, 0.036), glassMat);
-    wsFrame.position.set(0, 0.68, 0.32);
-    wsFrame.rotation.x = -0.34;
-    [-0.45, 0.45].forEach((px) => {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.48, 0.055), chromeMat);
-      post.position.set(px, 0.68, 0.32);
-      post.rotation.x = -0.34;
-      part.add(post);
+    wheelGroup.position.set(0, 0.46, 0.16);
+    wheelGroup.rotation.x = 0.48;
+    const headlight = buildRealisticHeadlightPod({
+      shape: 'round',
+      radius: 0.105,
+      chromeMat,
+      withHood: true,
     });
-    const topBar = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.045, 0.06), chromeMat);
-    topBar.position.set(0, 0.9, 0.24);
-    const wipers = buildWindshieldWipers(0.76);
-    wipers.position.set(0, 0.48, 0.4);
-
-    [-0.32, 0.32].forEach((hx) => {
-      const pod = buildRealisticHeadlightPod({
-        shape: 'round',
-        radius: 0.072,
-        chromeMat,
-        withHood: true,
-      });
-      pod.position.set(hx, 0.32, 0.5);
-      part.add(pod);
-    });
-
-    part.add(tub, seatCushion, seatBack, headrest, dash, helmWheel, wsFrame, topBar, wipers);
+    headlight.position.set(0, 0.3, 0.5);
+    part.add(
+      tub,
+      seatCushion,
+      seatBack,
+      headrest,
+      dash,
+      dashBrow,
+      gaugeBezel,
+      gaugeFace,
+      wheelGroup,
+      headlight,
+    );
+    handles.helmWheel = wheelGroup;
   } else if (m.kind === 'armor_plate') {
-    const slab = new THREE.Mesh(createContouredPanelGeo(1.04, 0.62, 1.02, 0.03, 0.025), paintMat);
+    const slab = new THREE.Mesh(createContouredPanelGeo(1.04, 0.62, 1.02, 0.035, 0.03), paintMat);
     slab.position.y = 0.14;
+    const powerBulge = new THREE.Mesh(
+      createContouredPanelGeo(0.58, 0.07, 0.86, 0.025, 0.02),
+      paintMat,
+    );
+    powerBulge.position.set(0, 0.48, -0.02);
     const bumper = new THREE.Mesh(
-      createContouredPanelGeo(1.08, 0.18, 0.22, 0.02, 0.02),
+      createContouredPanelGeo(1.08, 0.2, 0.24, 0.015, 0.02),
       chromeMat,
     );
     bumper.position.set(0, 0.04, 0.46);
     const grille = buildRealisticGrilleAssembly({
-      width: 0.72,
-      height: 0.26,
+      width: 0.62,
+      height: 0.28,
       chromeMat,
-      horizontalBars: 2,
+      horizontalBars: 3,
     });
-    grille.position.set(0, 0.22, 0.5);
-    const rivetL = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.48, 0.85), steelMat);
+    grille.position.set(0, 0.26, 0.51);
+    [-0.4, 0.4].forEach((hx) => {
+      const lamp = buildRealisticHeadlightPod({
+        shape: 'round',
+        radius: 0.078,
+        chromeMat,
+        withHood: true,
+      });
+      lamp.position.set(hx, 0.28, 0.51);
+      const towRing = new THREE.Mesh(new THREE.TorusGeometry(0.038, 0.01, 8, 12), chromeMat);
+      towRing.position.set(hx * 0.72, -0.04, 0.56);
+      part.add(lamp, towRing);
+    });
+    const rivetL = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.5, 0.85), steelMat);
     rivetL.position.set(-0.48, 0.15, 0);
     const rivetR = rivetL.clone();
     rivetR.position.x = 0.48;
-    [-0.36, 0.36].forEach((tx) => {
-      const tailPod = buildRealisticTaillightPod({
-        style: 'round',
-        radius: 0.052,
-        chromeMat,
-      });
-      tailPod.position.set(tx, 0.22, -0.52);
-      part.add(tailPod);
-    });
-    part.add(slab, bumper, grille, rivetL, rivetR);
+    part.add(slab, powerBulge, bumper, grille, rivetL, rivetR);
   } else if (m.kind === 'offroad_wheel') {
     const sideSign: -1 | 1 = m.gx < 0 ? -1 : 1;
     const strut = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.12, 0.12), steelMat);
@@ -3353,6 +2908,7 @@ function buildModulePart(
 
     attachBrakeAssembly(steerPivot, sideSign, 0.23, 0.03, 'orange');
 
+    const assets = getSharedShowroomAssets();
     const tireOuter = new THREE.Mesh(
       new THREE.CylinderGeometry(0.42, 0.42, 0.34, 24, 1, true),
       assets.tireMat,
@@ -3360,7 +2916,7 @@ function buildModulePart(
     tireOuter.rotation.z = Math.PI / 2;
     [-0.165, 0.165].forEach((sx) => {
       const sidewall = new THREE.Mesh(
-        new THREE.TorusGeometry(0.34, 0.075, 10, 24),
+        new THREE.TorusGeometry(0.34, 0.075, 8, 22),
         assets.tireSidewallMat,
       );
       sidewall.rotation.y = Math.PI / 2;
@@ -3368,43 +2924,31 @@ function buildModulePart(
       spinGroup.add(sidewall);
     });
     const barrel = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.28, 0.28, 0.32, 22, 1, true),
-      chromeMat,
+      new THREE.CylinderGeometry(0.28, 0.28, 0.32, 20, 1, true),
+      brassMat,
     );
     barrel.rotation.z = Math.PI / 2;
-    const rimLip = new THREE.Mesh(new THREE.TorusGeometry(0.275, 0.022, 8, 22), chromeMat);
+    const rimLip = new THREE.Mesh(new THREE.TorusGeometry(0.275, 0.022, 8, 20), chromeMat);
     rimLip.rotation.y = Math.PI / 2;
     rimLip.position.x = sideSign * 0.16;
-    const hubCap = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.075, 0.08, 12), brassMat);
+    const hubCap = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.075, 0.08, 12), chromeMat);
     hubCap.rotation.z = Math.PI / 2;
     hubCap.position.x = sideSign * 0.13;
     spinGroup.add(tireOuter, barrel, rimLip, hubCap);
-
-    // 12 Beadlock perimeter bolts + 5 lug nuts + 6 sculpted forged spokes
-    const boltGeo = new THREE.CylinderGeometry(0.007, 0.007, 0.018, 6);
-    boltGeo.rotateZ(Math.PI / 2);
-    for (let b = 0; b < 12; b++) {
-      const ba = (b / 12) * Math.PI * 2;
-      const bolt = new THREE.Mesh(boltGeo, chromeMat);
-      bolt.position.set(sideSign * 0.172, Math.cos(ba) * 0.258, Math.sin(ba) * 0.258);
-      bolt.userData.noShadowCast = true;
-      spinGroup.add(bolt);
+    for (let s = 0; s < 6; s++) {
+      const a = (s / 6) * Math.PI * 2;
+      const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.26, 0.035), brassMat);
+      spoke.position.set(sideSign * 0.11, Math.cos(a) * 0.135, Math.sin(a) * 0.135);
+      spoke.rotation.x = a;
+      spinGroup.add(spoke);
     }
-    const lugGeo = new THREE.CylinderGeometry(0.011, 0.011, 0.022, 6);
+    const lugGeo = new THREE.CylinderGeometry(0.01, 0.01, 0.024, 6);
     lugGeo.rotateZ(Math.PI / 2);
     for (let l = 0; l < 5; l++) {
       const la = (l / 5) * Math.PI * 2;
       const lug = new THREE.Mesh(lugGeo, chromeMat);
-      lug.position.set(sideSign * 0.145, Math.cos(la) * 0.05, Math.sin(la) * 0.05);
+      lug.position.set(sideSign * 0.15, Math.cos(la) * 0.052, Math.sin(la) * 0.052);
       spinGroup.add(lug);
-    }
-    const offroadSpokeGeo = getSculptedSpokeGeometry(0.255, 0.044, 0.028, 0.032);
-    for (let s = 0; s < 6; s++) {
-      const a = (s / 6) * Math.PI * 2;
-      const spoke = new THREE.Mesh(offroadSpokeGeo, chromeMat);
-      spoke.position.set(sideSign * 0.11, Math.cos(a) * 0.135, Math.sin(a) * 0.135);
-      spoke.rotation.x = a;
-      spinGroup.add(spoke);
     }
 
     part.add(steerPivot);
@@ -3416,81 +2960,52 @@ function buildModulePart(
       m.gz > 0 ? (m.gx < 0 ? 'fl' : 'fr') : m.gx < 0 ? 'rl' : 'rr';
     handles.wheelCorners.push({ obj: steerPivot, corner, baseY: -0.04 });
   } else if (m.kind === 'steam_engine_pod') {
-    const block = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.5, 0.88), steelMat);
+    const block = new THREE.Mesh(
+      createContouredPanelGeo(0.86, 0.52, 0.88, 0.02, 0.02),
+      steelMat,
+    );
     block.position.y = 0.18;
-    const boilerDrum = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.82, 16), brassMat);
+    const boilerDrum = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.84, 16), brassMat);
     boilerDrum.rotation.x = Math.PI / 2;
     boilerDrum.position.y = 0.42;
     [-0.28, 0, 0.28].forEach((bz) => {
-      const band = new THREE.Mesh(new THREE.TorusGeometry(0.285, 0.016, 8, 18), chromeMat);
+      const band = new THREE.Mesh(new THREE.TorusGeometry(0.286, 0.014, 8, 18), chromeMat);
       band.position.set(0, 0.42, bz);
       part.add(band);
     });
-    const fireboxGlass = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.11, 0.11, 0.04, 12),
-      new THREE.MeshStandardMaterial({
-        color: 0xf97316,
-        emissive: 0xea580c,
-        emissiveIntensity: 1.8,
-        roughness: 0.15,
-      }),
-    );
-    fireboxGlass.rotation.x = Math.PI / 2;
-    fireboxGlass.position.set(0, 0.42, -0.42);
-    const exhaustA = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.095, 0.68, 12), chromeMat);
-    exhaustA.position.set(-0.26, 0.72, -0.22);
+    const exhaustA = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.68, 12), chromeMat);
+    exhaustA.position.set(-0.26, 0.7, -0.22);
     const exhaustB = exhaustA.clone();
     exhaustB.position.x = 0.26;
-    const piston = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.24, 12), brassMat);
+    const piston = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.095, 0.24, 12), brassMat);
     piston.position.set(0, 0.62, 0.16);
-    part.add(block, boilerDrum, fireboxGlass, exhaustA, exhaustB, piston);
+    part.add(block, boilerDrum, exhaustA, exhaustB, piston);
     handles.pistons.push(piston);
   } else if (m.kind === 'boat_hull') {
-    const pontoon = new THREE.Mesh(new THREE.CapsuleGeometry(0.34, 0.86, 6, 14), woodMat);
+    const pontoon = new THREE.Mesh(new THREE.CapsuleGeometry(0.34, 0.86, 6, 14), walnutMat);
     pontoon.rotation.x = Math.PI / 2;
     pontoon.position.y = -0.05;
-    const keel = new THREE.Mesh(createContouredPanelGeo(0.88, 0.14, 0.98, 0.02, 0.02), paintMat);
+    const keel = new THREE.Mesh(
+      createContouredPanelGeo(0.86, 0.14, 0.96, 0.02, 0.02),
+      paintMat,
+    );
     keel.position.y = 0.16;
-    [-0.45, 0.45].forEach((rx) => {
-      const rubRail = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.04, 0.96), chromeMat);
-      rubRail.position.set(rx, 0.18, 0);
-      part.add(rubRail);
-    });
-    const cleat = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.035, 0.04), brassMat);
-    cleat.position.set(0, 0.25, 0.34);
-    part.add(pontoon, keel, cleat);
+    const rubRail = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.035, 0.98), chromeMat);
+    rubRail.position.y = 0.2;
+    part.add(pontoon, keel, rubRail);
   } else if (m.kind === 'rotor_wing') {
     const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.14, 0.58, 12), chromeMat);
     mast.position.y = 0.24;
     const wing = new THREE.Mesh(
-      createContouredPanelGeo(1.56, 0.075, 0.48, 0.025, 0.02),
+      createContouredPanelGeo(1.58, 0.08, 0.48, 0.025, 0.02),
       paintMat,
     );
     wing.position.y = 0.14;
-    [-0.76, 0.76].forEach((wx) => {
-      const strobe = new THREE.Mesh(
-        new THREE.SphereGeometry(0.045, 10, 8),
-        new THREE.MeshStandardMaterial({
-          color: wx < 0 ? 0xef4444 : 0x22c55e,
-          emissive: wx < 0 ? 0xdc2626 : 0x16a34a,
-          emissiveIntensity: 1.6,
-        }),
-      );
-      strobe.position.set(wx, 0.14, 0.18);
-      strobe.userData.noShadowCast = true;
-      part.add(strobe);
-    });
     const rotorHub = new THREE.Group();
     rotorHub.position.y = 0.56;
-    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.15, 0.12, 12), brassMat);
-    const bladeA = new THREE.Mesh(
-      createContouredPanelGeo(2.38, 0.032, 0.18, 0.01, 0.012),
-      steelMat,
-    );
-    const bladeB = new THREE.Mesh(
-      createContouredPanelGeo(0.18, 0.032, 2.38, 0.01, 0.012),
-      steelMat,
-    );
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.16, 0.14, 14), brassMat);
+    const bladeA = new THREE.Mesh(new THREE.BoxGeometry(2.38, 0.035, 0.2), carbonMat);
+    const bladeB = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.035, 2.38), carbonMat);
     rotorHub.add(cap, bladeA, bladeB);
     part.add(mast, wing, rotorHub);
     handles.rotors.push(rotorHub);
@@ -3498,22 +3013,22 @@ function buildModulePart(
     const mount = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.3, 0.65), steelMat);
     const finPivot = new THREE.Group();
     const blade = new THREE.Mesh(
-      createContouredPanelGeo(0.09, 0.62, 0.56, 0.015, 0.015),
+      createContouredPanelGeo(0.1, 0.62, 0.56, 0.015, 0.015),
       paintMat,
     );
     blade.position.y = 0.22;
-    finPivot.add(blade);
+    const trimTab = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.05, 0.58), chromeMat);
+    trimTab.position.y = 0.52;
+    finPivot.add(blade, trimTab);
     part.add(mount, finPivot);
     handles.rudders.push(finPivot);
   } else if (m.kind === 'storage_rack') {
     const frame = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.14, 0.92), steelMat);
-    const crate = new THREE.Mesh(createContouredPanelGeo(0.8, 0.52, 0.8, 0.015, 0.02), woodMat);
+    const crate = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.52, 0.8), walnutMat);
     crate.position.y = 0.3;
-    const strap = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.09, 0.84), leatherMat);
+    const strap = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.1, 0.84), brassMat);
     strap.position.y = 0.42;
-    const clasp = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.88), brassMat);
-    clasp.position.y = 0.42;
-    part.add(frame, crate, strap, clasp);
+    part.add(frame, crate, strap);
   }
 
   return part;
@@ -3543,18 +3058,6 @@ export function createModularVehicleMesh(
     vehicle.preset === 'chevy_2000_sub'
   ) {
     buildChevyTahoeShowSuv(vehicle, handles);
-    const shadowHulls: THREE.Mesh[] = [];
-    root.traverse((obj) => {
-      if (obj instanceof THREE.Mesh) {
-        if (obj.userData.isVehicleShadowHull) {
-          shadowHulls.push(obj);
-        } else {
-          obj.userData.noShadowCast = true;
-          obj.castShadow = false;
-        }
-      }
-    });
-    root.userData.shadowMeshes = shadowHulls;
   } else if (
     vehicle.preset === 'lowrider' ||
     vehicle.preset === 'donk' ||
@@ -3562,28 +3065,17 @@ export function createModularVehicleMesh(
     vehicle.preset === 'cadillac_coupe_deville'
   ) {
     buildCustomStreetShowCar(vehicle, handles);
-    const shadowHulls: THREE.Mesh[] = [];
-    root.traverse((obj) => {
-      if (obj instanceof THREE.Mesh) {
-        if (obj.userData.isVehicleShadowHull) {
-          shadowHulls.push(obj);
-        } else {
-          obj.userData.noShadowCast = true;
-          obj.castShadow = false;
-        }
-      }
-    });
-    root.userData.shadowMeshes = shadowHulls;
   } else if (vehicle.preset === 'sports_car') {
     buildExoticSupercarMesh(vehicle, handles);
   } else {
     const rimColor = vehicle.rimColor || '#d97706';
+    const paintColor = vehicle.paintColor || '#d97706';
     const wheelScale = vehicle.wheelScale ?? 1.0;
 
     for (const mod of vehicle.modules) {
       const part = buildModulePart(
         mod,
-        vehicle.paintColor || '#d97706',
+        paintColor,
         rimColor,
         wheelScale,
         handles,
@@ -3594,9 +3086,13 @@ export function createModularVehicleMesh(
       chassisGroup.add(part);
     }
 
-    // Real working hinged contoured doors + mirrors + trunk lid on ALL other modular cars & craft!
-    const doorPaintMat = createAutomotivePaintMaterial(vehicle.paintColor || '#d97706');
-    const doorTrimMat = createAutomotiveLeatherMaterial(0x262626);
+    // Real working hinged doors + trunk lid + sculpted interior/exterior trim on ALL modular vehicles!
+    const doorPaintMat = createAutomotivePaintMaterial(paintColor);
+    const doorLeatherMat = createAutomotiveLeatherMaterial(0x1f242c);
+    const doorTrimMat = new THREE.MeshStandardMaterial({
+      color: 0x161920,
+      roughness: 0.7,
+    });
     const handleMat = createChromeMaterial(rimColor);
     ([-1, 1] as const).forEach((side) => {
       const doorPivot = new THREE.Group();
@@ -3606,23 +3102,28 @@ export function createModularVehicleMesh(
         doorPaintMat,
       );
       panel.position.set(0, 0.24, -0.52);
-      const innerCard = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.46, 0.96), doorTrimMat);
+      const innerCard = new THREE.Mesh(
+        new THREE.BoxGeometry(0.04, 0.46, 0.96),
+        doorLeatherMat,
+      );
       innerCard.position.set(-side * 0.045, 0.24, -0.52);
-      const handleAssy = buildDoorHandleAssembly({
-        side,
-        chromeMat: handleMat,
-        pocketMat: doorTrimMat,
-        withKeyCylinder: true,
-      });
-      handleAssy.position.set(side * 0.042, 0.38, -0.78);
-      const mirrorAssy = buildRealisticSideMirror({
+      const armrest = new THREE.Mesh(
+        new THREE.BoxGeometry(0.055, 0.05, 0.52),
+        doorTrimMat,
+      );
+      armrest.position.set(-side * 0.068, 0.2, -0.5);
+      const pocket = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.05, 0.18), doorTrimMat);
+      pocket.position.set(side * 0.04, 0.38, -0.78);
+      const latch = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.042, 0.16), handleMat);
+      latch.position.set(side * 0.055, 0.38, -0.78);
+      const mirror = buildRealisticSideMirror({
         side,
         housingMat: doorPaintMat,
         chromeMat: handleMat,
-        style: 'classic_round',
+        style: 'aero',
       });
-      mirrorAssy.position.set(side * 0.04, 0.5, -0.18);
-      doorPivot.add(panel, innerCard, handleAssy, mirrorAssy);
+      mirror.position.set(side * 0.02, 0.5, -0.14);
+      doorPivot.add(panel, innerCard, armrest, pocket, latch, mirror);
       chassisGroup.add(doorPivot);
       if (side < 0) handles.doorLeft = doorPivot;
       else handles.doorRight = doorPivot;
@@ -3635,36 +3136,59 @@ export function createModularVehicleMesh(
       doorPaintMat,
     );
     rearLid.position.set(0, 0, -0.42);
-    const rearTrim = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.03, 0.04), handleMat);
-    rearTrim.position.set(0, 0.02, -0.82);
-    rearTrunkHinge.add(rearLid, rearTrim);
+    const rearLatch = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.04, 0.05), handleMat);
+    rearLatch.position.set(0, 0.02, -0.82);
+    rearTrunkHinge.add(rearLid, rearLatch);
     chassisGroup.add(rearTrunkHinge);
     handles.trunkLid = rearTrunkHinge;
 
+    // Rear bumper + crystal ruby taillights on land modular vehicles
+    if (vehicle.preset === 'expedition_rover' || vehicle.preset === 'dune_buggy') {
+      const rearBumper = new THREE.Mesh(
+        createContouredPanelGeo(1.65, 0.16, 0.2, 0.015, 0.018),
+        handleMat,
+      );
+      rearBumper.position.set(0, 0.42, -1.78);
+      chassisGroup.add(rearBumper);
+      [-0.64, 0.64].forEach((tx) => {
+        const tail = buildRealisticTaillightPod({
+          style: 'round',
+          radius: 0.068,
+          chromeMat: handleMat,
+        });
+        tail.position.set(tx, 0.68, -1.72);
+        chassisGroup.add(tail);
+      });
+    }
+
     if (vehicle.preset === 'dune_buggy') {
-      const cageMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.36, metalness: 0.8 });
+      const cageMat = new THREE.MeshStandardMaterial({
+        color: 0x1e293b,
+        roughness: 0.32,
+        metalness: 0.82,
+      });
       [-0.52, 0.52].forEach((rx) => {
-        const hoop = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.8, 10), cageMat);
+        const hoop = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.048, 1.8, 10), cageMat);
         hoop.position.set(rx, 1.48, -0.1);
         hoop.rotation.x = 0.68;
         chassisGroup.add(hoop);
       });
-      const roofLightBar = new THREE.Mesh(new THREE.BoxGeometry(1.08, 0.06, 0.08), cageMat);
-      roofLightBar.position.set(0, 1.86, 0.25);
-      chassisGroup.add(roofLightBar);
-      [-0.32, 0, 0.32].forEach((lx) => {
-        const pod = buildRealisticHeadlightPod({
+      const roofBar = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 1.08, 10), cageMat);
+      roofBar.rotation.z = Math.PI / 2;
+      roofBar.position.set(0, 2.02, 0.35);
+      chassisGroup.add(roofBar);
+      [-0.28, 0.28].forEach((lx) => {
+        const roofSpot = buildRealisticHeadlightPod({
           shape: 'round',
-          radius: 0.065,
+          radius: 0.072,
           chromeMat: handleMat,
+          withHood: true,
         });
-        pod.position.set(lx, 1.92, 0.28);
-        chassisGroup.add(pod);
+        roofSpot.position.set(lx, 2.08, 0.42);
+        chassisGroup.add(roofSpot);
       });
     }
   }
-
-  markVehicleLightingPreserved(root);
 
   const noShadowSet = new Set<THREE.Object3D>([
     ...(handles.underglowMeshes ?? []),
@@ -3713,17 +3237,31 @@ export function buildRealisticTahoeRig(spec: GarageVehicleSpec): BuiltVehicleRig
         ? subCones
         : ((handles.subwooferCones ?? []) as unknown as THREE.Mesh[]),
     dispose: () => {
+      const disposedGeos = new Set<THREE.BufferGeometry>();
+      const disposedMats = new Set<THREE.Material>();
+      const disposedTex = new Set<THREE.Texture>();
       handles.root.traverse((obj) => {
         if (obj instanceof THREE.Mesh) {
-          if (obj.geometry && !obj.geometry.userData?.sharedAsset) {
+          if (obj.geometry && !obj.geometry.userData?.sharedAsset && !disposedGeos.has(obj.geometry)) {
+            disposedGeos.add(obj.geometry);
             obj.geometry.dispose();
           }
           const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
           for (const m of mats) {
-            if (!m || m.userData?.sharedAsset) continue;
-            const std = m as THREE.MeshStandardMaterial;
-            if (std.map && !std.map.userData?.sharedAsset) std.map.dispose();
-            if (std.emissiveMap && !std.emissiveMap.userData?.sharedAsset) std.emissiveMap.dispose();
+            if (!m || m.userData?.sharedAsset || disposedMats.has(m)) continue;
+            disposedMats.add(m);
+            const phys = m as THREE.MeshPhysicalMaterial;
+            for (const tex of [
+              phys.map,
+              phys.emissiveMap,
+              phys.normalMap,
+              phys.clearcoatNormalMap,
+            ]) {
+              if (tex && !tex.userData?.sharedAsset && !disposedTex.has(tex)) {
+                disposedTex.add(tex);
+                tex.dispose();
+              }
+            }
             m.dispose();
           }
         }
@@ -3736,55 +3274,292 @@ function buildExoticSupercarMesh(
   vehicle: ModularVehicleData,
   handles: ModularVehicleMeshHandles,
 ): void {
-  const profile = resolveVehicleProfile(vehicle);
-  const rig = buildRealLifeCarRig({
-    id: vehicle.carId || vehicle.id,
-    displayName: vehicle.name || profile.id,
-    archetype: profile.archetype !== 'generic_car' ? profile.archetype : 'mclaren',
-    paintColor: vehicle.livery?.bodyColor ?? vehicle.paintColor ?? profile.paintColor,
-    secondaryColor: vehicle.accentColor ?? profile.accentColor,
-    rimColor: vehicle.rimColor ?? profile.rimColor,
-    underglowColor: vehicle.underglowColor ?? profile.underglowColor,
-    wheelRadius: profile.wheelRadius,
-    wheelWidth: profile.wheelWidth,
-    wheelBaseZ: profile.wheelBaseZ,
-    trackWidthX: profile.trackWidthX,
-    hasSubwooferWall: false,
-    liveryText: vehicle.livery
-      ? {
-          title: vehicle.livery.channelName,
-          badge: vehicle.livery.ctaText,
-          accentColor: vehicle.livery.accentColor,
-        }
-      : undefined,
+  const paintColor = vehicle.paintColor || '#f97316';
+  const rimColor = vehicle.rimColor || '#e2e8f0';
+  const wheelScale = vehicle.wheelScale ?? 0.92;
+  const baseWheelY = 0.36 * wheelScale;
+
+  handles.chassisGroup.position.y = Math.max(0.02, (vehicle.suspensionOffset ?? -0.1) + 0.14);
+
+  const paintMat = createAutomotivePaintMaterial(paintColor);
+  const carbonMat = createCarbonFiberMaterial();
+  const chromeMat = createChromeMaterial(rimColor);
+  const glassMat = createAutomotiveGlassMaterial(0.38);
+  const leatherMat = createAutomotiveLeatherMaterial(0x18181b);
+  const dashPadMat = createAutomotiveLeatherMaterial(0x0f1116);
+
+  // Sculpted low-slung wedge supercar hull via ExtrudeGeometry
+  const hullGeo = ensureGeometryHasUv(buildSilhouetteGeometry('mclaren'));
+  const hullMesh = new THREE.Mesh(hullGeo, paintMat);
+  hullMesh.position.y = -0.04;
+  handles.chassisGroup.add(hullMesh);
+
+  // Tinted sculpted canopy glass + windshield wipers + dark engine louver deck
+  const canopy = new THREE.Mesh(
+    createContouredPanelGeo(1.52, 0.24, 1.32, 0.05, 0.03),
+    glassMat,
+  );
+  canopy.position.set(0, 0.92, -0.26);
+  const wipers = buildWindshieldWipers(1.38);
+  wipers.position.set(0, 0.78, 0.74);
+  wipers.rotation.x = -0.45;
+  const engineLouvers = new THREE.Mesh(new THREE.BoxGeometry(1.16, 0.06, 0.85), carbonMat);
+  engineLouvers.position.set(0, 0.9, -1.28);
+
+  // Carbon aero front splitter, side skirts & rear diffuser
+  const frontSplitter = new THREE.Mesh(
+    createContouredPanelGeo(1.92, 0.07, 0.36, 0.015, 0.02),
+    carbonMat,
+  );
+  frontSplitter.position.set(0, 0.28, 2.22);
+  const frontPlateFrame = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.12, 0.03), carbonMat);
+  frontPlateFrame.position.set(0, 0.34, 2.34);
+  const rearDiffuser = new THREE.Mesh(new THREE.BoxGeometry(1.88, 0.14, 0.28), carbonMat);
+  rearDiffuser.position.set(0, 0.32, -2.14);
+  [-0.92, 0.92].forEach((sx) => {
+    const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.09, 2.3), carbonMat);
+    skirt.position.set(sx, 0.28, 0.02);
+    handles.chassisGroup.add(skirt);
   });
 
-  handles.chassisGroup.position.y = Math.max(
-    -0.04,
-    (vehicle.suspensionOffset ?? -0.1) + 0.1,
+  // Twin-pylon contoured GT rear wing
+  const wingBlade = new THREE.Mesh(
+    createContouredPanelGeo(1.94, 0.055, 0.34, 0.02, 0.02),
+    paintMat,
+  );
+  wingBlade.position.set(0, 1.06, -1.98);
+  wingBlade.rotation.x = 0.12;
+  [-0.52, 0.52].forEach((px) => {
+    const pylon = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.26, 0.24), carbonMat);
+    pylon.position.set(px, 0.92, -1.94);
+    handles.chassisGroup.add(pylon);
+  });
+
+  // Multi-layer Crystal LED Headlight Pods + Smoked Ruby LED Rear Blades + Twin Chrome Exhausts
+  [-0.64, 0.64].forEach((hx) => {
+    const hl = buildRealisticHeadlightPod({
+      shape: 'quad_bar',
+      width: 0.32,
+      height: 0.082,
+      chromeMat,
+      tintColor: 0xe0f2fe,
+    });
+    hl.position.set(hx, 0.48, 2.24);
+    const tailBlade = buildRealisticTaillightPod({
+      style: 'blade',
+      width: 0.68,
+      height: 0.062,
+      chromeMat,
+    });
+    tailBlade.position.set(hx * 0.72, 0.7, -2.18);
+    handles.chassisGroup.add(hl, tailBlade);
+  });
+  [-0.22, 0.22].forEach((ex) => {
+    const exhaust = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.22, 14), chromeMat);
+    exhaust.rotation.x = Math.PI / 2;
+    exhaust.position.set(ex, 0.44, -2.2);
+    handles.chassisGroup.add(exhaust);
+  });
+
+  // Interior racing seats, padded carbon cockpit brow, 3-spoke steering wheel, rearview mirror & pedals
+  [-0.4, 0.4].forEach((sx) => {
+    const seat = new THREE.Mesh(
+      createContouredPanelGeo(0.46, 0.52, 0.44, 0.02, 0.025),
+      leatherMat,
+    );
+    seat.position.set(sx, 0.52, -0.2);
+    seat.rotation.x = -0.18;
+    const headrest = new THREE.Mesh(
+      createContouredPanelGeo(0.24, 0.15, 0.1, 0.015, 0.018),
+      leatherMat,
+    );
+    headrest.position.set(sx, 0.82, -0.34);
+    handles.chassisGroup.add(seat, headrest);
+  });
+  const superDash = new THREE.Mesh(
+    createContouredPanelGeo(1.48, 0.16, 0.32, 0.02, 0.02),
+    dashPadMat,
+  );
+  superDash.position.set(0, 0.68, 0.54);
+  const superConsole = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.18, 0.92), carbonMat);
+  superConsole.position.set(0, 0.44, 0.04);
+  const superCabinKit = buildCabinDetailKit({
+    mirrorY: 0.96,
+    mirrorZ: 0.28,
+    visorWidth: 0.48,
+    dashY: 0.7,
+    pedalZ: 0.62,
+    driverX: -0.4,
+    trimMat: dashPadMat,
+    chromeMat,
+  });
+  const helmWheel = buildDetailedSteeringWheel({
+    style: 'supercar',
+    radius: 0.155,
+    chromeMat,
+    leatherMat,
+    accentColor: 0xf97316,
+  });
+  helmWheel.position.set(-0.4, 0.7, 0.28);
+  helmWheel.rotation.x = 0.42;
+  handles.helmWheel = helmWheel;
+
+  const superGaugeTex = getGaugeClusterMap();
+  if (superGaugeTex) {
+    const gaugeScreen = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.38, 0.14),
+      new THREE.MeshBasicMaterial({ map: superGaugeTex }),
+    );
+    gaugeScreen.position.set(-0.4, 0.72, 0.48);
+    gaugeScreen.rotation.y = Math.PI;
+    handles.chassisGroup.add(gaugeScreen);
+  }
+
+  handles.chassisGroup.add(
+    canopy,
+    wipers,
+    engineLouvers,
+    frontSplitter,
+    frontPlateFrame,
+    rearDiffuser,
+    wingBlade,
+    superDash,
+    superConsole,
+    superCabinKit,
+    helmWheel,
   );
 
-  // Move sculpted body, aero, interior, and hinged panels onto handles.chassisGroup
-  while (rig.bodyGroup.children.length > 0) {
-    handles.chassisGroup.add(rig.bodyGroup.children[0]);
-  }
+  // Hinged side doors with carbon aero intake vents, quilted door cards & side mirrors
+  ([-1, 1] as const).forEach((side) => {
+    const doorPivot = new THREE.Group();
+    doorPivot.position.set(side * 0.9, 0.42, 0.55);
+    const doorSkin = new THREE.Mesh(
+      createContouredPanelGeo(0.06, 0.42, 1.15, 0.015, 0.015),
+      paintMat,
+    );
+    doorSkin.position.set(0, 0.18, -0.56);
+    const innerCard = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.34, 1.02), leatherMat);
+    innerCard.position.set(-side * 0.034, 0.18, -0.56);
+    const handleLatch = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.032, 0.15), chromeMat);
+    handleLatch.position.set(side * 0.034, 0.28, -0.74);
+    const intakeVent = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.22, 0.42), carbonMat);
+    intakeVent.position.set(side * 0.015, 0.2, -0.92);
+    const mirror = buildRealisticSideMirror({
+      side,
+      housingMat: carbonMat,
+      chromeMat,
+      style: 'aero',
+    });
+    mirror.position.set(side * 0.02, 0.42, -0.14);
+    doorPivot.add(doorSkin, innerCard, handleLatch, intakeVent, mirror);
+    handles.chassisGroup.add(doorPivot);
+    if (side < 0) handles.doorLeft = doorPivot;
+    else handles.doorRight = doorPivot;
+  });
 
-  // Keep wheel corners directly under handles.root so suspension travel animates the body cleanly
-  for (const wc of rig.wheelCorners) {
-    handles.root.add(wc.obj);
-    handles.wheelCorners.push(wc);
-  }
+  // Hinged rear engine decklid / trunk
+  const deckHinge = new THREE.Group();
+  deckHinge.position.set(0, 0.86, -0.92);
+  const deckPanel = new THREE.Mesh(new THREE.BoxGeometry(1.12, 0.06, 0.92), carbonMat);
+  deckPanel.position.set(0, 0, -0.46);
+  deckHinge.add(deckPanel);
+  handles.chassisGroup.add(deckHinge);
+  handles.trunkLid = deckHinge;
 
-  handles.wheels.push(...rig.wheels);
-  handles.steerWheels.push(...rig.steerWheels);
-  if (rig.doorLeft) handles.doorLeft = rig.doorLeft;
-  if (rig.doorRight) handles.doorRight = rig.doorRight;
-  if (rig.trunkLid) handles.trunkLid = rig.trunkLid;
-  if (rig.helmWheel) handles.helmWheel = rig.helmWheel;
-  if (rig.underglowMeshes && rig.underglowMeshes.length > 0) {
-    handles.underglowMeshes = rig.underglowMeshes;
-  }
-  if (rig.underglowLight) {
-    handles.underglowLight = rig.underglowLight;
+  // Exotic Undercarriage Neon Glow
+  const glowColor = new THREE.Color(vehicle.underglowColor || '#38bdf8');
+  const glowMat = new THREE.MeshStandardMaterial({
+    color: glowColor,
+    emissive: glowColor,
+    emissiveIntensity: 2.0,
+    roughness: 0.2,
+  });
+  const glowMeshes: THREE.Mesh[] = [];
+  [-0.84, 0.84].forEach((gx) => {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 3.3), glowMat);
+    bar.position.set(gx, 0.2, 0.04);
+    handles.chassisGroup.add(bar);
+    glowMeshes.push(bar);
+  });
+  const underLight = new THREE.PointLight(glowColor.getHex(), 1.8, 8.5, 1.4);
+  underLight.position.set(0, 0.22, 0.04);
+  handles.chassisGroup.add(underLight);
+  handles.underglowLight = underLight;
+  handles.underglowMeshes = glowMeshes;
+
+  // 4 Forged Multi-Spoke Supercar Wheels with Treaded Rubber, Sidewalls, Lug Bolts & Cross-Drilled Brake Rotors
+  const assets = getSharedShowroomAssets();
+  const tireMat = assets.tireMat;
+  const sidewallMat = assets.tireSidewallMat;
+  const trackHalf = 0.94;
+  const corners: Array<{
+    corner: 'fl' | 'fr' | 'rl' | 'rr';
+    x: number;
+    z: number;
+    side: -1 | 1;
+    isFront: boolean;
+  }> = [
+    { corner: 'fl', x: -trackHalf, z: 1.38, side: -1, isFront: true },
+    { corner: 'fr', x: trackHalf, z: 1.38, side: 1, isFront: true },
+    { corner: 'rl', x: -trackHalf, z: -1.32, side: -1, isFront: false },
+    { corner: 'rr', x: trackHalf, z: -1.32, side: 1, isFront: false },
+  ];
+  const tireOuterGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.3, 28, 1, true);
+  tireOuterGeo.rotateZ(Math.PI / 2);
+  const rimBarrelGeo = new THREE.CylinderGeometry(0.285, 0.285, 0.3, 24, 1, true);
+  rimBarrelGeo.rotateZ(Math.PI / 2);
+  const spokeGeo = new THREE.BoxGeometry(0.028, 0.265, 0.026);
+  const lugGeo = new THREE.CylinderGeometry(0.009, 0.009, 0.024, 6);
+  lugGeo.rotateZ(Math.PI / 2);
+
+  for (const wc of corners) {
+    const cornerRoot = new THREE.Group();
+    cornerRoot.position.set(wc.x, baseWheelY, wc.z);
+    const steerPivot = new THREE.Group();
+    steerPivot.scale.setScalar(wheelScale);
+    const spinGroup = new THREE.Group();
+    steerPivot.add(spinGroup);
+
+    attachBrakeAssembly(steerPivot, wc.side, 0.225, 0.025, 'orange');
+
+    const tire = new THREE.Mesh(tireOuterGeo, tireMat);
+    [-0.145, 0.145].forEach((sx) => {
+      const sidewall = new THREE.Mesh(new THREE.TorusGeometry(0.315, 0.045, 8, 24), sidewallMat);
+      sidewall.rotation.y = Math.PI / 2;
+      sidewall.position.x = sx;
+      spinGroup.add(sidewall);
+    });
+    const barrel = new THREE.Mesh(rimBarrelGeo, chromeMat);
+    const lip = new THREE.Mesh(new THREE.TorusGeometry(0.278, 0.018, 8, 24), chromeMat);
+    lip.rotation.y = Math.PI / 2;
+    lip.position.x = wc.side * 0.145;
+    const centerCap = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.068, 0.06, 14), chromeMat);
+    centerCap.rotation.z = Math.PI / 2;
+    centerCap.position.x = wc.side * 0.115;
+    spinGroup.add(tire, barrel, lip, centerCap);
+
+    for (let s = 0; s < 7; s++) {
+      const a = (s / 7) * Math.PI * 2;
+      const spoke = new THREE.Mesh(spokeGeo, chromeMat);
+      spoke.position.set(wc.side * 0.11, Math.cos(a) * 0.135, Math.sin(a) * 0.135);
+      spoke.rotation.x = a;
+      spinGroup.add(spoke);
+    }
+    for (let l = 0; l < 5; l++) {
+      const la = (l / 5) * Math.PI * 2;
+      const lug = new THREE.Mesh(lugGeo, chromeMat);
+      lug.position.set(wc.side * 0.138, Math.cos(la) * 0.048, Math.sin(la) * 0.048);
+      spinGroup.add(lug);
+    }
+
+    cornerRoot.add(steerPivot);
+    handles.root.add(cornerRoot);
+    handles.wheels.push(spinGroup);
+    if (wc.isFront) handles.steerWheels.push(steerPivot);
+    handles.wheelCorners.push({
+      obj: cornerRoot,
+      corner: wc.corner,
+      baseY: baseWheelY,
+    });
   }
 }

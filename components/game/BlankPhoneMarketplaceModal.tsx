@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { buildSculptedBackpackMesh, SkinCatalogItem } from '@/game/data/exchangeCatalog';
 import { applySafeStandardMaps, ensureGeometryHasUv } from '@/game/world/textures';
+import { createSafeWebGLRenderer } from '@/game/world/webglUtils';
 import { extractPayhipCheckoutUrl } from './PayhipMarketplaceModal';
 
 function buildSculptedWeaponPreviewMesh(item: SkinCatalogItem): {
@@ -148,11 +149,11 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
 
     let renderer: THREE.WebGLRenderer | null = null;
     try {
-      renderer = new THREE.WebGLRenderer({
+      renderer = createSafeWebGLRenderer({
         antialias: true,
         alpha: true,
         powerPreference: 'low-power',
-      });
+      }).renderer;
     } catch {
       const rafFallback = requestAnimationFrame(() => setWebglUnavailable(true));
       return () => cancelAnimationFrame(rafFallback);

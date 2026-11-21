@@ -1052,6 +1052,66 @@ export function getTerrainHeight(x: number, z: number): number {
   return getBaseTerrainHeight(x, z) + sampleGridBilinear(terrainDeltaGrid, x, z);
 }
 
+let cachedIslandBaseTerrainGrid: Float32Array | null = null;
+
+function ensureIslandBaseTerrainGrid(): Float32Array {
+  if (cachedIslandBaseTerrainGrid) return cachedIslandBaseTerrainGrid;
+  const grid = new Float32Array(TERRAIN_VERTS * TERRAIN_VERTS);
+  const prevWorldType = activeTerrainWorldType;
+  activeTerrainWorldType = 'island';
+  try {
+    for (let iz = 0; iz < TERRAIN_VERTS; iz++) {
+      const vz = -TERRAIN_HALF + iz * TERRAIN_STEP;
+      const rowOffset = iz * TERRAIN_VERTS;
+      for (let ix = 0; ix < TERRAIN_VERTS; ix++) {
+        const vx = -TERRAIN_HALF + ix * TERRAIN_STEP;
+        grid[rowOffset + ix] = getBaseTerrainHeight(vx, vz);
+      }
+    }
+  } finally {
+    activeTerrainWorldType = prevWorldType;
+  }
+  cachedIslandBaseTerrainGrid = grid;
+  return grid;
+}
+
+/**
+ * Samples the exact rendered PlaneGeometry triangle elevation (including live terrain deltas)
+ * so player ground collision and camera clearance match the visible ground mesh everywhere.
+ */
+export function getTerrainSurfaceHeight(x: number, z: number): number {
+  if (activeTerrainWorldType === 'flat') return FLAT_GROUND_Y;
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return 0;
+  if (Math.abs(x) > TERRAIN_HALF || Math.abs(z) > TERRAIN_HALF) {
+    return getTerrainHeight(x, z);
+  }
+
+  const baseGrid = ensureIslandBaseTerrainGrid();
+  const gx = (x + TERRAIN_HALF) / TERRAIN_STEP;
+  const gz = (z + TERRAIN_HALF) / TERRAIN_STEP;
+  const ix = Math.max(0, Math.min(TERRAIN_SEGS - 1, Math.floor(gx)));
+  const iz = Math.max(0, Math.min(TERRAIN_SEGS - 1, Math.floor(gz)));
+  const fx = Math.max(0, Math.min(1, gx - ix));
+  const fz = Math.max(0, Math.min(1, gz - iz));
+
+  const idx00 = iz * TERRAIN_VERTS + ix;
+  const idx10 = idx00 + 1;
+  const idx01 = idx00 + TERRAIN_VERTS;
+  const idx11 = idx01 + 1;
+
+  const v00 = baseGrid[idx00] + terrainDeltaGrid[idx00];
+  const v10 = baseGrid[idx10] + terrainDeltaGrid[idx10];
+  const v01 = baseGrid[idx01] + terrainDeltaGrid[idx01];
+  const v11 = baseGrid[idx11] + terrainDeltaGrid[idx11];
+
+  // Match THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, TERRAIN_SEGS, TERRAIN_SEGS).rotateX(-PI/2)
+  // triangle diagonal (idx01 <-> idx10)
+  if (fx + fz <= 1) {
+    return v00 + fx * (v10 - v00) + fz * (v01 - v00);
+  }
+  return v11 + (1 - fx) * (v01 - v11) + (1 - fz) * (v10 - v11);
+}
+
 const FLAT_PADS: readonly [number, number, number, number, number, number][] = [
   [TRIAL_CHAMBERS_POS.x, TRIAL_CHAMBERS_POS.z, 6.5, 13.5, 13.5 * 13.5, 3.6],
   [WOODLAND_MANSION_POS.x, WOODLAND_MANSION_POS.z, 10.5, 17.5, 17.5 * 17.5, 4.1],

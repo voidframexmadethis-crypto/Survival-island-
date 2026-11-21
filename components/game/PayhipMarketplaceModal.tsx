@@ -18,6 +18,7 @@ import {
   subscribeExchangeState,
 } from '@/game/systems/exchangeManager';
 import { PlayerAccountAuthPanel } from './PlayerAccountAuthPanel';
+import { createSafeWebGLRenderer } from '@/game/world/webglUtils';
 
 export interface MarketplaceProps {
   isOpen: boolean;
@@ -204,11 +205,11 @@ export const PayhipMarketplaceModal: React.FC<MarketplaceProps> = ({
 
     let renderer: THREE.WebGLRenderer | null = null;
     try {
-      renderer = new THREE.WebGLRenderer({
+      renderer = createSafeWebGLRenderer({
         antialias: true,
         alpha: true,
         powerPreference: 'low-power',
-      });
+      }).renderer;
     } catch {
       const rafFallback = requestAnimationFrame(() => setWebglUnavailable(true));
       return () => cancelAnimationFrame(rafFallback);

@@ -231,6 +231,8 @@ export function SurvivalGameClient() {
   );
 
   const [quickTpInput, setQuickTpInput] = useState('');
+  const [webglError, setWebglError] = useState<string | null>(null);
+  const [webglRetryNonce, setWebglRetryNonce] = useState(0);
   const [walkingControlsMinimized, setWalkingControlsMinimized] = useState(false);
   const [vehicleDeckExpandedForId, setVehicleDeckExpandedForId] = useState<string | null>(null);
   const activeVehicleIdForDeck = hud?.activeVehicle?.id ?? null;
@@ -592,67 +594,76 @@ export function SurvivalGameClient() {
     if (!mountEl) return;
 
     const initialSettings = loadSettings();
-    const engine = new GameEngine(mountEl, initialSettings, {
-      onHudUpdate: (snapshot) => {
-        setHud(snapshot);
-        const eq = snapshot.equippedSlot;
-        const total = snapshot.hotbarItemIds.length;
-        if (eq >= 0) {
-          setHudWindowStart((prev) => {
-            const maxStart = Math.max(0, total - 9);
-            if (eq < prev) return Math.min(maxStart, eq);
-            if (eq >= prev + 9) return Math.min(maxStart, eq - 9 + 1);
-            return Math.min(maxStart, prev);
-          });
-        }
-      },
-      onToast: pushToast,
-      onOpenStation: (station, structureId) => {
-        if (station === 'underground_elevator') {
-          // Strictly clears any car menu and opens ONLY the elevator computer
-          setActiveStationStructureId(structureId);
-          setActiveModal('underground_elevator');
-          engine.setMode('paused');
-          return;
-        }
-        if (
-          station === 'vehicles' ||
-          station === 'car_radio' ||
-          station === 'vehicle_cargo'
-        ) {
-          // Block car menus if the elevator computer is currently active
-          setActiveModal((prev) => {
-            if (prev === 'underground_elevator') return prev;
+    let engine: GameEngine | null = null;
+    try {
+      engine = new GameEngine(mountEl, initialSettings, {
+        onHudUpdate: (snapshot) => {
+          setHud(snapshot);
+          const eq = snapshot.equippedSlot;
+          const total = snapshot.hotbarItemIds.length;
+          if (eq >= 0) {
+            setHudWindowStart((prev) => {
+              const maxStart = Math.max(0, total - 9);
+              if (eq < prev) return Math.min(maxStart, eq);
+              if (eq >= prev + 9) return Math.min(maxStart, eq - 9 + 1);
+              return Math.min(maxStart, prev);
+            });
+          }
+        },
+        onToast: pushToast,
+        onOpenStation: (station, structureId) => {
+          if (station === 'underground_elevator') {
+            // Strictly clears any car menu and opens ONLY the elevator computer
             setActiveStationStructureId(structureId);
-            engine.setMode('paused');
-            return station;
+            setActiveModal('underground_elevator');
+            engine?.setMode('paused');
+            return;
+          }
+          if (
+            station === 'vehicles' ||
+            station === 'car_radio' ||
+            station === 'vehicle_cargo'
+          ) {
+            // Block car menus if the elevator computer is currently active
+            setActiveModal((prev) => {
+              if (prev === 'underground_elevator') return prev;
+              setActiveStationStructureId(structureId);
+              engine?.setMode('paused');
+              return station;
+            });
+            return;
+          }
+          if (station === 'tv') {
+            setTvPipDismissed(false);
+            setTvViewMode('inline');
+          }
+          setActiveStationStructureId(structureId);
+          setActiveModal(station);
+          engine?.setMode('paused');
+        },
+        onYouTubeError: (videoId, errorCode) => {
+          ytErrSeqRef.current += 1;
+          setYoutubeErrorSignal({
+            videoId,
+            code: errorCode,
+            seq: ytErrSeqRef.current,
           });
-          return;
-        }
-        if (station === 'tv') {
-          setTvPipDismissed(false);
-          setTvViewMode('inline');
-        }
-        setActiveStationStructureId(structureId);
-        setActiveModal(station);
-        engine.setMode('paused');
-      },
-      onYouTubeError: (videoId, errorCode) => {
-        ytErrSeqRef.current += 1;
-        setYoutubeErrorSignal({
-          videoId,
-          code: errorCode,
-          seq: ytErrSeqRef.current,
-        });
-      },
-      onTvProjectionUpdate: (proj) => {
-        tvOverlayRef.current?.updateProjection(proj);
-      },
-      onTvBassUpdate: (bassEnergy, bassMode) => {
-        tvOverlayRef.current?.updateBassBump(bassEnergy, bassMode);
-      },
-    });
+        },
+        onTvProjectionUpdate: (proj) => {
+          tvOverlayRef.current?.updateProjection(proj);
+        },
+        onTvBassUpdate: (bassEnergy, bassMode) => {
+          tvOverlayRef.current?.updateBassBump(bassEnergy, bassMode);
+        },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unable to initialize WebGL 3D renderer.';
+      const rafId = window.requestAnimationFrame(() => setWebglError(msg));
+      return () => window.cancelAnimationFrame(rafId);
+    }
+
     engineRef.current = engine;
+    const clearErrId = window.requestAnimationFrame(() => setWebglError(null));
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('autostart') === '1') {
@@ -671,10 +682,12 @@ export function SurvivalGameClient() {
     }
 
     return () => {
-      engine.dispose();
+      window.cancelAnimationFrame(clearErrId);
+      engine?.dispose();
       engineRef.current = null;
+      mountEl.innerHTML = '';
     };
-  }, [pushToast]);
+  }, [pushToast, webglRetryNonce]);
 
   // Keep engine mode strictly synchronized with active screen & modal state
   useEffect(() => {
@@ -1209,6 +1222,23 @@ export function SurvivalGameClient() {
 
   return (
     <div className="relative w-full min-h-[100dvh] overflow-x-hidden bg-stone-950 select-none">
+      {webglError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/95 p-6 text-center text-stone-100">
+          <div className="max-w-md space-y-4 rounded-2xl border border-stone-700/80 bg-stone-900/90 p-6 shadow-2xl">
+            <AlertTriangle className="mx-auto h-10 w-10 text-amber-400" />
+            <h2 className="text-lg font-bold">3D Graphics Context Interrupted</h2>
+            <p className="text-sm text-stone-300">{webglError}</p>
+            <button
+              type="button"
+              onClick={() => setWebglRetryNonce((n) => n + 1)}
+              className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-400"
+            >
+              <RotateCcw className="h-4 w-4" />
+              Retry 3D Renderer
+            </button>
+          </div>
+        </div>
+      )}
       {/* Isolated WebGL Canvas Mount — Fixed Full-Bleed Behind Scrollable HUD */}
       <div
         ref={canvasMountRef}

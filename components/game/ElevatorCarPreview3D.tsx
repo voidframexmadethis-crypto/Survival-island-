@@ -13,6 +13,7 @@ import {
   RealLifeCarRig,
   VehicleArchetype,
 } from '@/game/world/realLifeCarRig';
+import { createSafeWebGLRenderer } from '@/game/world/webglUtils';
 
 interface ElevatorCarPreview3DProps {
   car: ExoticElevatorCar;
@@ -70,28 +71,16 @@ export function ElevatorCarPreview3D({ car }: ElevatorCarPreview3DProps) {
     const container = containerRef.current;
     if (!container) return;
 
-    const isSoftwareGl = (() => {
-      try {
-        const probe = document.createElement('canvas');
-        const gl = probe.getContext('webgl2');
-        if (!gl) return true;
-        const ext = gl.getExtension('WEBGL_debug_renderer_info');
-        const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
-        const gpu = String(gl.getParameter(param));
-        gl.getExtension('WEBGL_lose_context')?.loseContext();
-        return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
-      } catch {
-        return true;
-      }
-    })();
-
     let renderer: THREE.WebGLRenderer | null = null;
+    let isSoftwareGl = false;
     try {
-      renderer = new THREE.WebGLRenderer({
-        antialias: !isSoftwareGl,
+      const res = createSafeWebGLRenderer({
+        antialias: true,
         alpha: true,
         powerPreference: 'high-performance',
       });
+      renderer = res.renderer;
+      isSoftwareGl = res.isSoftwareGl;
     } catch {
       const id = window.requestAnimationFrame(() => setWebglFailed(true));
       return () => window.cancelAnimationFrame(id);

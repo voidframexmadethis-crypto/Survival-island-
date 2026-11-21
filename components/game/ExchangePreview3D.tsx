@@ -11,6 +11,7 @@ import {
   getCosmeticPatternTexture,
   toBackpackSkinCatalogItem,
 } from '@/game/data/exchangeCatalog';
+import { createSafeWebGLRenderer } from '@/game/world/webglUtils';
 
 interface ExchangePreview3DProps {
   item: ExchangeProduct;
@@ -217,11 +218,11 @@ export function ExchangePreview3D({
 
     let renderer: THREE.WebGLRenderer | null = null;
     try {
-      renderer = new THREE.WebGLRenderer({
+      renderer = createSafeWebGLRenderer({
         antialias: true,
         alpha: true,
         powerPreference: 'high-performance',
-      });
+      }).renderer;
     } catch {
       const rafId = window.requestAnimationFrame(() => setWebglFailed(true));
       return () => window.cancelAnimationFrame(rafId);

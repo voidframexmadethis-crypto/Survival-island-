@@ -83,18 +83,193 @@ export function isOldSchoolVehicleDescriptor(car: RadioCarDescriptor = {}): bool
   );
 }
 
+export type CarType = 'classic' | 'tahoe' | 'donk' | 'supercar';
+
+export interface CarAudioProfile {
+  bass: number;
+  low: number;
+  shake: number;
+}
+
+export const AUDIO_PROFILES: Record<CarType, CarAudioProfile> = {
+  classic: { bass: 1.8, low: 1.5, shake: 0.5 },
+  tahoe: { bass: 2.8, low: 2.5, shake: 1.0 },
+  donk: { bass: 3.0, low: 2.8, shake: 1.8 },
+  supercar: { bass: 0.8, low: 0.7, shake: 0.1 },
+};
+
+export function resolveCarAudioType(car: RadioCarDescriptor = {}): CarType {
+  const preset = (car.preset || '').toLowerCase();
+  const tag = `${car.class || ''} ${car.style || ''} ${car.name || ''}`.toLowerCase();
+  if (preset === 'donk' || tag.includes('donk')) {
+    return 'donk';
+  }
+  if (
+    preset === 'chevy_tahoe' ||
+    preset === 'chevy_2000_sub' ||
+    tag.includes('tahoe') ||
+    tag.includes('subwoofer') ||
+    tag.includes('savage life')
+  ) {
+    return 'tahoe';
+  }
+  if (
+    preset === 'sports_car' ||
+    tag.includes('modern exotic') ||
+    tag.includes('modern hypercar') ||
+    tag.includes('ultra rare') ||
+    tag.includes('supercar') ||
+    tag.includes('mclaren')
+  ) {
+    return 'supercar';
+  }
+  if (isOldSchoolVehicleDescriptor(car)) {
+    return 'classic';
+  }
+  return 'supercar';
+}
+
+export interface SetupCarAudioHandles {
+  ctx: AudioContext;
+  bass: BiquadFilterNode;
+  sub: BiquadFilterNode;
+  gain: GainNode;
+  analyser: AnalyserNode;
+  profile: CarAudioProfile;
+  destroy: () => void;
+}
+
+export function setupCarAudio(
+  audio: HTMLAudioElement,
+  car: CarType,
+  quarterPanel?: HTMLElement,
+): SetupCarAudioHandles {
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  const ctx = new AudioCtx();
+  const source = ctx.createMediaElementSource(audio);
+  const bass = ctx.createBiquadFilter();
+  const sub = ctx.createBiquadFilter();
+  const gain = ctx.createGain();
+  const analyser = ctx.createAnalyser();
+
+  const profile = AUDIO_PROFILES[car];
+
+  bass.type = 'lowshelf';
+  bass.frequency.value = 150;
+  bass.gain.value = 5 * profile.bass;
+
+  sub.type = 'peaking';
+  sub.frequency.value = 55;
+  sub.Q.value = 0.8;
+  sub.gain.value = 4 * profile.low;
+
+  gain.gain.value = 0.8;
+  analyser.fftSize = 256;
+
+  source.connect(bass);
+  bass.connect(sub);
+  sub.connect(gain);
+  gain.connect(analyser);
+  analyser.connect(ctx.destination);
+
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  let rafId = 0;
+  let destroyed = false;
+
+  function update() {
+    if (destroyed) return;
+    analyser.getByteFrequencyData(data);
+
+    let sum = 0;
+    for (let i = 0; i < 8; i++) {
+      sum += data[i] || 0;
+    }
+    const intensity = sum / (8 * 255);
+
+    if (quarterPanel) {
+      const movement = intensity * profile.shake;
+      quarterPanel.style.transform = `translateX(${Math.sin(performance.now() * 0.08) * movement}px)`;
+    }
+
+    if (!audio.paused && !audio.ended) {
+      rafId = requestAnimationFrame(update);
+    }
+  }
+
+  const onPlay = () => {
+    if (destroyed) return;
+    if (ctx.state === 'suspended') {
+      void ctx.resume().catch(() => {});
+    }
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(update);
+  };
+
+  const onPause = () => {
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+      rafId = 0;
+    }
+    if (quarterPanel) {
+      quarterPanel.style.transform = '';
+    }
+  };
+
+  audio.addEventListener('play', onPlay);
+  audio.addEventListener('pause', onPause);
+  audio.addEventListener('ended', onPause);
+
+  return {
+    ctx,
+    bass,
+    sub,
+    gain,
+    analyser,
+    profile,
+    destroy: () => {
+      destroyed = true;
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
+      audio.removeEventListener('play', onPlay);
+      audio.removeEventListener('pause', onPause);
+      audio.removeEventListener('ended', onPause);
+      if (quarterPanel) {
+        quarterPanel.style.transform = '';
+      }
+      try {
+        source.disconnect();
+        bass.disconnect();
+        sub.disconnect();
+        gain.disconnect();
+        analyser.disconnect();
+      } catch {
+        // Ignore teardown disconnect errors
+      }
+      if (ctx.state !== 'closed') {
+        void ctx.close().catch(() => {});
+      }
+    },
+  };
+}
+
 export const CABIN_BASS_AND_FIRST_PERSON = {
   audioCtx: null as AudioContext | null,
   analyser: null as AnalyserNode | null,
   bassFilter: null as BiquadFilterNode | null,
+  subFilter: null as BiquadFilterNode | null,
   compressor: null as DynamicsCompressorNode | null,
   masterGain: null as GainNode | null,
   freqData: null as Uint8Array<ArrayBuffer> | null,
   connectedElements: new WeakMap<HTMLMediaElement, MediaElementAudioSourceNode>(),
   cameraMode: 'CHASE' as DrivingCameraMode,
   lastThumpMs: 0,
+  activeCarType: 'classic' as CarType,
 
-  // Built-in stereo loop state (routes directly through bassFilter -> analyser -> compressor)
+  // Built-in stereo loop state (routes directly through bassFilter -> subFilter -> analyser -> compressor)
   stereoPlaying: false,
   stereoVolume: 0.78,
   activeStationId: 'slab_808',
@@ -117,12 +292,19 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
 
     if (!this.audioCtx || this.audioCtx.state === 'closed') {
       this.audioCtx = new AudioCtx();
+      const profile = AUDIO_PROFILES[this.activeCarType];
 
-      // Punchy low-end shelf for old-school trunk + chest bass
+      // 150 Hz lowshelf bass + 55 Hz peaking sub tuned per CarType profile
       this.bassFilter = this.audioCtx.createBiquadFilter();
       this.bassFilter.type = 'lowshelf';
-      this.bassFilter.frequency.value = 82;
-      this.bassFilter.gain.value = 0;
+      this.bassFilter.frequency.value = 150;
+      this.bassFilter.gain.value = 5 * profile.bass;
+
+      this.subFilter = this.audioCtx.createBiquadFilter();
+      this.subFilter.type = 'peaking';
+      this.subFilter.frequency.value = 55;
+      this.subFilter.Q.value = 0.8;
+      this.subFilter.gain.value = 4 * profile.low;
 
       this.analyser = this.audioCtx.createAnalyser();
       this.analyser.fftSize = 256;
@@ -138,9 +320,10 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       this.compressor.ratio.value = 6;
 
       this.masterGain = this.audioCtx.createGain();
-      this.masterGain.gain.value = this.stereoVolume;
+      this.masterGain.gain.value = this.stereoVolume * 0.8;
 
-      this.bassFilter.connect(this.analyser);
+      this.bassFilter.connect(this.subFilter);
+      this.subFilter.connect(this.analyser);
       this.analyser.connect(this.compressor);
       this.compressor.connect(this.masterGain);
       this.masterGain.connect(this.audioCtx.destination);
@@ -178,21 +361,35 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     return this.cameraMode;
   },
 
-  // Updates radio profile per vehicle: trunk + chest bass for old-school, clean radio for exotics
+  // Updates radio profile per vehicle using AUDIO_PROFILES (150Hz lowshelf + 55Hz sub peaking)
   applyVehicleRadioProfile(car: RadioCarDescriptor): {
     oldSchool: boolean;
+    carType: CarType;
+    profile: CarAudioProfile;
     radioMode: 'OLD_SCHOOL_TRUNK_AND_CHEST_BASS' | 'STANDARD_RADIO';
   } {
     const oldSchool = this.isOldSchoolCar(car);
+    const carType = resolveCarAudioType(car);
+    const profile = AUDIO_PROFILES[carType];
+    this.activeCarType = carType;
     if (this.bassFilter && this.audioCtx) {
       this.bassFilter.gain.setTargetAtTime(
-        oldSchool ? 9.5 : 0,
+        5 * profile.bass,
+        this.audioCtx.currentTime,
+        0.03,
+      );
+    }
+    if (this.subFilter && this.audioCtx) {
+      this.subFilter.gain.setTargetAtTime(
+        4 * profile.low,
         this.audioCtx.currentTime,
         0.03,
       );
     }
     return {
       oldSchool,
+      carType,
+      profile,
       radioMode: oldSchool ? 'OLD_SCHOOL_TRUNK_AND_CHEST_BASS' : 'STANDARD_RADIO',
     };
   },
@@ -201,7 +398,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     this.stereoVolume = Math.max(0, Math.min(1, vol));
     if (this.masterGain && this.audioCtx) {
       this.masterGain.gain.setTargetAtTime(
-        this.stereoVolume,
+        this.stereoVolume * 0.8,
         this.audioCtx.currentTime,
         0.02,
       );
@@ -409,29 +606,44 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     }
   },
 
-  // Returns real-time bass level (0..1) and chest-thump impulse (0..1)
+  // Returns real-time bass level (0..1), chest-thump impulse (0..1), and quarter-panel flex
   sampleBassAndChestThump(
     car: RadioCarDescriptor,
     nowMs = Date.now(),
-  ): { bassLevel: number; chestThump: number; trunkPump: number } {
-    if (
-      !this.isOldSchoolCar(car) ||
-      !this.stereoPlaying ||
-      !this.analyser ||
-      !this.freqData
-    ) {
-      return { bassLevel: 0, chestThump: 0, trunkPump: 0 };
+  ): {
+    bassLevel: number;
+    chestThump: number;
+    trunkPump: number;
+    quarterFlex: number;
+    carType: CarType;
+  } {
+    const carType = resolveCarAudioType(car);
+    const profile = AUDIO_PROFILES[carType];
+    if (!this.stereoPlaying || !this.analyser || !this.freqData) {
+      return { bassLevel: 0, chestThump: 0, trunkPump: 0, quarterFlex: 0, carType };
     }
 
     this.analyser.getByteFrequencyData(this.freqData);
 
-    // Sub-bass + chest punch bins (bins 1..8)
+    // Low-frequency sub-bass bins (0..7)
     let sum = 0;
-    for (let i = 1; i <= 8; i++) {
+    for (let i = 0; i < 8; i++) {
       sum += this.freqData[i] || 0;
     }
-    const normBass = sum / 8 / 255;
-    const bassLevel = Math.max(0, Math.min(1, (normBass - 0.22) / 0.72));
+    const rawIntensity = sum / (8 * 255);
+    const quarterFlex = rawIntensity * profile.shake;
+
+    if (!this.isOldSchoolCar(car)) {
+      return {
+        bassLevel: Math.min(1, rawIntensity * 0.45),
+        chestThump: 0,
+        trunkPump: 0,
+        quarterFlex,
+        carType,
+      };
+    }
+
+    const bassLevel = Math.max(0, Math.min(1, (rawIntensity - 0.18) / 0.72));
 
     // Sharp chest thump on heavy low-end hits
     let chestThump = 0;
@@ -454,6 +666,8 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       bassLevel,
       chestThump,
       trunkPump: bassLevel,
+      quarterFlex,
+      carType,
     };
   },
 

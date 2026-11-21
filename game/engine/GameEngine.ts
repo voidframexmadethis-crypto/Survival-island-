@@ -86,7 +86,6 @@ import {
   VEHICLE_MODULE_SPECS,
   VehiclePresetKey,
 } from '../systems/modularVehicle';
-import { resolveVehicleProfile } from '../systems/vehicleProfiles';
 import {
   STRUCT_GRID_XZ,
   STRUCT_GRID_Y,
@@ -97,14 +96,11 @@ import {
   worldToGrid,
 } from '../systems/structuralPhysics';
 import { VolumetricTerrainEngine } from '../systems/terrainPhysics';
+import { fixPlayerGroundCollision } from '../systems/playerGroundPhysics';
 import { ModSystemManager } from '../systems/modManager';
 import {
   DIMENSION_DEFINITIONS,
   getDimensionArrivalPoint,
-  getDimensionTerrainHeight,
-  getDimensionTerrainSlope,
-  getDimensionWaterLevel,
-  getSpacePlatformSurfaceY,
 } from '../systems/multiverse';
 import {
   isMobileOrTouchClient,
@@ -115,6 +111,7 @@ import {
   ensureGeometryHasUv,
   updateShaderEnvironment,
 } from '../world/shaders';
+import { createSafeWebGLRenderer } from '../world/webglUtils';
 import {
   P2PMultiplayerManager,
   P2PPacket,
@@ -238,8 +235,8 @@ import {
 import { RealisticRainSystem } from '../world/realisticRainSystem';
 import {
   AUTUMN_GROVE_POS,
-  CAVE_POS,
   BIOME_INFO,
+  CAVE_POS,
   EXPEDITION_POS,
   FARMER_POS,
   FLAT_GROUND_Y,
@@ -247,8 +244,8 @@ import {
   HILL_HOUSE_POS,
   HILL_HOUSE_Y,
   HOMESTEAD_POS,
-  ISLAND_UFO_POS,
   LAKE_CENTER,
+  ISLAND_UFO_POS,
   OCEAN_LEVEL,
   PILLAGER_OUTPOST_POS,
   PLAYABLE_MAX_RADIUS,
@@ -260,8 +257,6 @@ import {
   SNOWY_WOODLAND_POS,
   SWAMP_POS,
   TAIGA_VILLAGE_POS,
-  TERRAIN_SEGS,
-  TERRAIN_SIZE,
   UNDERGROUND_ELEVATOR_KIOSK_POS,
   UNDERGROUND_ELEVATOR_POS,
   VEHICLE_GARAGE_POS,
@@ -272,15 +267,14 @@ import {
   getBiomeAt,
   getHilltopBaseFloorY,
   getLandmarkFloorY,
-  getOverworldStructureSurfaceY,
   getPlayableMaxRadius,
   getTerrainHeight,
   getTerrainSlope,
+  getTerrainSurfaceHeight,
   getWaterLevelAt,
   importSparseTerrainDeltas,
   isFreshwaterAt,
   resetTerrainDeformation,
-  samplePlaneGeometryHeight,
   setActiveTerrainWorldType,
 } from '../world/terrain';
 import {
@@ -306,10 +300,12 @@ import {
   VAULT_COMPUTER_VOICE,
 } from '../systems/undergroundElevator';
 import {
+  AUDIO_PROFILES,
   CABIN_BASS_AND_FIRST_PERSON,
   CAR_RADIO_TRUNK_SYSTEM,
   DrivingCameraMode,
   RadioCarDescriptor,
+  resolveCarAudioType,
 } from '../systems/carRadioSystem';
 import {
   buildIslandWorld,
@@ -381,7 +377,7 @@ const FOG_GRID_SIZE = 32;
 const FOG_WORLD_SPAN = 1760;
 const MAX_POOLED_PARTICLES = 192;
 const ELEVATOR_TERMINAL_INTERACT_RADIUS_SQ = 3.2 * 3.2; // 3.2m radius around elevator computer terminal
-const VEHICLE_INTERACT_RADIUS_SQ = 5.5 * 5.5; // 5.5m comfortable radius for nearby vehicles
+const VEHICLE_INTERACT_RADIUS_SQ = 4.0 * 4.0; // 4.0m radius for nearby vehicles
 
 interface ArrowProjectile {
   mesh: THREE.Mesh;
@@ -642,17 +638,12 @@ export class GameEngine {
   private localPlayerHandle: RemotePlayerMeshHandle | null = null;
   private localAppliedBackpackSkinId: string | null | undefined = undefined;
   private localAppliedGunSkinId: string | null | undefined = undefined;
+  private _playerPhysicsProxy = new THREE.Object3D();
   private readonly _groundSampleFn = (x: number, z: number): number => {
     if (this.worldType === 'flat') return FLAT_GROUND_Y;
-    return Math.max(
-      this.getActiveTerrainHeightAt(x, z),
-      this.getActiveWaterLevelAt(x, z),
-    );
+    if (this.inSpacePlanet) return 0;
+    return Math.max(getTerrainSurfaceHeight(x, z), getWaterLevelAt(x, z));
   };
-  private readonly _groundRaycaster = new THREE.Raycaster();
-  private readonly _groundRayOrigin = new THREE.Vector3();
-  private readonly _groundRayDown = new THREE.Vector3(0, -1, 0);
-  private readonly _groundRayTargets: THREE.Object3D[] = [];
   private consecutiveSlowSeconds = 0;
   private consecutiveFastSeconds = 0;
   private autoFpsRestoreCooldown = 0;
@@ -714,10 +705,7 @@ export class GameEngine {
       verticalSpeed: 22,
       boostMultiplier: 1.8,
       getGroundHeight: (x, z) =>
-        Math.max(
-          this.getActiveTerrainHeightAt(x, z),
-          this.getActiveWaterLevelAt(x, z),
-        ),
+        Math.max(getTerrainSurfaceHeight(x, z), getWaterLevelAt(x, z)),
       onStatusChange: (msg, type) => {
         this.toast(
           msg,
@@ -764,7 +752,6 @@ export class GameEngine {
   private launchHudAccum = 0;
   private elevatorLiftActive = false;
   private elevatorLiftProgress = 1;
-  private elevatorPlatformT = 1;
   private elevatorSummonedVehicleId: string | null = null;
   private elevatorTargetCar: ExoticElevatorCar | null = null;
   private elevatorSteamAccum = 0;
@@ -883,9 +870,6 @@ export class GameEngine {
   private gamepadGas = 0;
   private gamepadBrake = 0;
   private gamepadHandbrake = false;
-  private touchGas = 0;
-  private touchBrake = 0;
-  private touchHandbrake = false;
 
   // Survival & World State
   public ecosystem: EcosystemSimulationData = createInitialEcosystem();
@@ -1171,15 +1155,6 @@ export class GameEngine {
   private vehicleAscendHold = false;
   private vehicleDescendHold = false;
   private vehicleEngineSoundAccum = 0;
-  private vehicleRpmNorm = 0;
-  private vehicleGear = 1;
-  private vehicleShiftTimer = 0;
-  private vehiclePrevThrottle = 0;
-  private vehicleSuspHeave = 0;
-  private vehicleSuspVelY = 0;
-  private vehiclePitchDyn = 0;
-  private vehicleRollDyn = 0;
-  private vehiclePrevLandY = 0;
   private hydraulicMode: HydraulicMode = 'level';
   private hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
   private vehicleInteriorCamera = false;
@@ -1284,29 +1259,14 @@ export class GameEngine {
     };
   }
 
-  private detectSoftwareGl(): boolean {
-    try {
-      const canvas = document.createElement('canvas');
-      const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
-      if (!gl) return true;
-      const ext = gl.getExtension('WEBGL_debug_renderer_info');
-      const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
-      const gpu = String(gl.getParameter(param) || '');
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
-      return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
-    } catch {
-      return false;
-    }
-  }
-
   private initScene(): void {
-    this.isSoftwareGl = this.detectSoftwareGl();
-
-    this.renderer = new THREE.WebGLRenderer({
-      antialias: !this.isSoftwareGl && !this.isTouchDevice,
+    const safeGl = createSafeWebGLRenderer({
+      antialias: !this.isTouchDevice,
       powerPreference: 'high-performance',
       stencil: false,
     });
+    this.isSoftwareGl = safeGl.isSoftwareGl;
+    this.renderer = safeGl.renderer;
     this.perfMonitor = createGamePerformanceMonitor(this.renderer);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -1823,9 +1783,6 @@ export class GameEngine {
     this.gamepadGas = 0;
     this.gamepadBrake = 0;
     this.gamepadHandbrake = false;
-    this.touchGas = 0;
-    this.touchBrake = 0;
-    this.touchHandbrake = false;
     this.camBobBlend = 0;
     this.camStepOffsetY = 0;
   }
@@ -2218,7 +2175,6 @@ export class GameEngine {
     if (mode !== 'playing') {
       this.clearMovementInputs();
       this.sound.stopTrunkBass();
-      this.sound.stopVehicleEngine();
       if (mode === 'menu' && prevMode !== 'menu') {
         this.menuCameraSnapped = false;
         this.applyMenuCullImmediate();
@@ -2458,20 +2414,6 @@ export class GameEngine {
 
   public setTouchSprint(active: boolean): void {
     this.touchSprint = active;
-  }
-
-  public setTouchDrivePedals(
-    gas: number,
-    brake: number,
-    handbrake = false,
-  ): void {
-    this.touchGas = THREE.MathUtils.clamp(Number.isFinite(gas) ? gas : 0, 0, 1);
-    this.touchBrake = THREE.MathUtils.clamp(
-      Number.isFinite(brake) ? brake : 0,
-      0,
-      1,
-    );
-    this.touchHandbrake = Boolean(handbrake);
   }
 
   public setTouchCrouch(active: boolean): void {
@@ -2878,16 +2820,10 @@ export class GameEngine {
     this.weatherTimer = 85;
     this.lightningFlash = 0;
 
-    const safeSpawn = this.resolveSafeStandSpot(
-      PLAYER_SPAWN.x,
-      PLAYER_SPAWN.z,
-      this.getActiveTerrainHeightAt(PLAYER_SPAWN.x, PLAYER_SPAWN.z),
-    );
-    this.playerX = safeSpawn.x;
-    this.playerZ = safeSpawn.z;
-    this.playerY = safeSpawn.y;
-    this.playerVelY = 0;
-    this.grounded = true;
+    this.playerX = PLAYER_SPAWN.x;
+    this.playerZ = PLAYER_SPAWN.z;
+    const spawnSurfY = this.getPlayerGroundSurfaceY(this.playerX, this.playerZ, 10);
+    this.applyPlayerGroundCollision(spawnSurfY, 0, false, false);
     this.camYaw = 0.12;
     this.camPitch = -0.05;
     this.playerYaw = this.camYaw + Math.PI;
@@ -3889,11 +3825,7 @@ export class GameEngine {
         spawnX: PLAYER_SPAWN.x,
         spawnZ: PLAYER_SPAWN.z,
         spawnYaw: this.camYaw + Math.PI,
-        sampleGroundY: (x: number, z: number) =>
-          Math.max(
-            this.getActiveTerrainHeightAt(x, z),
-            this.getStructuralSurfaceY(x, z, 40),
-          ),
+        sampleGroundY: getTerrainSurfaceHeight,
         isThirdPerson: this.playerCameraRig.mode === 'third_person',
       },
     );
@@ -3902,6 +3834,7 @@ export class GameEngine {
     this.playerZ = this._chaseTargetScratch.z;
     this.playerYaw = this._sessionYawRef.value;
     this.playerVelY = 0;
+    this.applyPlayerGroundCollision(this.getPlayerGroundSurfaceY(this.playerX, this.playerZ, this.playerY + 1.5), 0, false, false);
     this.snapPlayerCamera();
     this.isCrouching = false;
     this.touchCrouch = false;
@@ -4172,12 +4105,10 @@ export class GameEngine {
     this.elevatorLiftActive = false;
     this.elevatorSummonedVehicleId = null;
     this.elevatorTargetCar = null;
-    this.elevatorLiftProgress = 1;
-    this.elevatorPlatformT = 1;
+    this.elevatorLiftProgress = 0;
     this.elevatorSteamAccum = 0;
     this.autoParkJobs.clear();
     this.sound.stopTrunkBass();
-    this.sound.stopVehicleEngine();
     CABIN_BASS_AND_FIRST_PERSON.setCameraMode('CHASE');
   }
 
@@ -4257,7 +4188,7 @@ export class GameEngine {
       this.navigatorCompanion.resetAtSpawn(
         this.playerX,
         this.playerZ,
-        this.getActiveTerrainHeightAt(navX, navZ),
+        getTerrainHeight(navX, navZ),
       );
     }
     this.camYaw = this.playerYaw - Math.PI;
@@ -4371,6 +4302,16 @@ export class GameEngine {
       this.recalculateStructuralIntegrity(false);
     }
 
+    const loadedSurfaceY = this.getPlayerGroundSurfaceY(
+      this.playerX,
+      this.playerZ,
+      (Number.isFinite(this.playerY) ? this.playerY : 0) + 1.5,
+    );
+    if (!Number.isFinite(this.playerY) || this.playerY <= loadedSurfaceY + 0.02) {
+      this.applyPlayerGroundCollision(loadedSurfaceY, 0, false, false);
+      this.snapPlayerCamera();
+    }
+
     this.clearKineticAndVehicleWorld();
     if (Array.isArray(save.kineticNodes) && save.kineticNodes.length > 0) {
       for (const kn of save.kineticNodes) {
@@ -4404,10 +4345,7 @@ export class GameEngine {
               'veh_starter_donk',
               'donk',
               bay2X,
-              Math.max(
-                this.getActiveTerrainHeightAt(bay2X, bay2Z),
-                this.getStructuralSurfaceY(bay2X, bay2Z, 20),
-              ) + 0.04,
+              getTerrainHeight(bay2X, bay2Z) + 0.14,
               bay2Z,
               0,
             ),
@@ -4421,10 +4359,7 @@ export class GameEngine {
               'veh_starter_slab',
               'slab',
               bay3X,
-              Math.max(
-                this.getActiveTerrainHeightAt(bay3X, bay3Z),
-                this.getStructuralSurfaceY(bay3X, bay3Z, 20),
-              ) + 0.04,
+              getTerrainHeight(bay3X, bay3Z) + 0.14,
               bay3Z,
               0,
             ),
@@ -4438,10 +4373,7 @@ export class GameEngine {
               'veh_starter_deville',
               'cadillac_coupe_deville',
               bay4X,
-              Math.max(
-                this.getActiveTerrainHeightAt(bay4X, bay4Z),
-                this.getStructuralSurfaceY(bay4X, bay4Z, 20),
-              ) + 0.04,
+              getTerrainHeight(bay4X, bay4Z) + 0.14,
               bay4Z,
               0,
             ),
@@ -4455,10 +4387,7 @@ export class GameEngine {
               'veh_starter_tahoe',
               'chevy_tahoe',
               westX,
-              Math.max(
-                this.getActiveTerrainHeightAt(westX, westZ),
-                this.getStructuralSurfaceY(westX, westZ, 20),
-              ) + 0.04,
+              getTerrainHeight(westX, westZ) + 0.14,
               westZ,
               0,
             ),
@@ -4611,57 +4540,13 @@ export class GameEngine {
       this.emitHud();
       return;
     }
-    if (this.inSpacePlanet) {
-      this.playerX = 0;
-      this.playerZ = -4;
-      this.playerY = Math.max(0.2, this.getActiveTerrainHeightAt(0, -4) + 0.1);
-      this.playerVelY = 0;
-      this.grounded = true;
-      this.vitals.health = 100;
-      this.vitals.hunger = Math.max(55, this.vitals.hunger);
-      this.vitals.thirst = Math.max(55, this.vitals.thirst);
-      this.vitals.stamina = 100;
-      this.vitals.temperatureC = 37.0;
-      this.gameOver = false;
-      this.gameOverReason = '';
-      this.snapPlayerCamera();
-      this.toast('Regrouped at the planetary landing pad.', 'info');
-      this.emitHud();
-      return;
-    }
-    if (this.currentDimension !== 'overworld') {
-      const arrival = getDimensionArrivalPoint(this.currentDimension);
-      this.playerX = arrival.x;
-      this.playerZ = arrival.z;
-      this.playerY = arrival.y + 0.25;
-      this.playerYaw = arrival.yaw;
-      this.playerVelY = 0;
-      this.grounded = true;
-      this.vitals.health = 100;
-      this.vitals.hunger = Math.max(55, this.vitals.hunger);
-      this.vitals.thirst = Math.max(55, this.vitals.thirst);
-      this.vitals.stamina = 100;
-      this.vitals.temperatureC = 37.0;
-      this.gameOver = false;
-      this.gameOverReason = '';
-      this.snapPlayerCamera();
-      this.toast('Returned safely to dimensional arrival pad.', 'info');
-      this.emitHud();
-      return;
-    }
     const campBed = this.structures.find(
       (s) => s.type === 'basic_shelter' || s.type === 'sleeping_area',
     );
-    const safeSpot = this.resolveSafeStandSpot(
-      campBed ? campBed.x : PLAYER_SPAWN.x,
-      campBed ? campBed.z + 2.2 : PLAYER_SPAWN.z,
-      campBed ? campBed.y + 1.5 : 10,
-    );
-    this.playerX = safeSpot.x;
-    this.playerZ = safeSpot.z;
-    this.playerY = safeSpot.y;
-    this.playerVelY = 0;
-    this.grounded = true;
+    this.playerX = campBed ? campBed.x : PLAYER_SPAWN.x;
+    this.playerZ = campBed ? campBed.z + 2.2 : PLAYER_SPAWN.z;
+    const respawnSurfY = this.getPlayerGroundSurfaceY(this.playerX, this.playerZ, 30);
+    this.applyPlayerGroundCollision(respawnSurfY, 0, false, false);
     this.vitals.health = 100;
     this.vitals.hunger = Math.max(55, this.vitals.hunger);
     this.vitals.thirst = Math.max(55, this.vitals.thirst);
@@ -5918,9 +5803,9 @@ export class GameEngine {
     const fwdZ = -Math.cos(this.camYaw);
     const px = this.playerX + fwdX * placeDist;
     const pz = this.playerZ + fwdZ * placeDist;
-    const py = this.getActiveTerrainHeightAt(px, pz);
+    const py = getTerrainHeight(px, pz);
 
-    if (py < this.getActiveWaterLevelAt(px, pz) + 0.15) {
+    if (py < getWaterLevelAt(px, pz) + 0.15) {
       this.toast('Cannot build in deep water', 'warning');
       return false;
     }
@@ -5993,8 +5878,8 @@ export class GameEngine {
     const match = this.pickups[matchIdx];
     const fireX = match.x;
     const fireZ = match.z;
-    const fireY = this.getActiveTerrainHeightAt(fireX, fireZ);
-    if (fireY < this.getActiveWaterLevelAt(fireX, fireZ) + 0.1) {
+    const fireY = getTerrainHeight(fireX, fireZ);
+    if (fireY < getWaterLevelAt(fireX, fireZ) + 0.1) {
       return false;
     }
 
@@ -6055,8 +5940,8 @@ export class GameEngine {
     const fwdZ = -Math.cos(this.camYaw);
     const px = this.playerX + fwdX * placeDist;
     const pz = this.playerZ + fwdZ * placeDist;
-    const py = this.getActiveTerrainHeightAt(px, pz);
-    if (py < this.getActiveWaterLevelAt(px, pz) + 0.15) {
+    const py = getTerrainHeight(px, pz);
+    if (py < getWaterLevelAt(px, pz) + 0.15) {
       this.toast('Move onto dry ground to build a campfire', 'warning');
       return false;
     }
@@ -6122,9 +6007,9 @@ export class GameEngine {
     const fwdZ = -Math.cos(this.camYaw);
     const px = this.playerX + fwdX * placeDist;
     const pz = this.playerZ + fwdZ * placeDist;
-    const py = this.getActiveTerrainHeightAt(px, pz);
+    const py = getTerrainHeight(px, pz);
 
-    if (py < this.getActiveWaterLevelAt(px, pz) - 0.15) {
+    if (py < getWaterLevelAt(px, pz) - 0.15) {
       this.toast('Move onto dry ground to place items down', 'warning');
       return false;
     }
@@ -6291,17 +6176,15 @@ export class GameEngine {
 
   public standUp(): void {
     if (!this.seatedState) return;
-    const safe = this.resolveSafeStandSpot(
-      this.seatedState.returnX,
-      this.seatedState.returnZ,
-      this.playerY + 1.2,
+    this.playerX = this.seatedState.returnX;
+    this.playerZ = this.seatedState.returnZ;
+    const standSurfaceY = this.getPlayerGroundSurfaceY(
+      this.playerX,
+      this.playerZ,
+      (Number.isFinite(this.seatedState.y) ? this.seatedState.y : this.playerY) + 1.2,
     );
-    this.playerX = safe.x;
-    this.playerZ = safe.z;
-    this.playerY = safe.y;
-    this.playerVelY = 0;
-    this.grounded = true;
     this.seatedState = null;
+    this.applyPlayerGroundCollision(standSurfaceY, 0, false, false);
     this.emitHud();
   }
 
@@ -6338,7 +6221,7 @@ export class GameEngine {
     const fwdZ = -Math.cos(this.camYaw);
     let tx = this.playerX + fwdX * 1.9;
     let tz = this.playerZ + fwdZ * 1.9;
-    let ty = this.getActiveTerrainHeightAt(tx, tz);
+    let ty = getTerrainHeight(tx, tz);
 
     // Prefer nearest vacant tilled soil bed next to the Farmer if standing beside it
     let bestPlotDist = 3.2;
@@ -6356,7 +6239,7 @@ export class GameEngine {
       }
     }
 
-    if (ty < this.getActiveWaterLevelAt(tx, tz) + 0.15) {
+    if (ty < getWaterLevelAt(tx, tz) + 0.15) {
       this.toast('Find dry soil or tilled farm plots to plant seeds', 'warning');
       return false;
     }
@@ -9639,7 +9522,16 @@ export class GameEngine {
       const arcLift = Math.sin(p * Math.PI) * 0.65;
       this.playerY = THREE.MathUtils.lerp(this.vaultStartY, this.vaultEndY, ease) + arcLift;
       this.playerVelY = 0;
-      this.grounded = this.vaultTimer <= 0;
+      if (this.vaultTimer <= 0) {
+        const endSurfY = this.getPlayerGroundSurfaceY(
+          this.playerX,
+          this.playerZ,
+          this.playerY + 1.5,
+        );
+        this.applyPlayerGroundCollision(endSurfY, dt, false, false);
+      } else {
+        this.grounded = false;
+      }
       this.currentSpeedMps = 10.8;
       this.wallTiltAngle = THREE.MathUtils.damp(this.wallTiltAngle, 0, 12, dt);
       this.updateFirstPersonHands(1);
@@ -9871,36 +9763,18 @@ export class GameEngine {
       }
     }
 
-    if (
-      !Number.isFinite(this.playerX) ||
-      !Number.isFinite(this.playerY) ||
-      !Number.isFinite(this.playerZ)
-    ) {
-      this.respawnPlayer();
-      return;
-    }
-
-    const isSpaceDim = !this.inSpacePlanet && this.currentDimension === 'space';
-    const isOverworldIsland =
-      !isFlat && !this.inSpacePlanet && this.currentDimension === 'overworld';
-
     // Terrain, Built Bridges/Decks & Swimming state
-    const waterLevel = this.getActiveWaterLevelAt(this.playerX, this.playerZ);
-    const terrainY = this.getActiveTerrainHeightAt(this.playerX, this.playerZ);
-    const prevPlayerY = Number.isFinite(this.playerY) ? this.playerY : terrainY;
-    const deckY = this.getStructuralSurfaceY(
-      this.playerX,
-      this.playerZ,
-      this.playerY,
-      prevPlayerY,
-    );
+    if (!Number.isFinite(this.playerX)) this.playerX = 0;
+    if (!Number.isFinite(this.playerZ)) this.playerZ = 0;
+    const waterLevel = this.inSpacePlanet ? -999 : getWaterLevelAt(this.playerX, this.playerZ);
+    const terrainY = this.getPlayerTerrainY(this.playerX, this.playerZ);
+    const deckY = this.inSpacePlanet
+      ? -999
+      : this.getStructuralSurfaceY(this.playerX, this.playerZ, this.playerY);
     const standingSurfaceY = Math.max(terrainY, deckY);
-    this.isSwimming =
-      !isFlat &&
-      !this.inSpacePlanet &&
-      !isSpaceDim &&
-      standingSurfaceY < waterLevel - 0.45;
+    this.isSwimming = !this.inSpacePlanet && !isFlat && standingSurfaceY < waterLevel - 0.45;
 
+    const prevPlayerY = this.playerY;
     const wasGrounded = this.grounded;
 
     const activeBuff = this.grandFinalePlayer.activeBuff;
@@ -9955,7 +9829,7 @@ export class GameEngine {
         boost: this.isSprinting,
       });
 
-      const maxRadius = this.inSpacePlanet ? 88 : getPlayableMaxRadius();
+      const maxRadius = getPlayableMaxRadius();
       const rad = Math.hypot(this.flightPlayerProxy.x, this.flightPlayerProxy.z);
       if (rad > maxRadius && rad > 0.001) {
         this.flightPlayerProxy.x *= maxRadius / rad;
@@ -9995,32 +9869,19 @@ export class GameEngine {
 
       const stepUpAllowance = Math.max(0.55, baseSpeed * inputMag * dt * 1.4);
       const maxClimbSlope = this.grounded ? 2.15 : 2.4;
-      const canStep = (tx: number, tz: number, curSurfY: number): boolean => {
-        if (this.isSwimming || isFlat || isSpaceDim || this.inSpacePlanet) return true;
-        const th = Math.max(
-          this.getActiveTerrainHeightAt(tx, tz),
-          this.getStructuralSurfaceY(tx, tz, this.playerY, prevPlayerY),
-        );
-        if (th <= curSurfY + stepUpAllowance) return true;
-        return this.getActiveTerrainSlopeAt(tx, tz) <= maxClimbSlope;
+      const canStep = (tx: number, tz: number): boolean => {
+        if (this.isSwimming || isFlat) return true;
+        const th = this.getPlayerGroundSurfaceY(tx, tz, this.playerY);
+        if (th <= standingSurfaceY + stepUpAllowance) return true;
+        return getTerrainSlope(tx, tz) <= maxClimbSlope;
       };
 
       const lookAheadX = this.playerX + nx * baseSpeed * inputMag * dt;
       const lookAheadZ = this.playerZ + nz * baseSpeed * inputMag * dt;
       const lookAheadSurfY = isFlat
         ? standingSurfaceY
-        : Math.max(
-            this.getActiveTerrainHeightAt(lookAheadX, lookAheadZ),
-            this.getStructuralSurfaceY(
-              lookAheadX,
-              lookAheadZ,
-              this.playerY,
-              prevPlayerY,
-            ),
-          );
-      const stepSlope = isFlat
-        ? 0
-        : this.getActiveTerrainSlopeAt(lookAheadX, lookAheadZ);
+        : this.getPlayerGroundSurfaceY(lookAheadX, lookAheadZ, this.playerY);
+      const stepSlope = isFlat ? 0 : getTerrainSlope(lookAheadX, lookAheadZ);
       // Only gently slow steep UPHILL climbing — never penalize downhill or flat walking
       if (
         !this.isSwimming &&
@@ -10033,112 +9894,95 @@ export class GameEngine {
         this.vitals.stamina = Math.max(0, this.vitals.stamina - dt * 3);
       }
 
-      const totalStepX = nx * baseSpeed * inputMag * dt;
-      const totalStepZ = nz * baseSpeed * inputMag * dt;
-      const totalStepDist = Math.hypot(totalStepX, totalStepZ);
-      const subSteps = Math.min(4, Math.max(1, Math.ceil(totalStepDist / 0.45)));
-      const maxRadius = this.inSpacePlanet ? 88 : getPlayableMaxRadius();
+      const stepX = nx * baseSpeed * inputMag * dt;
+      const stepZ = nz * baseSpeed * inputMag * dt;
+      let nextX = this.playerX + stepX;
+      let nextZ = this.playerZ + stepZ;
 
-      let curX = this.playerX;
-      let curZ = this.playerZ;
-      for (let s = 0; s < subSteps; s++) {
-        const subSurfY = Math.max(
-          this.getActiveTerrainHeightAt(curX, curZ),
-          this.getStructuralSurfaceY(curX, curZ, this.playerY, prevPlayerY),
-        );
-        let nextX = curX + totalStepX / subSteps;
-        let nextZ = curZ + totalStepZ / subSteps;
+      // Axis-separated slope check so character always slides smoothly along cliffs
+      if (!canStep(nextX, nextZ)) {
+        const allowX = canStep(nextX, this.playerZ);
+        const allowZ = canStep(this.playerX, nextZ);
+        if (!allowX) nextX = this.playerX;
+        if (!allowZ) nextZ = this.playerZ;
+      }
 
-        // Axis-separated slope check so character always slides smoothly along cliffs
-        if (!canStep(nextX, nextZ, subSurfY)) {
-          const allowX = canStep(nextX, curZ, subSurfY);
-          const allowZ = canStep(curX, nextZ, subSurfY);
-          if (!allowX) nextX = curX;
-          if (!allowZ) nextZ = curZ;
-        }
+      // Playable World Boundary
+      const maxRadius = getPlayableMaxRadius();
+      const rad = Math.hypot(nextX, nextZ);
+      if (rad > maxRadius) {
+        nextX *= maxRadius / rad;
+        nextZ *= maxRadius / rad;
+      }
 
-        // Playable World Boundary
-        const rad = Math.hypot(nextX, nextZ);
-        if (rad > maxRadius) {
-          nextX *= maxRadius / rad;
-          nextZ *= maxRadius / rad;
-        }
-
-        // O(1) Spatial Hash Grid collision detection (Overworld Island only)
-        if (isOverworldIsland) {
-          const cx = Math.floor(nextX / 16);
-          const cz = Math.floor(nextZ / 16);
-          for (let ox = -1; ox <= 1; ox++) {
-            for (let oz = -1; oz <= 1; oz++) {
-              const cell = this.colliderGrid.get(
-                (cx + ox + 2048) * 4096 + (cz + oz + 2048),
-              );
-              if (!cell) continue;
-              for (let ci = 0; ci < cell.length; ci++) {
-                const col = cell[ci];
-                let activeRadius = col.radius;
-                if (col.nodeId) {
-                  const node = this.nodeById.get(col.nodeId);
-                  if (node && node.hp <= 0) {
-                    if (!node.felled) continue;
-                    activeRadius *= 0.65;
-                  }
+      // O(1) Spatial Hash Grid collision detection (skip Island colliders in Flat World)
+      if (!isFlat) {
+        const cx = Math.floor(nextX / 16);
+        const cz = Math.floor(nextZ / 16);
+        for (let ox = -1; ox <= 1; ox++) {
+          for (let oz = -1; oz <= 1; oz++) {
+            const cell = this.colliderGrid.get((cx + ox + 2048) * 4096 + (cz + oz + 2048));
+            if (!cell) continue;
+            for (let ci = 0; ci < cell.length; ci++) {
+              const col = cell[ci];
+              let activeRadius = col.radius;
+              if (col.nodeId) {
+                const node = this.nodeById.get(col.nodeId);
+                if (node && node.hp <= 0) {
+                  if (!node.felled) continue;
+                  activeRadius *= 0.65;
                 }
-                const cdx = nextX - col.x;
-                const cdz = nextZ - col.z;
-                const minD = activeRadius + 0.42;
-                const distSq = cdx * cdx + cdz * cdz;
-                if (distSq < minD * minD && distSq > 0.000001) {
-                  const dist = Math.sqrt(distSq);
-                  nextX = col.x + (cdx / dist) * minD;
-                  nextZ = col.z + (cdz / dist) * minD;
-                }
+              }
+              const cdx = nextX - col.x;
+              const cdz = nextZ - col.z;
+              const minD = activeRadius + 0.42;
+              const distSq = cdx * cdx + cdz * cdz;
+              if (distSq < minD * minD && distSq > 0.000001) {
+                const dist = Math.sqrt(distSq);
+                nextX = col.x + (cdx / dist) * minD;
+                nextZ = col.z + (cdz / dist) * minD;
               }
             }
           }
         }
-        if (this.currentDimension === 'overworld' && !this.inSpacePlanet) {
-          for (let i = 0; i < this.structures.length; i++) {
-            const st = this.structures[i];
-            if (st.type === 'sleeping_area' || st.type === 'basic_shelter') continue;
-            const cdx = nextX - st.x;
-            const cdz = nextZ - st.z;
-            const distSq = cdx * cdx + cdz * cdz;
-            const minD = 0.88;
-            if (distSq < minD * minD && distSq > 0.000001) {
-              const dist = Math.sqrt(distSq);
-              nextX = st.x + (cdx / dist) * minD;
-              nextZ = st.z + (cdz / dist) * minD;
-            }
+      }
+      for (let i = 0; i < this.structures.length; i++) {
+        const st = this.structures[i];
+        if (st.type === 'sleeping_area' || st.type === 'basic_shelter') continue;
+        const cdx = nextX - st.x;
+        const cdz = nextZ - st.z;
+        const distSq = cdx * cdx + cdz * cdz;
+        const minD = 0.88;
+        if (distSq < minD * minD && distSq > 0.000001) {
+          const dist = Math.sqrt(distSq);
+          nextX = st.x + (cdx / dist) * minD;
+          nextZ = st.z + (cdz / dist) * minD;
+        }
+      }
+      // Solid structural block & pillar wall collisions (allow walking under stone arches & atop decks)
+      for (const b of this.structuralBlocks) {
+        if (b.kind === 'stone_arch' || b.kind === 'timber_beam') continue;
+        if (this.playerY >= b.y + STRUCT_GRID_Y - 0.55) continue;
+        if (this.playerY + 1.55 < b.y || this.playerY > b.y + STRUCT_GRID_Y) continue;
+        const spec = STRUCTURAL_SPECS[b.kind];
+        const halfBox = (spec.isPillar ? 0.56 : 1.18) + 0.34;
+        const dxB = nextX - b.x;
+        const dzB = nextZ - b.z;
+        if (Math.abs(dxB) < halfBox && Math.abs(dzB) < halfBox) {
+          const overlapX = halfBox - Math.abs(dxB);
+          const overlapZ = halfBox - Math.abs(dzB);
+          if (overlapX < overlapZ) {
+            nextX += dxB >= 0 ? overlapX : -overlapX;
+          } else {
+            nextZ += dzB >= 0 ? overlapZ : -overlapZ;
           }
         }
-        // Solid structural block & pillar wall collisions (allow walking under stone arches & atop decks)
-        for (const b of this.structuralBlocks) {
-          if (b.kind === 'stone_arch' || b.kind === 'timber_beam') continue;
-          if (this.playerY >= b.y + STRUCT_GRID_Y - 0.55) continue;
-          if (this.playerY + 1.55 < b.y || this.playerY > b.y + STRUCT_GRID_Y) continue;
-          const spec = STRUCTURAL_SPECS[b.kind];
-          const halfBox = (spec.isPillar ? 0.56 : 1.18) + 0.34;
-          const dxB = nextX - b.x;
-          const dzB = nextZ - b.z;
-          if (Math.abs(dxB) < halfBox && Math.abs(dzB) < halfBox) {
-            const overlapX = halfBox - Math.abs(dxB);
-            const overlapZ = halfBox - Math.abs(dzB);
-            if (overlapX < overlapZ) {
-              nextX += dxB >= 0 ? overlapX : -overlapX;
-            } else {
-              nextZ += dzB >= 0 ? overlapZ : -overlapZ;
-            }
-          }
-        }
-        curX = nextX;
-        curZ = nextZ;
       }
 
-      const actualMoveDist = Math.hypot(curX - this.playerX, curZ - this.playerZ);
+      const actualMoveDist = Math.hypot(nextX - this.playerX, nextZ - this.playerZ);
       this.currentSpeedMps = actualMoveDist / Math.max(0.001, dt);
-      this.playerX = curX;
-      this.playerZ = curZ;
+      this.playerX = nextX;
+      this.playerZ = nextZ;
       this.markExploredAroundPlayer();
 
       const activeMoveRatio =
@@ -10151,8 +9995,6 @@ export class GameEngine {
           this.sound.playFootstep(
             this.flatSurfaceStyle === 'concrete_plaza' ? 'rock' : 'grass',
           );
-        } else if (!isOverworldIsland) {
-          this.sound.playFootstep(deckY > terrainY + 0.1 ? 'rock' : 'rock');
         } else {
           const b = getBiomeAt(this.playerX, this.playerZ);
           if (deckY > terrainY + 0.1) {
@@ -10188,10 +10030,10 @@ export class GameEngine {
       const checkWall = (side: -1 | 1): boolean => {
         const px = this.playerX + rightX * side * 1.15;
         const pz = this.playerZ + rightZ * side * 1.15;
-        if (isOverworldIsland) {
+        if (!isFlat) {
           // 1. Steep cliff or mountain cavern slope wall
-          const wh = this.getActiveTerrainHeightAt(px, pz);
-          if (wh >= this.playerY + 0.95 && this.getActiveTerrainSlopeAt(px, pz) >= 1.15) {
+          const wh = this.getPlayerTerrainY(px, pz);
+          if (wh >= this.playerY + 0.95 && getTerrainSlope(px, pz) >= 1.15) {
             detectedNormX = -rightX * side;
             detectedNormZ = -rightZ * side;
             return true;
@@ -10276,32 +10118,13 @@ export class GameEngine {
     }
 
     // Vertical physics / swimming buoyancy + walkable engineered bridges & roofs + wall-run gravity damping
-    const newTerrainY = this.getActiveTerrainHeightAt(this.playerX, this.playerZ);
-    const newDeckY = this.getStructuralSurfaceY(
-      this.playerX,
-      this.playerZ,
-      this.playerY,
-      prevPlayerY,
-    );
-    let newSurfaceY = Math.max(newTerrainY, newDeckY);
-    if (this.playerVelY <= 0 && !isSpaceDim) {
-      const meshHitY = this.sampleDownwardMeshHitY(
-        this.playerX,
-        this.playerZ,
-        Math.max(this.playerY, prevPlayerY),
-        3.8,
-      );
-      if (
-        Number.isFinite(meshHitY) &&
-        meshHitY > newSurfaceY &&
-        meshHitY <= Math.max(this.playerY, prevPlayerY) + 0.92
-      ) {
-        newSurfaceY = meshHitY;
-      }
-    }
-    const newWaterY = this.getActiveWaterLevelAt(this.playerX, this.playerZ);
-    this.isSwimming =
-      !this.inSpacePlanet && !isSpaceDim && !isFlat && newSurfaceY < newWaterY - 0.45;
+    const newTerrainY = this.getPlayerTerrainY(this.playerX, this.playerZ);
+    const newDeckY = this.inSpacePlanet
+      ? -999
+      : this.getStructuralSurfaceY(this.playerX, this.playerZ, this.playerY);
+    const newSurfaceY = Math.max(newTerrainY, newDeckY);
+    const newWaterY = this.inSpacePlanet ? -999 : getWaterLevelAt(this.playerX, this.playerZ);
+    this.isSwimming = !this.inSpacePlanet && !isFlat && newSurfaceY < newWaterY - 0.45;
     if (this.dragonFlight.flying) {
       const ascend = this.keys['Space'] ? 1 : 0;
       const descend =
@@ -10315,7 +10138,8 @@ export class GameEngine {
       this.isSwimming = false;
     } else if (this.isSwimming) {
       const swimTargetY = newWaterY - 0.72 + Math.sin(this.elapsed * 3.5) * 0.06;
-      this.playerY = THREE.MathUtils.damp(this.playerY, swimTargetY, 8, dt);
+      const nextSwimY = THREE.MathUtils.damp(this.playerY, swimTargetY, 8, dt);
+      this.playerY = Math.max(newSurfaceY, Number.isFinite(nextSwimY) ? nextSwimY : swimTargetY);
       this.playerVelY = 0;
       this.grounded = false;
       this.wallRunTimer = 0;
@@ -10330,42 +10154,20 @@ export class GameEngine {
       }
       this.grounded = false;
     } else {
+      const safeDt = Number.isFinite(dt) && dt > 0 ? Math.min(dt, 0.05) : 0;
+      if (!Number.isFinite(this.playerVelY)) {
+        this.playerVelY = 0;
+      }
+      if (!Number.isFinite(this.playerY)) {
+        this.playerY = newSurfaceY;
+        this.playerVelY = 0;
+      }
       const planetGrav = this.inSpacePlanet ? this.spaceGravity : 1.0;
       const gravMult =
         this.gravityScale * (this.modSystem?.tweaks.gravityMultiplier ?? 1) * planetGrav;
-      this.playerVelY -= 21 * gravMult * dt;
-      this.playerY += this.playerVelY * dt;
-      if (!Number.isFinite(this.playerY) || this.playerY <= newSurfaceY) {
-        this.playerY = newSurfaceY;
-        this.playerVelY = 0;
-        this.grounded = true;
-      } else if (
-        wasGrounded &&
-        this.playerVelY <= 0 &&
-        this.playerY - newSurfaceY <= 0.48
-      ) {
-        // Keep feet planted cleanly when walking down slopes/ramps instead of micro-floating & bouncing
-        this.playerY = newSurfaceY;
-        this.playerVelY = 0;
-        this.grounded = true;
-      } else if (this.playerY > newSurfaceY + 0.04) {
-        this.grounded = false;
-      }
-    }
-
-    // Void & Out-of-World Fall Recovery
-    if (isSpaceDim && this.playerY < -14) {
-      const arrival = getDimensionArrivalPoint('space');
-      this.playerX = arrival.x;
-      this.playerY = arrival.y + 0.4;
-      this.playerZ = arrival.z;
-      this.playerVelY = 0;
-      this.grounded = true;
-      this.camStepOffsetY = 0;
-      this.toast('Gravity tether returned you safely to the Asteroid Pad!', 'warning');
-    } else if (!Number.isFinite(this.playerY) || this.playerY < -60) {
-      this.respawnPlayer();
-      return;
+      this.playerVelY -= 21 * gravMult * safeDt;
+      this.playerY += this.playerVelY * safeDt;
+      this.applyPlayerGroundCollision(newSurfaceY, safeDt, wasGrounded, true);
     }
 
     // Smooth camera step offset when walking cleanly across steps, decks, and uneven terrain seams
@@ -10397,7 +10199,7 @@ export class GameEngine {
 
     // Biome & Homestead discovery tracking (Island World only)
     const currentBiome = getBiomeAt(this.playerX, this.playerZ);
-    if (isOverworldIsland) {
+    if (!isFlat) {
       if (!this.visitedBiomes.has(currentBiome)) {
         this.visitedBiomes.add(currentBiome);
         this.toast(`Discovered ${BIOME_INFO[currentBiome].name}`, 'discovery');
@@ -10604,10 +10406,7 @@ export class GameEngine {
 
             const endX = col.x + fwdX * (col.radius + 0.95);
             const endZ = col.z + fwdZ * (col.radius + 0.95);
-            const endY = Math.max(
-              this.getActiveTerrainHeightAt(endX, endZ),
-              this.getStructuralSurfaceY(endX, endZ, this.playerY + 2.4),
-            );
+            const endY = this.getPlayerGroundSurfaceY(endX, endZ, this.playerY + 2.4);
             if (endY - this.playerY > 2.35 || endY - this.playerY < -2.6) continue;
 
             this.vaultStartX = this.playerX;
@@ -10631,10 +10430,7 @@ export class GameEngine {
     for (const probeDist of [1.25, 1.85]) {
       const px = this.playerX + fwdX * probeDist;
       const pz = this.playerZ + fwdZ * probeDist;
-      const surfY = Math.max(
-        this.getActiveTerrainHeightAt(px, pz),
-        this.getStructuralSurfaceY(px, pz, this.playerY + 2.6),
-      );
+      const surfY = this.getPlayerGroundSurfaceY(px, pz, this.playerY + 2.6);
       const rise = surfY - this.playerY;
       if (rise >= 0.48 && rise <= 2.35) {
         this.vaultStartX = this.playerX;
@@ -11669,7 +11465,7 @@ export class GameEngine {
     }
 
     let best: NearbyInteraction | null = null;
-    let bestDist = 5.6;
+    let bestDist = 4.8;
 
     // 8A. Nearby Modular Vehicles (Pilot / Drive / Sail / Fly) — strictly lower priority than Elevator Computer
     for (const v of this.vehicles) {
@@ -12393,7 +12189,7 @@ export class GameEngine {
         actionCategory: 'use',
         distance: 1.5,
         targetX: aheadX,
-        targetY: this.getActiveWaterLevelAt(aheadX, aheadZ),
+        targetY: getWaterLevelAt(aheadX, aheadZ),
         targetZ: aheadZ,
       };
     }
@@ -12465,7 +12261,7 @@ export class GameEngine {
             const fdz = n.fallDirZ ?? 0;
             const dropX = n.x + fdx * 2.1;
             const dropZ = n.z + fdz * 2.1;
-            this.spawnParticles(dropX, this.getActiveTerrainHeightAt(dropX, dropZ) + 0.35, dropZ, 0x85532a, 10);
+            this.spawnParticles(dropX, getTerrainHeight(dropX, dropZ) + 0.35, dropZ, 0x85532a, 10);
             const grants = this.pendingTreeDrops.get(n.id);
             if (grants) {
               this.pendingTreeDrops.delete(n.id);
@@ -12619,9 +12415,8 @@ export class GameEngine {
       const segDz = a.pos.z - prevZ;
       const segLenSq = segDx * segDx + segDy * segDy + segDz * segDz;
 
-      const arrowGroundY = this.getActiveTerrainHeightAt(a.pos.x, a.pos.z);
-      let remove = a.life <= 0 || a.pos.y < arrowGroundY;
-      if (a.pos.y < arrowGroundY) {
+      let remove = a.life <= 0 || a.pos.y < getTerrainHeight(a.pos.x, a.pos.z);
+      if (a.pos.y < getTerrainHeight(a.pos.x, a.pos.z)) {
         this.spawnParticles(
           a.pos.x,
           a.pos.y + 0.05,
@@ -12750,7 +12545,7 @@ export class GameEngine {
       dp.mesh.rotation.x += dt * 14;
       dp.mesh.rotation.z += dt * 11;
 
-      let removeDebris = dp.life <= 0 || dp.pos.y < this.getActiveTerrainHeightAt(dp.pos.x, dp.pos.z);
+      let removeDebris = dp.life <= 0 || dp.pos.y < getTerrainHeight(dp.pos.x, dp.pos.z);
 
       if (!removeDebris && this.world?.caveCeilings) {
         for (const cc of this.world.caveCeilings) {
@@ -12859,7 +12654,7 @@ export class GameEngine {
             this.caveCeilingRespawnTimers.delete(cc.id);
             cc.collapsed = false;
             cc.hp = cc.maxHp;
-            const caveBaseY = this.getActiveTerrainHeightAt(CAVE_POS.x, CAVE_POS.z);
+            const caveBaseY = getTerrainHeight(CAVE_POS.x, CAVE_POS.z);
             cc.y = caveBaseY + 4.4;
             cc.mesh.position.set(cc.x, cc.y, cc.z);
             cc.mesh.rotation.set(0, 0, 0);
@@ -12914,7 +12709,7 @@ export class GameEngine {
       }
       sc.vel.y -= 15 * dt;
       sc.pos.addScaledVector(sc.vel, dt);
-      const gy = this.getActiveTerrainHeightAt(sc.pos.x, sc.pos.z) + 0.02;
+      const gy = getTerrainHeight(sc.pos.x, sc.pos.z) + 0.02;
       if (sc.pos.y <= gy) {
         sc.pos.y = gy;
         sc.vel.y = Math.abs(sc.vel.y) * 0.25;
@@ -12940,10 +12735,9 @@ export class GameEngine {
   private updateLocalPlayerAvatar(dt: number, visible: boolean): void {
     const h = this.localPlayerHandle;
     if (!h) return;
+    h.group.position.set(this.playerX, this.playerY, this.playerZ);
     h.group.visible = visible;
     if (!visible) return;
-
-    h.group.position.set(this.playerX, this.playerY, this.playerZ);
     h.group.rotation.y = this.playerYaw;
     h.bodyGroup.position.y = this.isCrouching ? -0.35 : 0;
     h.headGroup.rotation.x = THREE.MathUtils.clamp(-this.camPitch * 0.55, -0.45, 0.45);
@@ -13181,7 +12975,7 @@ export class GameEngine {
         }
         const specs = this.getVehicleSpecs(activeV);
         const surfY = Math.max(
-          this.getActiveTerrainHeightAt(activeV.x, activeV.z),
+          getTerrainHeight(activeV.x, activeV.z),
           this.getStructuralSurfaceY(activeV.x, activeV.z, activeV.y + 0.6),
         );
         const airborne = specs.canFly && activeV.y > surfY + 0.6;
@@ -13453,10 +13247,10 @@ export class GameEngine {
       if (av) {
         const specs = this.getVehicleSpecs(av);
         const surfY = Math.max(
-          this.getActiveTerrainHeightAt(av.x, av.z),
+          getTerrainHeight(av.x, av.z),
           this.getStructuralSurfaceY(av.x, av.z, av.y + 0.6),
         );
-        const waterY = this.getActiveWaterLevelAt(av.x, av.z);
+        const waterY = getWaterLevelAt(av.x, av.z);
         const inWater = surfY < waterY - 0.25 && av.y <= waterY + 0.45;
         const airborne = specs.canFly && av.y > Math.max(surfY, waterY) + 0.65;
         const spd = Math.hypot(av.vx, av.vz);
@@ -13980,6 +13774,27 @@ export class GameEngine {
       !this.cinematicActive;
     if (playerActive) {
       this.updatePlayer(dt);
+    } else if (
+      this.mode === 'playing' &&
+      !this.gameOver &&
+      !this.cinematicActive &&
+      !this.activeVehicleId &&
+      !this.mountedCreatureId &&
+      !this.ridingCoasterId &&
+      !this.seatedState &&
+      !this.flightAndTeleport.flying &&
+      !this.dragonFlight.flying &&
+      this.vaultTimer <= 0
+    ) {
+      // Keep ground floor clamping active even while UI modals pause movement
+      const pauseSurfY = this.getPlayerGroundSurfaceY(
+        this.playerX,
+        this.playerZ,
+        (Number.isFinite(this.playerY) ? this.playerY : 0) + 0.5,
+      );
+      if (!Number.isFinite(this.playerY) || this.playerY < pauseSurfY) {
+        this.applyPlayerGroundCollision(pauseSurfY, dt, false, false);
+      }
     }
 
     // 2. Run core simulation & world updates
@@ -14633,269 +14448,76 @@ export class GameEngine {
     this.structuralBlocks.push(b);
   }
 
-  private isInsideLoweredElevatorPit(x: number, z: number): boolean {
+  private getPlayerTerrainY(x: number, z: number): number {
+    if (this.inSpacePlanet) return 0;
+    return getTerrainSurfaceHeight(x, z);
+  }
+
+  private getPlayerGroundSurfaceY(x: number, z: number, footY: number): number {
+    const terrainY = this.getPlayerTerrainY(x, z);
+    const deckY = this.inSpacePlanet
+      ? -999
+      : this.getStructuralSurfaceY(x, z, footY);
+    return Math.max(terrainY, deckY);
+  }
+
+  private applyPlayerGroundCollision(
+    groundY: number,
+    deltaTime: number,
+    wasGrounded: boolean,
+    stickToSlope = true,
+  ): boolean {
+    if (!Number.isFinite(this.playerX)) this.playerX = 0;
+    if (!Number.isFinite(this.playerZ)) this.playerZ = 0;
+    if (!Number.isFinite(this.playerVelY)) this.playerVelY = 0;
+
     if (
-      this.worldType !== 'island' ||
-      this.inSpacePlanet ||
-      this.currentDimension !== 'overworld' ||
-      this.elevatorPlatformT >= 0.92
+      stickToSlope &&
+      wasGrounded &&
+      this.playerVelY <= 0 &&
+      Number.isFinite(this.playerY) &&
+      this.playerY > groundY + 0.02 &&
+      this.playerY - groundY <= 0.48
     ) {
-      return false;
+      // Keep feet planted cleanly when walking down slopes/ramps instead of micro-floating & bouncing
+      this.playerY = groundY;
     }
-    const dx = x - UNDERGROUND_ELEVATOR_POS.x;
-    const dz = z - UNDERGROUND_ELEVATOR_POS.z;
-    return Math.abs(dx) < 3.15 && Math.abs(dz) < 4.15;
+
+    const playerObj = this.localPlayerHandle
+      ? this.localPlayerHandle.group
+      : this._playerPhysicsProxy;
+    playerObj.position.set(this.playerX, this.playerY, this.playerZ);
+    playerObj.userData.verticalVelocity = this.playerVelY;
+    playerObj.userData.grounded = this.grounded;
+
+    const isGrounded = fixPlayerGroundCollision(playerObj, groundY, deltaTime);
+
+    this.playerX = playerObj.position.x;
+    this.playerY = playerObj.position.y;
+    this.playerZ = playerObj.position.z;
+    this.playerVelY =
+      typeof playerObj.userData.verticalVelocity === 'number' &&
+      Number.isFinite(playerObj.userData.verticalVelocity)
+        ? playerObj.userData.verticalVelocity
+        : 0;
+    this.grounded = isGrounded;
+    return isGrounded;
   }
 
-  private getActiveTerrainHeightAt(x: number, z: number): number {
-    if (!Number.isFinite(x) || !Number.isFinite(z)) return 0;
-    if (this.worldType === 'flat') return FLAT_GROUND_Y;
-    if (this.inSpacePlanet) {
-      const dist = Math.hypot(x, z);
-      if (dist > 95) return -24;
-      if (this.spaceArena?.root) {
-        this._groundRayOrigin.set(x, 32, z);
-        this._groundRaycaster.set(this._groundRayOrigin, this._groundRayDown);
-        this._groundRaycaster.far = 64;
-        this._groundRayTargets.length = 0;
-        this.spaceArena.root.traverse((obj) => {
-          if (obj.userData?.isSpacePlanetGround) {
-            this._groundRayTargets.push(obj);
-          }
-        });
-        if (this._groundRayTargets.length > 0) {
-          const hits = this._groundRaycaster.intersectObjects(
-            this._groundRayTargets,
-            false,
-          );
-          if (hits.length > 0 && Number.isFinite(hits[0].point.y)) {
-            return hits[0].point.y;
-          }
-        }
-      }
-      return 0;
-    }
-    if (this.currentDimension !== 'overworld') {
-      const sampled = samplePlaneGeometryHeight(
-        this.activeDimensionWorld?.terrainMesh?.geometry,
-        340,
-        112,
-        x,
-        z,
-      );
-      if (sampled !== null && Number.isFinite(sampled)) return sampled;
-      return getDimensionTerrainHeight(this.currentDimension, x, z);
-    }
-    if (this.isInsideLoweredElevatorPit(x, z)) {
-      return (
-        getTerrainHeight(UNDERGROUND_ELEVATOR_POS.x, UNDERGROUND_ELEVATOR_POS.z) -
-        6.5
-      );
-    }
-    const sampled = samplePlaneGeometryHeight(
-      this.world?.terrainMesh?.geometry,
-      TERRAIN_SIZE,
-      TERRAIN_SEGS,
-      x,
-      z,
-    );
-    if (sampled !== null && Number.isFinite(sampled)) return sampled;
-    return getTerrainHeight(x, z);
-  }
-
-  private getActiveWaterLevelAt(x: number, z: number): number {
-    if (this.worldType === 'flat' || this.inSpacePlanet) return -999;
-    if (this.currentDimension !== 'overworld') {
-      return getDimensionWaterLevel(this.currentDimension, x, z);
-    }
-    return getWaterLevelAt(x, z);
-  }
-
-  private getActiveTerrainSlopeAt(x: number, z: number): number {
-    if (this.worldType === 'flat' || this.inSpacePlanet) return 0;
-    if (this.currentDimension !== 'overworld') {
-      return getDimensionTerrainSlope(this.currentDimension, x, z);
-    }
-    const d = 0.75;
-    const hx0 = this.getActiveTerrainHeightAt(x - d, z);
-    const hx1 = this.getActiveTerrainHeightAt(x + d, z);
-    const hz0 = this.getActiveTerrainHeightAt(x, z - d);
-    const hz1 = this.getActiveTerrainHeightAt(x, z + d);
-    return Math.hypot((hx1 - hx0) / (d * 2), (hz1 - hz0) / (d * 2));
-  }
-
-  private getUndergroundElevatorSurfaceY(
-    x: number,
-    z: number,
-    footY: number,
-    prevFootY = footY,
-  ): number {
-    if (
-      this.worldType !== 'island' ||
-      this.inSpacePlanet ||
-      this.currentDimension !== 'overworld'
-    ) {
-      return -9999;
-    }
-    const dx = x - UNDERGROUND_ELEVATOR_POS.x;
-    const dz = z - UNDERGROUND_ELEVATOR_POS.z;
-    if (Math.abs(dx) > 4.35 || Math.abs(dz) > 5.35) return -9999;
-    const elevBaseY = getTerrainHeight(
-      UNDERGROUND_ELEVATOR_POS.x,
-      UNDERGROUND_ELEVATOR_POS.z,
-    );
-    const sweepFootY = Math.max(footY, prevFootY);
-    if (Math.abs(dx) >= 3.2 || Math.abs(dz) >= 4.2) {
-      const collarTop = elevBaseY + 0.36;
-      return sweepFootY >= collarTop - 1.5 ? collarTop : -9999;
-    }
-    const deckY = -6.0 + 6.16 * this.elevatorPlatformT;
-    const platTop = elevBaseY - 0.05 + deckY + 0.17;
-    const shaftFloor = elevBaseY - 6.5;
-    if (sweepFootY >= platTop - 1.5) {
-      return Math.max(platTop, shaftFloor);
-    }
-    return shaftFloor;
-  }
-
-  private sampleDownwardMeshHitY(
-    x: number,
-    z: number,
-    refFootY: number,
-    maxDrop = 4.5,
-  ): number {
-    if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(refFootY)) {
-      return -Infinity;
-    }
-    this._groundRayTargets.length = 0;
-    if (this.inSpacePlanet) {
-      if (this.spaceArena?.root) {
-        this.spaceArena.root.traverse((obj) => {
-          if (obj.userData?.isSpacePlanetGround) {
-            this._groundRayTargets.push(obj);
-          }
-        });
-      }
-    } else if (this.currentDimension !== 'overworld') {
-      if (this.activeDimensionWorld?.terrainMesh) {
-        this._groundRayTargets.push(this.activeDimensionWorld.terrainMesh);
-      }
-    } else if (this.worldType === 'island') {
-      if (
-        this.world?.terrainMesh &&
-        !this.isInsideLoweredElevatorPit(x, z)
-      ) {
-        this._groundRayTargets.push(this.world.terrainMesh);
-      }
-    }
-
-    const structMeshes = this.getStructuralMeshList();
-    for (let i = 0; i < structMeshes.length; i++) {
-      const sm = structMeshes[i];
-      if (
-        Math.abs(sm.position.x - x) <= 3.5 &&
-        Math.abs(sm.position.z - z) <= 3.5
-      ) {
-        this._groundRayTargets.push(sm);
-      }
-    }
-    if (this._groundRayTargets.length === 0) return -Infinity;
-
-    const topOriginY = refFootY + 1.15;
-    this._groundRayOrigin.set(x, topOriginY, z);
-    this._groundRaycaster.set(this._groundRayOrigin, this._groundRayDown);
-    this._groundRaycaster.far = 1.15 + maxDrop;
-    const hits = this._groundRaycaster.intersectObjects(
-      this._groundRayTargets,
-      true,
-    );
-    for (let i = 0; i < hits.length; i++) {
-      const hy = hits[i].point.y;
-      if (Number.isFinite(hy) && hy <= refFootY + 0.92) {
-        return hy;
-      }
-    }
-    return -Infinity;
-  }
-
-  private resolveSafeStandSpot(
-    targetX: number,
-    targetZ: number,
-    refY?: number,
-  ): { x: number; y: number; z: number } {
-    let x = Number.isFinite(targetX) ? targetX : 0;
-    let z = Number.isFinite(targetZ) ? targetZ : 0;
-    const maxRadius = this.inSpacePlanet ? 86 : getPlayableMaxRadius() - 2;
-    const rad = Math.hypot(x, z);
-    if (rad > maxRadius && rad > 0.001) {
-      x *= maxRadius / rad;
-      z *= maxRadius / rad;
-    }
-    if (
-      this.worldType === 'island' &&
-      !this.inSpacePlanet &&
-      this.currentDimension === 'overworld'
-    ) {
-      const cx = Math.floor(x / 16);
-      const cz = Math.floor(z / 16);
-      for (let ox = -1; ox <= 1; ox++) {
-        for (let oz = -1; oz <= 1; oz++) {
-          const cell = this.colliderGrid.get(
-            (cx + ox + 2048) * 4096 + (cz + oz + 2048),
-          );
-          if (!cell) continue;
-          for (let ci = 0; ci < cell.length; ci++) {
-            const col = cell[ci];
-            const dx = x - col.x;
-            const dz = z - col.z;
-            const minD = col.radius + 0.55;
-            const dSq = dx * dx + dz * dz;
-            if (dSq < minD * minD) {
-              const d = Math.sqrt(dSq) || 0.001;
-              x = col.x + (dx / d) * minD;
-              z = col.z + (dz / d) * minD;
-            }
-          }
-        }
-      }
-    }
-    const probeY = Number.isFinite(refY) ? (refY as number) : 40;
-    let y = Math.max(
-      this.getActiveTerrainHeightAt(x, z),
-      this.getStructuralSurfaceY(x, z, probeY),
-    );
-    const hitY = this.sampleDownwardMeshHitY(x, z, y + 1.2, 6.0);
-    if (Number.isFinite(hitY) && hitY > y && hitY <= y + 1.2) {
-      y = hitY;
-    }
-    if (!Number.isFinite(y)) y = 0;
-    return { x, y, z };
-  }
-
-  private getStructuralSurfaceY(
-    x: number,
-    z: number,
-    footY: number,
-    prevFootY = footY,
-  ): number {
+  private getStructuralSurfaceY(x: number, z: number, footY: number): number {
     let bestY = -9999;
-    const sweepFootY = Math.max(footY, prevFootY);
     for (const b of this.structuralBlocks) {
       const spec = STRUCTURAL_SPECS[b.kind];
       const halfXZ = spec.isPillar ? 0.78 : 1.24;
       if (Math.abs(x - b.x) <= halfXZ && Math.abs(z - b.z) <= halfXZ) {
         const topY = b.y + STRUCT_GRID_Y;
-        if (sweepFootY >= topY - 1.35 && topY > bestY) {
+        if (footY >= topY - 1.15 && topY > bestY) {
           bestY = topY;
         }
       }
     }
-    // Shipwreck & Overworld landmark walkable deck surfaces (Overworld Island World only)
-    if (
-      this.worldType === 'island' &&
-      !this.inSpacePlanet &&
-      this.currentDimension === 'overworld'
-    ) {
+    // Shipwreck walkable deck surfaces (Island World only)
+    if (this.worldType === 'island') {
       const sdx = x - SHIPWRECK_POS.x;
       const sdz = z - SHIPWRECK_POS.z;
       const distToShip = Math.hypot(sdx, sdz);
@@ -14904,65 +14526,36 @@ export class GameEngine {
         if (sdz >= -11 && sdz <= -3 && sdx >= -5.0 && sdx <= 2.5) {
           const rampT = (sdz + 11) / 8;
           const rampY = (OCEAN_LEVEL + 0.15) * (1 - rampT) + (OCEAN_LEVEL + 0.85) * rampT;
-          if (sweepFootY >= rampY - 1.15 && rampY > bestY) {
+          if (footY >= rampY - 0.95 && rampY > bestY) {
             bestY = rampY;
           }
         }
         // 2. Mid Deck platform & Armory
         if (sdz > -3 && sdz <= 3 && sdx >= -3.0 && sdx <= 4.5) {
           const midDeckY = OCEAN_LEVEL + 0.95;
-          if (sweepFootY >= midDeckY - 1.15 && midDeckY > bestY) {
+          if (footY >= midDeckY - 0.95 && midDeckY > bestY) {
             bestY = midDeckY;
           }
         }
         // 3. Captain's Quarters (Aft Cabin at raised stern)
         if (sdz > 3 && sdz <= 10 && sdx >= -1.5 && sdx <= 5.5) {
           const aftDeckY = OCEAN_LEVEL + 1.75;
-          if (sweepFootY >= aftDeckY - 1.15 && aftDeckY > bestY) {
+          if (footY >= aftDeckY - 0.95 && aftDeckY > bestY) {
             bestY = aftDeckY;
           }
         }
       }
 
       // Premade Hilltop Base, Front Porch, Entry Step & Music Studio Wing solid floor support
-      const hilltopFloorY = getHilltopBaseFloorY(x, z, footY, prevFootY);
+      const hilltopFloorY = getHilltopBaseFloorY(x, z, footY);
       if (hilltopFloorY > bestY) {
         bestY = hilltopFloorY;
       }
 
       // Enterable Woodland Mansion, Taiga/Snowy Village Cabins, Igloo & Pillager Outpost floors
-      const landmarkFloorY = getLandmarkFloorY(x, z, footY, prevFootY);
+      const landmarkFloorY = getLandmarkFloorY(x, z, footY);
       if (landmarkFloorY > bestY) {
         bestY = landmarkFloorY;
-      }
-
-      // Garage Bays/Apron, Hilltop Ramp, Saturn Launch Pad, Mineshaft, Swamp Deck, Tiki Lounge, Castle Dais
-      const structureSurfY = getOverworldStructureSurfaceY(
-        x,
-        z,
-        footY,
-        prevFootY,
-      );
-      if (structureSurfY > bestY) {
-        bestY = structureSurfY;
-      }
-
-      // Underground Car Elevator collar rim, moving lift deck, and shaft concrete floor
-      const elevatorSurfY = this.getUndergroundElevatorSurfaceY(
-        x,
-        z,
-        footY,
-        prevFootY,
-      );
-      if (elevatorSurfY > bestY) {
-        bestY = elevatorSurfY;
-      }
-    }
-
-    if (this.currentDimension === 'space' && !this.inSpacePlanet) {
-      const spaceSurfY = getSpacePlatformSurfaceY(x, z, footY, prevFootY);
-      if (spaceSurfY > bestY) {
-        bestY = spaceSurfY;
       }
     }
 
@@ -15078,14 +14671,14 @@ export class GameEngine {
       _probeEuler.set(this.camPitch, this.camYaw, 0, 'YXZ');
       const dir = _vec3A.set(0, 0, -1).applyEuler(_probeEuler);
       let hitX = this.playerX + dir.x * 3.8;
-      let hitY = this.getActiveTerrainHeightAt(hitX, this.playerZ + dir.z * 3.8);
+      let hitY = getTerrainHeight(hitX, this.playerZ + dir.z * 3.8);
       let hitZ = this.playerZ + dir.z * 3.8;
       const startY = this.playerY + this.currentEyeHeight;
       for (let d = 2.4; d <= 9.0; d += 0.35) {
         const px = this.playerX + dir.x * d;
         const py = startY + dir.y * d;
         const pz = this.playerZ + dir.z * d;
-        const th = this.getActiveTerrainHeightAt(px, pz);
+        const th = getTerrainHeight(px, pz);
         if (py <= th + 0.12) {
           hitX = px;
           hitY = th;
@@ -15350,7 +14943,7 @@ export class GameEngine {
       const px = this.playerX + dir.x * d;
       const py = startY + dir.y * d;
       const pz = this.playerZ + dir.z * d;
-      if (py <= this.getActiveTerrainHeightAt(px, pz) + 0.15) {
+      if (py <= getTerrainHeight(px, pz) + 0.15) {
         tx = px;
         tz = pz;
         break;
@@ -15360,7 +14953,7 @@ export class GameEngine {
     const moved = this.terrainEngine.excavateSoilBrush(tx, tz, 3.0, delta);
     if (moved > 0) {
       this.sound.playDigSoil();
-      const ty = this.getActiveTerrainHeightAt(tx, tz);
+      const ty = getTerrainHeight(tx, tz);
       this.spawnParticles(tx, ty + 0.25, tz, 0x78553a, 12);
       this.recalculateStructuralIntegrity(true);
       this.toast(
@@ -15486,7 +15079,7 @@ export class GameEngine {
     const fwdZ = -Math.cos(this.camYaw);
     const wx = this.playerX + fwdX * 2.2;
     const wz = this.playerZ + fwdZ * 2.2;
-    const wy = this.getActiveTerrainHeightAt(wx, wz);
+    const wy = getTerrainHeight(wx, wz);
 
     const cask = createWaterTorrentMesh();
     cask.position.set(wx, wy + 0.04, wz);
@@ -15589,7 +15182,7 @@ export class GameEngine {
       cb.mesh.position.z += cb.vz * dt;
       cb.mesh.rotation.x += cb.rx * dt;
       cb.mesh.rotation.z += cb.rz * dt;
-      const gh = this.getActiveTerrainHeightAt(cb.mesh.position.x, cb.mesh.position.z);
+      const gh = getTerrainHeight(cb.mesh.position.x, cb.mesh.position.z);
       if (cb.mesh.position.y <= gh) {
         cb.mesh.position.y = gh;
         if (!cb.hitGround) {
@@ -15618,7 +15211,7 @@ export class GameEngine {
       k.vel.y -= 18 * dt;
       k.pos.addScaledVector(k.vel, dt);
       const gh = Math.max(
-        this.getActiveTerrainHeightAt(k.pos.x, k.pos.z),
+        getTerrainHeight(k.pos.x, k.pos.z),
         this.getStructuralSurfaceY(k.pos.x, k.pos.z, k.pos.y + 0.4),
       );
       if (k.pos.y <= gh) {
@@ -15657,17 +15250,32 @@ export class GameEngine {
   // =========================================================================
 
   private disposeObject3D(root: THREE.Object3D): void {
+    const seenGeos = new Set<THREE.BufferGeometry>();
+    const seenMats = new Set<THREE.Material>();
+    const seenTex = new Set<THREE.Texture>();
     root.traverse((obj) => {
       if (obj instanceof THREE.Mesh) {
-        if (obj.geometry && !obj.geometry.userData?.sharedAsset) {
+        if (obj.geometry && !obj.geometry.userData?.sharedAsset && !seenGeos.has(obj.geometry)) {
+          seenGeos.add(obj.geometry);
           obj.geometry.dispose();
         }
         const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
         for (const m of mats) {
-          if (!m || m.userData?.sharedAsset) continue;
-          const std = m as THREE.MeshStandardMaterial;
-          if (std.map && !std.map.userData?.sharedAsset) std.map.dispose();
-          if (std.emissiveMap && !std.emissiveMap.userData?.sharedAsset) std.emissiveMap.dispose();
+          if (!m || m.userData?.sharedAsset || seenMats.has(m)) continue;
+          seenMats.add(m);
+          const phys = m as THREE.MeshPhysicalMaterial;
+          for (const tex of [
+            phys.map,
+            phys.emissiveMap,
+            phys.normalMap,
+            phys.roughnessMap,
+            phys.clearcoatNormalMap,
+          ]) {
+            if (tex && !tex.userData?.sharedAsset && !seenTex.has(tex)) {
+              seenTex.add(tex);
+              tex.dispose();
+            }
+          }
           m.dispose();
         }
       }
@@ -15724,7 +15332,6 @@ export class GameEngine {
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.trunkBassPulse = 0;
     this.sound.stopTrunkBass();
-    this.sound.stopVehicleEngine();
   }
 
   private setupStarterEngineeringShowcase(
@@ -15740,8 +15347,8 @@ export class GameEngine {
         rotY = 0,
         yOverride?: number,
       ): KineticNode => {
-        const gh = this.getActiveTerrainHeightAt(x, z);
-        const wh = this.getActiveWaterLevelAt(x, z);
+        const gh = getTerrainHeight(x, z);
+        const wh = getWaterLevelAt(x, z);
         const y =
           yOverride ??
           (kind === 'water_wheel' ? Math.max(gh - 0.35, wh - 0.72) : gh);
@@ -15792,12 +15399,6 @@ export class GameEngine {
     }
 
     if (seedVehicles) {
-      const baySurfaceY = (bx: number, bz: number) =>
-        Math.max(
-          this.getActiveTerrainHeightAt(bx, bz),
-          this.getStructuralSurfaceY(bx, bz, 20),
-        ) + 0.04;
-
       // Bay 1: 1964 Impala Candy Lowrider (with 4-Corner Hydraulics)
       const bay1X = VEHICLE_GARAGE_POS.x - 9.0;
       const bay1Z = VEHICLE_GARAGE_POS.z + 0.6;
@@ -15805,7 +15406,7 @@ export class GameEngine {
         'veh_starter_lowrider',
         'lowrider',
         bay1X,
-        baySurfaceY(bay1X, bay1Z),
+        getTerrainHeight(bay1X, bay1Z) + 0.14,
         bay1Z,
         0,
       );
@@ -15818,7 +15419,7 @@ export class GameEngine {
         'veh_starter_donk',
         'donk',
         bay2X,
-        baySurfaceY(bay2X, bay2Z),
+        getTerrainHeight(bay2X, bay2Z) + 0.14,
         bay2Z,
         0,
       );
@@ -15831,7 +15432,7 @@ export class GameEngine {
         'veh_starter_slab',
         'slab',
         bay3X,
-        baySurfaceY(bay3X, bay3Z),
+        getTerrainHeight(bay3X, bay3Z) + 0.14,
         bay3Z,
         0,
       );
@@ -15844,7 +15445,7 @@ export class GameEngine {
         'veh_starter_deville',
         'cadillac_coupe_deville',
         bay4X,
-        baySurfaceY(bay4X, bay4Z),
+        getTerrainHeight(bay4X, bay4Z) + 0.14,
         bay4Z,
         0,
       );
@@ -15857,7 +15458,7 @@ export class GameEngine {
         'veh_starter_rover',
         'expedition_rover',
         apronX,
-        baySurfaceY(apronX, apronZ),
+        getTerrainHeight(apronX, apronZ) + 0.14,
         apronZ,
         0,
       );
@@ -15870,7 +15471,7 @@ export class GameEngine {
         'veh_starter_tahoe',
         'chevy_tahoe',
         westApronX,
-        baySurfaceY(westApronX, westApronZ),
+        getTerrainHeight(westApronX, westApronZ) + 0.14,
         westApronZ,
         0,
       );
@@ -15942,14 +15543,14 @@ export class GameEngine {
     const dir = _vec3A.set(0, 0, -1).applyEuler(_probeEuler);
     let tx = this.playerX + dir.x * 3.6;
     let tz = this.playerZ + dir.z * 3.6;
-    let ty = this.getActiveTerrainHeightAt(tx, tz);
+    let ty = getTerrainHeight(tx, tz);
     const startY = this.playerY + this.currentEyeHeight;
     for (let d = 2.0; d <= 8.0; d += 0.35) {
       const px = this.playerX + dir.x * d;
       const py = startY + dir.y * d;
       const pz = this.playerZ + dir.z * d;
       const surf = Math.max(
-        this.getActiveTerrainHeightAt(px, pz),
+        getTerrainHeight(px, pz),
         this.getStructuralSurfaceY(px, pz, py + 0.5),
       );
       if (py <= surf + 0.16) {
@@ -15961,14 +15562,14 @@ export class GameEngine {
     }
 
     if (kind === 'water_wheel') {
-      const waterY = this.getActiveWaterLevelAt(tx, tz);
-      const groundY = this.getActiveTerrainHeightAt(tx, tz);
+      const waterY = getWaterLevelAt(tx, tz);
+      const groundY = getTerrainHeight(tx, tz);
       if (waterY > groundY - 0.25 || isFreshwaterAt(tx, tz)) {
         ty = Math.max(groundY - 0.35, waterY - 0.72);
       }
     } else {
       const deckY = this.getStructuralSurfaceY(tx, tz, startY);
-      ty = Math.max(this.getActiveTerrainHeightAt(tx, tz), deckY);
+      ty = Math.max(getTerrainHeight(tx, tz), deckY);
     }
 
     const baseRot = Math.round(this.camYaw / (Math.PI / 2)) * (Math.PI / 2);
@@ -15991,7 +15592,7 @@ export class GameEngine {
       return false;
     }
 
-    const waterY = this.getActiveWaterLevelAt(target.x, target.z);
+    const waterY = getWaterLevelAt(target.x, target.z);
     if (kind !== 'water_wheel' && target.y < waterY - 0.25) {
       this.toast(
         'Place boilers, shafts & assemblers on dry land or built bridges!',
@@ -16388,14 +15989,10 @@ export class GameEngine {
 
     const fwdX = -Math.sin(this.camYaw);
     const fwdZ = -Math.cos(this.camYaw);
-    const maxSpawnR = this.inSpacePlanet ? 82 : getPlayableMaxRadius() - 2;
-    const sx = THREE.MathUtils.clamp(this.playerX + fwdX * 6.5, -maxSpawnR, maxSpawnR);
-    const sz = THREE.MathUtils.clamp(this.playerZ + fwdZ * 6.5, -maxSpawnR, maxSpawnR);
-    const waterY = this.getActiveWaterLevelAt(sx, sz);
-    const groundY = Math.max(
-      this.getActiveTerrainHeightAt(sx, sz),
-      this.getStructuralSurfaceY(sx, sz, this.playerY + 1.5),
-    );
+    const sx = THREE.MathUtils.clamp(this.playerX + fwdX * 6.5, -142, 142);
+    const sz = THREE.MathUtils.clamp(this.playerZ + fwdZ * 6.5, -142, 142);
+    const waterY = getWaterLevelAt(sx, sz);
+    const groundY = getTerrainHeight(sx, sz);
     const sy = preset === 'steam_boat' ? Math.max(groundY, waterY) : groundY;
     const v = createVehicleFromPreset(
       `veh_${Date.now()}_${Math.floor(Math.random() * 999)}`,
@@ -16476,14 +16073,12 @@ export class GameEngine {
 
     const fwdX = -Math.sin(this.camYaw);
     const fwdZ = -Math.cos(this.camYaw);
-    const maxSpawnR = this.inSpacePlanet ? 82 : getPlayableMaxRadius() - 2;
-    const sx = THREE.MathUtils.clamp(this.playerX + fwdX * 6.5, -maxSpawnR, maxSpawnR);
-    const sz = THREE.MathUtils.clamp(this.playerZ + fwdZ * 6.5, -maxSpawnR, maxSpawnR);
+    const sx = THREE.MathUtils.clamp(this.playerX + fwdX * 6.5, -142, 142);
+    const sz = THREE.MathUtils.clamp(this.playerZ + fwdZ * 6.5, -142, 142);
     const sy = Math.max(
-      this.getActiveTerrainHeightAt(sx, sz),
-      this.getStructuralSurfaceY(sx, sz, this.playerY + 1.5),
+      getTerrainHeight(sx, sz),
       specs.canFloat && !specs.canFly && specs.wheelCount === 0
-        ? this.getActiveWaterLevelAt(sx, sz)
+        ? getWaterLevelAt(sx, sz)
         : -999,
     );
 
@@ -16492,7 +16087,7 @@ export class GameEngine {
       name: payload.name.trim() || `Custom ${specs.craftClass}`,
       paintColor: payload.paintColor || '#d97706',
       x: sx,
-      y: (Number.isFinite(sy) ? sy : 0) + 0.15,
+      y: sy + 0.15,
       z: sz,
       yaw: this.camYaw + Math.PI,
       vx: 0,
@@ -16518,20 +16113,16 @@ export class GameEngine {
     if (!v) return false;
     const fwdX = -Math.sin(this.camYaw);
     const fwdZ = -Math.cos(this.camYaw);
-    const maxSpawnR = this.inSpacePlanet ? 82 : getPlayableMaxRadius() - 2;
-    const sx = THREE.MathUtils.clamp(this.playerX + fwdX * 5.8, -maxSpawnR, maxSpawnR);
-    const sz = THREE.MathUtils.clamp(this.playerZ + fwdZ * 5.8, -maxSpawnR, maxSpawnR);
+    const sx = THREE.MathUtils.clamp(this.playerX + fwdX * 5.8, -142, 142);
+    const sz = THREE.MathUtils.clamp(this.playerZ + fwdZ * 5.8, -142, 142);
     const specs = this.getVehicleSpecs(v);
     const surf = Math.max(
-      this.getActiveTerrainHeightAt(sx, sz),
+      getTerrainHeight(sx, sz),
       this.getStructuralSurfaceY(sx, sz, this.playerY + 1.5),
     );
     v.x = sx;
     v.z = sz;
-    const nextY = specs.canFloat
-      ? Math.max(surf, this.getActiveWaterLevelAt(sx, sz))
-      : surf + 0.12;
-    v.y = Number.isFinite(nextY) ? nextY : 0.2;
+    v.y = specs.canFloat ? Math.max(surf, getWaterLevelAt(sx, sz)) : surf + 0.12;
     v.vx = 0;
     v.vy = 0;
     v.vz = 0;
@@ -16587,15 +16178,6 @@ export class GameEngine {
     this.vehicleAltitudeVel = 0;
     this.vehicleAscendHold = false;
     this.vehicleDescendHold = false;
-    this.vehicleRpmNorm = 0.08;
-    this.vehicleGear = 1;
-    this.vehicleShiftTimer = 0;
-    this.vehiclePrevThrottle = 0;
-    this.vehicleSuspHeave = 0;
-    this.vehicleSuspVelY = 0;
-    this.vehiclePitchDyn = 0;
-    this.vehicleRollDyn = 0;
-    this.vehiclePrevLandY = v.y;
     this.hydraulicMode = 'level';
     this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
@@ -16733,20 +16315,9 @@ export class GameEngine {
     this.vehicleDescendHold = false;
     this.joyX = 0;
     this.joyY = 0;
-    this.touchGas = 0;
-    this.touchBrake = 0;
-    this.touchHandbrake = false;
     this.touchSprint = false;
     this.vehicleVisualPitch = 0;
     this.vehicleVisualRoll = 0;
-    this.vehicleRpmNorm = 0;
-    this.vehicleGear = 1;
-    this.vehicleShiftTimer = 0;
-    this.vehiclePrevThrottle = 0;
-    this.vehicleSuspHeave = 0;
-    this.vehicleSuspVelY = 0;
-    this.vehiclePitchDyn = 0;
-    this.vehicleRollDyn = 0;
     this.gamepadGas = 0;
     this.gamepadBrake = 0;
     this.gamepadHandbrake = false;
@@ -16756,7 +16327,6 @@ export class GameEngine {
     this.trunkBassPulse = 0;
     this.chestThumpPulse = 0;
     this.sound.stopTrunkBass();
-    this.sound.stopVehicleEngine();
     try {
       if (typeof document !== 'undefined' && document.pointerLockElement) {
         document.exitPointerLock();
@@ -16768,16 +16338,10 @@ export class GameEngine {
     if (v) {
       const sideX = Math.cos(v.yaw);
       const sideZ = -Math.sin(v.yaw);
-      const safeExit = this.resolveSafeStandSpot(
-        v.x + sideX * 2.5,
-        v.z + sideZ * 2.5,
-        v.y + 1.5,
-      );
-      this.playerX = safeExit.x;
-      this.playerZ = safeExit.z;
-      this.playerY = safeExit.y;
-      this.playerVelY = 0;
-      this.grounded = true;
+      this.playerX = v.x + sideX * 2.5;
+      this.playerZ = v.z + sideZ * 2.5;
+      const exitSurfY = this.getPlayerGroundSurfaceY(this.playerX, this.playerZ, v.y + 1.5);
+      this.applyPlayerGroundCollision(exitSurfY, 0, false, false);
       this.camStepOffsetY = 0;
       this.camBobBlend = 0;
       this.wallTiltAngle = 0;
@@ -16795,11 +16359,7 @@ export class GameEngine {
         if (distToSlot <= 1.65) {
           v.x = slot.x;
           v.z = slot.z;
-          v.y =
-            Math.max(
-              this.getActiveTerrainHeightAt(v.x, v.z),
-              this.getStructuralSurfaceY(v.x, v.z, 20),
-            ) + 0.04;
+          v.y = getTerrainHeight(v.x, v.z) + 0.14;
           v.vx = 0;
           v.vy = 0;
           v.vz = 0;
@@ -16880,7 +16440,7 @@ export class GameEngine {
       const lock = THREE.MathUtils.clamp(av.airbagLockLevel ?? 1.0, 0.4, 1.4);
       const impulse = (3.4 + speed * 4.4) * lock;
       const floorY = Math.max(
-        this.getActiveTerrainHeightAt(av.x, av.z),
+        getTerrainHeight(av.x, av.z),
         this.getStructuralSurfaceY(av.x, av.z, av.y + 0.8),
       );
       const nearGround = av.y <= floorY + 1.15;
@@ -16985,7 +16545,7 @@ export class GameEngine {
 
     // Lowrider & custom hydraulic builds: bounce high above the ground with two wheels coming off the ground
     const floorY = Math.max(
-      this.getActiveTerrainHeightAt(av.x, av.z),
+      getTerrainHeight(av.x, av.z),
       this.getStructuralSurfaceY(av.x, av.z, av.y + 0.8),
     );
     const nearGround = av.y <= floorY + 1.15;
@@ -17431,7 +16991,6 @@ export class GameEngine {
       return;
     }
     const specs = this.getVehicleSpecs(v);
-    const profile = resolveVehicleProfile(v);
 
     let moveRight = 0;
     let moveForward = 0;
@@ -17440,7 +16999,7 @@ export class GameEngine {
     if (this.keys['KeyD'] || this.keys['key_d'] || this.keys['ArrowRight']) moveRight += 1;
     if (this.keys['KeyA'] || this.keys['key_a'] || this.keys['ArrowLeft']) moveRight -= 1;
     moveRight += this.joyX;
-    moveForward += this.joyY + this.touchGas - this.touchBrake + this.gamepadGas - this.gamepadBrake;
+    moveForward += this.joyY + this.gamepadGas - this.gamepadBrake;
     moveForward = THREE.MathUtils.clamp(moveForward, -1, 1);
     moveRight = THREE.MathUtils.clamp(moveRight, -1, 1);
 
@@ -17459,10 +17018,10 @@ export class GameEngine {
     }
 
     const surfY = Math.max(
-      this.getActiveTerrainHeightAt(v.x, v.z),
+      getTerrainHeight(v.x, v.z),
       this.getStructuralSurfaceY(v.x, v.z, v.y + 0.8),
     );
-    const waterY = this.getActiveWaterLevelAt(v.x, v.z);
+    const waterY = getWaterLevelAt(v.x, v.z);
     const isHighClearance =
       v.preset === 'donk' ||
       ((v.suspensionOffset ?? 0) >= 0.32 && (v.wheelScale ?? 1) >= 1.3);
@@ -17471,77 +17030,43 @@ export class GameEngine {
     const airborne = specs.canFly && (this.vehicleAscendHold || v.y > Math.max(surfY, waterY) + 0.55);
 
     const vSpeedMult = (v.turboBoost ?? 1) * (this.modSystem?.tweaks.vehicleSpeedMultiplier ?? 1);
-    const landBaseTop = Math.max(specs.topLandSpeed * 0.72, profile.handling.topLandSpeedMs);
     const topSpeed =
       (airborne
         ? specs.topAirSpeed * boostMult * fuelMult
         : isInWater
           ? specs.topWaterSpeed * boostMult * fuelMult
-          : landBaseTop * boostMult * fuelMult) * vSpeedMult;
+          : specs.topLandSpeed * boostMult * fuelMult) * vSpeedMult;
 
-    const prevForwardSpeed = this.vehicleForwardSpeed;
-    const handbraking = Boolean(
-      this.gamepadHandbrake ||
-        this.touchHandbrake ||
-        (!specs.canFly && !hasHyd && this.vehicleAscendHold),
-    );
-
-    // Braking / Throttle per vehicle powertrain & braking profile
-    if (handbraking) {
-      this.vehicleForwardSpeed = THREE.MathUtils.damp(
-        this.vehicleForwardSpeed,
-        0,
-        profile.handling.brakeRate * 0.78,
-        dt,
-      );
+    // Braking / Throttle
+    if (this.gamepadHandbrake || (!specs.canFly && !hasHyd && this.vehicleAscendHold)) {
+      this.vehicleForwardSpeed = THREE.MathUtils.damp(this.vehicleForwardSpeed, 0, 9, dt);
     } else if (Math.abs(moveForward) > 0.08) {
-      const opposingDir =
-        (moveForward > 0 && this.vehicleForwardSpeed < -0.6) ||
-        (moveForward < 0 && this.vehicleForwardSpeed > 0.6);
       const targetSpd =
-        moveForward >= 0
-          ? moveForward * topSpeed
-          : moveForward * topSpeed * profile.handling.reverseRatio;
-      const responseRate = airborne
-        ? 2.6
-        : opposingDir
-          ? profile.handling.brakeRate * 0.68
-          : profile.handling.accelRate * 0.66;
+        moveForward >= 0 ? moveForward * topSpeed : moveForward * topSpeed * 0.55;
       this.vehicleForwardSpeed = THREE.MathUtils.damp(
         this.vehicleForwardSpeed,
         targetSpd,
-        responseRate,
+        airborne ? 2.6 : 4.2,
         dt,
       );
     } else {
       this.vehicleForwardSpeed = THREE.MathUtils.damp(
         this.vehicleForwardSpeed,
         0,
-        airborne ? 1.8 : profile.handling.coastDrag,
+        airborne ? 1.8 : 3.2,
         dt,
       );
     }
 
-    // Steering yaw & speed-sensitive aero stability
-    const steerMax = profile.handling.steerMaxRad;
-    const targetSteer = THREE.MathUtils.clamp(-moveRight * steerMax, -steerMax, steerMax);
-    this.vehicleSteerAngle = THREE.MathUtils.damp(this.vehicleSteerAngle, targetSteer, 11, dt);
+    // Steering yaw & smooth follow camera
+    const targetSteer = THREE.MathUtils.clamp(-moveRight * 0.55, -0.55, 0.55);
+    this.vehicleSteerAngle = THREE.MathUtils.damp(this.vehicleSteerAngle, targetSteer, 10, dt);
 
-    const speedRatio =
-      topSpeed > 0.1
-        ? THREE.MathUtils.clamp(Math.abs(this.vehicleForwardSpeed) / topSpeed, 0, 1.2)
-        : 0;
     if (Math.abs(moveRight) > 0.08) {
       const revSign = !airborne && this.vehicleForwardSpeed < -0.5 ? -1 : 1;
-      const highSpeedDamp = THREE.MathUtils.lerp(
-        1.0,
-        profile.handling.highSpeedSteerFactor,
-        Math.min(1, speedRatio),
-      );
       const turnPower =
-        profile.handling.steerTurnRate *
-        highSpeedDamp *
-        (airborne || isInWater ? 1.0 : Math.min(1, 0.35 + Math.abs(this.vehicleForwardSpeed) / 6.5)) *
+        specs.turnRate *
+        (airborne || isInWater ? 1.0 : Math.min(1, 0.35 + Math.abs(this.vehicleForwardSpeed) / 7)) *
         revSign;
       const yawDelta = -moveRight * turnPower * dt;
       v.yaw += yawDelta;
@@ -17562,13 +17087,8 @@ export class GameEngine {
       nextZ *= maxVehicleRadius / rad;
     }
 
-    // Ground & bridge collision vs Airship clearance (Island Overworld colliders via 16m spatial hash)
-    if (
-      this.worldType === 'island' &&
-      !this.inSpacePlanet &&
-      this.currentDimension === 'overworld' &&
-      (!airborne || v.y < Math.max(surfY, waterY) + 3.2)
-    ) {
+    // Ground & bridge collision vs Airship clearance (Island World colliders via 16m spatial hash)
+    if (this.worldType === 'island' && (!airborne || v.y < Math.max(surfY, waterY) + 3.2)) {
       const vCx = Math.floor(nextX / 16);
       const vCz = Math.floor(nextZ / 16);
       for (let gdx = -1; gdx <= 1; gdx++) {
@@ -17596,25 +17116,25 @@ export class GameEngine {
     // Check water depth barrier only for land-only rigs that can't float & can't fly
     if (!specs.canFloat && !specs.canFly) {
       const nextSurf = Math.max(
-        this.getActiveTerrainHeightAt(nextX, nextZ),
+        getTerrainHeight(nextX, nextZ),
         this.getStructuralSurfaceY(nextX, nextZ, v.y + 0.8),
       );
-      const nextWater = this.getActiveWaterLevelAt(nextX, nextZ);
+      const nextWater = getWaterLevelAt(nextX, nextZ);
       const maxFordDepth = isHighClearance ? 2.2 : 1.2;
       if (nextSurf < nextWater - maxFordDepth) {
         this.vehicleForwardSpeed *= 0.6;
       }
     }
 
-    v.x = Number.isFinite(nextX) ? nextX : v.x;
-    v.z = Number.isFinite(nextZ) ? nextZ : v.z;
+    v.x = nextX;
+    v.z = nextZ;
 
     // Vertical physics: Airship lift / Watercraft buoyancy / Land suspension & bridges
     const newSurfY = Math.max(
-      this.getActiveTerrainHeightAt(v.x, v.z),
+      getTerrainHeight(v.x, v.z),
       this.getStructuralSurfaceY(v.x, v.z, v.y + 0.8),
     );
-    const newWaterY = this.getActiveWaterLevelAt(v.x, v.z);
+    const newWaterY = getWaterLevelAt(v.x, v.z);
     const floorY = specs.canFloat
       ? Math.max(newSurfY, newWaterY - 0.16)
       : Math.max(newSurfY, newWaterY - 0.85);
@@ -17646,20 +17166,6 @@ export class GameEngine {
         v.y = floorY;
         v.vy = 0;
       }
-    }
-    if (!Number.isFinite(v.y)) {
-      v.y = Number.isFinite(floorY) ? floorY : 0.2;
-      v.vy = 0;
-    }
-    if (this.currentDimension === 'space' && !this.inSpacePlanet && v.y < -14) {
-      const safePad = this.resolveSafeStandSpot(0, 0, 10);
-      v.x = safePad.x;
-      v.z = safePad.z;
-      v.y = safePad.y + 0.2;
-      v.vx = 0;
-      v.vy = 0;
-      v.vz = 0;
-      this.vehicleForwardSpeed = 0;
     }
 
     // Bumper ramming against wildlife/dinosaurs at high speed
@@ -17695,11 +17201,11 @@ export class GameEngine {
 
     // Update terrain slope pitch + turn bank roll visuals
     const sampleFwdY = Math.max(
-      this.getActiveTerrainHeightAt(v.x + fwdX * 1.4, v.z + fwdZ * 1.4),
+      getTerrainHeight(v.x + fwdX * 1.4, v.z + fwdZ * 1.4),
       this.getStructuralSurfaceY(v.x + fwdX * 1.4, v.z + fwdZ * 1.4, v.y + 0.8),
     );
     const sampleBackY = Math.max(
-      this.getActiveTerrainHeightAt(v.x - fwdX * 1.4, v.z - fwdZ * 1.4),
+      getTerrainHeight(v.x - fwdX * 1.4, v.z - fwdZ * 1.4),
       this.getStructuralSurfaceY(v.x - fwdX * 1.4, v.z - fwdZ * 1.4, v.y + 0.8),
     );
     const desiredPitch = airborne
@@ -17727,91 +17233,11 @@ export class GameEngine {
       dt,
     );
 
-    // Dynamic chassis squat / brake dive / cornering body roll / sprung bump suspension
-    const longAccel =
-      dt > 0.0005
-        ? THREE.MathUtils.clamp((this.vehicleForwardSpeed - prevForwardSpeed) / dt, -26, 26)
-        : 0;
-    const targetDynPitch = airborne
-      ? 0
-      : THREE.MathUtils.clamp(
-          -longAccel * profile.handling.pitchSquat * 0.14,
-          -profile.handling.pitchSquat * 1.4,
-          profile.handling.pitchDive * 1.4,
-        );
-    const targetDynRoll = airborne
-      ? 0
-      : THREE.MathUtils.clamp(
-          moveRight * Math.min(1.15, spd / 14) * profile.handling.rollGain,
-          -0.22,
-          0.22,
-        );
-    this.vehiclePitchDyn = THREE.MathUtils.damp(this.vehiclePitchDyn, targetDynPitch, 9.5, dt);
-    this.vehicleRollDyn = THREE.MathUtils.damp(this.vehicleRollDyn, targetDynRoll, 9.5, dt);
-
-    const bumpVel =
-      dt > 0.0005 && !airborne
-        ? THREE.MathUtils.clamp((v.y - this.vehiclePrevLandY) / dt, -8, 8)
-        : 0;
-    this.vehiclePrevLandY = v.y;
-    const springAccel =
-      -profile.handling.suspensionStiffness * 6.5 * this.vehicleSuspHeave -
-      profile.handling.suspensionDamping * 1.4 * this.vehicleSuspVelY -
-      bumpVel * 0.45;
-    this.vehicleSuspVelY += springAccel * dt;
-    this.vehicleSuspHeave = THREE.MathUtils.clamp(
-      this.vehicleSuspHeave + this.vehicleSuspVelY * dt,
-      -0.14,
-      0.14,
-    );
-
-    // Multi-gear transmission simulation + real-time authentic per-car engine sound
-    const gears = Math.max(1, profile.audio.gearCount);
-    const absSpeedNorm =
-      topSpeed > 0.1
-        ? THREE.MathUtils.clamp(Math.abs(this.vehicleForwardSpeed) / (topSpeed * 0.96), 0, 1.05)
-        : 0;
-    const targetGear = Math.max(1, Math.min(gears, Math.floor(absSpeedNorm * gears) + 1));
-    const justShifted = targetGear > this.vehicleGear && moveForward > 0.2;
-    if (targetGear !== this.vehicleGear) {
-      this.vehicleGear = targetGear;
-      this.vehicleShiftTimer = 0.13;
+    this.vehicleEngineSoundAccum += dt;
+    if ((spd > 2 || airborne) && this.vehicleEngineSoundAccum >= 0.45) {
+      this.vehicleEngineSoundAccum = 0;
+      this.sound.playKineticGearTick();
     }
-    if (this.vehicleShiftTimer > 0) {
-      this.vehicleShiftTimer = Math.max(0, this.vehicleShiftTimer - dt);
-    }
-    const gearLow = (this.vehicleGear - 1) / gears;
-    const gearSpan = 1 / gears;
-    const gearProgress =
-      gearSpan > 0
-        ? THREE.MathUtils.clamp((absSpeedNorm - gearLow) / gearSpan, 0, 1.05)
-        : absSpeedNorm;
-    const freeRev = Math.abs(moveForward) > 0.12 && absSpeedNorm < 0.06 ? 0.34 : 0;
-    const targetRpm = THREE.MathUtils.clamp(
-      0.08 +
-        gearProgress * (this.vehicleGear === 1 ? 0.88 : 0.62) +
-        (this.vehicleGear > 1 ? 0.28 : 0) +
-        freeRev +
-        (boosting ? 0.08 : 0),
-      0.06,
-      1.04,
-    );
-    this.vehicleRpmNorm = THREE.MathUtils.damp(this.vehicleRpmNorm, targetRpm, 11, dt);
-    const throttleVal = Math.abs(moveForward) > 0.08 ? Math.abs(moveForward) : 0;
-    const throttleReleased = this.vehiclePrevThrottle > 0.45 && throttleVal < 0.1;
-    this.vehiclePrevThrottle = throttleVal;
-    this.vehicleEngineSoundAccum = 0;
-
-    this.sound.updateVehicleEngine(dt, profile.audio, {
-      rpmNorm: this.vehicleRpmNorm,
-      throttle: throttleVal,
-      braking: handbraking,
-      speedRatio: absSpeedNorm,
-      boosting,
-      shifting: this.vehicleShiftTimer > 0,
-      justShifted,
-      throttleReleased,
-    });
     this.nearbyInteraction = null;
   }
 
@@ -17968,10 +17394,10 @@ export class GameEngine {
             this.elapsed >= restEntry.nextRefreshAt
           ) {
             const surf = Math.max(
-              this.getActiveTerrainHeightAt(v.x, v.z),
+              getTerrainHeight(v.x, v.z),
               this.getStructuralSurfaceY(v.x, v.z, v.y + 0.8),
             );
-            const water = this.getActiveWaterLevelAt(v.x, v.z);
+            const water = getWaterLevelAt(v.x, v.z);
             const restY = specs.canFloat ? Math.max(surf, water - 0.14) : surf;
             restEntry = {
               x: v.x,
@@ -18038,7 +17464,7 @@ export class GameEngine {
           cachedGroundSurf !== null
             ? cachedGroundSurf
             : Math.max(
-                this.getActiveTerrainHeightAt(v.x, v.z),
+                getTerrainHeight(v.x, v.z),
                 this.getStructuralSurfaceY(v.x, v.z, v.y + 0.8),
               );
         const airGap = Math.max(0, v.y - groundSurf);
@@ -18064,9 +17490,7 @@ export class GameEngine {
         ? Math.max(0.075, 0.38 + (v.suspensionOffset ?? -0.3))
         : isCustomShowCar
           ? Math.max(0.26, 0.38 + (v.suspensionOffset ?? 0))
-          : v.preset === 'sports_car'
-            ? Math.max(-0.04, (v.suspensionOffset ?? -0.1) + 0.1)
-            : (v.suspensionOffset ?? 0);
+          : (v.suspensionOffset ?? 0);
       const minChassisY = isTahoeShow ? 0.075 : 0.18;
       const vIsOldSchool = this.isOldSchoolVehicle(v);
       const showBassPulse =
@@ -18093,11 +17517,9 @@ export class GameEngine {
         }
       } else if (isActive && activeHasHyd) {
         const { fl, fr, rl, rr } = this.hydCorners;
-        const avgHeave = (fl + fr + rl + rr) * 0.25 + this.vehicleSuspHeave * 0.85;
-        const hydPitch =
-          (activeIsDonk ? 0 : ((rl + rr) - (fl + fr)) * 0.21) + this.vehiclePitchDyn;
-        const hydRoll =
-          ((fr + rr) - (fl + rl)) * (activeIsDonk ? 0.16 : 0.24) + this.vehicleRollDyn;
+        const avgHeave = (fl + fr + rl + rr) * 0.25;
+        const hydPitch = activeIsDonk ? 0 : ((rl + rr) - (fl + fr)) * 0.21;
+        const hydRoll = ((fr + rr) - (fl + rl)) * (activeIsDonk ? 0.16 : 0.24);
         handles.chassisGroup.position.y =
           Math.max(minChassisY, baseBodyY + avgHeave) + showBassPulse * 0.025;
         handles.chassisGroup.rotation.x = hydPitch;
@@ -18115,12 +17537,9 @@ export class GameEngine {
           }
         }
       } else {
-        const dynHeave = isActive ? this.vehicleSuspHeave : 0;
-        const dynPitch = isActive ? this.vehiclePitchDyn : 0;
-        const dynRoll = isActive ? this.vehicleRollDyn : 0;
-        handles.chassisGroup.position.y = baseBodyY + dynHeave + showBassPulse * 0.032;
-        handles.chassisGroup.rotation.x = dynPitch;
-        handles.chassisGroup.rotation.z = dynRoll;
+        handles.chassisGroup.position.y = baseBodyY + showBassPulse * 0.032;
+        handles.chassisGroup.rotation.x = 0;
+        handles.chassisGroup.rotation.z = 0;
         for (const wc of handles.wheelCorners) {
           wc.obj.position.y = wc.baseY;
         }
@@ -18266,6 +17685,21 @@ export class GameEngine {
           cone.position.z = baseZ + excursion + flutter;
         }
       }
+      if (handles.quarterPanels && handles.quarterPanels.length > 0) {
+        const carProfile =
+          AUDIO_PROFILES[resolveCarAudioType(this.toRadioCarDescriptor(v))];
+        const shakeAmp = showBassPulse * 0.01 * carProfile.shake;
+        const flexWave = Math.sin(this.elapsed * 52);
+        for (const qp of handles.quarterPanels) {
+          const baseX = (qp.userData.baseX as number | undefined) ?? qp.position.x;
+          const side = (qp.userData.flexSide as number | undefined) ?? (baseX < 0 ? -1 : 1);
+          qp.userData.baseX = baseX;
+          qp.position.x =
+            showBassPulse > 0.02
+              ? baseX + side * Math.abs(flexWave) * shakeAmp + flexWave * shakeAmp * 0.35
+              : baseX;
+        }
+      }
       if (handles.subGlowMeshes && handles.subGlowMeshes.length > 0) {
         for (const sm of handles.subGlowMeshes) {
           const mat = sm.material as THREE.MeshStandardMaterial;
@@ -18377,9 +17811,7 @@ export class GameEngine {
         }
       }
 
-      const vProfile = resolveVehicleProfile(v);
-      const wheelRadius =
-        v.preset === 'sports_car' ? vProfile.wheelRadius : 0.42 * (v.wheelScale ?? 1.0);
+      const wheelRadius = 0.42 * (v.wheelScale ?? 1.0);
       const spd = isActive
         ? this.vehicleForwardSpeed
         : autoJob
@@ -18571,11 +18003,7 @@ export class GameEngine {
       v.vx = 0;
       v.vy = 0;
       v.vz = 0;
-      v.y =
-        Math.max(
-          this.getActiveTerrainHeightAt(v.x, v.z),
-          this.getStructuralSurfaceY(v.x, v.z, 20),
-        ) + 0.04;
+      v.y = getTerrainHeight(v.x, v.z) + 0.14;
       job.speed = 0;
       job.steerAngle = 0;
       job.pitchAngle = 0;
@@ -18690,7 +18118,7 @@ export class GameEngine {
     let nextX = v.x + v.vx * dt;
     let nextZ = v.z + v.vz * dt;
 
-    if (this.worldType === 'island' && !this.inSpacePlanet && this.currentDimension === 'overworld') {
+    if (this.worldType === 'island') {
       const pCx = Math.floor(nextX / 16);
       const pCz = Math.floor(nextZ / 16);
       for (let gdx = -1; gdx <= 1; gdx++) {
@@ -18736,19 +18164,19 @@ export class GameEngine {
     }
 
     const surf = Math.max(
-      this.getActiveTerrainHeightAt(v.x, v.z),
+      getTerrainHeight(v.x, v.z),
       this.getStructuralSurfaceY(v.x, v.z, v.y + 0.8),
     );
-    const water = this.getActiveWaterLevelAt(v.x, v.z);
+    const water = getWaterLevelAt(v.x, v.z);
     const restY = Math.max(surf, water - 0.35);
     v.y = THREE.MathUtils.damp(v.y, restY, 10, dt);
 
     const sampleFwdY = Math.max(
-      this.getActiveTerrainHeightAt(v.x + fwdX * 1.4, v.z + fwdZ * 1.4),
+      getTerrainHeight(v.x + fwdX * 1.4, v.z + fwdZ * 1.4),
       this.getStructuralSurfaceY(v.x + fwdX * 1.4, v.z + fwdZ * 1.4, v.y + 0.8),
     );
     const sampleBackY = Math.max(
-      this.getActiveTerrainHeightAt(v.x - fwdX * 1.4, v.z - fwdZ * 1.4),
+      getTerrainHeight(v.x - fwdX * 1.4, v.z - fwdZ * 1.4),
       this.getStructuralSurfaceY(v.x - fwdX * 1.4, v.z - fwdZ * 1.4, v.y + 0.8),
     );
     const desiredPitch = THREE.MathUtils.clamp(
@@ -18767,11 +18195,7 @@ export class GameEngine {
     const offsetZ = 0.6;
     v.x = VEHICLE_GARAGE_POS.x + offsetX;
     v.z = VEHICLE_GARAGE_POS.z + offsetZ;
-    v.y =
-      Math.max(
-        this.getActiveTerrainHeightAt(v.x, v.z),
-        this.getStructuralSurfaceY(v.x, v.z, 20),
-      ) + 0.04;
+    v.y = getTerrainHeight(v.x, v.z) + 0.14;
     v.vx = 0;
     v.vy = 0;
     v.vz = 0;
@@ -18812,10 +18236,7 @@ export class GameEngine {
       this.grounded = false;
       this.isSwimming = false;
       this.playerVelY = 0;
-      const safeFloor = Math.max(
-        this.getActiveTerrainHeightAt(this.playerX, this.playerZ),
-        this.getActiveWaterLevelAt(this.playerX, this.playerZ),
-      );
+      const safeFloor = Math.max(this.getPlayerGroundSurfaceY(this.playerX, this.playerZ, this.playerY + 1.5), getWaterLevelAt(this.playerX, this.playerZ));
       if (this.playerY < safeFloor + 2.0) {
         this.playerY = safeFloor + 2.5;
         this.flightPlayerProxy.y = this.playerY;
@@ -18942,11 +18363,7 @@ export class GameEngine {
         entities: entityList,
       },
       {
-        getGroundY: (x, z) =>
-          Math.max(
-            this.getActiveTerrainHeightAt(x, z),
-            this.getStructuralSurfaceY(x, z, 30),
-          ),
+        getGroundY: (x, z) => getTerrainHeight(x, z),
         waterLevel: 0,
         maxWorldRadius: getPlayableMaxRadius() + 180,
         maxPropCount: 1200,
@@ -19196,12 +18613,8 @@ export class GameEngine {
         this.vaultTimer = 0;
         this.playerX = HILL_HOUSE_POS.x + 8.2;
         this.playerZ = HILL_HOUSE_POS.z;
-        this.playerY = Math.max(
-          this.getActiveTerrainHeightAt(this.playerX, this.playerZ),
-          getHilltopBaseFloorY(this.playerX, this.playerZ, HILL_HOUSE_Y + 1),
-        ) + 0.05;
-        this.playerVelY = 0;
-        this.grounded = true;
+        const tpSurfY = this.getPlayerGroundSurfaceY(this.playerX, this.playerZ, HILL_HOUSE_Y + 1);
+        this.applyPlayerGroundCollision(tpSurfY, 0, false, false);
         this.camYaw = Math.PI / 2; // face West toward porch & front door
         this.camPitch = -0.05;
         this.playerYaw = this.camYaw + Math.PI;
@@ -19211,12 +18624,11 @@ export class GameEngine {
         this.vaultTimer = 0;
         this.playerX = HILL_HOUSE_POS.x + 2.05;
         this.playerZ = HILL_HOUSE_POS.z + 5.15;
-        this.playerY = Math.max(
+        const tpSurfY = Math.max(
           this.world.hillHousePos.y + 0.08,
-          getHilltopBaseFloorY(this.playerX, this.playerZ, this.world.hillHousePos.y + 1),
+          this.getPlayerGroundSurfaceY(this.playerX, this.playerZ, this.world.hillHousePos.y + 1),
         );
-        this.playerVelY = 0;
-        this.grounded = true;
+        this.applyPlayerGroundCollision(tpSurfY, 0, false, false);
         this.camYaw = Math.PI - 0.34; // face South-West directly toward Control Room Desk & Recording Booth
         this.camPitch = -0.14;
         this.playerYaw = this.camYaw + Math.PI;
@@ -19224,16 +18636,10 @@ export class GameEngine {
       } else if (target === 'mansion' && !parts[2]) {
         this.seatedState = null;
         this.vaultTimer = 0;
-        const safe = this.resolveSafeStandSpot(
-          WOODLAND_MANSION_POS.x,
-          WOODLAND_MANSION_POS.z + 7.2,
-          40,
-        );
-        this.playerX = safe.x;
-        this.playerZ = safe.z;
-        this.playerY = safe.y + 0.05;
-        this.playerVelY = 0;
-        this.grounded = true;
+        this.playerX = WOODLAND_MANSION_POS.x;
+        this.playerZ = WOODLAND_MANSION_POS.z + 7.2;
+        const tpSurfY = this.getPlayerGroundSurfaceY(this.playerX, this.playerZ, 20);
+        this.applyPlayerGroundCollision(tpSurfY, 0, false, false);
         this.camYaw = 0; // face North straight into Mansion front doorway
         this.camPitch = -0.05;
         this.playerYaw = Math.PI;
@@ -19241,16 +18647,10 @@ export class GameEngine {
       } else if (target === 'taiga_village') {
         this.seatedState = null;
         this.vaultTimer = 0;
-        const safe = this.resolveSafeStandSpot(
-          TAIGA_VILLAGE_POS.x,
-          TAIGA_VILLAGE_POS.z + 2.2,
-          40,
-        );
-        this.playerX = safe.x;
-        this.playerZ = safe.z;
-        this.playerY = safe.y + 0.05;
-        this.playerVelY = 0;
-        this.grounded = true;
+        this.playerX = TAIGA_VILLAGE_POS.x;
+        this.playerZ = TAIGA_VILLAGE_POS.z + 2.2;
+        const tpSurfY = this.getPlayerGroundSurfaceY(this.playerX, this.playerZ, 20);
+        this.applyPlayerGroundCollision(tpSurfY, 0, false, false);
         this.camYaw = 0;
         this.camPitch = -0.05;
         this.playerYaw = Math.PI;
@@ -19258,16 +18658,10 @@ export class GameEngine {
       } else if (target === 'snowy_village') {
         this.seatedState = null;
         this.vaultTimer = 0;
-        const safe = this.resolveSafeStandSpot(
-          SNOWY_VILLAGE_POS.x,
-          SNOWY_VILLAGE_POS.z + 2.2,
-          40,
-        );
-        this.playerX = safe.x;
-        this.playerZ = safe.z;
-        this.playerY = safe.y + 0.05;
-        this.playerVelY = 0;
-        this.grounded = true;
+        this.playerX = SNOWY_VILLAGE_POS.x;
+        this.playerZ = SNOWY_VILLAGE_POS.z + 2.2;
+        const tpSurfY = this.getPlayerGroundSurfaceY(this.playerX, this.playerZ, 20);
+        this.applyPlayerGroundCollision(tpSurfY, 0, false, false);
         this.camYaw = 0;
         this.camPitch = -0.05;
         this.playerYaw = Math.PI;
@@ -19275,16 +18669,10 @@ export class GameEngine {
       } else if (target === 'igloo') {
         this.seatedState = null;
         this.vaultTimer = 0;
-        const safe = this.resolveSafeStandSpot(
-          SNOWY_IGLOO_POS.x,
-          SNOWY_IGLOO_POS.z + 4.8,
-          40,
-        );
-        this.playerX = safe.x;
-        this.playerZ = safe.z;
-        this.playerY = safe.y + 0.05;
-        this.playerVelY = 0;
-        this.grounded = true;
+        this.playerX = SNOWY_IGLOO_POS.x;
+        this.playerZ = SNOWY_IGLOO_POS.z + 4.8;
+        const tpSurfY = this.getPlayerGroundSurfaceY(this.playerX, this.playerZ, 20);
+        this.applyPlayerGroundCollision(tpSurfY, 0, false, false);
         this.camYaw = 0;
         this.camPitch = -0.05;
         this.playerYaw = Math.PI;
@@ -19292,16 +18680,10 @@ export class GameEngine {
       } else if (target === 'outpost') {
         this.seatedState = null;
         this.vaultTimer = 0;
-        const safe = this.resolveSafeStandSpot(
-          PILLAGER_OUTPOST_POS.x,
-          PILLAGER_OUTPOST_POS.z + 4.5,
-          40,
-        );
-        this.playerX = safe.x;
-        this.playerZ = safe.z;
-        this.playerY = safe.y + 0.05;
-        this.playerVelY = 0;
-        this.grounded = true;
+        this.playerX = PILLAGER_OUTPOST_POS.x;
+        this.playerZ = PILLAGER_OUTPOST_POS.z + 4.5;
+        const tpSurfY = this.getPlayerGroundSurfaceY(this.playerX, this.playerZ, 20);
+        this.applyPlayerGroundCollision(tpSurfY, 0, false, false);
         this.camYaw = 0;
         this.camPitch = -0.05;
         this.playerYaw = Math.PI;
@@ -19355,10 +18737,7 @@ export class GameEngine {
   public spawnCreatorRelic(relicKey: string): void {
     const fx = this.playerX + Math.sin(this.playerYaw) * 5;
     const fz = this.playerZ + Math.cos(this.playerYaw) * 5;
-    const fy = Math.max(
-      this.getActiveTerrainHeightAt(fx, fz),
-      this.getStructuralSurfaceY(fx, fz, this.playerY),
-    );
+    const fy = Math.max(getTerrainHeight(fx, fz), this.getStructuralSurfaceY(fx, fz, this.playerY));
 
     if (relicKey === 'gravity_monolith') {
       const structId = `struct_gravity_${Date.now()}`;
@@ -19453,16 +18832,10 @@ export class GameEngine {
       c.mounted = false;
       const sideX = Math.cos(c.yaw);
       const sideZ = -Math.sin(c.yaw);
-      const safeDismount = this.resolveSafeStandSpot(
-        c.x + sideX * 2.2,
-        c.z + sideZ * 2.2,
-        c.y + 1.5,
-      );
-      this.playerX = safeDismount.x;
-      this.playerZ = safeDismount.z;
-      this.playerY = safeDismount.y;
-      this.playerVelY = 0;
-      this.grounded = true;
+      this.playerX = c.x + sideX * 2.2;
+      this.playerZ = c.z + sideZ * 2.2;
+      const dismountSurfY = this.getPlayerGroundSurfaceY(this.playerX, this.playerZ, c.y + 1.5);
+      this.applyPlayerGroundCollision(dismountSurfY, 0, false, false);
       this.camStepOffsetY = 0;
       this.camBobBlend = 0;
       this.wallTiltAngle = 0;
@@ -19543,17 +18916,7 @@ export class GameEngine {
       c.stepAccum += dt * (sprinting ? 6.5 : 3.5);
     }
 
-    const maxMountR = getPlayableMaxRadius() - 2;
-    const mRad = Math.hypot(c.x, c.z);
-    if (mRad > maxMountR && mRad > 0.001) {
-      c.x *= maxMountR / mRad;
-      c.z *= maxMountR / mRad;
-    }
-
-    c.y = Math.max(
-      this.getActiveTerrainHeightAt(c.x, c.z),
-      this.getStructuralSurfaceY(c.x, c.z, c.y + 1.2),
-    );
+    c.y = getTerrainHeight(c.x, c.z);
     c.rig.root.position.set(c.x, c.y, c.z);
     c.rig.root.rotation.y = c.yaw;
 
@@ -20175,7 +19538,7 @@ export class GameEngine {
     const fwdZ = -Math.cos(this.camYaw);
     const px = this.playerX + fwdX * 4.5;
     const pz = this.playerZ + fwdZ * 4.5;
-    const py = this.getActiveTerrainHeightAt(px, pz);
+    const py = getTerrainHeight(px, pz);
     const asset = await this.modSystem.importModelFromFile(file, px, py, pz, this.camYaw + Math.PI);
     this.emitHud();
     return asset;
@@ -20186,7 +19549,7 @@ export class GameEngine {
     const fwdZ = -Math.cos(this.camYaw);
     const px = this.playerX + fwdX * 4.5;
     const pz = this.playerZ + fwdZ * 4.5;
-    const py = this.getActiveTerrainHeightAt(px, pz);
+    const py = getTerrainHeight(px, pz);
     const asset = await this.modSystem.importModelFromUrl(url, px, py, pz, this.camYaw + Math.PI);
     this.emitHud();
     return asset;
@@ -20395,7 +19758,7 @@ export class GameEngine {
     const tx = UNDERGROUND_ELEVATOR_KIOSK_POS.x - this.playerX;
     const tz = UNDERGROUND_ELEVATOR_KIOSK_POS.z - this.playerZ;
     const ty =
-      this.getActiveTerrainHeightAt(
+      getTerrainHeight(
         UNDERGROUND_ELEVATOR_KIOSK_POS.x,
         UNDERGROUND_ELEVATOR_KIOSK_POS.z,
       ) - this.playerY;
@@ -20447,7 +19810,7 @@ export class GameEngine {
       }
     }
 
-    const groundY = this.getActiveTerrainHeightAt(
+    const groundY = getTerrainHeight(
       UNDERGROUND_ELEVATOR_POS.x,
       UNDERGROUND_ELEVATOR_POS.z,
     );
@@ -20461,17 +19824,11 @@ export class GameEngine {
       UNDERGROUND_ELEVATOR_POS.z,
       0,
     );
-    spawned.carId = car.id;
     spawned.name = car.name;
     spawned.paintColor = car.paintColor;
-    spawned.accentColor = car.accentColor;
     spawned.rimColor = car.rimColor;
     spawned.underglowColor = car.underglowColor;
     spawned.turboBoost = car.turboBoost;
-    spawned.horsepower = car.horsepower;
-    spawned.topSpeedMph = car.topSpeedMph;
-    spawned.zeroToSixtySec = Number.parseFloat(car.zeroToSixty) || undefined;
-    spawned.engineLabel = car.engine;
     if (car.livery) {
       spawned.livery = { ...car.livery };
     }
@@ -20496,7 +19853,6 @@ export class GameEngine {
     this.elevatorSummonedVehicleId = spawned.id;
     this.elevatorTargetCar = car;
     this.elevatorLiftProgress = 0;
-    this.elevatorPlatformT = 0;
     this.elevatorLiftActive = true;
     this.elevatorSteamAccum = 0;
     this.world?.undergroundElevator?.setLiftProgress(0);
@@ -20514,14 +19870,13 @@ export class GameEngine {
     // Smooth ease-in-out cubic curve for heavy hydraulic elevator feel
     const t = this.elevatorLiftProgress;
     const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-    this.elevatorPlatformT = eased;
 
     if (elev) {
       elev.setLiftProgress(eased);
       elev.beaconMat.emissiveIntensity = 1.2 + Math.abs(Math.sin(this.elapsed * 12)) * 1.4;
     }
 
-    const groundY = this.getActiveTerrainHeightAt(
+    const groundY = getTerrainHeight(
       UNDERGROUND_ELEVATOR_POS.x,
       UNDERGROUND_ELEVATOR_POS.z,
     );
@@ -20555,7 +19910,6 @@ export class GameEngine {
 
     if (this.elevatorLiftProgress >= 1) {
       this.elevatorLiftActive = false;
-      this.elevatorPlatformT = 1;
       ELEVATOR_EXOTIC_LIFT.markReady();
       if (elev) {
         elev.beaconMat.emissiveIntensity = 0.85;
@@ -20701,13 +20055,7 @@ export class GameEngine {
       const viewZ = SATURN_ROCKET_POS.z + 24.0;
       this.playerX = viewX;
       this.playerZ = viewZ;
-      this.playerY =
-        Math.max(
-          this.getActiveTerrainHeightAt(viewX, viewZ),
-          this.getStructuralSurfaceY(viewX, viewZ, 40),
-        ) + 0.1;
-      this.playerVelY = 0;
-      this.grounded = true;
+      this.playerY = getTerrainHeight(viewX, viewZ) + 0.1;
       this.camYaw = Math.atan2(
         this.playerX - SATURN_ROCKET_POS.x,
         this.playerZ - SATURN_ROCKET_POS.z,
@@ -20716,9 +20064,7 @@ export class GameEngine {
     } else {
       this.playerX = 2.0;
       this.playerZ = 10.0;
-      this.playerY = Math.max(0.05, this.getActiveTerrainHeightAt(2.0, 10.0) + 0.05);
-      this.playerVelY = 0;
-      this.grounded = true;
+      this.playerY = 0.2;
       this.camYaw = Math.atan2(this.playerX - 0, this.playerZ - -14);
       this.camPitch = 0.28;
     }
@@ -20876,17 +20222,12 @@ export class GameEngine {
     this.currentDimension = 'overworld';
     this.setOverworldActiveState(true);
 
-    const safeReturn = this.resolveSafeStandSpot(
-      SATURN_ROCKET_POS.x,
-      SATURN_ROCKET_POS.z + 11.0,
-      40,
-    );
-    this.playerX = safeReturn.x;
-    this.playerZ = safeReturn.z;
-    this.playerY = safeReturn.y + 0.1;
-    this.playerVelY = 0;
-    this.grounded = true;
-    this.isSwimming = false;
+    const padX = SATURN_ROCKET_POS.x;
+    const padZ = SATURN_ROCKET_POS.z + 11.0;
+    this.playerX = padX;
+    this.playerZ = padZ;
+    const earthSurfY = this.getPlayerGroundSurfaceY(padX, padZ, 30);
+    this.applyPlayerGroundCollision(earthSurfY, 0, false, false);
     this.sound.playSteamHiss();
     this.toast('Saturn V Returned Safely to Earth Launch Complex!', 'discovery');
     this.emitHud();
@@ -21025,14 +20366,11 @@ export class GameEngine {
     }
 
     const arrival = getDimensionArrivalPoint(dim);
-    const safeArrival = this.resolveSafeStandSpot(arrival.x, arrival.z, arrival.y + 4);
-    this.playerX = safeArrival.x;
-    this.playerY = safeArrival.y + 0.08;
-    this.playerZ = safeArrival.z;
+    this.playerX = arrival.x;
+    this.playerY = arrival.y;
+    this.playerZ = arrival.z;
     this.playerYaw = arrival.yaw;
     this.playerVelY = 0;
-    this.grounded = true;
-    this.isSwimming = false;
 
     const def = DIMENSION_DEFINITIONS[dim];
     if (def) {
@@ -21235,6 +20573,7 @@ export class GameEngine {
     this.vehicleUnderglowMeta.clear();
     this.sound?.dispose();
     this.renderer.dispose();
+    this.renderer.domElement.remove();
   }
 
   // =========================================================================
@@ -21247,7 +20586,7 @@ export class GameEngine {
     const fwdZ = -Math.cos(this.camYaw);
     const sx = this.playerX + fwdX * 5.5;
     const sz = this.playerZ + fwdZ * 5.5;
-    const sy = this.getActiveTerrainHeightAt(sx, sz);
+    const sy = getTerrainHeight(sx, sz);
 
     if (withStation) {
       const stationStruct: PlacedStructure = {
@@ -21279,7 +20618,7 @@ export class GameEngine {
     const fwdZ = -Math.cos(this.camYaw);
     const sx = this.playerX + fwdX * 6.5;
     const sz = this.playerZ + fwdZ * 6.5;
-    const sy = this.getActiveTerrainHeightAt(sx, sz);
+    const sy = getTerrainHeight(sx, sz);
 
     const stationStruct: PlacedStructure = {
       id: `struct_demo_coaster_${Date.now()}_${Math.floor(Math.random() * 999)}`,
@@ -21398,7 +20737,7 @@ export class GameEngine {
     const lastNode = summary?.nodes[summary.nodes.length - 1];
     const baseX = lastNode ? lastNode.position.x : this.playerX;
     const baseZ = lastNode ? lastNode.position.z : this.playerZ;
-    const baseY = lastNode ? lastNode.position.y : this.getActiveTerrainHeightAt(baseX, baseZ) + 2;
+    const baseY = lastNode ? lastNode.position.y : getTerrainHeight(baseX, baseZ) + 2;
     const fwdX = -Math.sin(this.camYaw);
     const fwdZ = -Math.cos(this.camYaw);
     const ok = this.coasterRuntime.addNode(
@@ -21506,16 +20845,12 @@ export class GameEngine {
     this.ridingCoasterId = null;
     this.camera.rotation.order = 'YXZ';
     this.camera.up.set(0, 1, 0);
-    const safeDismount = this.resolveSafeStandSpot(
+    const groundY = this.getPlayerGroundSurfaceY(
       this.playerX,
       this.playerZ,
       this.playerY + 1.5,
     );
-    this.playerX = safeDismount.x;
-    this.playerZ = safeDismount.z;
-    this.playerY = safeDismount.y;
-    this.playerVelY = 0;
-    this.grounded = true;
+    this.applyPlayerGroundCollision(groundY, 0, false, false);
     this.camStepOffsetY = 0;
     this.camBobBlend = 0;
     this.wallTiltAngle = 0;

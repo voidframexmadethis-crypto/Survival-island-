@@ -17,12 +17,15 @@ import {
   X,
 } from 'lucide-react';
 import {
+  AUDIO_PROFILES,
   BUILT_IN_RADIO_STATIONS,
   CABIN_BASS_AND_FIRST_PERSON,
   CAR_RADIO_TRUNK_SYSTEM,
+  CarType,
   DrivingCameraMode,
   PANDORA_APP_LAUNCHER,
   RadioCarDescriptor,
+  resolveCarAudioType,
 } from '@/game/systems/carRadioSystem';
 
 interface CarRadioModalProps {
@@ -74,8 +77,16 @@ export function CarRadioModal({
     CABIN_BASS_AND_FIRST_PERSON.customTrackError,
   );
   const [volume, setVolume] = useState(CABIN_BASS_AND_FIRST_PERSON.stereoVolume);
-  const [meters, setMeters] = useState({ bassLevel: 0, chestThump: 0, trunkPump: 0 });
+  const carAudioType: CarType = resolveCarAudioType(car);
+  const audioProfile = AUDIO_PROFILES[carAudioType];
+  const [meters, setMeters] = useState({
+    bassLevel: 0,
+    chestThump: 0,
+    trunkPump: 0,
+    quarterFlex: 0,
+  });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const quarterPanelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     CAR_RADIO_TRUNK_SYSTEM.configureForCar(car);
@@ -84,13 +95,30 @@ export function CarRadioModal({
 
   useEffect(() => {
     let rafId = 0;
+    const panelEl = quarterPanelRef.current;
     const tick = () => {
-      setMeters(CABIN_BASS_AND_FIRST_PERSON.sampleBassAndChestThump(car));
-      setIsPlaying(CABIN_BASS_AND_FIRST_PERSON.stereoPlaying);
+      const sample = CABIN_BASS_AND_FIRST_PERSON.sampleBassAndChestThump(car);
+      setMeters(sample);
+      const playing = CABIN_BASS_AND_FIRST_PERSON.stereoPlaying;
+      setIsPlaying(playing);
+      const activePanel = quarterPanelRef.current ?? panelEl;
+      if (activePanel) {
+        if (playing && sample.quarterFlex > 0.005) {
+          const movement = sample.quarterFlex;
+          activePanel.style.transform = `translateX(${Math.sin(performance.now() * 0.08) * movement}px)`;
+        } else {
+          activePanel.style.transform = '';
+        }
+      }
       rafId = window.requestAnimationFrame(tick);
     };
     rafId = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(rafId);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      if (panelEl) {
+        panelEl.style.transform = '';
+      }
+    };
   }, [car]);
 
   const handlePandoraSearch = (e?: React.FormEvent) => {
@@ -182,9 +210,7 @@ export function CarRadioModal({
                       : 'bg-sky-500/20 border border-sky-400/40 text-sky-200'
                   }`}
                 >
-                  {isOldSchool
-                    ? 'OLD-SCHOOL TRUNK + CHEST BASS (+9.5 dB)'
-                    : 'STANDARD CAR RADIO (CLEAN EXOTIC EQ)'}
+                  {`${carAudioType.toUpperCase()} EQ · 150Hz +${(5 * audioProfile.bass).toFixed(1)}dB · 55Hz +${(4 * audioProfile.low).toFixed(1)}dB`}
                 </span>
               </div>
               <h2 className="text-sm sm:text-base font-black text-white truncate">
@@ -357,28 +383,33 @@ export function CarRadioModal({
               </div>
             </div>
 
-            {/* Real-Time Trunk Pump & Chest Thump DSP Telemetry */}
-            <div className="rounded-xl bg-[#0b0e17] border border-white/10 p-3 space-y-2">
+            {/* Real-Time Trunk Pump, Quarter-Panel Flex & Chest Thump DSP Telemetry */}
+            <div
+              ref={quarterPanelRef}
+              className="rounded-xl bg-[#0b0e17] border border-white/10 p-3 space-y-2 will-change-transform"
+            >
               <div className="flex items-center justify-between text-[11px]">
                 <span className="font-bold text-stone-300">
                   {isOldSchool
-                    ? 'Live Trunk Pump & Chest Thump'
+                    ? 'Live Quarter-Panel Flex & Chest Thump'
                     : 'Exotic Clean Radio Profile'}
                 </span>
                 <span className="font-mono text-[10px] text-stone-400">
-                  {isOldSchool ? '2x12" Trunk Sub Active' : '0 dB Flat (No Trunk Shake)'}
+                  {`Shake ${audioProfile.shake.toFixed(1)}x · 55Hz Peak`}
                 </span>
               </div>
               <div className="space-y-1.5">
                 <div>
                   <div className="flex justify-between text-[10px] text-stone-400 mb-0.5">
-                    <span>Trunk Lid Pump</span>
-                    <span>{Math.round(meters.trunkPump * 100)}%</span>
+                    <span>Quarter-Panel &amp; Trunk Flex</span>
+                    <span>{Math.round(Math.min(100, (meters.quarterFlex / Math.max(0.1, audioProfile.shake)) * 100))}%</span>
                   </div>
                   <div className="h-2 rounded-full bg-slate-900 overflow-hidden">
                     <div
                       className="h-full bg-gradient-to-r from-pink-500 to-amber-400 transition-all duration-75"
-                      style={{ width: `${Math.round(meters.trunkPump * 100)}%` }}
+                      style={{
+                        width: `${Math.round(Math.min(100, Math.max(meters.trunkPump, meters.quarterFlex / Math.max(0.1, audioProfile.shake)) * 100))}%`,
+                      }}
                     />
                   </div>
                 </div>
