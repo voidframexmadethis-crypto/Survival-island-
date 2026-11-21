@@ -103,6 +103,7 @@ import { DryingRackModal } from './DryingRackModal';
 import { CraftingModal } from './CraftingModal';
 import { FarmerShopModal } from './FarmerShopModal';
 import { FridgeModal } from './FridgeModal';
+import { VikingVillageModal } from './VikingVillageModal';
 import { InventoryModal } from './InventoryModal';
 import { IslandMapModal } from './IslandMapModal';
 import { ItemIcon } from './ItemIcon';
@@ -195,6 +196,7 @@ export function SurvivalGameClient() {
   const [hud, setHud] = useState<HUDStateSnapshot | null>(null);
   const [ecosystemSnapshot, setEcosystemSnapshot] = useState<EcosystemSimulationData | null>(null);
   const [dragonsSnapshot, setDragonsSnapshot] = useState<DragonCompanion[]>([]);
+  const [dragonEggsSnapshot, setDragonEggsSnapshot] = useState<string[]>([]);
   const [toasts, setToasts] = useState<ResourceToast[]>([]);
   const [telemetryExpanded, setTelemetryExpanded] = useState(false);
   const [hudWindowStart, setHudWindowStart] = useState(0);
@@ -1042,6 +1044,7 @@ export function SurvivalGameClient() {
       }
       if (modal === 'dragon_sanctuary' && engineRef.current) {
         setDragonsSnapshot(engineRef.current.getDragons());
+        setDragonEggsSnapshot(engineRef.current.getDragonEggs());
       }
       setActiveStationStructureId(structureId);
       setActiveModal(modal);
@@ -3781,6 +3784,21 @@ export function SurvivalGameClient() {
         />
       )}
 
+      {activeModal === 'viking_village' && hud && (
+        <VikingVillageModal
+          hud={hud}
+          initialVillagerId={activeStationStructureId}
+          onInteractVillager={(id) =>
+            engineRef.current?.interactVikingVillager(id) ?? null
+          }
+          onBuyOffer={(offerId) => engineRef.current?.buyFromViking(offerId) || false}
+          onCompleteQuest={(questId) =>
+            engineRef.current?.completeVikingQuest(questId) || false
+          }
+          onClose={closeModal}
+        />
+      )}
+
       {activeModal === 'navigator_companion' &&
         hud?.navigatorCompanion &&
         !hud.navigatorCompanion.gone && (
@@ -4186,16 +4204,28 @@ export function SurvivalGameClient() {
       {activeModal === 'dragon_sanctuary' && (
         <DragonSanctuaryModal
           dragons={dragonsSnapshot}
+          eggs={hud?.dragonEggs ?? dragonEggsSnapshot}
           canRideDragon={hud?.caveSummary?.dragonUnlocked ?? false}
           redDragonCave={
             hud?.caveSummary?.specialCaves.find((c) => c.type === 'red-dragon') ?? null
           }
-          onHatch={(el, name) => {
-            engineRef.current?.hatchDragonEgg(el, name);
-            if (engineRef.current) setDragonsSnapshot(engineRef.current.getDragons());
+          onHatch={(el, name, requireEgg) => {
+            engineRef.current?.hatchDragonEgg(el, name, requireEgg);
+            if (engineRef.current) {
+              setDragonsSnapshot(engineRef.current.getDragons());
+              setDragonEggsSnapshot(engineRef.current.getDragonEggs());
+            }
           }}
           onFeed={(id) => {
             engineRef.current?.feedDragon(id);
+            if (engineRef.current) setDragonsSnapshot(engineRef.current.getDragons());
+          }}
+          onGrow={(id) => {
+            engineRef.current?.growDragon(id);
+            if (engineRef.current) setDragonsSnapshot(engineRef.current.getDragons());
+          }}
+          onCustomizeColor={(id, color) => {
+            engineRef.current?.customizeDragonColor(id, color);
             if (engineRef.current) setDragonsSnapshot(engineRef.current.getDragons());
           }}
           onCombine={(idA, idB, hybridName) => {
@@ -4322,6 +4352,13 @@ export function SurvivalGameClient() {
               >
                 <Flame className="w-5 h-5 text-orange-300 shrink-0" />
                 <span>Dragon Valley</span>
+              </button>
+              <button
+                onClick={() => openModal('viking_village', 'viking_jarl_erik')}
+                className="p-3.5 rounded-xl bg-amber-950/80 hover:bg-amber-500 hover:text-stone-950 border border-amber-500/40 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <Shield className="w-5 h-5 text-amber-300 shrink-0" />
+                <span>Viking Village</span>
               </button>
               <button
                 onClick={() => openModal('ecosystem_journal')}

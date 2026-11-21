@@ -113,6 +113,19 @@ export function tradeWithMerchant(
   };
 }
 
+export {
+  vikingVillage,
+  VIKING_TRADE_OFFERS,
+  VIKING_QUESTS,
+} from './vikingVillageSystem';
+export type {
+  VikingVillager,
+  VikingInteractionResult,
+  VikingTradeOffer,
+  VikingQuestDefinition,
+  VikingVillageSaveData,
+} from './vikingVillageSystem';
+
 /* ---------------- PLAYER HOMES ---------------- */
 
 export type HomeUpgrade =

@@ -111,10 +111,10 @@ test('StructureManager handles hostile chase, defeat, clearing, and cleared pers
   assert.equal(reloaded.structures[0].cleared, true);
 });
 
-test('Village merchants enable trading within 3m, resist damage, and registerDefaultIslandStructures loads all 6 sites', () => {
+test('Village merchants enable trading within 3m, resist damage, and registerDefaultIslandStructures loads all 7 sites', () => {
   const manager = new StructureManager();
   registerDefaultIslandStructures(manager);
-  assert.equal(manager.structures.length, 6);
+  assert.equal(manager.structures.length, 7);
 
   const taiga = manager.structures.find((s) => s.id === 'taiga_village');
   assert.ok(taiga);
@@ -133,4 +133,12 @@ test('Village merchants enable trading within 3m, resist damage, and registerDef
   const dmg = manager.damageEntity(villager, 999);
   assert.equal(dmg.killed, false);
   assert.equal(taiga.cleared, false);
+
+  const viking = manager.structures.find((s) => s.id === 'viking_village');
+  assert.ok(viking);
+  assert.ok(viking.spawnPoints.length >= 4);
+  const vPt = viking.spawnPoints[0];
+  manager.update({ x: vPt.x + 1.0, y: 6.0, z: vPt.z }, 0.016);
+  assert.equal(viking.isAwake, true);
+  assert.equal(viking.activeEntities[0].villagerRefId, 'viking_jarl_erik');
 });

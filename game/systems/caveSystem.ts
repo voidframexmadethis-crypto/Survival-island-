@@ -375,3 +375,12 @@ export function getSafeHudLayoutMetrics(
     repositionPromptAboveControls: false,
   };
 }
+
+export {
+  CAVE_TOTAL,
+  CaveBoss,
+  IslandCaveSystem,
+  LOAD_DISTANCE,
+} from './islandCaveSystem';
+export type { Cave as IslandCave } from './islandCaveSystem';
+

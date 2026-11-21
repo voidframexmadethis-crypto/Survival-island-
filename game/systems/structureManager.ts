@@ -6,6 +6,7 @@ import {
   SNOWY_VILLAGE_POS,
   TAIGA_VILLAGE_POS,
   TRIAL_CHAMBERS_POS,
+  VIKING_VILLAGE_POS,
   WOODLAND_MANSION_POS,
   getLandmarkFloorY,
   getTerrainHeight,
@@ -30,6 +31,7 @@ export interface StructureSpawnPoint {
   z: number;
   maxHp: number;
   label?: string;
+  villagerRefId?: string;
 }
 
 export interface StructureEntityDrop {
@@ -54,6 +56,7 @@ export interface ActiveStructureEntity {
   homeZ: number;
   attackCooldown: number;
   walkPhase: number;
+  villagerRefId?: string;
   mesh?: THREE.Group;
   rig?: StructureEntityRig;
 }
@@ -274,6 +277,7 @@ export class StructureManager {
         homeZ: pt.z,
         attackCooldown: 0.8 + idx * 0.25,
         walkPhase: idx * 1.3,
+        villagerRefId: pt.villagerRefId,
         mesh,
         rig,
       });
@@ -635,6 +639,49 @@ export function registerDefaultIslandStructures(manager: StructureManager): void
     spawnPoints: [
       { enemyType: 'witch', x: JUNGLE_TEMPLE_POS.x - 2.2, z: JUNGLE_TEMPLE_POS.z + 5.8, maxHp: 75, label: 'Sanctum Witch' },
       { enemyType: 'pillager', x: JUNGLE_TEMPLE_POS.x + 2.2, z: JUNGLE_TEMPLE_POS.z + 5.6, maxHp: 65, label: 'Temple Raider' },
+    ],
+  });
+
+  manager.registerStructure({
+    id: 'viking_village',
+    name: 'Viking Village',
+    type: 'village',
+    x: VIKING_VILLAGE_POS.x,
+    z: VIKING_VILLAGE_POS.z,
+    radius: 44,
+    spawnPoints: [
+      {
+        enemyType: 'villager',
+        x: VIKING_VILLAGE_POS.x - 3.2,
+        z: VIKING_VILLAGE_POS.z + 6.8,
+        maxHp: 60,
+        label: 'Jarl Erik Ironbeard',
+        villagerRefId: 'viking_jarl_erik',
+      },
+      {
+        enemyType: 'villager',
+        x: VIKING_VILLAGE_POS.x + 3.4,
+        z: VIKING_VILLAGE_POS.z + 6.4,
+        maxHp: 60,
+        label: 'Astrild the Runesmith',
+        villagerRefId: 'viking_astrild',
+      },
+      {
+        enemyType: 'villager',
+        x: VIKING_VILLAGE_POS.x + 11.2,
+        z: VIKING_VILLAGE_POS.z + 5.6,
+        maxHp: 60,
+        label: 'Bjorn the Shipwright',
+        villagerRefId: 'viking_bjorn',
+      },
+      {
+        enemyType: 'villager',
+        x: VIKING_VILLAGE_POS.x - 9.4,
+        z: VIKING_VILLAGE_POS.z - 1.2,
+        maxHp: 60,
+        label: 'Freya the Dragon-Keeper',
+        villagerRefId: 'viking_freya',
+      },
     ],
   });
 }

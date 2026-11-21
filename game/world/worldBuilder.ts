@@ -196,6 +196,7 @@ export interface WorldHandles {
   worldChunks: WorldChunk[];
   foliageChunks: WorldChunk[];
   largeLandmarkObjs: THREE.Object3D[];
+  largeLandmarkEntries: { x: number; z: number; radius: number; obj: THREE.Object3D }[];
   activateInteractiveNode: (nodeId: string) => ResourceVisualHandle | undefined;
   restoreBatchedNode: (nodeId: string) => void;
   setBatchedNodeVisible: (nodeId: string, visible: boolean) => void;
@@ -207,6 +208,7 @@ export interface WorldHandles {
     budgetQueue?: FrameBudgetQueue,
     maxActivePointLights?: number,
   ) => void;
+  resetTerrainIndex: () => void;
   dispose: () => void;
 }
 
@@ -446,6 +448,14 @@ export function buildIslandWorld(
   terrainGeo.computeVertexNormals();
   terrainGeo.computeBoundingBox();
   terrainGeo.computeBoundingSphere();
+
+  const initialTerrainIndex = terrainGeo.getIndex()?.clone() ?? null;
+  const resetTerrainIndex = (): void => {
+    if (!initialTerrainIndex) return;
+    terrainGeo.setIndex(initialTerrainIndex.clone());
+    terrainGeo.computeVertexNormals();
+    terrainGeo.computeBoundingSphere();
+  };
 
   const terrainMat = enhanceSurfaceMaterial(
     applySafeStandardMaps(
@@ -6927,6 +6937,18 @@ gl_Position = projectionMatrix * mvPosition;`,
   };
 
   const dispose = (): void => {
+    for (let i = 0; i < worldChunkManager.chunks.length; i++) {
+      const g = worldChunkManager.chunks[i].group;
+      if (!g.parent) overworldGroup.add(g);
+    }
+    for (let i = 0; i < worldChunkManager.foliageChunks.length; i++) {
+      const g = worldChunkManager.foliageChunks[i].group;
+      if (!g.parent) overworldGroup.add(g);
+    }
+    for (let i = 0; i < largeLandmarks.length; i++) {
+      const o = largeLandmarks[i].obj;
+      if (!o.parent) overworldGroup.add(o);
+    }
     overworldGroup.traverse((obj) => {
       if (obj instanceof THREE.Mesh || obj instanceof THREE.InstancedMesh) {
         obj.geometry?.dispose();
@@ -6981,11 +7003,18 @@ gl_Position = projectionMatrix * mvPosition;`,
     worldChunks: worldChunkManager.chunks,
     foliageChunks: worldChunkManager.foliageChunks,
     largeLandmarkObjs: largeLandmarks.map((e) => e.obj),
+    largeLandmarkEntries: largeLandmarks.map((e) => ({
+      x: e.cx,
+      z: e.cz,
+      radius: e.radius,
+      obj: e.obj,
+    })),
     activateInteractiveNode,
     restoreBatchedNode,
     setBatchedNodeVisible,
     setWorldShadowCasting,
     cullWorldByDistance,
+    resetTerrainIndex,
     dispose,
   };
 }

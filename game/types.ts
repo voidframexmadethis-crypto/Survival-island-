@@ -1168,6 +1168,8 @@ export interface GameSaveData {
   ecosystem?: EcosystemSimulationData;
   clearedStructureIds?: string[];
   caveProgress?: import('./systems/caveSystem').CaveCompactSave;
+  dragonValleySave?: import('./systems/dragonValleySystem').DragonValleySaveData;
+  vikingVillageSave?: import('./systems/vikingVillageSystem').VikingVillageSaveData;
 }
 
 export interface CarcassSaveData {
@@ -1218,7 +1220,8 @@ export type ActiveModal =
   | 'saturn_rocket'
   | 'underground_elevator'
   | 'car_radio'
-  | 'navigator_companion';
+  | 'navigator_companion'
+  | 'viking_village';
 
 export interface NearbyInteraction {
   id: string;
@@ -1277,7 +1280,10 @@ export interface NearbyInteraction {
     | 'saturn_rocket'
     | 'island_ufo'
     | 'underground_elevator'
-    | 'cave_entrance';
+    | 'cave_entrance'
+    | 'viking_villager'
+    | 'dragon_egg'
+    | 'dragon_sanctuary';
   actionCategory?:
     | 'chop'
     | 'mine'
@@ -1493,6 +1499,11 @@ export interface HUDStateSnapshot {
   portalNearHint?: string | null;
   spaceState?: import('./systems/multiverseSpace').SpaceHudSnapshot;
   caveSummary?: import('./systems/caveSystem').CaveSummarySnapshot;
+  dragonEggs?: string[];
+  vikingVillageProgress?: {
+    completedQuestIds: string[];
+    reputation: number;
+  };
 }
 
 export interface ModGameplayTweaks {

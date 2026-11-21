@@ -38,10 +38,20 @@ import {
   DragonElement,
   DragonFlightSystem,
   DragonPlayerRef,
+  dragonValley,
 } from '../systems/dragonValleySystem';
 import {
+  VIKING_QUESTS,
+  VIKING_TRADE_OFFERS,
+  VikingInteractionResult,
+  vikingVillage,
+} from '../systems/vikingVillageSystem';
+import {
   Cave,
+  CaveBoss,
   CaveType,
+  IslandCave,
+  IslandCaveSystem,
   caveSystem,
   getCaveTypeLabel,
 } from '../systems/caveSystem';
@@ -238,11 +248,13 @@ import {
   createGamePerformanceMonitor,
   GamePerformanceRecorder,
 } from '../systems/performanceMonitor';
+import { WorldPerformanceManager } from '../systems/worldPerformanceManager';
 import { RealisticRainSystem } from '../world/realisticRainSystem';
 import {
   AUTUMN_GROVE_POS,
   BIOME_INFO,
   CAVE_POS,
+  DRAGON_VALLEY_POS,
   EXPEDITION_POS,
   FARMER_POS,
   FLAT_GROUND_Y,
@@ -266,6 +278,7 @@ import {
   UNDERGROUND_ELEVATOR_KIOSK_POS,
   UNDERGROUND_ELEVATOR_POS,
   VEHICLE_GARAGE_POS,
+  VIKING_VILLAGE_POS,
   WATERFALL_POS,
   WHEATFIELD_POS,
   WOODLAND_MANSION_POS,
@@ -494,6 +507,8 @@ export interface EngineCallbacks {
       | 'underground_elevator'
       | 'car_radio'
       | 'navigator_companion'
+      | 'dragon_sanctuary'
+      | 'viking_village'
     >,
     structureId?: string,
   ) => void;
@@ -596,6 +611,13 @@ export class GameEngine {
   private shadowLastYaw = NaN;
   private shadowLastPitch = NaN;
   private worldQueue = new FrameBudgetQueue(3.5);
+  public readonly worldPerfManager = new WorldPerformanceManager();
+  private readonly islandCaveSystem = new IslandCaveSystem();
+  private activeCaveBosses = new Map<
+    string,
+    { boss: CaveBoss; creature: ActiveCreature }
+  >();
+  private _cavePlayerVec = new THREE.Vector3();
   private _scavengerTargetsScratch: ScavengerCarcassTarget[] = [];
   private readonly _onCreatureDamage = (amount: number, sourceName: string) => {
     this.applyPlayerDamage(amount, sourceName);
@@ -745,9 +767,20 @@ export class GameEngine {
     },
   );
 
-  // Dragon Valley System (max 6 active dragons, hatching, raising, hybrids, Anvil+NameTag, flight mount)
-  public dragons: DragonCompanion[] = [
-    DRAGON_VALLEY_SYSTEM.hatchEgg('Ember', 'Ignis'),
+  // Dragon Valley System (max 6 active dragons, egg collection, hatching, feeding/bond, color customization, age-3 rideable, Anvil+NameTag, flight mount)
+  public dragons: DragonCompanion[] = DRAGON_VALLEY_SYSTEM.resetToStarter();
+  private dragonEggNests: {
+    id: string;
+    species: DragonElement;
+    x: number;
+    z: number;
+    collected: boolean;
+    mesh?: THREE.Group;
+  }[] = [
+    { id: 'dv_egg_ember', species: 'Ember', x: DRAGON_VALLEY_POS.x - 9.5, z: DRAGON_VALLEY_POS.z + 8.5, collected: false },
+    { id: 'dv_egg_frost', species: 'Frost', x: DRAGON_VALLEY_POS.x + 10.2, z: DRAGON_VALLEY_POS.z + 7.4, collected: false },
+    { id: 'dv_egg_storm', species: 'Storm', x: DRAGON_VALLEY_POS.x - 10.8, z: DRAGON_VALLEY_POS.z - 7.6, collected: false },
+    { id: 'dv_egg_shadow', species: 'Shadow', x: DRAGON_VALLEY_POS.x + 11.0, z: DRAGON_VALLEY_POS.z - 8.2, collected: false },
   ];
   private dragonPlayerRef: DragonPlayerRef = { mountedDragonId: null };
   private dragonFlight: DragonFlightSystem = {
@@ -1560,6 +1593,8 @@ export class GameEngine {
     this.creatures = new CreatureManager(this.scene);
     this.structureManager = new StructureManager(this.scene);
     registerDefaultIslandStructures(this.structureManager);
+    this.ensureDragonEggNestMeshes();
+    this.registerWorldPerformanceObjects();
     this.sanitizeWorld();
 
     // Pre-allocate Zero-GC VFX Pools (1 InstancedMesh particle batch = 1 draw call)
@@ -2189,10 +2224,85 @@ export class GameEngine {
     this.updateStructureLightPool(cx, cz, maxDistSq, inOverworld);
   }
 
+  private registerWorldPerformanceObjects(): void {
+    this.worldPerfManager.dispose();
+    if (!this.world) return;
+    const parent = this.world.overworldGroup;
+
+    for (let i = 0; i < this.world.worldChunks.length; i++) {
+      const chunk = this.world.worldChunks[i];
+      const wx = (chunk.x + 0.5) * 64;
+      const wz = (chunk.z + 0.5) * 64;
+      this.worldPerfManager.register({
+        id: `wchunk_${chunk.x}_${chunk.z}`,
+        x: wx,
+        z: wz,
+        loaded: Boolean(chunk.group.parent),
+        load: () => {
+          if (!chunk.group.parent) parent.add(chunk.group);
+        },
+        unload: () => {
+          chunk.group.removeFromParent();
+        },
+      });
+    }
+
+    for (let i = 0; i < this.world.foliageChunks.length; i++) {
+      const fChunk = this.world.foliageChunks[i];
+      const fx = (fChunk.x + 0.5) * 64;
+      const fz = (fChunk.z + 0.5) * 64;
+      this.worldPerfManager.register({
+        id: `fchunk_${fChunk.x}_${fChunk.z}`,
+        x: fx,
+        z: fz,
+        loaded: Boolean(fChunk.group.parent),
+        load: () => {
+          if (!fChunk.group.parent) parent.add(fChunk.group);
+        },
+        unload: () => {
+          fChunk.group.removeFromParent();
+        },
+      });
+    }
+
+    for (let i = 0; i < this.world.largeLandmarkEntries.length; i++) {
+      const entry = this.world.largeLandmarkEntries[i];
+      this.worldPerfManager.register({
+        id: `landmark_${i}`,
+        x: entry.x,
+        z: entry.z,
+        loaded: Boolean(entry.obj.parent),
+        load: () => {
+          if (!entry.obj.parent) parent.add(entry.obj);
+        },
+        unload: () => {
+          entry.obj.removeFromParent();
+        },
+      });
+    }
+
+    for (let i = 0; i < this.dragonEggNests.length; i++) {
+      const nest = this.dragonEggNests[i];
+      this.worldPerfManager.register({
+        id: `nest_${nest.id}`,
+        x: nest.x,
+        z: nest.z,
+        loaded: Boolean(nest.mesh?.parent),
+        load: () => {
+          if (nest.mesh && !nest.mesh.parent) this.scene.add(nest.mesh);
+        },
+        unload: () => {
+          nest.mesh?.removeFromParent();
+        },
+      });
+    }
+  }
+
   private applyMenuCullImmediate(): void {
     if (!this.world) return;
     this.worldQueue.clear();
     if (this.currentDimension === 'overworld' && this.worldType === 'island') {
+      this.worldPerfManager.syncAll(0, 0);
       const cullDist = Math.min(this.effectiveMaxDrawDistance, 220);
       this.world.cullWorldByDistance(0, 0, cullDist, undefined, this.maxActivePointLights);
       this.cullPlacedObjectsByDistance(0, 0, cullDist);
@@ -2205,6 +2315,7 @@ export class GameEngine {
     if (!this.world) return;
     this.worldQueue.clear();
     if (this.currentDimension === 'overworld' && this.worldType === 'island') {
+      this.worldPerfManager.syncAll(0, 740);
       const cullDist = Math.max(this.effectiveMaxDrawDistance, 210);
       this.world.cullWorldByDistance(0, 740, cullDist, undefined, this.maxActivePointLights);
       this.cullPlacedObjectsByDistance(0, 740, cullDist);
@@ -2217,6 +2328,7 @@ export class GameEngine {
     if (!this.world) return;
     this.worldQueue.clear();
     if (this.currentDimension === 'overworld' && this.worldType === 'island') {
+      this.worldPerfManager.syncAll(this.playerX, this.playerZ);
       this.world.cullWorldByDistance(
         this.playerX,
         this.playerZ,
@@ -2484,11 +2596,72 @@ export class GameEngine {
     this.emitHud();
   }
 
+  private ensureDragonEggNestMeshes(): void {
+    if (!this.scene) return;
+    const colorMap: Record<DragonElement, number> = {
+      Ember: 0xf97316,
+      Frost: 0x38bdf8,
+      Storm: 0x818cf8,
+      Shadow: 0xa855f7,
+    };
+    for (const nest of this.dragonEggNests) {
+      if (nest.mesh) continue;
+      const g = new THREE.Group();
+      const y = getTerrainHeight(nest.x, nest.z);
+      g.position.set(nest.x, y, nest.z);
+      const stoneRing = new THREE.Mesh(
+        new THREE.TorusGeometry(0.62, 0.14, 6, 12),
+        new THREE.MeshStandardMaterial({ color: 0x292524, roughness: 0.92 }),
+      );
+      stoneRing.rotation.x = Math.PI / 2;
+      stoneRing.position.y = 0.12;
+      const eggGeo = new THREE.SphereGeometry(0.38, 10, 10);
+      eggGeo.scale(0.85, 1.25, 0.85);
+      const eggMesh = new THREE.Mesh(
+        eggGeo,
+        new THREE.MeshStandardMaterial({
+          color: colorMap[nest.species],
+          emissive: colorMap[nest.species],
+          emissiveIntensity: 0.48,
+          roughness: 0.35,
+        }),
+      );
+      eggMesh.position.y = 0.52;
+      g.add(stoneRing, eggMesh);
+      this.scene.add(g);
+      nest.mesh = g;
+    }
+  }
+
+  private syncDragonEggNestVisibility(): void {
+    const show = this.worldType === 'island' && this.currentDimension === 'overworld' && !this.inSpacePlanet;
+    for (const nest of this.dragonEggNests) {
+      if (nest.mesh) {
+        nest.mesh.visible = show && !nest.collected;
+      }
+    }
+  }
+
   public getDragons(): DragonCompanion[] {
     return this.dragons.map((d) => ({ ...d, elements: [...d.elements] }));
   }
 
-  public hatchDragonEgg(element: DragonElement, customName: string): DragonCompanion | null {
+  public getDragonEggs(): string[] {
+    return [...dragonValley.eggs];
+  }
+
+  public collectDragonEgg(species: string, toastPrefix = 'Collected'): void {
+    dragonValley.collectEgg(species);
+    this.sound.playPickup();
+    this.toast(`${toastPrefix} ${species} Dragon Egg! Hatch it in Dragon Valley Sanctuary.`, 'discovery');
+    this.emitHud();
+  }
+
+  public hatchDragonEgg(
+    element: DragonElement,
+    customName: string,
+    requireCollectedEgg = false,
+  ): DragonCompanion | null {
     if (this.dragons.length >= DRAGON_VALLEY_SYSTEM.maxActiveDragons) {
       this.toast(
         `Dragon cap reached (${DRAGON_VALLEY_SYSTEM.maxActiveDragons} max for steady FPS).`,
@@ -2496,9 +2669,14 @@ export class GameEngine {
       );
       return null;
     }
-    const dragon = DRAGON_VALLEY_SYSTEM.hatchEgg(element, customName);
+    const dragon = DRAGON_VALLEY_SYSTEM.hatchEgg(element, customName, requireCollectedEgg);
+    if (!dragon) {
+      this.toast(`No ${element} Dragon Egg in your Egg Bag yet — gather eggs in Dragon Valley or Viking Village!`, 'warning');
+      return null;
+    }
     this.dragons.push(dragon);
-    this.toast(`Hatched ${dragon.name} (${element} Hatchling)!`, 'discovery');
+    this.toast(`Hatched ${dragon.name} (${element} Hatchling · Age 0)!`, 'discovery');
+    this.emitHud();
     return dragon;
   }
 
@@ -2506,16 +2684,47 @@ export class GameEngine {
     const d = this.dragons.find((item) => item.id === dragonId);
     if (!d) return null;
     const prevStage = d.stage;
+    const prevRideable = d.rideable;
     DRAGON_VALLEY_SYSTEM.feedAndRaise(d, amount);
     if (d.isMounted) {
       this.dragonFlight.flySpeed = d.speed;
     }
     this.toast(
-      d.stage !== prevStage
-        ? `${d.name} evolved into a ${d.stage} (Speed ${d.speed})!`
-        : `Fed ${d.name} (${d.growth}% growth).`,
+      !prevRideable && d.rideable
+        ? `${d.name} reached Age ${d.age} (${d.stage}) and is now Rideable! Bond ${d.bond}.`
+        : d.stage !== prevStage
+          ? `${d.name} evolved into a ${d.stage} (Bond ${d.bond} · Speed ${d.speed})!`
+          : `Fed ${d.name} (+Hunger ${d.hunger}%, +5 Bond -> ${d.bond}).`,
       'discovery',
     );
+    this.emitHud();
+    return d;
+  }
+
+  public growDragon(dragonId: string): DragonCompanion | null {
+    const d = this.dragons.find((item) => item.id === dragonId);
+    if (!d) return null;
+    const prevRideable = d.rideable;
+    DRAGON_VALLEY_SYSTEM.growDragon(d);
+    if (d.isMounted) {
+      this.dragonFlight.flySpeed = d.speed;
+    }
+    this.toast(
+      !prevRideable && d.rideable
+        ? `${d.name} grew to Age ${d.age} and unlocked Rideable status!`
+        : `${d.name} grew to Age ${d.age} (${d.stage} · ${d.rideable ? 'Rideable' : 'Age 3 needed to ride'}).`,
+      'discovery',
+    );
+    this.emitHud();
+    return d;
+  }
+
+  public customizeDragonColor(dragonId: string, color: string): DragonCompanion | null {
+    const d = this.dragons.find((item) => item.id === dragonId);
+    if (!d) return null;
+    DRAGON_VALLEY_SYSTEM.customizeColor(d, color);
+    this.toast(`${d.name}'s scales customized to ${d.color}.`, 'discovery');
+    this.emitHud();
     return d;
   }
 
@@ -2534,6 +2743,7 @@ export class GameEngine {
       `Combined into ${hybrid.name} (${hybrid.elements.join('-')} • Speed ${hybrid.speed})!`,
       'discovery',
     );
+    this.emitHud();
     return hybrid;
   }
 
@@ -2546,12 +2756,20 @@ export class GameEngine {
       return false;
     }
     this.toast(`Anvil Name Tag applied: ${res.name}`, 'discovery');
+    this.emitHud();
     return true;
   }
 
   public toggleMountDragon(dragonId: string): boolean {
     const target = this.dragons.find((d) => d.id === dragonId);
     if (!target) return false;
+    if (!target.isMounted && !dragonValley.canRide(target.id)) {
+      this.toast(
+        `${target.name} is Age ${target.age}/3 — grow it to Age 3 before riding!`,
+        'warning',
+      );
+      return false;
+    }
     if (!target.isMounted && !caveSystem.canRideDragon()) {
       this.toast(
         'Dragon Riding Locked! Find & defeat the Red Dragon Boss in the Red Dragon Cave first.',
@@ -2577,6 +2795,77 @@ export class GameEngine {
     );
     this.emitHud();
     return mounted;
+  }
+
+  public interactVikingVillager(villagerId: string): VikingInteractionResult | null {
+    const targetId = villagerId || vikingVillage.villagers[0]?.id || 'viking_jarl_erik';
+    return vikingVillage.interact(targetId);
+  }
+
+  public buyFromViking(offerId: string): boolean {
+    const offer = VIKING_TRADE_OFFERS.find((o) => o.id === offerId);
+    if (!offer) return false;
+    if (this.coins < offer.costCoins) {
+      this.toast(`Need ${offer.costCoins} Coins for ${offer.title}.`, 'warning');
+      return false;
+    }
+    this.coins -= offer.costCoins;
+    if (offer.giveItemId) {
+      this.addItem(offer.giveItemId, offer.giveQuantity ?? 1, true);
+    }
+    if (offer.giveDragonEgg) {
+      dragonValley.collectEgg(offer.giveDragonEgg);
+    }
+    vikingVillage.reputation += 2;
+    this.sound.playPickup();
+    this.toast(`Traded ${offer.costCoins} Coins for ${offer.title}! (+2 Clan Rep)`, 'discovery');
+    this.emitHud();
+    return true;
+  }
+
+  public completeVikingQuest(questId: string): boolean {
+    const quest = VIKING_QUESTS.find((q) => q.id === questId);
+    if (!quest) return false;
+    if (vikingVillage.completedQuestIds.includes(questId)) {
+      this.toast('Quest already completed!', 'info');
+      return false;
+    }
+    if (quest.requirementType === 'red_dragon') {
+      if (!caveSystem.canRideDragon()) {
+        this.toast('Defeat the Red Dragon Boss in the Red Dragon Cave first!', 'warning');
+        return false;
+      }
+    } else if (quest.requiredItems) {
+      for (const req of quest.requiredItems) {
+        if (this.getItemCount(req.itemId) < req.quantity) {
+          this.toast(
+            `Missing ${ITEMS[req.itemId]?.name || req.itemId} (need ${req.quantity}).`,
+            'warning',
+          );
+          return false;
+        }
+      }
+      for (const req of quest.requiredItems) {
+        this.removeItem(req.itemId, req.quantity);
+      }
+    }
+    this.coins += quest.rewardCoins;
+    if (quest.rewardItems) {
+      for (const rw of quest.rewardItems) {
+        this.addItem(rw.itemId, rw.quantity, true);
+      }
+    }
+    if (quest.rewardDragonEgg) {
+      dragonValley.collectEgg(quest.rewardDragonEgg);
+    }
+    vikingVillage.markQuestCompleted(questId);
+    this.sound.playPickup();
+    this.toast(
+      `Quest Complete: ${quest.title}! +${quest.rewardCoins} Coins${quest.rewardDragonEgg ? ` + ${quest.rewardDragonEgg} Dragon Egg` : ''}`,
+      'discovery',
+    );
+    this.emitHud();
+    return true;
   }
 
   public setAiming(active: boolean): void {
@@ -3874,6 +4163,12 @@ export class GameEngine {
       caveSystem.dragonUnlocked = false;
       caveSystem._rebuildIndex();
       this.hideAllPooledCaveEntrances();
+      this.syncIslandCaveTerrainAndTunnels();
+      this.dragons = DRAGON_VALLEY_SYSTEM.resetToStarter();
+      this.dragonPlayerRef.mountedDragonId = null;
+      vikingVillage.reset();
+      for (const nest of this.dragonEggNests) nest.collected = false;
+      this.syncDragonEggNestVisibility();
 
       // Starter Coaster Station & Park Cyclone roller coaster right beside the Park Plaza
       this.spawnStructure({
@@ -4172,8 +4467,14 @@ export class GameEngine {
       z: 0,
       radius: Math.max(580, getPlayableMaxRadius() * 0.85),
     });
+    this.syncIslandCaveTerrainAndTunnels();
     this.lastCaveStreamX = -9999;
     this.lastCaveStreamZ = -9999;
+    this.dragons = DRAGON_VALLEY_SYSTEM.resetToStarter();
+    this.dragonPlayerRef.mountedDragonId = null;
+    vikingVillage.reset();
+    for (const nest of this.dragonEggNests) nest.collected = false;
+    this.syncDragonEggNestVisibility();
     this.ensurePlayerHasGun(true);
     this.applyExchangeCosmetics(true);
     saveCheckpoint(this.playerX, this.playerY, this.playerZ);
@@ -4362,8 +4663,14 @@ export class GameEngine {
       caveSystem._rebuildIndex();
       this.hideAllPooledCaveEntrances();
     }
+    this.syncIslandCaveTerrainAndTunnels();
     this.lastCaveStreamX = -9999;
     this.lastCaveStreamZ = -9999;
+    this.dragons = DRAGON_VALLEY_SYSTEM.importSave(save.dragonValleySave);
+    this.dragonPlayerRef.mountedDragonId = null;
+    vikingVillage.importSave(save.vikingVillageSave);
+    for (const nest of this.dragonEggNests) nest.collected = false;
+    this.syncDragonEggNestVisibility();
     saveCheckpoint(save.player.x, save.player.y, save.player.z);
     saveObjectives(Array.from(this.completedMissionIds));
     this.stats = { ...this.createEmptyStats(), ...save.stats };
@@ -5332,6 +5639,8 @@ export class GameEngine {
           : [],
       caveProgress:
         this.worldType === 'island' ? caveSystem.exportCompactState() : undefined,
+      dragonValleySave: DRAGON_VALLEY_SYSTEM.exportSave(this.dragons),
+      vikingVillageSave: vikingVillage.exportSave(),
     };
   }
 
@@ -7222,6 +7531,26 @@ export class GameEngine {
         this.callbacks.onOpenStation('farmer', near.id || 'farmer_npc');
         return;
       }
+      if (near.kind === 'viking_villager') {
+        this.callbacks.onOpenStation('viking_village', near.id || 'viking_jarl_erik');
+        this.actionCooldown = 0.35;
+        return;
+      }
+      if (near.kind === 'dragon_sanctuary') {
+        this.callbacks.onOpenStation('dragon_sanctuary', near.id || 'dragon_valley_altar');
+        this.actionCooldown = 0.35;
+        return;
+      }
+      if (near.kind === 'dragon_egg') {
+        const nest = this.dragonEggNests.find((n) => n.id === near.id && !n.collected);
+        if (nest) {
+          nest.collected = true;
+          this.syncDragonEggNestVisibility();
+          this.collectDragonEgg(nest.species, 'Found Wild');
+        }
+        this.actionCooldown = 0.4;
+        return;
+      }
       if (near.kind === 'planted_crop') {
         const crop = this.plantedCrops.find((c) => c.id === near.id);
         if (crop) {
@@ -7624,6 +7953,14 @@ export class GameEngine {
     const isDino = this.isDinosaurSpecies(c.species);
     if (isDino) {
       this.stats.dinosaursEncountered += 1;
+    }
+
+    if (c.id === 'boss_red_dragon' || c.id === 'boss_cave_monster') {
+      const tracked = this.activeCaveBosses.get(c.id);
+      if (tracked && !tracked.boss.defeated && tracked.boss.health > 0) {
+        tracked.boss.takeDamage(tracked.boss.health);
+      }
+      this.activeCaveBosses.delete(c.id);
     }
 
     if (c.id === 'boss_red_dragon') {
@@ -12274,6 +12611,44 @@ export class GameEngine {
             targetZ: cv.z,
           };
         }
+
+        // Wild Dragon Egg Nests & Dragon Valley Sanctuary Altar around DRAGON_VALLEY_POS
+        for (const nest of this.dragonEggNests) {
+          if (nest.collected) continue;
+          const eggDist = Math.hypot(nest.x - this.playerX, nest.z - this.playerZ);
+          if (eggDist < 3.4 && eggDist < bestDist) {
+            bestDist = eggDist;
+            best = {
+              id: nest.id,
+              label: `Collect ${nest.species} Dragon Egg`,
+              sublabel: 'Dragon Valley Nest · Add Egg to Sanctuary Bag',
+              kind: 'dragon_egg',
+              actionCategory: 'pickup',
+              distance: eggDist,
+              targetX: nest.x,
+              targetY: getTerrainHeight(nest.x, nest.z) + 0.5,
+              targetZ: nest.z,
+            };
+          }
+        }
+        const dvDist = Math.hypot(
+          DRAGON_VALLEY_POS.x - this.playerX,
+          DRAGON_VALLEY_POS.z - this.playerZ,
+        );
+        if (dvDist < 7.5 && dvDist < bestDist) {
+          bestDist = dvDist;
+          best = {
+            id: 'dragon_valley_altar',
+            label: 'Open Dragon Valley Sanctuary',
+            sublabel: 'Hatch Eggs, Feed, Color & Grow Dragons',
+            kind: 'dragon_sanctuary',
+            actionCategory: 'use',
+            distance: dvDist,
+            targetX: DRAGON_VALLEY_POS.x,
+            targetY: getTerrainHeight(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z) + 2.4,
+            targetZ: DRAGON_VALLEY_POS.z,
+          };
+        }
       }
     }
 
@@ -12498,11 +12873,14 @@ export class GameEngine {
           z: this.playerZ,
         });
         if (villager) {
+          const isViking = villager.siteId === 'viking_village';
           return {
-            id: villager.id,
-            label: `Trade with ${villager.displayName}`,
-            sublabel: 'Buy Seeds, Supplies & Sell Loot',
-            kind: 'farmer',
+            id: isViking ? villager.villagerRefId || 'viking_jarl_erik' : villager.id,
+            label: isViking ? `Talk to ${villager.displayName}` : `Trade with ${villager.displayName}`,
+            sublabel: isViking
+              ? 'Conversation, Nordic Trading & Quests'
+              : 'Buy Seeds, Supplies & Sell Loot',
+            kind: isViking ? 'viking_villager' : 'farmer',
             actionCategory: 'use',
             distance: Math.hypot(villager.x - this.playerX, villager.z - this.playerZ),
             targetX: villager.x,
@@ -14229,6 +14607,8 @@ export class GameEngine {
       modState: this.modSystem?.getSnapshot(),
       spaceState: this.buildSpaceHudSnapshot(),
       caveSummary: this.worldType === 'island' ? caveSystem.getSummary() : undefined,
+      dragonEggs: [...dragonValley.eggs],
+      vikingVillageProgress: vikingVillage.exportSave(),
     });
   }
 
@@ -14298,6 +14678,102 @@ export class GameEngine {
     }
   }
 
+  private syncIslandCaveTerrainAndTunnels(): void {
+    this.islandCaveSystem.dispose(this.scene);
+    this.activeCaveBosses.clear();
+    this.world?.resetTerrainIndex?.();
+
+    if (this.worldType !== 'island' || caveSystem.caves.length === 0) {
+      this.islandCaveSystem.caves = [];
+      return;
+    }
+
+    const specialCaves = caveSystem.getSpecialCaves();
+    const islandCaves: IslandCave[] = specialCaves.map((sc) => ({
+      id: sc.id,
+      type: sc.type,
+      position: new THREE.Vector3(
+        sc.x,
+        Math.max(OCEAN_LEVEL + 0.15, getTerrainHeight(sc.x, sc.z)),
+        sc.z,
+      ),
+      discovered: sc.discovered,
+      built: false,
+    }));
+    this.islandCaveSystem.caves = islandCaves;
+
+    if (this.world?.terrainMesh?.geometry && islandCaves.length > 0) {
+      this.islandCaveSystem.carveTerrain(
+        this.world.terrainMesh.geometry,
+        islandCaves.map((c) => ({
+          x: c.position.x,
+          z: c.position.z,
+          radius: 4.2,
+        })),
+      );
+    }
+  }
+
+  private registerCaveBoss(creature: ActiveCreature | null): void {
+    if (!creature || !creature.alive) return;
+    const existing = this.activeCaveBosses.get(creature.id);
+    if (existing) {
+      existing.creature = creature;
+      return;
+    }
+    const damage = creature.id === 'boss_red_dragon' ? 25 : 18;
+    const boss = new CaveBoss(
+      creature.displayNameOverride || creature.spec.displayName,
+      creature.rig.root,
+      damage,
+    );
+    boss.health = creature.hp;
+    if (boss.health < 650) boss.phase = 2;
+    if (boss.health < 300) boss.phase = 3;
+    this.activeCaveBosses.set(creature.id, { boss, creature });
+  }
+
+  private updateCaveBosses(dt: number): void {
+    if (this.activeCaveBosses.size === 0) return;
+    this._cavePlayerVec.set(this.playerX, this.playerY, this.playerZ);
+
+    for (const [id, entry] of this.activeCaveBosses) {
+      const { boss, creature } = entry;
+      if (!creature.alive || boss.defeated) {
+        if (!boss.defeated && boss.health > 0) {
+          boss.takeDamage(boss.health);
+        }
+        this.activeCaveBosses.delete(id);
+        continue;
+      }
+
+      if (creature.hp < boss.health) {
+        const prevPhase = boss.phase;
+        boss.takeDamage(boss.health - creature.hp);
+        if (boss.phase > prevPhase && !boss.defeated) {
+          this.spawnParticles(
+            creature.x,
+            creature.y + 1.8,
+            creature.z,
+            boss.phase === 3 ? 0xef4444 : 0xf97316,
+            18,
+          );
+          this.toast(
+            `${boss.name} entered Phase ${boss.phase}!`,
+            'warning',
+          );
+        }
+      }
+
+      boss.update(dt, this._cavePlayerVec, (n) =>
+        this.applyPlayerDamage(n, boss.name),
+      );
+      // Keep CreatureManager locomotion authoritative & upright on terrain.
+      creature.rig.root.position.set(creature.x, creature.y, creature.z);
+      creature.rig.root.rotation.set(0, creature.yaw, 0);
+    }
+  }
+
   private updateCaveStreaming(dt: number): void {
     if (
       this.worldType !== 'island' ||
@@ -14306,8 +14782,13 @@ export class GameEngine {
       caveSystem.caves.length === 0
     ) {
       if (this.caveEntrancePool.length > 0) this.hideAllPooledCaveEntrances();
+      if (this.islandCaveSystem.getActiveCount() > 0) {
+        this.islandCaveSystem.dispose(this.scene);
+      }
       return;
     }
+
+    this.updateCaveBosses(dt);
 
     // Rotate visible cave beacon crystals gently
     for (let i = 0; i < this.caveEntrancePool.length; i++) {
@@ -14327,6 +14808,9 @@ export class GameEngine {
     this.caveStreamTimer = 0;
     this.lastCaveStreamX = this.playerX;
     this.lastCaveStreamZ = this.playerZ;
+
+    this._cavePlayerVec.set(this.playerX, this.playerY, this.playerZ);
+    this.islandCaveSystem.update(this._cavePlayerVec, this.scene);
 
     this.ensureCaveEntrancePool();
     const nearby = caveSystem.getCavesNear(
@@ -14360,9 +14844,9 @@ export class GameEngine {
         }
       }
       if (cv.type === 'red-dragon' && !cv.bossDefeated && dist <= 46) {
-        this.creatures.spawnRedDragonBoss(cv.x, cv.z);
+        this.registerCaveBoss(this.creatures.spawnRedDragonBoss(cv.x, cv.z));
       } else if (cv.type === 'monster-boss' && !cv.bossDefeated && dist <= 42) {
-        this.creatures.spawnCaveMonsterBoss(cv.x, cv.z);
+        this.registerCaveBoss(this.creatures.spawnCaveMonsterBoss(cv.x, cv.z));
       }
     }
 
@@ -14400,7 +14884,7 @@ export class GameEngine {
     caveSystem.explore(cave.id);
 
     if (cave.type === 'red-dragon' && !cave.bossDefeated) {
-      this.creatures.spawnRedDragonBoss(cave.x, cave.z);
+      this.registerCaveBoss(this.creatures.spawnRedDragonBoss(cave.x, cave.z));
       this.toast(
         'Red Dragon Boss awakened! Defeat it to unlock Dragon Riding!',
         'warning',
@@ -14409,7 +14893,7 @@ export class GameEngine {
       return;
     }
     if (cave.type === 'monster-boss' && !cave.bossDefeated) {
-      this.creatures.spawnCaveMonsterBoss(cave.x, cave.z);
+      this.registerCaveBoss(this.creatures.spawnCaveMonsterBoss(cave.x, cave.z));
       this.toast('Cavern Monster Boss emerged from the depths!', 'warning');
       this.emitHud();
       return;
@@ -14677,6 +15161,7 @@ export class GameEngine {
             const maxDist = this.effectiveMaxDrawDistance;
             const maxDistSq = maxDist * maxDist;
             if (inOverworld && this.worldType === 'island') {
+              this.worldPerfManager.update(this.playerX, this.playerZ);
               this.world?.cullWorldByDistance(
                 this.playerX,
                 this.playerZ,
@@ -21343,6 +21828,7 @@ export class GameEngine {
   public dispose(): void {
     this.disposed = true;
     this.fpsController.stop();
+    this.worldPerfManager.dispose();
     this.perfMonitor?.dispose();
     this.perfMonitor = null;
     window.removeEventListener('resize', this.onResize);
@@ -21384,6 +21870,8 @@ export class GameEngine {
     }
     this.portalHandles.clear();
 
+    this.islandCaveSystem.dispose(this.scene);
+    this.activeCaveBosses.clear();
     this.creatures?.dispose();
     this.structureManager?.hibernateAll();
     this.realisticOcean?.dispose();

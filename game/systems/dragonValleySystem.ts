@@ -1,9 +1,19 @@
 export type DragonElement = 'Ember' | 'Frost' | 'Storm' | 'Shadow';
 export type DragonStage = 'Hatchling' | 'Juvenile' | 'Adult';
 
-export interface DragonCompanion {
+export type Dragon = {
   id: string;
   name: string;
+  species: string;
+  color: string;
+  age: number;
+  hunger: number;
+  bond: number;
+  hatched: boolean;
+  rideable: boolean;
+};
+
+export interface DragonCompanion extends Dragon {
   elements: DragonElement[];
   stage: DragonStage;
   growth: number; // 0 to 100
@@ -21,36 +31,305 @@ export interface DragonFlightSystem {
   toggleFlight: (active: boolean) => void;
 }
 
+export interface DragonColorOption {
+  id: string;
+  label: string;
+  hex: string;
+}
+
+export const DRAGON_COLOR_OPTIONS: DragonColorOption[] = [
+  { id: 'Original', label: 'Original', hex: '#ea580c' },
+  { id: 'Crimson', label: 'Crimson Flame', hex: '#dc2626' },
+  { id: 'Frostbite', label: 'Frostbite Blue', hex: '#0284c7' },
+  { id: 'Stormgold', label: 'Stormgold', hex: '#eab308' },
+  { id: 'Obsidian', label: 'Obsidian Night', hex: '#334155' },
+  { id: 'Emerald', label: 'Verdant Emerald', hex: '#10b981' },
+  { id: 'Amethyst', label: 'Void Amethyst', hex: '#9333ea' },
+];
+
+export const DRAGON_SPECIES_INFO: Record<
+  DragonElement,
+  { species: string; baseColor: string; tagline: string }
+> = {
+  Ember: {
+    species: 'Ember',
+    baseColor: 'Original',
+    tagline: 'Volcanic flame wyrm forged in magma vents',
+  },
+  Frost: {
+    species: 'Frost',
+    baseColor: 'Original',
+    tagline: 'Glacial mountain drake with ice-crystal wings',
+  },
+  Storm: {
+    species: 'Storm',
+    baseColor: 'Original',
+    tagline: 'High-altitude thunder serpent from sea squalls',
+  },
+  Shadow: {
+    species: 'Shadow',
+    baseColor: 'Original',
+    tagline: 'Nocturnal obsidian wyvern from deep caverns',
+  },
+};
+
+function generateDragonUuid(): string {
+  if (
+    typeof globalThis !== 'undefined' &&
+    globalThis.crypto &&
+    typeof globalThis.crypto.randomUUID === 'function'
+  ) {
+    return globalThis.crypto.randomUUID();
+  }
+  return `drg_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
+}
+
+export function resolveElementsFromSpecies(species: string): DragonElement[] {
+  const normalized = species.toLowerCase();
+  const found: DragonElement[] = [];
+  if (normalized.includes('ember') || normalized.includes('fire') || normalized.includes('red')) {
+    found.push('Ember');
+  }
+  if (normalized.includes('frost') || normalized.includes('ice')) {
+    found.push('Frost');
+  }
+  if (normalized.includes('storm') || normalized.includes('thunder') || normalized.includes('skrill')) {
+    found.push('Storm');
+  }
+  if (normalized.includes('shadow') || normalized.includes('void') || normalized.includes('night')) {
+    found.push('Shadow');
+  }
+  return found.length > 0 ? found.slice(0, 2) : ['Ember'];
+}
+
+export function stageFromAgeAndGrowth(age: number, growth: number): DragonStage {
+  if (age >= 3 || growth >= 100) return 'Adult';
+  if (age >= 1 || growth >= 40) return 'Juvenile';
+  return 'Hatchling';
+}
+
+export function speedFromDragon(age: number, bond: number, elements: DragonElement[]): number {
+  const base = age >= 3 ? 54 : age >= 1 ? 45 : 38;
+  const bondBonus = Math.min(10, Math.floor(bond / 10));
+  const hybridBonus = elements.length > 1 ? 4 : 0;
+  return base + bondBonus + hybridBonus;
+}
+
+export const dragonValley = {
+  eggs: [] as string[],
+  dragons: [] as Dragon[],
+
+  collectEgg(species: string): void {
+    this.eggs.push(species);
+  },
+
+  hatchEgg(species: string, name: string): Dragon | null {
+    const index = this.eggs.indexOf(species);
+    if (index < 0) return null;
+
+    this.eggs.splice(index, 1);
+    const dragon: Dragon = {
+      id: generateDragonUuid(),
+      name,
+      species,
+      color: 'Original',
+      age: 0,
+      hunger: 100,
+      bond: 0,
+      hatched: true,
+      rideable: false,
+    };
+
+    this.dragons.push(dragon);
+    return dragon;
+  },
+
+  feed(id: string): void {
+    const d = this.dragons.find((x) => x.id === id);
+    if (d) {
+      d.hunger = Math.min(100, d.hunger + 25);
+      d.bond += 5;
+    }
+  },
+
+  rename(id: string, name: string): void {
+    const d = this.dragons.find((x) => x.id === id);
+    if (d) d.name = name;
+  },
+
+  customizeColor(id: string, color: string): void {
+    const d = this.dragons.find((x) => x.id === id);
+    if (d) d.color = color;
+  },
+
+  grow(id: string): void {
+    const d = this.dragons.find((x) => x.id === id);
+    if (d) {
+      d.age++;
+      if (d.age >= 3) d.rideable = true;
+    }
+  },
+
+  canRide(id: string): boolean {
+    return this.dragons.find((x) => x.id === id)?.rideable ?? false;
+  },
+};
+
+export interface DragonValleySaveData {
+  eggs: string[];
+  dragons: DragonCompanion[];
+}
+
 export const DRAGON_VALLEY_SYSTEM = {
   maxActiveDragons: 6, // Cap active dragons so frame pacing stays steady
 
   elements: ['Ember', 'Frost', 'Storm', 'Shadow'] as DragonElement[],
 
+  resetToStarter(): DragonCompanion[] {
+    dragonValley.eggs = ['Ember', 'Frost'];
+    dragonValley.dragons = [];
+    const starter: DragonCompanion = {
+      id: generateDragonUuid(),
+      name: 'Ignis',
+      species: 'Ember',
+      color: 'Original',
+      age: 1,
+      hunger: 100,
+      bond: 10,
+      hatched: true,
+      rideable: false,
+      elements: ['Ember'],
+      stage: 'Juvenile',
+      growth: 35,
+      speed: 46,
+      isMounted: false,
+    };
+    dragonValley.dragons.push({
+      id: starter.id,
+      name: starter.name,
+      species: starter.species,
+      color: starter.color,
+      age: starter.age,
+      hunger: starter.hunger,
+      bond: starter.bond,
+      hatched: starter.hatched,
+      rideable: starter.rideable,
+    });
+    return [starter];
+  },
+
+  syncCompanionFromCore(companion: DragonCompanion): DragonCompanion {
+    const core = dragonValley.dragons.find((d) => d.id === companion.id);
+    if (core) {
+      companion.name = core.name;
+      companion.species = core.species;
+      companion.color = core.color;
+      companion.age = core.age;
+      companion.hunger = core.hunger;
+      companion.bond = core.bond;
+      companion.hatched = core.hatched;
+      companion.rideable = core.rideable;
+      companion.stage = stageFromAgeAndGrowth(core.age, companion.growth);
+      companion.speed = speedFromDragon(core.age, core.bond, companion.elements);
+    }
+    return companion;
+  },
+
+  ensureCoreEntry(companion: DragonCompanion): void {
+    const existing = dragonValley.dragons.find((d) => d.id === companion.id);
+    if (!existing) {
+      dragonValley.dragons.push({
+        id: companion.id,
+        name: companion.name,
+        species: companion.species || companion.elements.join('-'),
+        color: companion.color || 'Original',
+        age: companion.age ?? 0,
+        hunger: companion.hunger ?? 100,
+        bond: companion.bond ?? 0,
+        hatched: companion.hatched ?? true,
+        rideable: companion.rideable ?? false,
+      });
+    }
+  },
+
   hatchEgg(
     eggType: DragonElement = 'Ember',
     customName = 'Unnamed Wyrm',
-  ): DragonCompanion {
+    requireCollectedEgg = false,
+  ): DragonCompanion | null {
+    const cleanName = customName.trim() || `${eggType} Wyrm`;
+    let coreDragon: Dragon | null = null;
+
+    if (requireCollectedEgg) {
+      coreDragon = dragonValley.hatchEgg(eggType, cleanName);
+      if (!coreDragon) return null;
+    } else {
+      if (dragonValley.eggs.includes(eggType)) {
+        coreDragon = dragonValley.hatchEgg(eggType, cleanName);
+      } else {
+        coreDragon = {
+          id: generateDragonUuid(),
+          name: cleanName,
+          species: eggType,
+          color: 'Original',
+          age: 0,
+          hunger: 100,
+          bond: 0,
+          hatched: true,
+          rideable: false,
+        };
+        dragonValley.dragons.push(coreDragon);
+      }
+    }
+
+    if (!coreDragon) return null;
+    const elements = resolveElementsFromSpecies(coreDragon.species);
     return {
-      id: 'drg_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
-      name: customName.trim() || 'Unnamed Wyrm',
-      elements: [eggType],
-      stage: 'Hatchling', // Hatchling -> Juvenile -> Adult
-      growth: 0, // 0 to 100
-      speed: 38,
+      ...coreDragon,
+      elements,
+      stage: 'Hatchling',
+      growth: 0,
+      speed: speedFromDragon(coreDragon.age, coreDragon.bond, elements),
       isMounted: false,
     };
   },
 
   feedAndRaise(dragon: DragonCompanion, amount = 35): DragonCompanion {
+    this.ensureCoreEntry(dragon);
+    dragonValley.feed(dragon.id);
     dragon.growth = Math.min(100, dragon.growth + amount);
-    if (dragon.growth >= 100) {
-      dragon.stage = 'Adult';
-      dragon.speed = 54;
-    } else if (dragon.growth >= 40) {
-      dragon.stage = 'Juvenile';
-      dragon.speed = 45;
+
+    // Every full growth milestone advances age smoothly up to rideable adult (age >= 3)
+    const core = dragonValley.dragons.find((x) => x.id === dragon.id);
+    if (core) {
+      if (dragon.growth >= 100 && core.age < 3) {
+        while (core.age < 3) {
+          dragonValley.grow(core.id);
+        }
+      } else if (dragon.growth >= 66 && core.age < 2) {
+        dragonValley.grow(core.id);
+      } else if (dragon.growth >= 34 && core.age < 1) {
+        dragonValley.grow(core.id);
+      }
     }
-    return dragon;
+    return this.syncCompanionFromCore(dragon);
+  },
+
+  growDragon(dragon: DragonCompanion): DragonCompanion {
+    this.ensureCoreEntry(dragon);
+    dragonValley.grow(dragon.id);
+    const core = dragonValley.dragons.find((x) => x.id === dragon.id);
+    if (core) {
+      dragon.growth = Math.min(100, Math.max(dragon.growth, Math.round((core.age / 3) * 100)));
+    }
+    return this.syncCompanionFromCore(dragon);
+  },
+
+  customizeColor(dragon: DragonCompanion, color: string): DragonCompanion {
+    this.ensureCoreEntry(dragon);
+    const clean = color.trim().slice(0, 28) || 'Original';
+    dragonValley.customizeColor(dragon.id, clean);
+    return this.syncCompanionFromCore(dragon);
   },
 
   combineDragons(
@@ -69,12 +348,24 @@ export const DRAGON_VALLEY_SYSTEM = {
       (hybridName && hybridName.trim()) ||
       mergedElements.join('-') + ' Drake';
 
-    return {
-      id: 'hyb_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+    const core: Dragon = {
+      id: generateDragonUuid(),
       name: comboTitle,
+      species: mergedElements.join('-'),
+      color: 'Original',
+      age: 2,
+      hunger: 100,
+      bond: Math.max(15, Math.round((dragonA.bond + dragonB.bond) * 0.6)),
+      hatched: true,
+      rideable: false,
+    };
+    dragonValley.dragons.push(core);
+
+    return {
+      ...core,
       elements: mergedElements,
       stage: 'Juvenile',
-      growth: 50,
+      growth: 67,
       speed: Math.max(dragonA.speed, dragonB.speed) + 6,
       isMounted: false,
     };
@@ -97,7 +388,9 @@ export const DRAGON_VALLEY_SYSTEM = {
     if (!cleanName) {
       return { ok: false, reason: 'Enter a name on the tag first.' };
     }
-    dragon.name = cleanName;
+    this.ensureCoreEntry(dragon);
+    dragonValley.rename(dragon.id, cleanName);
+    this.syncCompanionFromCore(dragon);
     return { ok: true, name: dragon.name };
   },
 
@@ -117,5 +410,63 @@ export const DRAGON_VALLEY_SYSTEM = {
       }
     }
     return mounting;
+  },
+
+  exportSave(companions: DragonCompanion[]): DragonValleySaveData {
+    return {
+      eggs: [...dragonValley.eggs],
+      dragons: companions.map((d) => ({
+        ...d,
+        elements: [...d.elements],
+        isMounted: false,
+      })),
+    };
+  },
+
+  importSave(save?: DragonValleySaveData | null): DragonCompanion[] {
+    if (!save) {
+      return this.resetToStarter();
+    }
+    dragonValley.eggs = Array.isArray(save.eggs) ? save.eggs.map((e) => String(e)) : [];
+    const companions: DragonCompanion[] = Array.isArray(save.dragons)
+      ? save.dragons.map((d) => {
+          const elements =
+            Array.isArray(d.elements) && d.elements.length > 0
+              ? d.elements
+              : resolveElementsFromSpecies(d.species || 'Ember');
+          const age = typeof d.age === 'number' ? d.age : d.stage === 'Adult' ? 3 : d.stage === 'Juvenile' ? 1 : 0;
+          const bond = typeof d.bond === 'number' ? d.bond : 0;
+          const hunger = typeof d.hunger === 'number' ? d.hunger : 100;
+          const rideable = typeof d.rideable === 'boolean' ? d.rideable : age >= 3;
+          return {
+            id: d.id || generateDragonUuid(),
+            name: d.name || 'Wyrm',
+            species: d.species || elements.join('-'),
+            color: d.color || 'Original',
+            age,
+            hunger,
+            bond,
+            hatched: d.hatched ?? true,
+            rideable,
+            elements,
+            stage: stageFromAgeAndGrowth(age, d.growth ?? 0),
+            growth: typeof d.growth === 'number' ? d.growth : Math.min(100, age * 34),
+            speed: typeof d.speed === 'number' ? d.speed : speedFromDragon(age, bond, elements),
+            isMounted: false,
+          };
+        })
+      : [];
+    dragonValley.dragons = companions.map((c) => ({
+      id: c.id,
+      name: c.name,
+      species: c.species,
+      color: c.color,
+      age: c.age,
+      hunger: c.hunger,
+      bond: c.bond,
+      hatched: c.hatched,
+      rideable: c.rideable,
+    }));
+    return companions;
   },
 };
