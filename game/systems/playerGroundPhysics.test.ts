@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { fixPlayerGroundCollision } from './playerGroundPhysics';
+import { fixGround, fixPlayerGroundCollision } from './playerGroundPhysics';
+import { createCave } from '../world/models';
 import {
   FLAT_GROUND_Y,
   TERRAIN_HALF,
@@ -15,6 +16,32 @@ import {
   setActiveTerrainWorldType,
   terrainDeltaGrid,
 } from '../world/terrain';
+
+test('fixGround clamps objects below finite groundY and resets verticalVelocity', () => {
+  const obj = new THREE.Object3D();
+  obj.position.set(2, 1.5, -3);
+  obj.userData.verticalVelocity = -6.2;
+  obj.userData.grounded = false;
+
+  fixGround(obj, 4.0);
+  assert.equal(obj.position.y, 4.0);
+  assert.equal(obj.userData.verticalVelocity, 0);
+  assert.equal(obj.userData.grounded, true);
+
+  // Non-finite groundY is ignored safely
+  obj.position.y = 3.0;
+  obj.userData.grounded = false;
+  fixGround(obj, Number.NaN);
+  assert.equal(obj.position.y, 3.0);
+  assert.equal(obj.userData.grounded, false);
+});
+
+test('createCave builds rock ring and glowing crystals attached to scene', () => {
+  const scene = new THREE.Scene();
+  const cave = createCave(scene, { seed: 42 });
+  assert.equal(cave.parent, scene);
+  assert.equal(cave.children.length, 36);
+});
 
 test('fixPlayerGroundCollision prevents falling below ground and floating after landing', () => {
   const player = new THREE.Object3D();

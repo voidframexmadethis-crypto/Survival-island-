@@ -774,8 +774,15 @@ export class NavigatorCompanionController {
             ctx.onChopHit(nearestTree, nearestTree.x, nearestTree.y + 1.4, nearestTree.z);
             ctx.onSpawnParticles(nearestTree.x, nearestTree.y + 1.4, nearestTree.z, 0x92400e, 6);
             if (nearestTree.hp <= 0) {
+              const fdx = nearestTree.x - this.x;
+              const fdz = nearestTree.z - this.z;
+              const fdLen = Math.hypot(fdx, fdz) || 1;
               nearestTree.felled = true;
-              nearestTree.fallTimer = 1.6;
+              nearestTree.fallTimer = 1.65;
+              nearestTree.fallDuration = 1.65;
+              nearestTree.fallImpactDone = false;
+              nearestTree.fallDirX = fdx / fdLen;
+              nearestTree.fallDirZ = fdz / fdLen;
               ctx.onTreeFelled(nearestTree);
               this.treesChopped += 1;
               this.addBackpackItem('wood', 4);

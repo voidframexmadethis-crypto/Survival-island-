@@ -18,7 +18,7 @@ import {
   terrainScorchGrid,
   terrainWetnessGrid,
 } from '../world/terrain';
-export { fixPlayerGroundCollision } from './playerGroundPhysics';
+export { fixGround, fixPlayerGroundCollision } from './playerGroundPhysics';
 
 export interface ActiveWaterDroplet {
   x: number;

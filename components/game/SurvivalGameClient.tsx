@@ -1980,7 +1980,7 @@ export function SurvivalGameClient() {
                   <button
                     type="button"
                     onPointerDown={(e) => e.stopPropagation()}
-                    onClick={() => engineRef.current?.triggerPrimaryAction()}
+                    onClick={() => engineRef.current?.triggerHudInteraction()}
                     className="pointer-events-auto min-h-[40px] px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 border border-amber-300/80 text-stone-950 font-bold text-xs sm:text-sm shadow-xl flex items-center gap-1.5 whitespace-nowrap shrink-0"
                   >
                     {hud.nearbyInteraction.actionCategory === 'chop' ? (

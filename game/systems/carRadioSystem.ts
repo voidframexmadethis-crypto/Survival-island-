@@ -1,4 +1,4 @@
-import type * as THREE from 'three';
+import * as THREE from 'three';
 
 export interface RadioCarDescriptor {
   id?: string;
@@ -135,6 +135,7 @@ export interface SetupCarAudioHandles {
   sub: BiquadFilterNode;
   gain: GainNode;
   analyser: AnalyserNode;
+  panner: PannerNode;
   profile: CarAudioProfile;
   destroy: () => void;
 }
@@ -153,26 +154,34 @@ export function setupCarAudio(
   const sub = ctx.createBiquadFilter();
   const gain = ctx.createGain();
   const analyser = ctx.createAnalyser();
+  const carPanner = ctx.createPanner();
 
   const profile = AUDIO_PROFILES[car];
 
   bass.type = 'lowshelf';
-  bass.frequency.value = 150;
-  bass.gain.value = 5 * profile.bass;
+  bass.frequency.value = 100;
+  bass.gain.value = 6 * profile.bass;
 
   sub.type = 'peaking';
-  sub.frequency.value = 55;
+  sub.frequency.value = 48;
   sub.Q.value = 0.8;
-  sub.gain.value = 4 * profile.low;
+  sub.gain.value = 5 * profile.low;
 
   gain.gain.value = 0.8;
   analyser.fftSize = 256;
+
+  carPanner.panningModel = 'HRTF';
+  carPanner.distanceModel = 'inverse';
+  carPanner.refDistance = 2;
+  carPanner.maxDistance = 55;
+  carPanner.rolloffFactor = 1.4;
 
   source.connect(bass);
   bass.connect(sub);
   sub.connect(gain);
   gain.connect(analyser);
-  analyser.connect(ctx.destination);
+  analyser.connect(carPanner);
+  carPanner.connect(ctx.destination);
 
   const data = new Uint8Array(analyser.frequencyBinCount);
   let rafId = 0;
@@ -227,6 +236,7 @@ export function setupCarAudio(
     sub,
     gain,
     analyser,
+    panner: carPanner,
     profile,
     destroy: () => {
       destroyed = true;
@@ -246,6 +256,7 @@ export function setupCarAudio(
         sub.disconnect();
         gain.disconnect();
         analyser.disconnect();
+        carPanner.disconnect();
       } catch {
         // Ignore teardown disconnect errors
       }
@@ -263,6 +274,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
   subFilter: null as BiquadFilterNode | null,
   compressor: null as DynamicsCompressorNode | null,
   masterGain: null as GainNode | null,
+  carPanner: null as PannerNode | null,
   freqData: null as Uint8Array<ArrayBuffer> | null,
   connectedElements: new WeakMap<HTMLMediaElement, MediaElementAudioSourceNode>(),
   cameraMode: 'CHASE' as DrivingCameraMode,
@@ -271,6 +283,8 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
 
   // Built-in stereo loop state (routes directly through bassFilter -> subFilter -> analyser -> compressor)
   stereoPlaying: false,
+  userPaused: false,
+  spatialAttenuation: 1,
   stereoVolume: 0.78,
   activeStationId: 'slab_808',
   customTrackName: null as string | null,
@@ -294,17 +308,17 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       this.audioCtx = new AudioCtx();
       const profile = AUDIO_PROFILES[this.activeCarType];
 
-      // 150 Hz lowshelf bass + 55 Hz peaking sub tuned per CarType profile
+      // 100 Hz lowshelf bass + 48 Hz peaking sub tuned per CarType profile
       this.bassFilter = this.audioCtx.createBiquadFilter();
       this.bassFilter.type = 'lowshelf';
-      this.bassFilter.frequency.value = 150;
-      this.bassFilter.gain.value = 5 * profile.bass;
+      this.bassFilter.frequency.value = 100;
+      this.bassFilter.gain.value = 6 * profile.bass;
 
       this.subFilter = this.audioCtx.createBiquadFilter();
       this.subFilter.type = 'peaking';
-      this.subFilter.frequency.value = 55;
+      this.subFilter.frequency.value = 48;
       this.subFilter.Q.value = 0.8;
-      this.subFilter.gain.value = 4 * profile.low;
+      this.subFilter.gain.value = 5 * profile.low;
 
       this.analyser = this.audioCtx.createAnalyser();
       this.analyser.fftSize = 256;
@@ -320,13 +334,22 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       this.compressor.ratio.value = 6;
 
       this.masterGain = this.audioCtx.createGain();
-      this.masterGain.gain.value = this.stereoVolume * 0.8;
+      const synthSpatial = this.customAudioEl && this.customTrackName ? 1 : this.spatialAttenuation;
+      this.masterGain.gain.value = this.stereoVolume * 0.8 * synthSpatial;
+
+      this.carPanner = this.audioCtx.createPanner();
+      this.carPanner.panningModel = 'HRTF';
+      this.carPanner.distanceModel = 'inverse';
+      this.carPanner.refDistance = 2;
+      this.carPanner.maxDistance = 55;
+      this.carPanner.rolloffFactor = 1.4;
 
       this.bassFilter.connect(this.subFilter);
       this.subFilter.connect(this.analyser);
       this.analyser.connect(this.compressor);
       this.compressor.connect(this.masterGain);
-      this.masterGain.connect(this.audioCtx.destination);
+      this.masterGain.connect(this.carPanner);
+      this.carPanner.connect(this.audioCtx.destination);
     }
 
     if (this.audioCtx.state === 'suspended') {
@@ -361,7 +384,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     return this.cameraMode;
   },
 
-  // Updates radio profile per vehicle using AUDIO_PROFILES (150Hz lowshelf + 55Hz sub peaking)
+  // Updates radio profile per vehicle using AUDIO_PROFILES (100Hz lowshelf + 48Hz sub peaking)
   applyVehicleRadioProfile(car: RadioCarDescriptor): {
     oldSchool: boolean;
     carType: CarType;
@@ -373,15 +396,18 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     const profile = AUDIO_PROFILES[carType];
     this.activeCarType = carType;
     if (this.bassFilter && this.audioCtx) {
+      this.bassFilter.frequency.value = 100;
       this.bassFilter.gain.setTargetAtTime(
-        5 * profile.bass,
+        6 * profile.bass,
         this.audioCtx.currentTime,
         0.03,
       );
     }
     if (this.subFilter && this.audioCtx) {
+      this.subFilter.frequency.value = 48;
+      this.subFilter.Q.value = 0.8;
       this.subFilter.gain.setTargetAtTime(
-        4 * profile.low,
+        5 * profile.low,
         this.audioCtx.currentTime,
         0.03,
       );
@@ -397,14 +423,30 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
   setVolume(vol: number): void {
     this.stereoVolume = Math.max(0, Math.min(1, vol));
     if (this.masterGain && this.audioCtx) {
+      const synthSpatial =
+        this.customAudioEl && this.customTrackName ? 1 : this.spatialAttenuation;
       this.masterGain.gain.setTargetAtTime(
-        this.stereoVolume * 0.8,
+        this.stereoVolume * 0.8 * synthSpatial,
         this.audioCtx.currentTime,
         0.02,
       );
     }
-    if (this.customAudioEl) {
+    if (this.customAudioEl && !(this.customAudioEl.src && this.customTrackName)) {
       this.customAudioEl.volume = this.stereoVolume;
+    }
+  },
+
+  setSpatialAttenuation(factor: number): void {
+    const clamped = THREE.MathUtils.clamp(factor, 0, 1);
+    this.spatialAttenuation = clamped;
+    if (this.masterGain && this.audioCtx) {
+      const synthSpatial =
+        this.customAudioEl && this.customTrackName ? 1 : clamped;
+      this.masterGain.gain.setTargetAtTime(
+        this.stereoVolume * 0.8 * synthSpatial,
+        this.audioCtx.currentTime,
+        0.03,
+      );
     }
   },
 
@@ -413,6 +455,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     this.stopAudioElementOnly();
     this.activeStationId = stationId;
     this.customTrackName = null;
+    this.userPaused = false;
     if (car) {
       this.applyVehicleRadioProfile(car);
     }
@@ -467,6 +510,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       this.applyVehicleRadioProfile(car);
     }
     this.customTrackName = file.name.replace(/\.[^/.]+$/, '') || 'Custom Audio';
+    this.userPaused = false;
     this.stereoPlaying = true;
     audioEl.play().catch(() => {
       // Autoplay or codec fallback handled cleanly on user play click / onerror
@@ -480,6 +524,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       return false;
     }
     this.ensureAudioGraph();
+    this.userPaused = false;
     if (car) {
       this.applyVehicleRadioProfile(car);
     }
@@ -493,6 +538,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
   },
 
   pause(): void {
+    this.userPaused = true;
     this.stereoPlaying = false;
     this.stopSynthLoop();
     if (this.customAudioEl) {
@@ -501,6 +547,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
   },
 
   stopAll(): void {
+    this.userPaused = true;
     this.stereoPlaying = false;
     this.stopSynthLoop();
     this.stopAudioElementOnly();
@@ -794,6 +841,88 @@ export function updateCarTrunkAudio(
   }
 
   return pump;
+}
+
+export function updateCarAudioPosition(
+  audio: HTMLAudioElement,
+  car: THREE.Object3D,
+  player: THREE.Object3D,
+  listener: THREE.AudioListener,
+) {
+  const distance = player.position.distanceTo(car.position);
+  const inside = distance < 3;
+
+  audio.volume = THREE.MathUtils.clamp(1 - distance / 35, 0, 1);
+
+  if (inside && audio.paused) {
+    if (listener?.context?.state === 'suspended') {
+      listener.context.resume().catch(() => {});
+    }
+    audio.play().catch(() => {});
+  }
+
+  return { inside, distance, volume: audio.volume };
+}
+
+const _carPos3D = new THREE.Vector3();
+const _camPos3D = new THREE.Vector3();
+const _camQuat3D = new THREE.Quaternion();
+const _camForward3D = new THREE.Vector3();
+
+export function updateCarStereo3D(
+  panner: PannerNode,
+  car: THREE.Object3D,
+  camera: THREE.Camera,
+) {
+  const t = panner.context.currentTime;
+  car.updateMatrixWorld();
+  camera.updateMatrixWorld();
+  const pos = car.getWorldPosition(_carPos3D);
+  const listener = panner.context.listener;
+  const camPos = camera.getWorldPosition(_camPos3D);
+  const forward = _camForward3D
+    .set(0, 0, -1)
+    .applyQuaternion(camera.getWorldQuaternion(_camQuat3D));
+
+  if (panner.positionX) {
+    panner.positionX.setTargetAtTime(pos.x, t, 0.04);
+    panner.positionY.setTargetAtTime(pos.y, t, 0.04);
+    panner.positionZ.setTargetAtTime(pos.z, t, 0.04);
+  } else {
+    const legacyPanner = panner as unknown as {
+      setPosition?: (x: number, y: number, z: number) => void;
+    };
+    legacyPanner.setPosition?.(pos.x, pos.y, pos.z);
+  }
+
+  if (listener.positionX) {
+    listener.positionX.setTargetAtTime(camPos.x, t, 0.04);
+    listener.positionY.setTargetAtTime(camPos.y, t, 0.04);
+    listener.positionZ.setTargetAtTime(camPos.z, t, 0.04);
+  } else {
+    const legacyListener = listener as unknown as {
+      setPosition?: (x: number, y: number, z: number) => void;
+    };
+    legacyListener.setPosition?.(camPos.x, camPos.y, camPos.z);
+  }
+
+  if (listener.forwardX) {
+    listener.forwardX.setTargetAtTime(forward.x, t, 0.04);
+    listener.forwardY.setTargetAtTime(forward.y, t, 0.04);
+    listener.forwardZ.setTargetAtTime(forward.z, t, 0.04);
+  } else {
+    const legacyListener = listener as unknown as {
+      setOrientation?: (
+        fx: number,
+        fy: number,
+        fz: number,
+        ux: number,
+        uy: number,
+        uz: number,
+      ) => void;
+    };
+    legacyListener.setOrientation?.(forward.x, forward.y, forward.z, 0, 1, 0);
+  }
 }
 
 interface CapacitorAppLauncherPlugin {

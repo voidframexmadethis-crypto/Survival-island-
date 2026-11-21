@@ -306,6 +306,8 @@ import {
   DrivingCameraMode,
   RadioCarDescriptor,
   resolveCarAudioType,
+  updateCarAudioPosition,
+  updateCarStereo3D,
 } from '../systems/carRadioSystem';
 import {
   buildIslandWorld,
@@ -323,6 +325,7 @@ import { RealisticOcean } from '../world/RealisticOcean';
 import {
   applyRealisticMeshLightingPass,
   enableRealisticIslandLighting,
+  upgradeGraphics,
 } from '../world/realisticLighting';
 import {
   buildDimensionWorld,
@@ -332,6 +335,20 @@ import {
   disposePortalVortex,
   PortalVortexHandle,
 } from '../world/multiverseModels';
+import {
+  loadCheckpoint,
+  saveCheckpoint,
+  saveObjectives,
+  unlockReward,
+} from '../systems/launchSave';
+import {
+  TREE_FALL_DURATION_SEC,
+  canCollectPickupWithinRange,
+  computeTreeChopPower,
+  computeTreeFallPose,
+  isChoppableNodeKind,
+  isTreeResourceKind,
+} from '../systems/treeAndPickupPhysics';
 
 const _vec3A = new THREE.Vector3();
 const _vec3B = new THREE.Vector3();
@@ -639,6 +656,9 @@ export class GameEngine {
   private localAppliedBackpackSkinId: string | null | undefined = undefined;
   private localAppliedGunSkinId: string | null | undefined = undefined;
   private _playerPhysicsProxy = new THREE.Object3D();
+  private audioListener: THREE.AudioListener | null = null;
+  private lastRadioVehicleId: string | null = null;
+  private activeRadioCarRoot: THREE.Object3D | null = null;
   private readonly _groundSampleFn = (x: number, z: number): number => {
     if (this.worldType === 'flat') return FLAT_GROUND_Y;
     if (this.inSpacePlanet) return 0;
@@ -1280,7 +1300,7 @@ export class GameEngine {
       this.isSoftwareGl ? 1 : this.isTouchDevice ? 1.5 : 2,
     );
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.needsUpdate = !this.isSoftwareGl;
     this.renderer.setSize(
@@ -1302,6 +1322,12 @@ export class GameEngine {
     this.container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
+    const initialShadowMapSize = this.isTouchDevice ? 1024 : 2048;
+    upgradeGraphics(this.renderer, this.scene, {
+      shadowsEnabled: !this.isSoftwareGl,
+      exposure: 1.15,
+      shadowMapSize: initialShadowMapSize,
+    });
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.envTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -1322,6 +1348,19 @@ export class GameEngine {
     this.camera.add(this.handsRig.root);
     this.nightVisionLight = new THREE.PointLight(0x94a3b8, 0, 11, 1.8);
     this.camera.add(this.nightVisionLight);
+    if (
+      typeof window !== 'undefined' &&
+      (window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext)
+    ) {
+      try {
+        this.audioListener = new THREE.AudioListener();
+        this.camera.add(this.audioListener);
+      } catch {
+        this.audioListener = null;
+      }
+    }
     this.scene.add(this.camera);
 
     // Local 3rd-Person Avatar Rig (visible when SmoothPlayerCameraRig is in 'third_person')
@@ -1335,7 +1374,7 @@ export class GameEngine {
       this.renderer,
       {
         shadowsEnabled: !this.isSoftwareGl,
-        shadowMapSize: 1024,
+        shadowMapSize: initialShadowMapSize,
         shadowHalfExtent: 64,
         shadowNear: 1,
         shadowFar: 220,
@@ -1933,7 +1972,7 @@ export class GameEngine {
       if (this.activeVehicleId) {
         this.openVehicleCargo(this.activeVehicleId);
       } else {
-        this.collectNearbyCarcass();
+        this.collectNearbyPickupOrCarcass();
       }
     } else if (e.code === 'KeyX') {
       if (!this.activeVehicleId) {
@@ -2233,7 +2272,7 @@ export class GameEngine {
       !this.isSoftwareGl;
 
     const shadowMapSize =
-      preset === 'ultra' && !this.isTouchDevice
+      !this.isTouchDevice && !this.isSoftwareGl && preset !== 'low'
         ? 2048
         : 1024;
     const shadowHalfExtent =
@@ -4057,6 +4096,8 @@ export class GameEngine {
       n.respawnTimer = 0;
       n.felled = false;
       n.fallTimer = 0;
+      n.fallDuration = 0;
+      n.fallImpactDone = false;
       this.world.restoreBatchedNode(n.id);
       this.syncResourceVisual(n);
     });
@@ -4099,6 +4140,8 @@ export class GameEngine {
     }
     this.ensurePlayerHasGun(true);
     this.applyExchangeCosmetics(true);
+    saveCheckpoint(this.playerX, this.playerY, this.playerZ);
+    saveObjectives([]);
     this.resetFrameTiming();
     this.emitHud();
   }
@@ -4268,6 +4311,8 @@ export class GameEngine {
     this.markExploredAroundPlayer();
     this.discoveredLocations = new Set(save.discoveredLocations || []);
     this.completedMissionIds = new Set(save.completedMissionIds || []);
+    saveCheckpoint(save.player.x, save.player.y, save.player.z);
+    saveObjectives(Array.from(this.completedMissionIds));
     this.stats = { ...this.createEmptyStats(), ...save.stats };
     this.weaponMagazines.clear();
     this.cancelReload();
@@ -4559,8 +4604,21 @@ export class GameEngine {
     const campBed = this.structures.find(
       (s) => s.type === 'basic_shelter' || s.type === 'sleeping_area',
     );
-    this.playerX = campBed ? campBed.x : PLAYER_SPAWN.x;
-    this.playerZ = campBed ? campBed.z + 2.2 : PLAYER_SPAWN.z;
+    const savedCheckpoint = !campBed ? loadCheckpoint() : null;
+    const maxPlayableR = getPlayableMaxRadius();
+    const hasValidCheckpoint =
+      savedCheckpoint &&
+      Math.hypot(savedCheckpoint.x, savedCheckpoint.z) <= maxPlayableR;
+    this.playerX = campBed
+      ? campBed.x
+      : hasValidCheckpoint
+        ? savedCheckpoint.x
+        : PLAYER_SPAWN.x;
+    this.playerZ = campBed
+      ? campBed.z + 2.2
+      : hasValidCheckpoint
+        ? savedCheckpoint.z
+        : PLAYER_SPAWN.z;
     const respawnSurfY = this.getPlayerGroundSurfaceY(this.playerX, this.playerZ, 30);
     this.applyPlayerGroundCollision(respawnSurfY, 0, false, false);
     this.vitals.health = 100;
@@ -5848,6 +5906,10 @@ export class GameEngine {
         def.structureType === 'cooking_station',
     };
     this.spawnStructure(st);
+    if (st.type === 'basic_shelter' || st.type === 'sleeping_area') {
+      saveCheckpoint(st.x, st.y, st.z + 2.2);
+      unlockReward('shelter_checkpoint');
+    }
     this.p2p?.broadcast({ type: 'place_structure', structure: st });
     this.sound.playCraftSuccess();
     this.toast(`Built ${def.name}`, 'craft');
@@ -6651,8 +6713,19 @@ export class GameEngine {
 
     const equippedId = this.getEquippedItemId();
     const equippedDef = equippedId ? ITEMS[equippedId] : null;
+    const holdingRangedWeapon = Boolean(
+      equippedId && (isFirearmItem(equippedId) || equippedId === 'primitive_bow'),
+    );
 
-    // 1. WEAPON ISOLATION (with smart Sickle/Knife crop harvesting when facing wheat/sugarcane/mature crop)
+    // Pick up any nearby ground resource on primary action unless actively aiming a ranged weapon at a creature
+    if (near && near.kind === 'pickup' && !(holdingRangedWeapon && this.targetHitbox)) {
+      this.collectPickup(near.id);
+      this.swingTimer = 0.18;
+      this.actionCooldown = 0.2;
+      return;
+    }
+
+    // 1. WEAPON ISOLATION (with smart Sickle/Knife crop harvesting + universal tree chopping fallback)
     if (equippedId && equippedDef && isActiveWeaponItem(equippedId)) {
       if (equippedId === 'hunting_knife') {
         const cropNode = this.findNearestResourceNode(
@@ -6681,21 +6754,53 @@ export class GameEngine {
             Math.hypot(c.x - this.playerX, c.z - this.playerZ) <= 4.2 &&
             Math.abs(c.y - this.playerY) <= 3.8,
         );
-        if (
-          !creatureNearby &&
-          (this.getItemCount('dried_raw_meat') > 0 ||
-            this.getItemCount('dried_dino_meat') > 0)
-        ) {
-          this.cutDriedMeatWithKnife();
-          return;
+        if (!creatureNearby) {
+          const treeNode = this.findNearestResourceNode(4.4, (n) =>
+            isChoppableNodeKind(n.kind),
+          );
+          if (treeNode) {
+            this.swingTimer = 0.28;
+            this.actionCooldown = 0.34;
+            this.harvestResourceNode(treeNode.id, equippedDef);
+            return;
+          }
+          if (
+            this.getItemCount('dried_raw_meat') > 0 ||
+            this.getItemCount('dried_dino_meat') > 0
+          ) {
+            this.cutDriedMeatWithKnife();
+            return;
+          }
         }
       }
       if (isFirearmItem(equippedId)) {
+        const spec = FIREARM_SPECS[equippedId] ?? FIREARM_SPECS['gun'];
+        const magAmmo = this.weaponMagazines.get(equippedId) ?? spec?.magSize ?? 0;
+        if (magAmmo <= 0 && this.getItemCount('ammo') <= 0) {
+          const treeNode = this.findNearestResourceNode(4.4, (n) =>
+            isChoppableNodeKind(n.kind),
+          );
+          if (treeNode) {
+            this.swingTimer = 0.28;
+            this.actionCooldown = 0.36;
+            this.harvestResourceNode(treeNode.id, equippedDef);
+            return;
+          }
+        }
         this.fireGun(equippedId);
         return;
       }
       if (equippedId === 'primitive_bow') {
         if (this.getItemCount('arrows') <= 0) {
+          const treeNode = this.findNearestResourceNode(4.4, (n) =>
+            isChoppableNodeKind(n.kind),
+          );
+          if (treeNode) {
+            this.swingTimer = 0.28;
+            this.actionCooldown = 0.36;
+            this.harvestResourceNode(treeNode.id, equippedDef);
+            return;
+          }
           this.toast(
             'Out of Flint Arrows! Craft more at a Crafting Station.',
             'warning',
@@ -6715,7 +6820,7 @@ export class GameEngine {
       return;
     }
 
-    // 2. HARVESTING TOOLS: Strictly scoped to their own resource type
+    // 2. HARVESTING TOOLS: Primary specialization + universal tree chopping fallback
     if (equippedId === 'sickle' && equippedDef) {
       const matureCrop = this.plantedCrops.find(
         (c) => c.mature && Math.hypot(c.x - this.playerX, c.z - this.playerZ) < 3.2,
@@ -6738,15 +6843,22 @@ export class GameEngine {
       if (cropNode) {
         this.harvestResourceNode(cropNode.id, equippedDef);
       } else {
-        this.sound.playAttack('melee');
-        this.toast('Face Wheat, Sugarcane, or ripe crops to cut with Sickle', 'info');
+        const treeNode = this.findNearestResourceNode(4.4, (n) =>
+          isChoppableNodeKind(n.kind),
+        );
+        if (treeNode) {
+          this.harvestResourceNode(treeNode.id, equippedDef);
+        } else {
+          this.sound.playAttack('melee');
+          this.toast('Face Wheat, Sugarcane, ripe crops, or a tree to cut with Sickle', 'info');
+        }
       }
       return;
     }
 
     if (equippedId === 'stone_axe' && equippedDef) {
       const treeNode = this.findNearestResourceNode(4.4, (n) =>
-        this.isTreeKind(n.kind) || n.kind === 'branch_pile',
+        isChoppableNodeKind(n.kind),
       );
       this.swingTimer = 0.28;
       this.actionCooldown = 0.36;
@@ -6772,14 +6884,30 @@ export class GameEngine {
         if (hitBlock) {
           this.dismantleStructuralBlock(hitBlock.id);
         } else {
-          this.sound.playAttack('melee');
-          this.toast('Face stone, ore, or built masonry to mine', 'info');
+          const treeNode = this.findNearestResourceNode(4.4, (n) =>
+            isChoppableNodeKind(n.kind),
+          );
+          if (treeNode) {
+            this.harvestResourceNode(treeNode.id, equippedDef);
+          } else {
+            this.sound.playAttack('melee');
+            this.toast('Face stone, ore, built masonry, or a tree', 'info');
+          }
         }
       }
       return;
     }
 
     if (equippedId === 'excavator_shovel') {
+      const treeNode = this.findNearestResourceNode(4.0, (n) =>
+        this.isTreeKind(n.kind),
+      );
+      if (treeNode) {
+        this.swingTimer = 0.28;
+        this.actionCooldown = 0.32;
+        this.harvestResourceNode(treeNode.id, equippedDef);
+        return;
+      }
       this.useExcavatorShovel();
       this.swingTimer = 0.28;
       this.actionCooldown = 0.28;
@@ -6807,8 +6935,22 @@ export class GameEngine {
       return;
     }
 
-    // 3. SPECIALIZED EQUIPMENT: Independently scoped to their own job
+    // 3. SPECIALIZED EQUIPMENT: Independently scoped, with tree chop fallback when facing a tree on land
     if (equippedId === 'fishing_rod') {
+      const treeNode = this.findNearestResourceNode(4.4, (n) =>
+        isChoppableNodeKind(n.kind),
+      );
+      if (
+        treeNode &&
+        !this.isNearOceanWater() &&
+        !this.isNearLakeWater() &&
+        !isFreshwaterAt(this.playerX, this.playerZ)
+      ) {
+        this.swingTimer = 0.26;
+        this.actionCooldown = 0.36;
+        this.harvestResourceNode(treeNode.id, equippedDef);
+        return;
+      }
       this.castFishingRod();
       return;
     }
@@ -6890,8 +7032,17 @@ export class GameEngine {
       return;
     }
 
-    // 6. AMMO SUPPLY: Strictly informational reminder (never swings or harvests)
+    // 6. AMMO SUPPLY: Chops facing tree if right in front, else shows reminder
     if (equippedId && isAmmoItem(equippedId)) {
+      const treeNode = this.findNearestResourceNode(4.4, (n) =>
+        isChoppableNodeKind(n.kind),
+      );
+      if (treeNode) {
+        this.swingTimer = 0.28;
+        this.actionCooldown = 0.36;
+        this.harvestResourceNode(treeNode.id, null);
+        return;
+      }
       const qty = this.getItemCount(equippedId);
       this.toast(
         equippedId === 'ammo'
@@ -6905,8 +7056,17 @@ export class GameEngine {
       return;
     }
 
-    // 7. RAW MATERIAL / RESOURCE: Places 1 down (or mills/uses wheat/sugarcane info)
+    // 7. RAW MATERIAL / RESOURCE: Places 1 down (or chops if directly facing a tree)
     if (equippedDef && equippedDef.category === 'resource') {
+      const treeNode = this.findNearestResourceNode(3.9, (n) =>
+        this.isTreeKind(n.kind),
+      );
+      if (treeNode) {
+        this.swingTimer = 0.28;
+        this.actionCooldown = 0.36;
+        this.harvestResourceNode(treeNode.id, null);
+        return;
+      }
       this.placeItemInWorld(equippedDef.id);
       this.actionCooldown = 0.35;
       return;
@@ -7160,6 +7320,34 @@ export class GameEngine {
     this.swingTimer = 0.25;
     this.actionCooldown = 0.35;
     this.sound.playAttack('melee');
+  }
+
+  public triggerHudInteraction(): void {
+    this.sound.unlock();
+    if (
+      this.mode !== 'playing' ||
+      !canProcessGameplayInput(this.masterRuntime) ||
+      this.gameOver ||
+      this.cinematicActive
+    ) {
+      return;
+    }
+    const near = this.nearbyInteraction;
+    if (near && near.kind === 'pickup') {
+      this.collectPickup(near.id);
+      this.swingTimer = 0.18;
+      this.actionCooldown = 0.2;
+      return;
+    }
+    if (near && near.kind === 'resource') {
+      const eqId = this.getEquippedItemId();
+      const eqDef = eqId ? ITEMS[eqId] : null;
+      this.swingTimer = 0.28;
+      this.actionCooldown = 0.34;
+      this.harvestResourceNode(near.id, eqDef);
+      return;
+    }
+    this.triggerPrimaryAction();
   }
 
   private findNearestResourceNode(
@@ -7598,6 +7786,14 @@ export class GameEngine {
         }
       }
     }
+
+    // 3. Tree / Choppable Resource Fallback: any melee weapon can chop down trees
+    const treeNode = this.findNearestResourceNode(Math.max(4.4, range + 0.8), (n) =>
+      isChoppableNodeKind(n.kind),
+    );
+    if (treeNode) {
+      this.harvestResourceNode(treeNode.id, weaponDef);
+    }
   }
 
   private fireArrow(): void {
@@ -7954,36 +8150,13 @@ export class GameEngine {
     this.stats.daysSurvived = this.dayCount;
     this.timeOfDay = 0.28;
     this.lastIsNight = false;
+    saveCheckpoint(this.playerX, this.playerY, this.playerZ);
     this.toast(`Rested until Day ${this.dayCount} sunrise (+45 Health)`, 'info');
     this.emitHud();
   }
 
   private isTreeKind(kind: ResourceNodeKind): boolean {
-    return (
-      kind === 'palm_tree' ||
-      kind === 'tropical_tree' ||
-      kind === 'oak_tree' ||
-      kind === 'dark_oak_tree' ||
-      kind === 'huge_red_mushroom' ||
-      kind === 'huge_brown_mushroom' ||
-      kind === 'banyan_tree' ||
-      kind === 'highland_cedar' ||
-      kind === 'birch_tree' ||
-      kind === 'old_growth_birch_tree' ||
-      kind === 'pale_oak_tree' ||
-      kind === 'taiga_pine_tree' ||
-      kind === 'old_growth_pine_tree' ||
-      kind === 'spruce_tree' ||
-      kind === 'mega_spruce_tree' ||
-      kind === 'snowy_spruce_tree' ||
-      kind === 'jungle_tree' ||
-      kind === 'mega_jungle_tree' ||
-      kind === 'cherry_tree' ||
-      kind === 'bee_nest_oak' ||
-      kind === 'acacia_tree' ||
-      kind === 'swamp_oak_tree' ||
-      kind === 'mangrove_tree'
-    );
+    return isTreeResourceKind(kind);
   }
 
   private isRockKind(kind: ResourceNodeKind): boolean {
@@ -8019,6 +8192,11 @@ export class GameEngine {
     }
     if (!handle) return;
 
+    if (handle.felledPivot && handle.felledPivot.userData.basePivotY === undefined) {
+      handle.felledPivot.userData.basePivotY = handle.felledPivot.position.y;
+    }
+    const basePivotY = (handle.felledPivot?.userData.basePivotY as number | undefined) ?? 0.65;
+
     if (this.isTreeKind(node.kind)) {
       if (node.felled) {
         handle.root.visible = true;
@@ -8028,7 +8206,9 @@ export class GameEngine {
             handle.felledPivot.visible = true;
           } else {
             handle.felledPivot.visible = false;
-            handle.felledPivot.rotation.set(0, 0, 0);
+            handle.felledPivot.quaternion.identity();
+            handle.felledPivot.position.y = basePivotY;
+            handle.felledPivot.scale.setScalar(1);
           }
         }
         if (handle.trunkCutBand) handle.trunkCutBand.visible = false;
@@ -8036,9 +8216,12 @@ export class GameEngine {
         handle.root.visible = false;
       } else {
         handle.root.visible = true;
+        if (handle.stumpMesh) handle.stumpMesh.visible = true;
         if (handle.felledPivot) {
           handle.felledPivot.visible = true;
-          handle.felledPivot.rotation.set(0, 0, 0);
+          handle.felledPivot.quaternion.identity();
+          handle.felledPivot.position.y = basePivotY;
+          handle.felledPivot.scale.setScalar(1);
         }
         const dmgRatio = (node.maxHp - node.hp) / Math.max(1, node.maxHp);
         if (handle.trunkCutBand) {
@@ -8134,7 +8317,23 @@ export class GameEngine {
     placedOnGround = false,
     startY?: number,
   ): void {
-    if (this.pickups.length >= 64) {
+    const def = ITEMS[itemId];
+    if (def?.stackable && !placedOnGround && !existingId && startY === undefined) {
+      for (const existing of this.pickups) {
+        if (
+          !existing.collected &&
+          !existing.placedOnGround &&
+          existing.itemId === itemId &&
+          existing.quantity + quantity <= def.maxStack &&
+          Math.hypot(existing.x - x, existing.z - z) <= 2.0
+        ) {
+          existing.quantity += quantity;
+          existing.life = Math.max(existing.life, life);
+          return;
+        }
+      }
+    }
+    if (this.pickups.length >= 140) {
       const oldest = this.pickups.shift();
       if (oldest) this.recyclePickupMesh(oldest.itemId, oldest.mesh);
     }
@@ -8506,6 +8705,44 @@ export class GameEngine {
     );
   }
 
+  private findBestNearbyPickup(maxRange = 3.8): ActivePickup | null {
+    let best: ActivePickup | null = null;
+    let bestDistSq = maxRange * maxRange;
+    for (let i = 0; i < this.pickups.length; i++) {
+      const p = this.pickups[i];
+      if (!canCollectPickupWithinRange(p, this.playerX, this.playerY, this.playerZ, maxRange, 3.2)) {
+        continue;
+      }
+      const dx = p.x - this.playerX;
+      const dz = p.z - this.playerZ;
+      const dSq = dx * dx + dz * dz;
+      if (dSq < bestDistSq) {
+        bestDistSq = dSq;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  public collectNearbyPickupOrCarcass(): boolean {
+    this.sound.unlock();
+    if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) {
+      return false;
+    }
+    if (this.worldType === 'island' && this.findNearbyCarcass()) {
+      return this.collectNearbyCarcass();
+    }
+    const nearPickup = this.findBestNearbyPickup(4.5);
+    if (nearPickup) {
+      this.collectPickup(nearPickup.id);
+      this.swingTimer = 0.18;
+      this.actionCooldown = 0.2;
+      return true;
+    }
+    this.emitHud();
+    return false;
+  }
+
   private harvestResourceNode(
     nodeId: string,
     equippedTool: (typeof ITEMS)[ItemId] | null,
@@ -8520,10 +8757,9 @@ export class GameEngine {
     let power = 1;
     const isTree = this.isTreeKind(node.kind);
     const isRock = this.isRockKind(node.kind);
-    if (isTree && equippedTool?.preferredResource === 'wood') {
-      power = equippedTool.gatherPower || 2;
-    }
-    if (isRock && equippedTool?.preferredResource === 'stone') {
+    if (isTree || isChoppableNodeKind(node.kind)) {
+      power = computeTreeChopPower(equippedTool);
+    } else if (isRock && equippedTool?.preferredResource === 'stone') {
       power = equippedTool.gatherPower || 2;
     }
 
@@ -8553,7 +8789,9 @@ export class GameEngine {
         const dz = node.z - this.playerZ;
         const dLen = Math.hypot(dx, dz) || 1;
         node.felled = true;
-        node.fallTimer = 1.05;
+        node.fallDuration = TREE_FALL_DURATION_SEC;
+        node.fallTimer = TREE_FALL_DURATION_SEC;
+        node.fallImpactDone = false;
         node.fallDirX = dx / dLen;
         node.fallDirZ = dz / dLen;
         this.activeFellingNodeIds.add(node.id);
@@ -8998,6 +9236,8 @@ export class GameEngine {
         m.checkProgress(ctx) >= m.targetCount
       ) {
         this.completedMissionIds.add(m.id);
+        saveObjectives(Array.from(this.completedMissionIds));
+        unlockReward(m.id);
         this.toast(`Mission Complete: ${m.title}`, 'discovery');
       }
     }
@@ -10254,16 +10494,28 @@ export class GameEngine {
     // Update First-Person Hands & Held Tool Visuals
     this.updateFirstPersonHands(inputMag);
 
-    // Auto-collect physical resource pickups when walking directly over them (only once settled on ground)
+    // Magnetically pull & auto-collect physical resource pickups once settled on the ground
     for (let i = this.pickups.length - 1; i >= 0; i--) {
       const p = this.pickups[i];
       if (
-        !p.collected &&
-        p.currentY === undefined &&
-        (p.autoCollectDelay ?? 0) <= 0 &&
-        Math.hypot(p.x - this.playerX, p.z - this.playerZ) < 1.35
+        p.collected ||
+        p.currentY !== undefined ||
+        (p.autoCollectDelay ?? 0) > 0 ||
+        Math.abs(p.y - this.playerY) > 3.0
       ) {
+        continue;
+      }
+      const pdx = this.playerX - p.x;
+      const pdz = this.playerZ - p.z;
+      const dist = Math.hypot(pdx, pdz);
+      if (dist < 1.65) {
         this.collectPickup(p.id);
+      } else if (!p.placedOnGround && dist < 2.85 && dist > 0.001) {
+        const pull = Math.min(dist, 6.2 * dt);
+        p.x += (pdx / dist) * pull;
+        p.z += (pdz / dist) * pull;
+        p.mesh.position.x = p.x;
+        p.mesh.position.z = p.z;
       }
     }
 
@@ -10922,7 +11174,28 @@ export class GameEngine {
     const equippedId = this.getEquippedItemId();
     const equippedDef = equippedId ? ITEMS[equippedId] : null;
 
-    // 1. WEAPON ISOLATION (Knife can also slice adjacent Wheat/Sugarcane/ripe crops)
+    const nearPickup = this.findBestNearbyPickup(3.8);
+    const holdingRangedWeapon = Boolean(
+      equippedId && (isFirearmItem(equippedId) || equippedId === 'primitive_bow'),
+    );
+    if (nearPickup && !(holdingRangedWeapon && this.targetHitbox)) {
+      const d = Math.hypot(nearPickup.x - this.playerX, nearPickup.z - this.playerZ);
+      return {
+        id: nearPickup.id,
+        label: `Pick up ${ITEMS[nearPickup.itemId].name}`,
+        sublabel: `×${nearPickup.quantity}`,
+        kind: 'pickup',
+        actionCategory: 'pickup',
+        distance: d,
+        targetX: nearPickup.x,
+        targetY: nearPickup.y,
+        targetZ: nearPickup.z,
+        pickupItemId: nearPickup.itemId,
+        pickupQuantity: nearPickup.quantity,
+      };
+    }
+
+    // 1. WEAPON ISOLATION (Knife can also slice crops; melee weapons show nearby tree chop prompts)
     if (equippedId && equippedDef && isActiveWeaponItem(equippedId)) {
       if (equippedId === 'hunting_knife') {
         const cropNode = this.findNearestResourceNode(
@@ -11023,6 +11296,25 @@ export class GameEngine {
           targetZ: this.playerZ,
         };
       }
+      if (!this.targetHitbox) {
+        const treeNode = this.findNearestResourceNode(4.4, (n) =>
+          isChoppableNodeKind(n.kind),
+        );
+        if (treeNode) {
+          const d = Math.hypot(treeNode.x - this.playerX, treeNode.z - this.playerZ);
+          return {
+            id: treeNode.id,
+            label: `Chop ${treeNode.kind.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}`,
+            sublabel: treeNode.maxHp > 1 ? `HP ${treeNode.hp}/${treeNode.maxHp}` : undefined,
+            kind: 'resource',
+            actionCategory: 'chop',
+            distance: d,
+            targetX: treeNode.x,
+            targetY: treeNode.y,
+            targetZ: treeNode.z,
+          };
+        }
+      }
       return {
         id: `attack_${equippedId}`,
         label: `Strike (${equippedDef.name})`,
@@ -11081,10 +11373,27 @@ export class GameEngine {
           targetZ: cropNode.z,
         };
       }
+      const treeNode = this.findNearestResourceNode(4.4, (n) =>
+        isChoppableNodeKind(n.kind),
+      );
+      if (treeNode) {
+        const d = Math.hypot(treeNode.x - this.playerX, treeNode.z - this.playerZ);
+        return {
+          id: treeNode.id,
+          label: `Chop ${treeNode.kind.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}`,
+          sublabel: treeNode.maxHp > 1 ? `HP ${treeNode.hp}/${treeNode.maxHp}` : undefined,
+          kind: 'resource',
+          actionCategory: 'chop',
+          distance: d,
+          targetX: treeNode.x,
+          targetY: treeNode.y,
+          targetZ: treeNode.z,
+        };
+      }
       return {
         id: 'use_sickle',
         label: 'Swing Harvesting Sickle',
-        sublabel: 'Face Wheat or Sugarcane',
+        sublabel: 'Face Wheat, Sugarcane, or a Tree',
         kind: 'tool_action',
         actionCategory: 'harvest',
         distance: 0,
@@ -11096,7 +11405,7 @@ export class GameEngine {
 
     if (equippedId === 'stone_axe') {
       const treeNode = this.findNearestResourceNode(4.4, (n) =>
-        this.isTreeKind(n.kind) || n.kind === 'branch_pile',
+        isChoppableNodeKind(n.kind),
       );
       if (treeNode) {
         const d = Math.hypot(treeNode.x - this.playerX, treeNode.z - this.playerZ);
@@ -11105,7 +11414,7 @@ export class GameEngine {
           label:
             treeNode.kind === 'branch_pile'
               ? 'Chop Branches'
-              : `Chop ${treeNode.kind.replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase())}`,
+              : `Chop ${treeNode.kind.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}`,
           sublabel: treeNode.maxHp > 1 ? `HP ${treeNode.hp}/${treeNode.maxHp}` : undefined,
           kind: 'resource',
           actionCategory: 'chop',
@@ -11136,7 +11445,7 @@ export class GameEngine {
         const d = Math.hypot(rockNode.x - this.playerX, rockNode.z - this.playerZ);
         return {
           id: rockNode.id,
-          label: `Mine ${rockNode.kind.replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase())}`,
+          label: `Mine ${rockNode.kind.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}`,
           sublabel: rockNode.maxHp > 1 ? `HP ${rockNode.hp}/${rockNode.maxHp}` : undefined,
           kind: 'resource',
           actionCategory: 'mine',
@@ -11160,10 +11469,27 @@ export class GameEngine {
           targetZ: hitBlock.z,
         };
       }
+      const treeNode = this.findNearestResourceNode(4.4, (n) =>
+        isChoppableNodeKind(n.kind),
+      );
+      if (treeNode) {
+        const d = Math.hypot(treeNode.x - this.playerX, treeNode.z - this.playerZ);
+        return {
+          id: treeNode.id,
+          label: `Chop ${treeNode.kind.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}`,
+          sublabel: treeNode.maxHp > 1 ? `HP ${treeNode.hp}/${treeNode.maxHp}` : undefined,
+          kind: 'resource',
+          actionCategory: 'chop',
+          distance: d,
+          targetX: treeNode.x,
+          targetY: treeNode.y,
+          targetZ: treeNode.z,
+        };
+      }
       return {
         id: 'use_stone_pickaxe',
         label: 'Swing Stone Pickaxe',
-        sublabel: 'Face Stone, Ore, or Masonry',
+        sublabel: 'Face Stone, Ore, Masonry, or a Tree',
         kind: 'tool_action',
         actionCategory: 'mine',
         distance: 0,
@@ -11174,6 +11500,23 @@ export class GameEngine {
     }
 
     if (equippedId === 'excavator_shovel') {
+      const treeNode = this.findNearestResourceNode(4.0, (n) =>
+        this.isTreeKind(n.kind),
+      );
+      if (treeNode) {
+        const d = Math.hypot(treeNode.x - this.playerX, treeNode.z - this.playerZ);
+        return {
+          id: treeNode.id,
+          label: `Chop ${treeNode.kind.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}`,
+          sublabel: treeNode.maxHp > 1 ? `HP ${treeNode.hp}/${treeNode.maxHp}` : undefined,
+          kind: 'resource',
+          actionCategory: 'chop',
+          distance: d,
+          targetX: treeNode.x,
+          targetY: treeNode.y,
+          targetZ: treeNode.z,
+        };
+      }
       return {
         id: 'dig_terrain',
         label: this.isCrouching ? 'Raise Soil Berm' : 'Excavate Earth Trench',
@@ -11232,6 +11575,28 @@ export class GameEngine {
 
     // 3. SPECIALIZED EQUIPMENT
     if (equippedId === 'fishing_rod') {
+      const treeNode = this.findNearestResourceNode(4.4, (n) =>
+        isChoppableNodeKind(n.kind),
+      );
+      if (
+        treeNode &&
+        !this.isNearOceanWater() &&
+        !this.isNearLakeWater() &&
+        !isFreshwaterAt(this.playerX, this.playerZ)
+      ) {
+        const d = Math.hypot(treeNode.x - this.playerX, treeNode.z - this.playerZ);
+        return {
+          id: treeNode.id,
+          label: `Chop ${treeNode.kind.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}`,
+          sublabel: treeNode.maxHp > 1 ? `HP ${treeNode.hp}/${treeNode.maxHp}` : undefined,
+          kind: 'resource',
+          actionCategory: 'chop',
+          distance: d,
+          targetX: treeNode.x,
+          targetY: treeNode.y,
+          targetZ: treeNode.z,
+        };
+      }
       return {
         id: 'cast_fishing_rod',
         label: 'Cast Fishing Rod',
@@ -11246,6 +11611,23 @@ export class GameEngine {
     }
 
     if (equippedId === 'lasso' && equippedDef) {
+      const treeNode = this.findNearestResourceNode(4.4, (n) =>
+        isChoppableNodeKind(n.kind),
+      );
+      if (treeNode && !this.targetHitbox) {
+        const d = Math.hypot(treeNode.x - this.playerX, treeNode.z - this.playerZ);
+        return {
+          id: treeNode.id,
+          label: `Chop ${treeNode.kind.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}`,
+          sublabel: treeNode.maxHp > 1 ? `HP ${treeNode.hp}/${treeNode.maxHp}` : undefined,
+          kind: 'resource',
+          actionCategory: 'chop',
+          distance: d,
+          targetX: treeNode.x,
+          targetY: treeNode.y,
+          targetZ: treeNode.z,
+        };
+      }
       return {
         id: 'throw_lasso',
         label: 'Throw Hunter Lasso',
@@ -12236,16 +12618,15 @@ export class GameEngine {
       if (next <= 0 || !node || node.felled || node.hp <= 0) {
         this.nodeHitShakeTimers.delete(nid);
         if (handle?.felledPivot && (!node || !node.felled)) {
-          handle.felledPivot.rotation.z = 0;
-          handle.felledPivot.rotation.x = 0;
+          handle.felledPivot.quaternion.identity();
         } else if (handle?.root) {
           handle.root.rotation.z = 0;
         }
       } else {
         this.nodeHitShakeTimers.set(nid, next);
-        const wobble = Math.sin(next * 52) * 0.065 * (next / 0.22);
+        const wobble = Math.sin(next * 56) * 0.072 * (next / 0.22);
         if (handle?.felledPivot && !node.felled) {
-          handle.felledPivot.rotation.z = wobble;
+          handle.felledPivot.quaternion.setFromAxisAngle(_vec3A.set(0, 0, 1), wobble);
         } else if (handle?.root) {
           handle.root.rotation.z = wobble;
         }
@@ -12260,24 +12641,53 @@ export class GameEngine {
             this.activeFellingNodeIds.delete(nid);
             continue;
           }
+          const duration = Math.max(0.5, n.fallDuration ?? TREE_FALL_DURATION_SEC);
           n.fallTimer = Math.max(0, (n.fallTimer ?? 0) - dt);
+          const progress = Math.max(0, Math.min(1, 1 - (n.fallTimer ?? 0) / duration));
           const handle = this.world.resourceHandles.get(n.id);
+          const fdx = n.fallDirX ?? 1;
+          const fdz = n.fallDirZ ?? 0;
+          const pose = computeTreeFallPose(
+            fdx,
+            fdz,
+            handle?.root.rotation.y ?? 0,
+            progress,
+          );
+
           if (handle?.felledPivot) {
-            const t = 1 - (n.fallTimer ?? 0) / 1.05;
-            const tilt = t * t * (Math.PI / 2.08);
-            const fdx = n.fallDirX ?? 1;
-            const fdz = n.fallDirZ ?? 0;
-            handle.felledPivot.rotation.z = -fdx * tilt;
-            handle.felledPivot.rotation.x = fdz * tilt;
+            if (handle.felledPivot.userData.basePivotY === undefined) {
+              handle.felledPivot.userData.basePivotY = handle.felledPivot.position.y;
+            }
+            const basePivotY = handle.felledPivot.userData.basePivotY as number;
+            handle.felledPivot.quaternion.setFromAxisAngle(
+              _vec3A.set(pose.axisX, 0, pose.axisZ),
+              pose.tiltRad,
+            );
+            handle.felledPivot.position.y = basePivotY + pose.dropY;
+            handle.felledPivot.scale.setScalar(pose.sinkScale);
           }
+
+          if (pose.impacted && !n.fallImpactDone) {
+            n.fallImpactDone = true;
+            const trunkMidX = n.x + fdx * 2.1;
+            const trunkMidZ = n.z + fdz * 2.1;
+            const crownX = n.x + fdx * 3.6;
+            const crownZ = n.z + fdz * 3.6;
+            this.spawnParticles(trunkMidX, getTerrainHeight(trunkMidX, trunkMidZ) + 0.35, trunkMidZ, 0x85532a, 12);
+            this.spawnParticles(crownX, getTerrainHeight(crownX, crownZ) + 0.55, crownZ, 0x22c55e, 14);
+            if (Math.hypot(trunkMidX - this.playerX, trunkMidZ - this.playerZ) < 14) {
+              this.cameraShakeTimer = Math.max(this.cameraShakeTimer, 0.16);
+            }
+            const grants = this.pendingTreeDrops.get(n.id);
+            if (grants) {
+              this.pendingTreeDrops.delete(n.id);
+              this.spawnWorldPickupsFromGrants(n.x, n.z, grants, fdx * 2.1, fdz * 2.1, 1.85);
+            }
+          }
+
           if ((n.fallTimer ?? 0) <= 0) {
             this.activeFellingNodeIds.delete(nid);
             this.syncResourceVisual(n);
-            const fdx = n.fallDirX ?? 1;
-            const fdz = n.fallDirZ ?? 0;
-            const dropX = n.x + fdx * 2.1;
-            const dropZ = n.z + fdz * 2.1;
-            this.spawnParticles(dropX, getTerrainHeight(dropX, dropZ) + 0.35, dropZ, 0x85532a, 10);
             const grants = this.pendingTreeDrops.get(n.id);
             if (grants) {
               this.pendingTreeDrops.delete(n.id);
@@ -12299,6 +12709,8 @@ export class GameEngine {
             n.hp = n.maxHp;
             n.felled = false;
             n.fallTimer = 0;
+            n.fallDuration = 0;
+            n.fallImpactDone = false;
             this.respawningNodeIds.delete(nid);
             this.activeFellingNodeIds.delete(nid);
             this.shakenTreeDropIds.delete(n.id);
@@ -12511,8 +12923,8 @@ export class GameEngine {
         }
       }
 
-      // If high velocity bullet didn't hit creature, check if it struck a nearby breakable resource node via spatial hash
-      if (!remove && a.isBullet && this.worldType === 'island') {
+      // If projectile didn't hit a creature, check if it struck a standing breakable resource node via spatial hash
+      if (!remove && this.worldType === 'island') {
         const bCx = Math.floor(a.pos.x / 16);
         const bCz = Math.floor(a.pos.z / 16);
         outerBulletNodes: for (let gdx = -1; gdx <= 1; gdx++) {
@@ -12521,12 +12933,12 @@ export class GameEngine {
             if (!bucket) continue;
             for (let bi = 0; bi < bucket.length; bi++) {
               const n = bucket[bi];
-              if (n.hp <= 0) continue;
+              if (n.hp <= 0 || n.felled) continue;
               const dx = a.pos.x - n.x;
               const dz = a.pos.z - n.z;
-              if (dx * dx + dz * dz < 1.96 && a.pos.y > n.y && a.pos.y < n.y + 4.5) {
-                this.spawnParticles(a.pos.x, a.pos.y, a.pos.z, 0xffd700, 6);
-                this.harvestResourceNode(n.id, ITEMS['gun']);
+              if (dx * dx + dz * dz < 1.96 && a.pos.y > n.y && a.pos.y < n.y + 5.2) {
+                this.spawnParticles(a.pos.x, a.pos.y, a.pos.z, a.isBullet ? 0xffd700 : 0x85532a, 6);
+                this.harvestResourceNode(n.id, ITEMS[a.isBullet ? 'gun' : 'primitive_bow']);
                 remove = true;
                 break outerBulletNodes;
               }
@@ -14139,6 +14551,8 @@ export class GameEngine {
             this.sound.playGather('wood', 0.45);
           },
           onTreeFelled: (node) => {
+            node.respawnTimer = 95;
+            this.respawningNodeIds.add(node.id);
             this.sound.playTreeFall();
             this.activeFellingNodeIds.add(node.id);
             this.syncResourceVisual(node);
@@ -14343,6 +14757,17 @@ export class GameEngine {
 
   private renderScene(): void {
     this.updateCamera();
+    if (
+      this.mode === 'playing' &&
+      this.activeRadioCarRoot &&
+      CABIN_BASS_AND_FIRST_PERSON.carPanner
+    ) {
+      updateCarStereo3D(
+        CABIN_BASS_AND_FIRST_PERSON.carPanner,
+        this.activeRadioCarRoot,
+        this.camera,
+      );
+    }
     if (this.mode === 'playing' && !this.cinematicActive) {
       this.syncTvScreenProjection();
     }
@@ -16189,6 +16614,7 @@ export class GameEngine {
     this.autoParkJobs.delete(vehicleId);
     this.seatedState = null;
     this.activeVehicleId = v.id;
+    this.lastRadioVehicleId = v.id;
     this.vehicleForwardSpeed = 0;
     this.vehicleSteerAngle = 0;
     this.vehicleAltitudeVel = 0;
@@ -16693,6 +17119,7 @@ export class GameEngine {
     if (!this.activeVehicleId) return;
     const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
     if (av) {
+      this.lastRadioVehicleId = av.id;
       const desc = this.toRadioCarDescriptor(av);
       CAR_RADIO_TRUNK_SYSTEM.configureForCar(desc);
       CABIN_BASS_AND_FIRST_PERSON.applyVehicleRadioProfile(desc);
@@ -17278,6 +17705,65 @@ export class GameEngine {
     const activeV = this.activeVehicleId
       ? this.vehicles.find((x) => x.id === this.activeVehicleId)
       : null;
+    if (activeV) {
+      this.lastRadioVehicleId = activeV.id;
+    }
+
+    this._playerPhysicsProxy.position.set(this.playerX, this.playerY, this.playerZ);
+
+    let radioSourceV: ModularVehicleData | null = activeV ?? null;
+    if (!radioSourceV && this.lastRadioVehicleId) {
+      radioSourceV =
+        this.vehicles.find((x) => x.id === this.lastRadioVehicleId) ?? null;
+    }
+    if (!radioSourceV && this.vehicles.length > 0) {
+      let bestDistSq = 55 * 55;
+      for (const cand of this.vehicles) {
+        const dx = cand.x - this.playerX;
+        const dy = cand.y - this.playerY;
+        const dz = cand.z - this.playerZ;
+        const dSq = dx * dx + dy * dy + dz * dz;
+        if (dSq < bestDistSq) {
+          bestDistSq = dSq;
+          radioSourceV = cand;
+        }
+      }
+    }
+
+    let radioSpatialVolume = activeV ? 1 : 0;
+    const radioSourceHandles = radioSourceV
+      ? this.vehicleMeshes.get(radioSourceV.id)
+      : undefined;
+    this.activeRadioCarRoot = radioSourceHandles ? radioSourceHandles.root : null;
+    if (radioSourceV && radioSourceHandles && this.audioListener) {
+      const customEl = CABIN_BASS_AND_FIRST_PERSON.customAudioEl;
+      if (
+        customEl &&
+        customEl.src &&
+        CABIN_BASS_AND_FIRST_PERSON.customTrackName &&
+        !CABIN_BASS_AND_FIRST_PERSON.userPaused
+      ) {
+        const spatial = updateCarAudioPosition(
+          customEl,
+          radioSourceHandles.root,
+          this._playerPhysicsProxy,
+          this.audioListener,
+        );
+        radioSpatialVolume = spatial.volume;
+        CABIN_BASS_AND_FIRST_PERSON.stereoPlaying = !customEl.paused;
+      } else if (CABIN_BASS_AND_FIRST_PERSON.stereoPlaying) {
+        const dist = this._playerPhysicsProxy.position.distanceTo(
+          radioSourceHandles.root.position,
+        );
+        radioSpatialVolume = THREE.MathUtils.clamp(1 - dist / 55, 0, 1);
+        CABIN_BASS_AND_FIRST_PERSON.setSpatialAttenuation(
+          CABIN_BASS_AND_FIRST_PERSON.carPanner ? 1 : radioSpatialVolume,
+        );
+      }
+    } else if (!radioSourceV && CABIN_BASS_AND_FIRST_PERSON.stereoPlaying) {
+      CABIN_BASS_AND_FIRST_PERSON.setSpatialAttenuation(0);
+    }
+
     const activeIsOldSchool = this.isOldSchoolVehicle(activeV);
     const bassActive = Boolean(
       activeV &&
@@ -17287,16 +17773,19 @@ export class GameEngine {
         !this.gameOver,
     );
     const synthPulse = this.sound.updateTrunkBass(bassActive, dt);
+    const radioCarForSample = activeV ?? radioSourceV;
     const radioSample =
-      activeV && activeIsOldSchool
+      radioCarForSample && this.isOldSchoolVehicle(radioCarForSample)
         ? CABIN_BASS_AND_FIRST_PERSON.sampleBassAndChestThump(
-            this.toRadioCarDescriptor(activeV),
+            this.toRadioCarDescriptor(radioCarForSample),
           )
         : { bassLevel: 0, chestThump: 0, trunkPump: 0 };
-    this.trunkBassPulse = Math.max(synthPulse, radioSample.trunkPump);
+    const effectiveRadioTrunk =
+      radioSpatialVolume > 0.01 ? radioSample.trunkPump * radioSpatialVolume : 0;
+    this.trunkBassPulse = Math.max(synthPulse, effectiveRadioTrunk);
     this.chestThumpPulse = Math.max(
       bassActive && synthPulse > 0.48 ? Math.min(1, (synthPulse - 0.48) * 1.8) : 0,
-      radioSample.chestThump,
+      activeV ? radioSample.chestThump : 0,
     );
 
     // Solve 4-corner hydraulic & airbag/coil-over spring-damper physics for active vehicle
@@ -17517,12 +18006,20 @@ export class GameEngine {
           : (v.suspensionOffset ?? 0);
       const minChassisY = isTahoeShow ? 0.075 : 0.18;
       const vIsOldSchool = this.isOldSchoolVehicle(v);
+      const isRadioCar = Boolean(
+        radioSourceV &&
+          v.id === radioSourceV.id &&
+          CABIN_BASS_AND_FIRST_PERSON.stereoPlaying &&
+          radioSpatialVolume > 0.01,
+      );
       const showBassPulse =
         vIsOldSchool && isActive
           ? this.trunkBassPulse
-          : vIsOldSchool && !isActive && v.trunkBassEnabled
-            ? 0.25 + 0.25 * Math.max(0, Math.sin(this.elapsed * 6.5))
-            : 0;
+          : vIsOldSchool && !isActive && isRadioCar
+            ? effectiveRadioTrunk
+            : vIsOldSchool && !isActive && v.trunkBassEnabled
+              ? 0.25 + 0.25 * Math.max(0, Math.sin(this.elapsed * 6.5))
+              : 0;
 
       const danceState = this.vehicleDanceStates.get(v.id);
       if (danceState && (danceState.enabled || v.hydraulicsDanceEnabled)) {
@@ -20531,6 +21028,11 @@ export class GameEngine {
       this.localPlayerHandle = null;
     }
 
+    if (this.audioListener) {
+      this.camera.remove(this.audioListener);
+      this.audioListener = null;
+    }
+    this.activeRadioCarRoot = null;
     if (this.activeDimensionWorld) {
       disposeDimensionWorld(this.activeDimensionWorld);
       this.activeDimensionWorld = null;

@@ -5585,6 +5585,72 @@ export function createCaveCeilingClusterMesh(): THREE.Group {
   return g;
 }
 
+export function createCave(
+  s: THREE.Object3D,
+  options?: {
+    position?: THREE.Vector3;
+    radius?: number;
+    leaveEntranceGap?: boolean;
+    seed?: number;
+  },
+): THREE.Group {
+  const g = new THREE.Group();
+  const radius = options?.radius ?? 10;
+  const leaveEntranceGap = options?.leaveEntranceGap ?? false;
+  let state = (options?.seed ?? 9173) >>> 0;
+  const nextRand = (): number => {
+    if (options?.seed === undefined) return Math.random();
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+
+  const rockGeo = new THREE.DodecahedronGeometry(3, 1);
+  const rock = new THREE.MeshStandardMaterial({
+    color: 0x343c32,
+    roughness: 0.9,
+  });
+
+  for (let i = 0; i < 24; i++) {
+    const a = (i / 24) * Math.PI * 2;
+    // Leave south (+Z) entrance gap open when placed as a walk-in overworld grotto
+    if (leaveEntranceGap && Math.sin(a) > 0.82) continue;
+    const m = new THREE.Mesh(rockGeo, rock);
+    m.position.set(Math.cos(a) * radius, 2, Math.sin(a) * radius);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    g.add(m);
+  }
+
+  const crystalGeo = new THREE.OctahedronGeometry(0.8);
+  const crystal = new THREE.MeshStandardMaterial({
+    color: 0x32e6d0,
+    emissive: 0x087d72,
+    emissiveIntensity: 2,
+    roughness: 0.22,
+  });
+
+  for (let i = 0; i < 12; i++) {
+    const m = new THREE.Mesh(crystalGeo, crystal);
+    let cx = nextRand() * 12 - 6;
+    let cz = nextRand() * 12 - 6;
+    if (leaveEntranceGap && Math.hypot(cx, cz) < 3.5) {
+      const ang = (i / 12) * Math.PI * 2;
+      cx = Math.cos(ang) * 5.2;
+      cz = Math.sin(ang) * 5.2;
+    }
+    m.position.set(cx, 0, cz);
+    m.scale.y = 2;
+    g.add(m);
+  }
+
+  if (options?.position) {
+    g.position.copy(options.position);
+  }
+
+  s.add(g);
+  return g;
+}
+
 export interface RemotePlayerMeshHandle {
   group: THREE.Group;
   bodyGroup: THREE.Group;

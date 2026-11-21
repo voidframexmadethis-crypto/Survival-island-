@@ -96,6 +96,38 @@ export function applyRealisticMeshLightingPass(
   });
 }
 
+export function upgradeGraphics(
+  r: THREE.WebGLRenderer,
+  s: THREE.Scene,
+  options?: { shadowsEnabled?: boolean; exposure?: number; shadowMapSize?: number },
+): void {
+  const shadowsEnabled = options?.shadowsEnabled ?? true;
+  const shadowMapSize = options?.shadowMapSize ?? 2048;
+
+  r.shadowMap.enabled = shadowsEnabled;
+  r.shadowMap.type = THREE.PCFSoftShadowMap;
+  r.toneMapping = THREE.ACESFilmicToneMapping;
+  r.toneMappingExposure = options?.exposure ?? 1.15;
+  r.outputColorSpace = THREE.SRGBColorSpace;
+
+  if (!s.getObjectByName('WorldSun')) {
+    const sun = new THREE.DirectionalLight(0xffedcf, 3);
+    sun.name = 'WorldSun';
+    sun.position.set(100, 150, 80);
+    sun.castShadow = shadowsEnabled;
+    sun.shadow.mapSize.set(shadowMapSize, shadowMapSize);
+    sun.shadow.bias = -0.00015;
+    sun.shadow.normalBias = 0.025;
+    sun.shadow.radius = 4;
+    s.add(sun);
+    s.add(sun.target);
+
+    const hemi = new THREE.HemisphereLight(0xc5e5ff, 0x66513b, 1.5);
+    hemi.name = 'WorldHemisphere';
+    s.add(hemi);
+  }
+}
+
 export function enableRealisticIslandLighting(
   scene: THREE.Scene,
   renderer: THREE.WebGLRenderer,
@@ -108,27 +140,49 @@ export function enableRealisticIslandLighting(
   const shadowFar = options?.shadowFar ?? 300;
   const shadowRadius = options?.shadowRadius ?? 4;
 
-  // Enable physically correct lighting and PCF shadows.
-  renderer.shadowMap.enabled = shadowsEnabled;
-  renderer.shadowMap.type = THREE.PCFShadowMap;
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = options?.exposure ?? 1.15;
+  // Enable physically correct lighting, ACES Filmic tone mapping, and soft PCF shadows.
+  upgradeGraphics(renderer, scene, {
+    shadowsEnabled,
+    exposure: options?.exposure ?? 1.15,
+    shadowMapSize,
+  });
 
   // Natural sky and atmospheric background.
   scene.background = new THREE.Color(0x87b9dc);
   scene.fog = new THREE.FogExp2(0xb6cbd5, 0.00065);
 
-  // Soft environmental light.
-  const ambient = new THREE.HemisphereLight(0xd9edff, 0x46513a, 1.35);
-  scene.add(ambient);
+  // Soft environmental light (reuse WorldHemisphere from upgradeGraphics if present).
+  const existingHemi = scene.getObjectByName('WorldHemisphere');
+  const ambient =
+    existingHemi instanceof THREE.HemisphereLight
+      ? existingHemi
+      : new THREE.HemisphereLight(0xc5e5ff, 0x66513b, 1.5);
+  ambient.name = 'WorldHemisphere';
+  ambient.color.setHex(0xc5e5ff);
+  ambient.groundColor.setHex(0x66513b);
+  ambient.intensity = 1.5;
+  if (!existingHemi) {
+    scene.add(ambient);
+  }
 
-  // Realistic directional sunlight.
-  const sunlight = new THREE.DirectionalLight(0xffedcf, 3.2);
-  sunlight.position.set(80, 120, 50);
+  // Realistic directional sunlight (reuse WorldSun from upgradeGraphics if present).
+  const existingSun = scene.getObjectByName('WorldSun');
+  const sunlight =
+    existingSun instanceof THREE.DirectionalLight
+      ? existingSun
+      : new THREE.DirectionalLight(0xffedcf, 3);
+  sunlight.name = 'WorldSun';
+  sunlight.color.setHex(0xffedcf);
+  sunlight.intensity = 3;
+  sunlight.position.set(100, 150, 80);
   sunlight.castShadow = shadowsEnabled;
 
-  sunlight.shadow.mapSize.set(shadowMapSize, shadowMapSize);
+  if (
+    sunlight.shadow.mapSize.x !== shadowMapSize ||
+    sunlight.shadow.mapSize.y !== shadowMapSize
+  ) {
+    sunlight.shadow.mapSize.set(shadowMapSize, shadowMapSize);
+  }
   sunlight.shadow.camera.left = -shadowHalfExtent;
   sunlight.shadow.camera.right = shadowHalfExtent;
   sunlight.shadow.camera.top = shadowHalfExtent;
@@ -140,14 +194,25 @@ export function enableRealisticIslandLighting(
   sunlight.shadow.normalBias = 0.025;
   sunlight.shadow.radius = shadowRadius;
 
-  scene.add(sunlight);
-  scene.add(sunlight.target);
+  if (!existingSun) {
+    scene.add(sunlight);
+    scene.add(sunlight.target);
+  } else if (!sunlight.target.parent) {
+    scene.add(sunlight.target);
+  }
 
   // Subtle reflected sky illumination.
-  const skyFill = new THREE.DirectionalLight(0xa5cfff, 0.45);
+  const existingSkyFill = scene.getObjectByName('WorldSkyFill');
+  const skyFill =
+    existingSkyFill instanceof THREE.DirectionalLight
+      ? existingSkyFill
+      : new THREE.DirectionalLight(0xa5cfff, 0.45);
+  skyFill.name = 'WorldSkyFill';
   skyFill.position.set(-60, 35, -80);
-  scene.add(skyFill);
-  scene.add(skyFill.target);
+  if (!existingSkyFill) {
+    scene.add(skyFill);
+    scene.add(skyFill.target);
+  }
 
   if (options?.applyMeshPass !== false) {
     applyRealisticMeshLightingPass(scene, { shadowsEnabled });

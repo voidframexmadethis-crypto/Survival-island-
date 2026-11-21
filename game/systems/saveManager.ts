@@ -11,6 +11,34 @@ import {
   resolveAllowedGameMode,
 } from '../types';
 
+import {
+  KEY as LAUNCH_SAVE_KEY,
+  loadCheckpoint,
+  loadGame,
+  loadObjectives,
+  loadRewards,
+  loadSettings as loadLaunchSettings,
+  saveCheckpoint,
+  saveGame,
+  saveObjectives,
+  saveSettings as saveLaunchSettings,
+  unlockReward,
+} from './launchSave';
+
+export {
+  LAUNCH_SAVE_KEY,
+  loadCheckpoint,
+  loadGame,
+  loadLaunchSettings,
+  loadObjectives,
+  loadRewards,
+  saveCheckpoint,
+  saveGame,
+  saveLaunchSettings,
+  saveObjectives,
+  unlockReward,
+};
+
 const SAVE_INDEX_KEY = 'survival_island_lost_world_saves_v1';
 const SAVE_SLOT_PREFIX = 'survival_island_slot_v1_';
 const SETTINGS_KEY = 'survival_island_settings_v1';
@@ -135,8 +163,16 @@ export function loadSettings(): GameSettings {
   if (typeof window === 'undefined') return base;
   try {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return base;
-    const parsed = JSON.parse(raw) as Partial<GameSettings> & {
+    const launchParsed = loadLaunchSettings<Partial<GameSettings>>();
+    if (!raw && Object.keys(launchParsed).length === 0) return base;
+    const parsed = (
+      raw
+        ? (JSON.parse(raw) as Partial<GameSettings> & {
+            graphicsPreset?: string;
+            graphicsQuality?: string;
+          })
+        : launchParsed
+    ) as Partial<GameSettings> & {
       graphicsPreset?: string;
       graphicsQuality?: string;
     };
@@ -177,6 +213,7 @@ export function saveSettings(settings: GameSettings): void {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    saveLaunchSettings(settings);
   } catch {
     // Ignore storage quota errors gracefully
   }
@@ -306,6 +343,13 @@ export function saveGameToSlot(data: GameSaveData): boolean {
     };
     const payload = JSON.stringify(normalizedData);
     window.localStorage.setItem(`${SAVE_SLOT_PREFIX}${data.slotId}`, payload);
+    saveGame(normalizedData);
+    saveCheckpoint(
+      normalizedData.player.x,
+      normalizedData.player.y,
+      normalizedData.player.z,
+    );
+    saveObjectives(normalizedData.completedMissionIds);
 
     const existing = listSaveSlots().filter((s) => s.slotId !== data.slotId);
     const summary: SaveSlotSummary = {

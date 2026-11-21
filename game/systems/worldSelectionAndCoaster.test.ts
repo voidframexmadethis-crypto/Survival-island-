@@ -11,8 +11,18 @@ import {
   deleteSaveSlot,
   getLatestSaveSlot,
   listSaveSlots,
+  loadCheckpoint,
+  loadGame,
   loadGameFromSlot,
+  loadLaunchSettings,
+  loadObjectives,
+  loadRewards,
+  saveCheckpoint,
+  saveGame,
   saveGameToSlot,
+  saveLaunchSettings,
+  saveObjectives,
+  unlockReward,
 } from './saveManager';
 import {
   FLAT_GROUND_Y,
@@ -382,4 +392,37 @@ test('RollerCoasterRuntime supports wooden, inverted, and log flume coaster type
   assert.ok(flumeId);
   assert.equal(runtime.getHudSummaries()[1].coasterType, 'log_flume');
   runtime.dispose();
+});
+
+test('launchSave persists game snapshot, checkpoint, settings, objectives, and unique rewards safely', () => {
+  const storage = installMockLocalStorage();
+
+  saveGame({ day: 4, health: 92 });
+  assert.deepEqual(loadGame(), { day: 4, health: 92 });
+
+  saveCheckpoint(12.5, 4.2, -18.75);
+  assert.deepEqual(loadCheckpoint(), { x: 12.5, y: 4.2, z: -18.75 });
+
+  saveLaunchSettings({ graphicsPreset: 'high', showCompass: true });
+  assert.deepEqual(loadLaunchSettings(), { graphicsPreset: 'high', showCompass: true });
+
+  saveObjectives(['build_shelter', 'collect_wood', 'build_shelter']);
+  assert.deepEqual(loadObjectives(), ['build_shelter', 'collect_wood']);
+
+  assert.deepEqual(unlockReward('first_camp'), ['first_camp']);
+  assert.deepEqual(unlockReward('first_camp'), ['first_camp']);
+  assert.deepEqual(unlockReward('island_explorer'), ['first_camp', 'island_explorer']);
+  assert.deepEqual(loadRewards(), ['first_camp', 'island_explorer']);
+
+  // Malformed JSON never crashes loaders
+  storage.set('survival_island_launch', '{bad-json');
+  storage.set('survival_island_launch_checkpoint', '{bad-json');
+  storage.set('survival_island_launch_settings', '{bad-json');
+  storage.set('survival_island_launch_objectives', '{bad-json');
+  storage.set('survival_island_launch_rewards', '{bad-json');
+  assert.equal(loadGame(), null);
+  assert.equal(loadCheckpoint(), null);
+  assert.deepEqual(loadLaunchSettings(), {});
+  assert.deepEqual(loadObjectives(), []);
+  assert.deepEqual(loadRewards(), []);
 });

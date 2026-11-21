@@ -888,6 +888,8 @@ export interface ResourceNodeState {
   respawnTimer: number;
   felled?: boolean;
   fallTimer?: number;
+  fallDuration?: number;
+  fallImpactDone?: boolean;
   fallDirX?: number;
   fallDirZ?: number;
 }

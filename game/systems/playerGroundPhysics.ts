@@ -1,5 +1,13 @@
 import * as THREE from 'three';
 
+export function fixGround(p: THREE.Object3D, groundY: number): void {
+  if (Number.isFinite(groundY) && p.position.y < groundY) {
+    p.position.y = groundY;
+    p.userData.verticalVelocity = 0;
+    p.userData.grounded = true;
+  }
+}
+
 /**
  * Enforces stable ground collision for a player Object3D:
  * - Prevents falling below groundY (clamps Y, zeros downward velocity, marks grounded)

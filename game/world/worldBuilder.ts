@@ -110,6 +110,7 @@ import {
 } from './textures';
 import {
   HouseStationTarget,
+  createCave,
   createCaveCeilingClusterMesh,
   createFarmerNpcModel,
   createHilltopHouse,
@@ -1196,6 +1197,23 @@ export function buildIslandWorld(
   colliders.push({ x: CAVE_POS.x - 4.2, z: CAVE_POS.z, radius: 2.2 });
   colliders.push({ x: CAVE_POS.x + 4.2, z: CAVE_POS.z, radius: 2.2 });
   colliders.push({ x: CAVE_POS.x, z: CAVE_POS.z - 4.8, radius: 3.0 });
+
+  const crystalGrotto = createCave(overworldGroup, {
+    position: new THREE.Vector3(CAVE_POS.x, caveBaseY, CAVE_POS.z),
+    radius: 10.5,
+    leaveEntranceGap: true,
+    seed: 1337,
+  });
+  staticMergeTargets.push({ group: crystalGrotto });
+  for (let i = 0; i < 24; i++) {
+    const a = (i / 24) * Math.PI * 2;
+    if (Math.sin(a) > 0.82) continue;
+    colliders.push({
+      x: CAVE_POS.x + Math.cos(a) * 10.5,
+      z: CAVE_POS.z + Math.sin(a) * 10.5,
+      radius: 2.4,
+    });
+  }
 
   // Unstable Collapsible Cave Ceiling Stalactites (shoot or warhammer-leap to crush Obsidian Cave Boss!)
   const caveCeilings: CaveCeilingCluster[] = [];
@@ -2547,35 +2565,57 @@ export function buildIslandWorld(
 
     if (kind === 'huge_red_mushroom' || kind === 'huge_brown_mushroom') {
       const isRed = kind === 'huge_red_mushroom';
+      const stumpMesh = new THREE.Group();
+      const stumpBase = new THREE.Mesh(gCylStraight8, giantMushroomStemMat);
+      stumpBase.scale.set(0.45, 0.68, 0.45);
+      stumpBase.position.y = 0.34;
+      stumpBase.castShadow = shadowsEnabledState;
+      const stumpTop = new THREE.Mesh(gCircle8, heartwoodCutMat);
+      stumpTop.scale.setScalar(0.39);
+      stumpTop.rotation.x = -Math.PI / 2;
+      stumpTop.position.y = 0.685;
+      stumpMesh.add(stumpBase, stumpTop);
+      root.add(stumpMesh);
+
+      const felledPivot = new THREE.Group();
+      felledPivot.position.y = 0.64;
+
       const stem = new THREE.Mesh(gCylStraight8, giantMushroomStemMat);
-      const stemH = isRed ? 3.8 : 4.2;
+      const stemH = (isRed ? 3.8 : 4.2) - 0.62;
       stem.scale.set(0.44, stemH, 0.44);
       stem.position.y = stemH * 0.5;
       stem.castShadow = shadowsEnabledState;
-      root.add(stem);
+      felledPivot.add(stem);
+
+      const trunkCutBand = new THREE.Mesh(gCylStraight8, heartwoodCutMat);
+      trunkCutBand.scale.set(0.45, 0.24, 0.45);
+      trunkCutBand.position.y = 0.14;
+      trunkCutBand.visible = false;
+      felledPivot.add(trunkCutBand);
 
       if (isRed) {
         const cap = new THREE.Mesh(gSphere7, redMushroomCapMat);
         cap.scale.set(1.85, 1.15, 1.85);
         cap.position.y = stemH + 0.1;
         cap.castShadow = shadowsEnabledState;
-        root.add(cap);
+        felledPivot.add(cap);
         for (let sp = 0; sp < 6; sp++) {
           const sa = (sp / 6) * Math.PI * 2;
           const spot = new THREE.Mesh(gDodec0, mushroomSpotMat);
           spot.scale.set(0.28, 0.14, 0.28);
           spot.position.set(Math.cos(sa) * 1.18, stemH + 0.65, Math.sin(sa) * 1.18);
-          root.add(spot);
+          felledPivot.add(spot);
         }
       } else {
         const flatCap = new THREE.Mesh(gCylTaper8, brownMushroomCapMat);
         flatCap.scale.set(2.35, 0.46, 2.35);
         flatCap.position.y = stemH + 0.2;
         flatCap.castShadow = shadowsEnabledState;
-        root.add(flatCap);
+        felledPivot.add(flatCap);
       }
+      root.add(felledPivot);
       root.scale.setScalar(scale);
-      return { root };
+      return { root, felledPivot, stumpMesh, trunkCutBand };
     }
 
     if (kind === 'jungle_bush') {
@@ -2881,7 +2921,11 @@ export function buildIslandWorld(
       const stumpBase = new THREE.Mesh(gCylTaper8, cherryTrunkMat);
       stumpBase.scale.set(0.32, 0.65, 0.32);
       stumpBase.position.y = 0.32;
-      stumpMesh.add(stumpBase);
+      const stumpTop = new THREE.Mesh(gCircle8, heartwoodCutMat);
+      stumpTop.scale.setScalar(0.24);
+      stumpTop.rotation.x = -Math.PI / 2;
+      stumpTop.position.y = 0.655;
+      stumpMesh.add(stumpBase, stumpTop);
       root.add(stumpMesh);
 
       const felledPivot = new THREE.Group();
@@ -2891,11 +2935,15 @@ export function buildIslandWorld(
       trunk.position.set(0.18, 1.8, 0);
       trunk.rotation.z = -0.14;
       trunk.castShadow = shadowsEnabledState;
+      const trunkCutBand = new THREE.Mesh(gCylStraight8, heartwoodCutMat);
+      trunkCutBand.scale.set(0.29, 0.22, 0.29);
+      trunkCutBand.position.y = 0.14;
+      trunkCutBand.visible = false;
       const branch = new THREE.Mesh(gCylTaper6, cherryTrunkMat);
       branch.scale.set(0.16, 2.2, 0.16);
       branch.position.set(-0.65, 2.8, 0.25);
       branch.rotation.z = 0.58;
-      felledPivot.add(trunk, branch);
+      felledPivot.add(trunk, trunkCutBand, branch);
       // Sweeping layered pink cherry blossom canopies
       const canopyOffsets: [number, number, number, number, boolean][] = [
         [0.45, 4.1, 0, 1.85, false],
@@ -2917,14 +2965,18 @@ export function buildIslandWorld(
       });
       root.add(felledPivot);
       root.scale.setScalar(scale);
-      return { root, felledPivot, stumpMesh };
+      return { root, felledPivot, stumpMesh, trunkCutBand };
     } else if (kind === 'bee_nest_oak') {
       const stumpMesh = new THREE.Group();
       addRootFlares(stumpMesh, oakTrunkMat, 5, 0.3, 0.62, nodeRand);
       const stumpBase = new THREE.Mesh(gCylTaper8, oakTrunkMat);
       stumpBase.scale.set(0.36, 0.65, 0.36);
       stumpBase.position.y = 0.32;
-      stumpMesh.add(stumpBase);
+      const stumpTop = new THREE.Mesh(gCircle8, heartwoodCutMat);
+      stumpTop.scale.setScalar(0.28);
+      stumpTop.rotation.x = -Math.PI / 2;
+      stumpTop.position.y = 0.655;
+      stumpMesh.add(stumpBase, stumpTop);
       root.add(stumpMesh);
 
       const felledPivot = new THREE.Group();
@@ -2933,11 +2985,15 @@ export function buildIslandWorld(
       trunk.scale.set(0.32, 3.6, 0.32);
       trunk.position.y = 1.8;
       trunk.castShadow = shadowsEnabledState;
+      const trunkCutBand = new THREE.Mesh(gCylStraight8, heartwoodCutMat);
+      trunkCutBand.scale.set(0.33, 0.24, 0.33);
+      trunkCutBand.position.y = 0.14;
+      trunkCutBand.visible = false;
       const crown = new THREE.Mesh(gDodec1, oakLeafMat);
       crown.scale.set(1.42, 0.95, 1.42);
       crown.position.y = 3.95;
       crown.castShadow = shadowsEnabledState;
-      felledPivot.add(trunk, crown);
+      felledPivot.add(trunk, trunkCutBand, crown);
       for (let s = 0; s < 5; s++) {
         const sa = (s / 5) * Math.PI * 2 + nodeRand() * 0.4;
         const dist = s === 0 ? 0.1 : 1.05;
@@ -2954,7 +3010,7 @@ export function buildIslandWorld(
       felledPivot.add(nest);
       root.add(felledPivot);
       root.scale.setScalar(scale);
-      return { root, felledPivot, stumpMesh };
+      return { root, felledPivot, stumpMesh, trunkCutBand };
     } else if (kind === 'pink_petals') {
       for (let i = 0; i < 12; i++) {
         const px = (nodeRand() - 0.5) * 1.5;
@@ -3023,7 +3079,11 @@ export function buildIslandWorld(
       const stumpBase = new THREE.Mesh(gCylTaper8, acaciaTrunkMat);
       stumpBase.scale.set(0.3, 0.6, 0.3);
       stumpBase.position.y = 0.3;
-      stumpMesh.add(stumpBase);
+      const stumpTop = new THREE.Mesh(gCircle8, heartwoodCutMat);
+      stumpTop.scale.setScalar(0.23);
+      stumpTop.rotation.x = -Math.PI / 2;
+      stumpTop.position.y = 0.605;
+      stumpMesh.add(stumpBase, stumpTop);
       root.add(stumpMesh);
 
       const felledPivot = new THREE.Group();
@@ -3034,6 +3094,10 @@ export function buildIslandWorld(
       trunk1.position.set(0.28, 1.35, 0);
       trunk1.rotation.z = -0.22;
       trunk1.castShadow = shadowsEnabledState;
+      const trunkCutBand = new THREE.Mesh(gCylStraight8, heartwoodCutMat);
+      trunkCutBand.scale.set(0.27, 0.22, 0.27);
+      trunkCutBand.position.y = 0.14;
+      trunkCutBand.visible = false;
       const trunk2 = new THREE.Mesh(gCylTaper8, acaciaTrunkMat);
       trunk2.scale.set(0.2, 2.2, 0.2);
       trunk2.position.set(-0.45, 2.4, 0.25);
@@ -3045,7 +3109,7 @@ export function buildIslandWorld(
       const canopy2 = new THREE.Mesh(gCylTaper8, acaciaLeafMat);
       canopy2.scale.set(1.35, 0.38, 1.25);
       canopy2.position.set(-0.85, 3.65, 0.35);
-      felledPivot.add(trunk1, trunk2, canopy1, canopy2);
+      felledPivot.add(trunk1, trunkCutBand, trunk2, canopy1, canopy2);
       for (const [ax, ay, az, ar] of [[0.7, 3.35, 0, 2.5], [1.45, 3.3, 0.6, 1.85], [-0.85, 3.72, 0.35, 1.95]]) {
         const sp = new THREE.Mesh(gLeafSpray, acaciaSprayMat);
         sp.position.set(ax, ay, az);
@@ -3055,14 +3119,18 @@ export function buildIslandWorld(
       }
       root.add(felledPivot);
       root.scale.setScalar(scale);
-      return { root, felledPivot, stumpMesh };
+      return { root, felledPivot, stumpMesh, trunkCutBand };
     } else if (kind === 'swamp_oak_tree') {
       const stumpMesh = new THREE.Group();
       addRootFlares(stumpMesh, darkOakTrunkMat, 5, 0.3, 0.55, nodeRand);
       const stumpBase = new THREE.Mesh(gCylTaper8, darkOakTrunkMat);
       stumpBase.scale.set(0.36, 0.62, 0.36);
       stumpBase.position.y = 0.31;
-      stumpMesh.add(stumpBase);
+      const stumpTop = new THREE.Mesh(gCircle8, heartwoodCutMat);
+      stumpTop.scale.setScalar(0.28);
+      stumpTop.rotation.x = -Math.PI / 2;
+      stumpTop.position.y = 0.625;
+      stumpMesh.add(stumpBase, stumpTop);
       root.add(stumpMesh);
 
       const felledPivot = new THREE.Group();
@@ -3071,11 +3139,15 @@ export function buildIslandWorld(
       trunk.scale.set(0.32, 3.1, 0.32);
       trunk.position.y = 1.55;
       trunk.castShadow = shadowsEnabledState;
+      const trunkCutBand = new THREE.Mesh(gCylStraight8, heartwoodCutMat);
+      trunkCutBand.scale.set(0.33, 0.24, 0.33);
+      trunkCutBand.position.y = 0.14;
+      trunkCutBand.visible = false;
       const crown = new THREE.Mesh(gDodec1, mangroveLeafMat);
       crown.scale.set(1.55, 0.92, 1.55);
       crown.position.y = 3.5;
       crown.castShadow = shadowsEnabledState;
-      felledPivot.add(trunk, crown);
+      felledPivot.add(trunk, trunkCutBand, crown);
       for (let s = 0; s < 5; s++) {
         const sa = (s / 5) * Math.PI * 2 + nodeRand() * 0.4;
         const dist = s === 0 ? 0.1 : 1.15;
@@ -3095,7 +3167,7 @@ export function buildIslandWorld(
       }
       root.add(felledPivot);
       root.scale.setScalar(scale);
-      return { root, felledPivot, stumpMesh };
+      return { root, felledPivot, stumpMesh, trunkCutBand };
     } else if (kind === 'mangrove_tree') {
       const stumpMesh = new THREE.Group();
       // Tangled prop roots arching out of the mud
@@ -3108,6 +3180,11 @@ export function buildIslandWorld(
         propRoot.rotation.x = -Math.sin(ang) * 0.45;
         stumpMesh.add(propRoot);
       }
+      const stumpTop = new THREE.Mesh(gCircle8, heartwoodCutMat);
+      stumpTop.scale.setScalar(0.24);
+      stumpTop.rotation.x = -Math.PI / 2;
+      stumpTop.position.y = 1.16;
+      stumpMesh.add(stumpTop);
       root.add(stumpMesh);
 
       const felledPivot = new THREE.Group();
@@ -3116,11 +3193,15 @@ export function buildIslandWorld(
       trunk.scale.set(0.28, 3.2, 0.28);
       trunk.position.y = 1.55;
       trunk.castShadow = shadowsEnabledState;
+      const trunkCutBand = new THREE.Mesh(gCylStraight8, heartwoodCutMat);
+      trunkCutBand.scale.set(0.29, 0.22, 0.29);
+      trunkCutBand.position.y = 0.14;
+      trunkCutBand.visible = false;
       const crown = new THREE.Mesh(gDodec1, mangroveLeafMat);
       crown.scale.set(1.65, 0.95, 1.65);
       crown.position.y = 3.55;
       crown.castShadow = shadowsEnabledState;
-      felledPivot.add(trunk, crown);
+      felledPivot.add(trunk, trunkCutBand, crown);
       for (let s = 0; s < 5; s++) {
         const sa = (s / 5) * Math.PI * 2 + nodeRand() * 0.4;
         const dist = s === 0 ? 0.1 : 1.25;
@@ -3140,7 +3221,7 @@ export function buildIslandWorld(
       }
       root.add(felledPivot);
       root.scale.setScalar(scale);
-      return { root, felledPivot, stumpMesh };
+      return { root, felledPivot, stumpMesh, trunkCutBand };
     } else if (kind === 'cactus_plant') {
       const mainStem = new THREE.Mesh(gBox1, cactusMat);
       const ch = 2.1 + nodeRand() * 1.4;

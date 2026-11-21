@@ -210,7 +210,7 @@ export function CarRadioModal({
                       : 'bg-sky-500/20 border border-sky-400/40 text-sky-200'
                   }`}
                 >
-                  {`${carAudioType.toUpperCase()} EQ · 150Hz +${(5 * audioProfile.bass).toFixed(1)}dB · 55Hz +${(4 * audioProfile.low).toFixed(1)}dB`}
+                  {`${carAudioType.toUpperCase()} EQ · 100Hz +${(6 * audioProfile.bass).toFixed(1)}dB · 48Hz +${(5 * audioProfile.low).toFixed(1)}dB`}
                 </span>
               </div>
               <h2 className="text-sm sm:text-base font-black text-white truncate">
@@ -395,7 +395,7 @@ export function CarRadioModal({
                     : 'Exotic Clean Radio Profile'}
                 </span>
                 <span className="font-mono text-[10px] text-stone-400">
-                  {`Shake ${audioProfile.shake.toFixed(1)}x · 55Hz Peak`}
+                  {`Shake ${audioProfile.shake.toFixed(1)}x · 48Hz Peak`}
                 </span>
               </div>
               <div className="space-y-1.5">
