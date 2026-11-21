@@ -1987,6 +1987,169 @@ export class CreatureManager {
     }
   }
 
+  public spawnRedDragonBoss(x: number, z: number): ActiveCreature | null {
+    const existing = this.creatures.find((c) => c.id === 'boss_red_dragon');
+    if (existing) {
+      if (!existing.alive) {
+        return existing;
+      }
+      existing.x = x;
+      existing.z = z;
+      existing.y = getTerrainHeight(x, z);
+      existing.homeX = x;
+      existing.homeZ = z;
+      existing.rig.root.position.set(existing.x, existing.y, existing.z);
+      existing.rig.root.visible = true;
+      return existing;
+    }
+
+    const spec = SPECIES_SPECS['trex'];
+    const rig = createCreatureModel('trex');
+    const y = getTerrainHeight(x, z);
+    rig.root.scale.setScalar(1.75);
+    rig.root.position.set(x, y, z);
+    rig.root.visible = true;
+    // Tint body meshes deep crimson-scarlet for the Red Dragon Boss
+    rig.root.traverse((obj) => {
+      if (obj instanceof THREE.Mesh && obj.material && !Array.isArray(obj.material)) {
+        const mat = obj.material as THREE.MeshStandardMaterial;
+        if (mat.color) {
+          const cloned = mat.clone();
+          cloned.color.setHex(0xb91c1c);
+          if ('emissive' in cloned && cloned.emissive) {
+            cloned.emissive.setHex(0x7f1d1d);
+            cloned.emissiveIntensity = 0.45;
+          }
+          obj.material = cloned;
+        }
+      }
+    });
+    const zoneArmor = getCreatureDefaultArmor('trex', true);
+    attachCreatureArmorPlates(rig, 'trex', zoneArmor);
+    this.scene.add(rig.root);
+
+    const dragonBoss: ActiveCreature = {
+      id: 'boss_red_dragon',
+      species: 'trex',
+      spec: {
+        ...spec,
+        displayName: 'Red Dragon Boss',
+        maxHp: 920,
+        attackDamage: 28,
+        attackRange: 4.2,
+        walkSpeed: 3.0,
+        chaseSpeed: 7.4,
+        aggroRadius: 34,
+        drops: [
+          { itemId: 'dino_meat', min: 6, max: 10 },
+          { itemId: 'emerald', min: 3, max: 5 },
+          { itemId: 'totem_of_undying', min: 1, max: 1 },
+        ],
+      },
+      rig,
+      x,
+      y,
+      z,
+      yaw: 0,
+      homeX: x,
+      homeZ: z,
+      targetX: x,
+      targetZ: z,
+      hp: 920,
+      maxHp: 920,
+      alive: true,
+      spawnCycle: 'always',
+      cycleActive: true,
+      respawnTimer: 0,
+      state: 'idle',
+      stateTimer: 3,
+      attackCooldown: 0,
+      provokedTimer: 0,
+      snaredTimer: 0,
+      stunTimer: 0,
+      blindTimer: 0,
+      isBoss: true,
+      displayNameOverride: 'Red Dragon Boss',
+      zoneArmor,
+      stepAccum: 0,
+      callCooldown: 4,
+      leapPhase: 0,
+      leaping: false,
+      swoopOffsetAngle: 0,
+      feedTimer: 0,
+      startledTimer: 0,
+      velY: 0,
+    };
+    this.creatures.push(dragonBoss);
+    return dragonBoss;
+  }
+
+  public spawnCaveMonsterBoss(x: number, z: number): ActiveCreature | null {
+    const existing = this.creatures.find((c) => c.id === 'boss_cave_monster');
+    if (existing) {
+      return existing;
+    }
+    const spec = SPECIES_SPECS['allosaurus'];
+    const rig = createCreatureModel('allosaurus');
+    const y = getTerrainHeight(x, z);
+    rig.root.scale.setScalar(1.38);
+    rig.root.position.set(x, y, z);
+    rig.root.visible = true;
+    const zoneArmor = getCreatureDefaultArmor('allosaurus', true);
+    attachCreatureArmorPlates(rig, 'allosaurus', zoneArmor);
+    this.scene.add(rig.root);
+
+    const boss: ActiveCreature = {
+      id: 'boss_cave_monster',
+      species: 'allosaurus',
+      spec: {
+        ...spec,
+        displayName: 'Cavern Monster Boss',
+        maxHp: 560,
+        attackDamage: 22,
+        attackRange: 3.4,
+        walkSpeed: 2.5,
+        chaseSpeed: 6.8,
+        aggroRadius: 28,
+      },
+      rig,
+      x,
+      y,
+      z,
+      yaw: 0,
+      homeX: x,
+      homeZ: z,
+      targetX: x,
+      targetZ: z,
+      hp: 560,
+      maxHp: 560,
+      alive: true,
+      spawnCycle: 'always',
+      cycleActive: true,
+      respawnTimer: 0,
+      state: 'idle',
+      stateTimer: 3,
+      attackCooldown: 0,
+      provokedTimer: 0,
+      snaredTimer: 0,
+      stunTimer: 0,
+      blindTimer: 0,
+      isBoss: true,
+      displayNameOverride: 'Cavern Monster Boss',
+      zoneArmor,
+      stepAccum: 0,
+      callCooldown: 5,
+      leapPhase: 0,
+      leaping: false,
+      swoopOffsetAngle: 0,
+      feedTimer: 0,
+      startledTimer: 0,
+      velY: 0,
+    };
+    this.creatures.push(boss);
+    return boss;
+  }
+
   public syncArmorVisuals(creature: ActiveCreature): void {
     const groups = creature.rig.armorGroups;
     if (!groups) return;

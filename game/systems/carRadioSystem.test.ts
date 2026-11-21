@@ -190,21 +190,33 @@ test('updateCarStereo3D updates panner position, listener position, and camera f
   assert.ok(Math.abs(listener.forwardZ.calls[0].val) < 1e-6);
 });
 
-test('setupCarAudio routes through HRTF PannerNode with 100Hz bass and 48Hz sub filters', () => {
+test('setupCarAudio routes through HRTF PannerNode with 100Hz bass, 48Hz sub filters, and parallel addCarSubwoofer branch', () => {
   const connections: Array<[unknown, unknown]> = [];
+  const ctxRef: { current: unknown } = { current: null };
   const makeNode = (label: string) => ({
     label,
+    get context() {
+      return ctxRef.current;
+    },
     type: '',
     frequency: { value: 0 },
     Q: { value: 0 },
     gain: { value: 0 },
     fftSize: 0,
-    frequencyBinCount: 128,
+    smoothingTimeConstant: 0,
+    frequencyBinCount: 1024,
     panningModel: '',
     distanceModel: '',
     refDistance: 0,
     maxDistance: 0,
     rolloffFactor: 0,
+    curve: null as Float32Array | null,
+    oversample: 'none',
+    threshold: { value: 0 },
+    knee: { value: 0 },
+    ratio: { value: 0 },
+    attack: { value: 0 },
+    release: { value: 0 },
     connect(dest: unknown) {
       connections.push([this, dest]);
     },
@@ -216,11 +228,20 @@ test('setupCarAudio routes through HRTF PannerNode with 100Hz bass and 48Hz sub 
   class MockAudioContext {
     state = 'running';
     destination = destination;
+    constructor() {
+      ctxRef.current = this;
+    }
     createMediaElementSource() {
       return makeNode('source');
     }
     createBiquadFilter() {
       return makeNode('filter');
+    }
+    createWaveShaper() {
+      return makeNode('waveshaper');
+    }
+    createDynamicsCompressor() {
+      return makeNode('compressor');
     }
     createGain() {
       return makeNode('gain');
@@ -254,6 +275,9 @@ test('setupCarAudio routes through HRTF PannerNode with 100Hz bass and 48Hz sub 
     assert.equal(handles.sub.frequency.value, 48);
     assert.equal(handles.sub.Q.value, 0.8);
     assert.ok(Math.abs(handles.sub.gain.value - 5 * 1.5) < 1e-6);
+    assert.equal(handles.analyser.fftSize, 2048);
+    assert.equal(handles.analyser.smoothingTimeConstant, 0.78);
+    assert.ok(Math.abs(handles.subwoofer.subGain.gain.value - Math.min(0.65, 0.2 * 1.5)) < 1e-6);
 
     assert.equal(handles.panner.panningModel, 'HRTF');
     assert.equal(handles.panner.distanceModel, 'inverse');
@@ -261,9 +285,12 @@ test('setupCarAudio routes through HRTF PannerNode with 100Hz bass and 48Hz sub 
     assert.equal(handles.panner.maxDistance, 55);
     assert.equal(handles.panner.rolloffFactor, 1.4);
 
-    // analyser -> panner -> destination
+    // analyser -> panner -> destination and subGain -> panner
     assert.ok(
       connections.some(([a, b]) => a === handles.analyser && b === handles.panner),
+    );
+    assert.ok(
+      connections.some(([a, b]) => a === handles.subwoofer.subGain && b === handles.panner),
     );
     assert.ok(
       connections.some(([a, b]) => a === handles.panner && b === destination),

@@ -1167,6 +1167,7 @@ export interface GameSaveData {
   visitedDimensions?: DimensionId[];
   ecosystem?: EcosystemSimulationData;
   clearedStructureIds?: string[];
+  caveProgress?: import('./systems/caveSystem').CaveCompactSave;
 }
 
 export interface CarcassSaveData {
@@ -1275,7 +1276,8 @@ export interface NearbyInteraction {
     | 'coaster_station'
     | 'saturn_rocket'
     | 'island_ufo'
-    | 'underground_elevator';
+    | 'underground_elevator'
+    | 'cave_entrance';
   actionCategory?:
     | 'chop'
     | 'mine'
@@ -1490,6 +1492,7 @@ export interface HUDStateSnapshot {
   crystalArmorMaxHp?: number;
   portalNearHint?: string | null;
   spaceState?: import('./systems/multiverseSpace').SpaceHudSnapshot;
+  caveSummary?: import('./systems/caveSystem').CaveSummarySnapshot;
 }
 
 export interface ModGameplayTweaks {

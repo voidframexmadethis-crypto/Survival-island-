@@ -157,6 +157,7 @@ import {
 import { SkinCatalogItem } from '@/game/data/exchangeCatalog';
 import { EcosystemSimulationData } from '@/game/systems/livingEcosystemSystem';
 import { DragonCompanion } from '@/game/systems/dragonValleySystem';
+import { UI_LAYOUT, getSafeHudLayoutMetrics } from '@/game/systems/caveSystem';
 
 function formatTimePhase(t: number): string {
   if (t < 0.2 || t >= 0.84) return 'Night';
@@ -234,6 +235,22 @@ export function SurvivalGameClient() {
   const [webglError, setWebglError] = useState<string | null>(null);
   const [webglRetryNonce, setWebglRetryNonce] = useState(0);
   const [walkingControlsMinimized, setWalkingControlsMinimized] = useState(false);
+  const [viewportSize, setViewportSize] = useState({ width: 1280, height: 720 });
+  useEffect(() => {
+    const updateViewport = () => {
+      setViewportSize({
+        width: window.innerWidth || 1280,
+        height: window.innerHeight || 720,
+      });
+    };
+    updateViewport();
+    window.addEventListener('resize', updateViewport);
+    window.addEventListener('orientationchange', updateViewport);
+    return () => {
+      window.removeEventListener('resize', updateViewport);
+      window.removeEventListener('orientationchange', updateViewport);
+    };
+  }, []);
   const [vehicleDeckExpandedForId, setVehicleDeckExpandedForId] = useState<string | null>(null);
   const activeVehicleIdForDeck = hud?.activeVehicle?.id ?? null;
   const vehicleDeckExpanded =
@@ -1158,6 +1175,32 @@ export function SurvivalGameClient() {
     (settings.touchControlsMode === 'always' ||
       (settings.touchControlsMode === 'auto' && isTouchDevice));
 
+  const touchVisibleForLayout =
+    showTouchControls ||
+    (gamepadConnected &&
+      settings.touchControlsMode !== 'off' &&
+      screen === 'playing' &&
+      !activeModal &&
+      !hud?.gameOver &&
+      !hud?.cinematicActive);
+
+  const safeHudLayout = useMemo(
+    () =>
+      getSafeHudLayoutMetrics(
+        viewportSize.width,
+        viewportSize.height,
+        touchVisibleForLayout,
+        stickMinimized || hudMinimizedMobile,
+      ),
+    [
+      viewportSize.width,
+      viewportSize.height,
+      touchVisibleForLayout,
+      stickMinimized,
+      hudMinimizedMobile,
+    ],
+  );
+
   const hudStructures = hud?.structures;
   const hudPlayerX = hud?.playerX ?? 0;
   const hudPlayerZ = hud?.playerZ ?? 0;
@@ -1400,7 +1443,10 @@ export function SurvivalGameClient() {
 
       {/* IN-GAME FIRST-PERSON HUD (CLEAN MINECRAFT-INSPIRED LAYOUT) */}
       {screen === 'playing' && hud && !hud.cinematicActive && (
-        <div className="pointer-events-none relative z-10 min-h-[100dvh] w-full flex flex-col justify-between gap-1.5 p-2 sm:p-3.5 safe-top safe-bottom pb-2 sm:pb-3">
+        <div
+          data-ui-layout-safe={UI_LAYOUT.preventOverlap ? 'true' : 'false'}
+          className="pointer-events-none relative z-10 min-h-[100dvh] w-full flex flex-col justify-between gap-1.5 p-2 sm:p-3.5 safe-top safe-bottom safe-left safe-right pb-2 sm:pb-3"
+        >
           {/* Subtle Center Crosshair + Target Hitbox Readout (Only when aiming at enemy) */}
           {!activeModal && !hud.gameOver && (
             <div className="fixed inset-0 pointer-events-none flex items-center justify-center">
@@ -1502,9 +1548,10 @@ export function SurvivalGameClient() {
           )}
 
           {/* Top Bar: Compact Survival Vitals (Left), Slim Compass (Center), Menu/Exit (Right) */}
-          <div className="flex flex-nowrap items-start justify-between gap-2 sm:gap-3">
-            {/* Top-Left Vitals / Flat World Park Tools Panel */}
-            <div className="pointer-events-auto rounded-lg bg-stone-950/90 border border-stone-700/80 p-1.5 sm:p-2.5 w-[164px] sm:w-[236px] space-y-1.5 shadow-lg shrink-0">
+          <div className="flex flex-nowrap items-start justify-between gap-1.5 sm:gap-3">
+            {/* Top-Left Vitals / Flat World Park Tools Panel + Narrow-Viewport Flight/TP Stack */}
+            <div className="flex flex-col items-start gap-1.5 shrink-0">
+            <div className="pointer-events-auto rounded-lg bg-stone-950/90 border border-stone-700/80 p-1.5 sm:p-2.5 w-[138px] min-[430px]:w-[164px] sm:w-[236px] space-y-1.5 shadow-lg shrink-0">
               <div className="flex items-center justify-between gap-1 text-[10px] sm:text-[11px] text-stone-300 pb-0.5 border-b border-stone-800">
                 <span className="font-semibold text-amber-300 truncate">
                   {hud.worldType === 'flat'
@@ -1699,6 +1746,117 @@ export function SurvivalGameClient() {
               )}
             </div>
 
+            {!touchVisibleForLayout &&
+              viewportSize.width < 1200 &&
+              !activeModal &&
+              !hud.gameOver &&
+              !hud.activeVehicle && (
+                <div className="pointer-events-auto flex flex-col items-start gap-1 w-[174px] sm:w-[216px]">
+                  <div className="flex items-center gap-1 w-full">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={Boolean(hud.isFlying)}
+                      aria-label="Toggle Flight"
+                      onClick={() => {
+                        if (activeModalRef.current !== null) return;
+                        engineRef.current?.togglePlayerFlight();
+                      }}
+                      className={`h-8 px-2 rounded-lg border flex items-center gap-1 shadow-lg transition-colors flex-1 justify-center ${
+                        hud.isFlying
+                          ? 'bg-sky-500 border-sky-200 text-stone-950'
+                          : 'bg-stone-950/85 border-stone-500/60 text-stone-100 hover:border-sky-400/70'
+                      }`}
+                    >
+                      <Plane className="w-3.5 h-3.5" />
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider whitespace-nowrap">
+                        Fly {hud.isFlying ? 'ON' : 'OFF'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Fly Higher"
+                      title="Hold to Fly Higher"
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        if (activeModalRef.current !== null) return;
+                        engineRef.current?.setTouchFlyAscend(true);
+                      }}
+                      onPointerUp={(e) => {
+                        e.stopPropagation();
+                        engineRef.current?.setTouchFlyAscend(false);
+                      }}
+                      onPointerLeave={() => engineRef.current?.setTouchFlyAscend(false)}
+                      onPointerCancel={() => engineRef.current?.setTouchFlyAscend(false)}
+                      className={`w-8 h-8 rounded-lg border flex items-center justify-center shadow-lg transition-colors ${
+                        hud.isFlying
+                          ? 'bg-sky-500/90 border-sky-200 text-stone-950'
+                          : 'bg-stone-950/85 border-stone-500/60 text-sky-300'
+                      }`}
+                    >
+                      <ArrowUp className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Fly Down"
+                      title="Hold to Fly Down"
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        if (activeModalRef.current !== null) return;
+                        engineRef.current?.setTouchFlyDescend(true);
+                      }}
+                      onPointerUp={(e) => {
+                        e.stopPropagation();
+                        engineRef.current?.setTouchFlyDescend(false);
+                      }}
+                      onPointerLeave={() => engineRef.current?.setTouchFlyDescend(false)}
+                      onPointerCancel={() => engineRef.current?.setTouchFlyDescend(false)}
+                      className={`w-8 h-8 rounded-lg border flex items-center justify-center shadow-lg transition-colors ${
+                        hud.isFlying
+                          ? 'bg-sky-500/90 border-sky-200 text-stone-950'
+                          : 'bg-stone-950/85 border-stone-500/60 text-sky-300'
+                      }`}
+                    >
+                      <ArrowDown className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <form
+                    id="teleport-bar"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (activeModalRef.current !== null) return;
+                      const dest = quickTpInput.trim();
+                      if (!dest) return;
+                      engineRef.current?.teleportToBiome(dest);
+                      setQuickTpInput('');
+                    }}
+                    onKeyDown={(e) => e.stopPropagation()}
+                    onKeyUp={(e) => e.stopPropagation()}
+                    className="flex items-center gap-1 h-8 w-full bg-stone-950/92 border border-sky-500/50 rounded-lg px-2 shadow-lg"
+                  >
+                    <Navigation className="w-3 h-3 text-sky-400 shrink-0" />
+                    <input
+                      type="text"
+                      value={quickTpInput}
+                      onChange={(e) => setQuickTpInput(e.target.value)}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      onKeyUp={(e) => e.stopPropagation()}
+                      placeholder="TP biome..."
+                      aria-label="Teleport to biome"
+                      className="flex-1 min-w-0 bg-transparent text-[11px] text-stone-100 placeholder:text-stone-400 focus:outline-none select-text"
+                    />
+                    <button
+                      type="submit"
+                      className="px-2 py-0.5 rounded bg-sky-500 hover:bg-sky-400 text-stone-950 text-[10px] font-extrabold uppercase tracking-wider shrink-0"
+                    >
+                      TP
+                    </button>
+                  </form>
+                </div>
+              )}
+            </div>
+
             {/* Top-Center Slim Compass (No permanent objective box blocking center view) */}
             <div className="flex flex-col items-center gap-1 min-w-0">
               {settings.showCompass !== false && (
@@ -1804,7 +1962,7 @@ export function SurvivalGameClient() {
                     <button
                       type="button"
                       onClick={() => engineRef.current?.toggleCameraView()}
-                      className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg bg-stone-950/90 hover:bg-stone-900 text-amber-200 font-display font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-lg border border-stone-700/85 transition whitespace-nowrap shrink-0"
+                      className="px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg bg-stone-950/90 hover:bg-stone-900 text-amber-200 font-display font-bold text-[11px] sm:text-sm flex items-center gap-1 sm:gap-1.5 shadow-lg border border-stone-700/85 transition whitespace-nowrap shrink-0"
                       title="Toggle 1st / 3rd Person Camera (F5 / K)"
                     >
                       <Camera className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400" />
@@ -1813,7 +1971,7 @@ export function SurvivalGameClient() {
                     <button
                       type="button"
                       onClick={() => openModal('coaster')}
-                      className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg bg-stone-950/90 hover:bg-stone-900 text-sky-300 font-display font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-lg border border-sky-500/40 transition whitespace-nowrap shrink-0"
+                      className="px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg bg-stone-950/90 hover:bg-stone-900 text-sky-300 font-display font-bold text-[11px] sm:text-sm flex items-center gap-1 sm:gap-1.5 shadow-lg border border-sky-500/40 transition whitespace-nowrap shrink-0"
                       title="Roller Coaster Creator"
                     >
                       <RollerCoaster className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
@@ -1825,7 +1983,7 @@ export function SurvivalGameClient() {
                         setActiveModal('menu_drawer');
                         engineRef.current?.setMode('paused');
                       }}
-                      className="px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-lg bg-stone-950/90 hover:bg-stone-900 text-amber-300 font-display font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-lg border border-stone-700/85 transition whitespace-nowrap shrink-0"
+                      className="px-2 py-1.5 sm:px-3.5 sm:py-2 rounded-lg bg-stone-950/90 hover:bg-stone-900 text-amber-300 font-display font-bold text-[11px] sm:text-sm flex items-center gap-1 sm:gap-1.5 shadow-lg border border-stone-700/85 transition whitespace-nowrap shrink-0"
                     >
                       <Settings className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                       <span>MENU</span>
@@ -1911,6 +2069,17 @@ export function SurvivalGameClient() {
               </div>
             )}
 
+            {hud.navigatorCompanion?.speechLine && !hud.cinematicActive && (
+              <div className="max-w-[min(88vw,440px)] rounded-xl border border-amber-400/45 bg-stone-950/90 px-3.5 py-1.5 sm:px-4 sm:py-2 text-center shadow-2xl backdrop-blur-md">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-amber-300">
+                  {hud.navigatorCompanion.name}
+                </div>
+                <div className="mt-0.5 text-xs sm:text-sm font-semibold text-stone-100 italic line-clamp-2">
+                  &ldquo;{hud.navigatorCompanion.speechLine}&rdquo;
+                </div>
+              </div>
+            )}
+
             {toasts.map((t) => (
               <div
                 key={t.id}
@@ -1932,10 +2101,34 @@ export function SurvivalGameClient() {
             ))}
           </div>
 
-          {/* Bottom-Center Contextual Prompts (Only when needed) + Compact Minecraft-Style Hotbar */}
-          <div className="flex flex-col items-center gap-1.5">
-            {/* Contextual Action Buttons: Unmistakable COLLECT for carcasses & targeted world prompts */}
-            <div className="flex flex-wrap items-center justify-center gap-1.5 max-w-[min(92vw,460px)]">
+          {/* Bottom-Center Contextual Prompts (Repositioned Outside Player Controls) + Compact Minecraft-Style Hotbar */}
+          <div
+            className="flex flex-col items-center gap-1.5 mx-auto w-full"
+            style={
+              UI_LAYOUT.reservePlayerControls &&
+              touchVisibleForLayout &&
+              !stickMinimized &&
+              !hudMinimizedMobile &&
+              safeHudLayout.isLandscapeCompact
+                ? { maxWidth: `${safeHudLayout.centerBandMaxWidthPx}px` }
+                : undefined
+            }
+          >
+            {/* Contextual Action Buttons: Repositioned above touch controls on portrait phones so #joystick-pad & #combat-controls stay clear */}
+            <div
+              className={`flex flex-wrap items-center justify-center gap-1.5 max-w-[min(92vw,460px)] ${
+                UI_LAYOUT.repositionMenus &&
+                touchVisibleForLayout &&
+                !stickMinimized &&
+                !hudMinimizedMobile &&
+                !safeHudLayout.isLandscapeCompact &&
+                safeHudLayout.repositionPromptAboveControls
+                  ? 'mb-[158px]'
+                  : rocketControlsActive && !hudMinimizedMobile
+                    ? 'mb-[64px]'
+                    : ''
+              }`}
+            >
               {hud.seatedLabel && !activeModal && (
                 <button
                   type="button"
@@ -2193,7 +2386,12 @@ export function SurvivalGameClient() {
                 className={`pointer-events-auto relative z-30 rounded-xl bg-stone-950/95 border border-amber-500/50 px-2.5 sm:px-3 py-1.5 sm:py-2 shadow-2xl space-y-1.5 transition-all ${
                   stickMinimized
                     ? 'controls-minimized-mode w-[min(96vw,680px)]'
-                    : 'w-[min(96vw,580px)]'
+                    : UI_LAYOUT.repositionMenus &&
+                        touchVisibleForLayout &&
+                        !safeHudLayout.isLandscapeCompact &&
+                        vehicleDeckExpanded
+                      ? 'w-[min(96vw,580px)] mb-[158px]'
+                      : 'w-[min(96vw,580px)] max-w-full'
                 }`}
               >
                 <div className="flex flex-wrap items-center justify-between gap-1.5 sm:gap-2">
@@ -2975,7 +3173,15 @@ export function SurvivalGameClient() {
             {hudManagerOpen && (
               <div
                 onPointerDown={(e) => e.stopPropagation()}
-                className="pointer-events-auto mb-1 w-[min(94vw,430px)] rounded-xl bg-stone-950/95 border border-amber-500/60 p-3 shadow-2xl space-y-2.5"
+                className={`pointer-events-auto mb-1 w-[min(94vw,430px)] max-w-full rounded-xl bg-stone-950/95 border border-amber-500/60 p-3 shadow-2xl space-y-2.5 ${
+                  UI_LAYOUT.repositionMenus &&
+                  touchVisibleForLayout &&
+                  !stickMinimized &&
+                  !hudMinimizedMobile &&
+                  !safeHudLayout.isLandscapeCompact
+                    ? 'mb-[158px]'
+                    : ''
+                }`}
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-xs font-bold text-amber-300">
@@ -3075,7 +3281,7 @@ export function SurvivalGameClient() {
               <div
                 id="hotbar-dock"
                 data-hud-hotbar="true"
-                className="hotbar-strip pointer-events-auto flex items-center gap-0.5 sm:gap-1 p-1 rounded-lg bg-stone-950/92 border-2 border-stone-700/90 shadow-2xl max-w-[calc(100vw-16px)]"
+                className="hotbar-strip pointer-events-auto flex items-center gap-0.5 sm:gap-1 p-1 rounded-lg bg-stone-950/92 border-2 border-stone-700/90 shadow-2xl max-w-full"
               >
                 <button
                   type="button"
@@ -3111,7 +3317,7 @@ export function SurvivalGameClient() {
                 <div
                   ref={hotbarScrollRef}
                   onPointerDown={(e) => e.stopPropagation()}
-                  className="flex items-center gap-1 overflow-x-auto survival-scroll min-w-0 max-w-[196px] sm:max-w-[392px] md:max-w-[444px] snap-x snap-mandatory"
+                  className="flex items-center gap-1 overflow-x-auto survival-scroll flex-1 min-w-0 max-w-[196px] sm:max-w-[392px] md:max-w-[444px] snap-x snap-mandatory"
                 >
                   {(() => {
                     const clampedStart = Math.min(
@@ -3321,45 +3527,48 @@ export function SurvivalGameClient() {
             />
 
             {!touchVisible &&
+              viewportSize.width >= 1200 &&
               screen === 'playing' &&
               !activeModal &&
               !hud.gameOver &&
               !hud.cinematicActive &&
               !hud.activeVehicle && (
-                <div className="pointer-events-auto fixed bottom-[86px] left-5 z-20 flex items-center gap-2">
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={Boolean(hud.isFlying)}
-                    aria-label="Toggle Flight"
-                    onClick={() => {
-                      if (activeModalRef.current !== null) return;
-                      engineRef.current?.togglePlayerFlight();
-                    }}
-                    className={`h-9 px-3 rounded-lg border-2 flex items-center gap-1.5 shadow-xl transition-colors ${
-                      hud.isFlying
-                        ? 'bg-sky-500 border-sky-200 text-stone-950'
-                        : 'bg-stone-950/85 border-stone-500/60 text-stone-100 hover:border-sky-400/70'
-                    }`}
-                  >
-                    <Plane className="w-4 h-4" />
-                    <span className="text-[11px] font-extrabold uppercase tracking-wider whitespace-nowrap">
-                      Fly {hud.isFlying ? 'ON' : 'OFF'}
-                    </span>
-                    <span
-                      className={`w-6 h-3.5 rounded-full p-0.5 flex items-center transition-colors ${
-                        hud.isFlying ? 'bg-stone-950/40 justify-end' : 'bg-stone-700 justify-start'
+                <div className="pointer-events-auto fixed bottom-3 left-3.5 safe-bottom safe-left z-20 flex flex-col items-start gap-1.5 w-[216px]">
+                  <div className="flex items-center gap-1.5 w-full">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={Boolean(hud.isFlying)}
+                      aria-label="Toggle Flight"
+                      onClick={() => {
+                        if (activeModalRef.current !== null) return;
+                        engineRef.current?.togglePlayerFlight();
+                      }}
+                      className={`h-8 px-2.5 rounded-lg border-2 flex items-center gap-1.5 shadow-xl transition-colors flex-1 justify-between ${
+                        hud.isFlying
+                          ? 'bg-sky-500 border-sky-200 text-stone-950'
+                          : 'bg-stone-950/85 border-stone-500/60 text-stone-100 hover:border-sky-400/70'
                       }`}
                     >
+                      <span className="flex items-center gap-1">
+                        <Plane className="w-3.5 h-3.5" />
+                        <span className="text-[10px] font-extrabold uppercase tracking-wider whitespace-nowrap">
+                          Fly {hud.isFlying ? 'ON' : 'OFF'}
+                        </span>
+                      </span>
                       <span
-                        className={`w-2.5 h-2.5 rounded-full ${
-                          hud.isFlying ? 'bg-white' : 'bg-stone-400'
+                        className={`w-5 h-3 rounded-full p-0.5 flex items-center transition-colors ${
+                          hud.isFlying ? 'bg-stone-950/40 justify-end' : 'bg-stone-700 justify-start'
                         }`}
-                      />
-                    </span>
-                  </button>
+                      >
+                        <span
+                          className={`w-2 h-2 rounded-full ${
+                            hud.isFlying ? 'bg-white' : 'bg-stone-400'
+                          }`}
+                        />
+                      </span>
+                    </button>
 
-                  <div className="flex items-center gap-1">
                     <button
                       type="button"
                       aria-label="Fly Higher"
@@ -3375,7 +3584,7 @@ export function SurvivalGameClient() {
                       }}
                       onPointerLeave={() => engineRef.current?.setTouchFlyAscend(false)}
                       onPointerCancel={() => engineRef.current?.setTouchFlyAscend(false)}
-                      className={`w-9 h-9 rounded-lg border-2 flex items-center justify-center shadow-xl transition-colors ${
+                      className={`w-8 h-8 rounded-lg border-2 flex items-center justify-center shadow-xl transition-colors shrink-0 ${
                         hud.isFlying
                           ? 'bg-sky-500/90 border-sky-200 text-stone-950 active:bg-sky-300'
                           : 'bg-stone-950/85 border-stone-500/60 text-sky-300 hover:border-sky-400/70'
@@ -3398,7 +3607,7 @@ export function SurvivalGameClient() {
                       }}
                       onPointerLeave={() => engineRef.current?.setTouchFlyDescend(false)}
                       onPointerCancel={() => engineRef.current?.setTouchFlyDescend(false)}
-                      className={`w-9 h-9 rounded-lg border-2 flex items-center justify-center shadow-xl transition-colors ${
+                      className={`w-8 h-8 rounded-lg border-2 flex items-center justify-center shadow-xl transition-colors shrink-0 ${
                         hud.isFlying
                           ? 'bg-sky-500/90 border-sky-200 text-stone-950 active:bg-sky-300'
                           : 'bg-stone-950/85 border-stone-500/60 text-sky-300 hover:border-sky-400/70'
@@ -3421,7 +3630,7 @@ export function SurvivalGameClient() {
                     }}
                     onKeyDown={(e) => e.stopPropagation()}
                     onKeyUp={(e) => e.stopPropagation()}
-                    className="flex items-center gap-1.5 h-9 bg-stone-950/92 border border-sky-500/50 rounded-lg px-2 shadow-xl"
+                    className="flex items-center gap-1.5 h-8 w-full bg-stone-950/92 border border-sky-500/50 rounded-lg px-2 shadow-xl"
                   >
                     <Navigation className="w-3.5 h-3.5 text-sky-400 shrink-0" />
                     <input
@@ -3432,7 +3641,7 @@ export function SurvivalGameClient() {
                       onKeyUp={(e) => e.stopPropagation()}
                       placeholder="Teleport biome..."
                       aria-label="Teleport to biome"
-                      className="w-32 bg-transparent text-xs text-stone-100 placeholder:text-stone-400 focus:outline-none select-text"
+                      className="flex-1 min-w-0 bg-transparent text-xs text-stone-100 placeholder:text-stone-400 focus:outline-none select-text"
                     />
                     <button
                       type="submit"
@@ -3570,19 +3779,6 @@ export function SurvivalGameClient() {
           onEquipSeed={(itemId) => engineRef.current?.useOrEquipItem(itemId)}
           onClose={closeModal}
         />
-      )}
-
-      {hud?.navigatorCompanion?.speechLine && !hud.cinematicActive && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-28 z-40 flex justify-center px-4">
-          <div className="max-w-lg rounded-xl border border-amber-400/45 bg-stone-950/90 px-5 py-3 text-center shadow-2xl backdrop-blur-md">
-            <div className="text-[11px] font-bold uppercase tracking-widest text-amber-300">
-              {hud.navigatorCompanion.name}
-            </div>
-            <div className="mt-1 text-base font-semibold text-stone-100 italic">
-              &ldquo;{hud.navigatorCompanion.speechLine}&rdquo;
-            </div>
-          </div>
-        </div>
       )}
 
       {activeModal === 'navigator_companion' &&
@@ -3724,6 +3920,11 @@ export function SurvivalGameClient() {
             <div
               id="rocket-controls-bar"
               onPointerDown={(e) => e.stopPropagation()}
+              style={
+                UI_LAYOUT.reservePlayerControls && safeHudLayout.isLandscapeCompact
+                  ? { maxWidth: `${safeHudLayout.centerBandMaxWidthPx}px` }
+                  : undefined
+              }
               className="fixed left-1/2 -translate-x-1/2 bottom-2.5 safe-bottom w-[min(95vw,520px)] z-40 flex items-center justify-around gap-2 p-2 rounded-2xl bg-[rgba(10,14,24,0.94)] border border-white/20 shadow-2xl pointer-events-auto"
             >
               <button
@@ -3985,6 +4186,10 @@ export function SurvivalGameClient() {
       {activeModal === 'dragon_sanctuary' && (
         <DragonSanctuaryModal
           dragons={dragonsSnapshot}
+          canRideDragon={hud?.caveSummary?.dragonUnlocked ?? false}
+          redDragonCave={
+            hud?.caveSummary?.specialCaves.find((c) => c.type === 'red-dragon') ?? null
+          }
           onHatch={(el, name) => {
             engineRef.current?.hatchDragonEgg(el, name);
             if (engineRef.current) setDragonsSnapshot(engineRef.current.getDragons());
@@ -4062,8 +4267,8 @@ export function SurvivalGameClient() {
       />
 
       {activeModal === 'menu_drawer' && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
-          <div className="relative w-full max-w-md bg-stone-900 border border-amber-500/50 rounded-2xl shadow-2xl p-6 space-y-5 max-h-[90vh] overflow-y-auto survival-scroll">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 sm:p-4 safe-top safe-bottom">
+          <div className="relative w-full max-w-md bg-stone-900 border border-amber-500/50 rounded-2xl shadow-2xl p-5 sm:p-6 space-y-5 max-h-[calc(100dvh-2rem)] overflow-y-auto survival-scroll">
             <div className="flex items-center justify-between border-b border-stone-800 pb-3">
               <div>
                 <h3 className="font-display text-lg font-bold text-amber-300">
@@ -4447,7 +4652,7 @@ function CompassStrip({ playerYaw }: { playerYaw: number }) {
   }, markers[0]);
 
   return (
-    <div className="w-32 sm:w-48 rounded-lg bg-stone-950/85 border border-stone-700/80 px-2.5 py-1.5 flex flex-col items-center gap-0.5 shadow-lg overflow-hidden shrink-0">
+    <div className="w-[76px] min-[460px]:w-32 sm:w-48 rounded-lg bg-stone-950/85 border border-stone-700/80 px-1.5 sm:px-2.5 py-1.5 flex flex-col items-center gap-0.5 shadow-lg overflow-hidden shrink-0">
       <div className="relative w-full h-4 overflow-hidden">
         <div className="absolute left-1/2 top-0 bottom-0 w-px bg-amber-400/90 -translate-x-1/2 z-10" />
         {markers.map((m) => {

@@ -482,7 +482,8 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
       {/* LEFT ZONE: Movement / Steering Joystick + Compact Popover Teleport */}
       <div
         id="joystick-pad"
-        className="joystick-pad pointer-events-auto absolute bottom-[66px] sm:bottom-[86px] left-1 sm:left-4 safe-bottom safe-left flex flex-col items-start gap-1.5"
+        data-safe-zone="player-controls"
+        className="joystick-pad pointer-events-auto absolute bottom-[72px] sm:bottom-[86px] left-1 sm:left-4 safe-bottom safe-left flex flex-col items-start gap-1.5"
       >
         {/* Floating Teleport Popover (opens above left pad so it never stretches across narrow screens) */}
         {onTeleportBiome && tpOpen && (
@@ -720,7 +721,8 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
       {!mirroredJoystickOnly && (
         <div
           id="combat-controls"
-          className="action-wheel pointer-events-auto absolute bottom-[66px] sm:bottom-[86px] right-1 sm:right-4 safe-bottom safe-right flex flex-col items-end gap-1.5 sm:gap-2"
+          data-safe-zone="player-controls"
+          className="action-wheel pointer-events-auto absolute bottom-[72px] sm:bottom-[86px] right-1 sm:right-4 safe-bottom safe-right flex flex-col items-end gap-1.5 sm:gap-2"
         >
           {isDriving ? (
             <div id="vehicle-touch-pedals" className="flex flex-col items-end gap-1.5 sm:gap-2">

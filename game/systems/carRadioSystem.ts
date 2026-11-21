@@ -129,6 +129,82 @@ export function resolveCarAudioType(car: RadioCarDescriptor = {}): CarType {
   return 'supercar';
 }
 
+export interface CarSubwooferHandles {
+  subGain: GainNode;
+  destroy: () => void;
+}
+
+export function addCarSubwoofer(
+  sourceBus: AudioNode,
+  carPanner: PannerNode,
+  profile: { low: number },
+): CarSubwooferHandles {
+  const ctx = sourceBus.context;
+
+  // Protect the subwoofer from infrasonic frequencies.
+  const subsonic = ctx.createBiquadFilter();
+  subsonic.type = 'highpass';
+  subsonic.frequency.value = 28;
+
+  // Dedicated subwoofer crossover.
+  const crossover = ctx.createBiquadFilter();
+  crossover.type = 'lowpass';
+  crossover.frequency.value = 90;
+  crossover.Q.value = 0.707;
+
+  // Gentle amplifier-style harmonic saturation.
+  const saturation = ctx.createWaveShaper();
+  const curve = new Float32Array(256);
+  const norm = Math.tanh(1.6);
+
+  for (let i = 0; i < curve.length; i++) {
+    const x = i / 127.5 - 1;
+    curve[i] = Math.tanh(x * 1.6) / norm;
+  }
+
+  saturation.curve = curve;
+  saturation.oversample = '2x';
+
+  // Control peaks before the subwoofer output.
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -18;
+  limiter.knee.value = 18;
+  limiter.ratio.value = 4;
+  limiter.attack.value = 0.005;
+  limiter.release.value = 0.18;
+
+  const subGain = ctx.createGain();
+  subGain.gain.value = Math.min(0.65, 0.2 * profile.low);
+
+  // Parallel branch: original stereo remains untouched.
+  sourceBus.connect(subsonic);
+  subsonic.connect(crossover);
+  crossover.connect(saturation);
+  saturation.connect(limiter);
+  limiter.connect(subGain);
+  subGain.connect(carPanner);
+
+  return {
+    subGain,
+    destroy() {
+      try {
+        sourceBus.disconnect(subsonic);
+      } catch {
+        // Ignore if already disconnected
+      }
+      try {
+        subsonic.disconnect();
+        crossover.disconnect();
+        saturation.disconnect();
+        limiter.disconnect();
+        subGain.disconnect();
+      } catch {
+        // Ignore teardown disconnect errors
+      }
+    },
+  };
+}
+
 export interface SetupCarAudioHandles {
   ctx: AudioContext;
   bass: BiquadFilterNode;
@@ -137,6 +213,7 @@ export interface SetupCarAudioHandles {
   analyser: AnalyserNode;
   panner: PannerNode;
   profile: CarAudioProfile;
+  subwoofer: CarSubwooferHandles;
   destroy: () => void;
 }
 
@@ -168,7 +245,8 @@ export function setupCarAudio(
   sub.gain.value = 5 * profile.low;
 
   gain.gain.value = 0.8;
-  analyser.fftSize = 256;
+  analyser.fftSize = 2048;
+  analyser.smoothingTimeConstant = 0.78;
 
   carPanner.panningModel = 'HRTF';
   carPanner.distanceModel = 'inverse';
@@ -182,6 +260,8 @@ export function setupCarAudio(
   gain.connect(analyser);
   analyser.connect(carPanner);
   carPanner.connect(ctx.destination);
+
+  const subwoofer = addCarSubwoofer(source, carPanner, profile);
 
   const data = new Uint8Array(analyser.frequencyBinCount);
   let rafId = 0;
@@ -238,6 +318,7 @@ export function setupCarAudio(
     analyser,
     panner: carPanner,
     profile,
+    subwoofer,
     destroy: () => {
       destroyed = true;
       if (rafId) {
@@ -250,6 +331,7 @@ export function setupCarAudio(
       if (quarterPanel) {
         quarterPanel.style.transform = '';
       }
+      subwoofer.destroy();
       try {
         source.disconnect();
         bass.disconnect();
@@ -269,12 +351,14 @@ export function setupCarAudio(
 
 export const CABIN_BASS_AND_FIRST_PERSON = {
   audioCtx: null as AudioContext | null,
+  sourceBus: null as GainNode | null,
   analyser: null as AnalyserNode | null,
   bassFilter: null as BiquadFilterNode | null,
   subFilter: null as BiquadFilterNode | null,
   compressor: null as DynamicsCompressorNode | null,
   masterGain: null as GainNode | null,
   carPanner: null as PannerNode | null,
+  subwoofer: null as CarSubwooferHandles | null,
   freqData: null as Uint8Array<ArrayBuffer> | null,
   connectedElements: new WeakMap<HTMLMediaElement, MediaElementAudioSourceNode>(),
   cameraMode: 'CHASE' as DrivingCameraMode,
@@ -308,6 +392,9 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       this.audioCtx = new AudioCtx();
       const profile = AUDIO_PROFILES[this.activeCarType];
 
+      this.sourceBus = this.audioCtx.createGain();
+      this.sourceBus.gain.value = 1.0;
+
       // 100 Hz lowshelf bass + 48 Hz peaking sub tuned per CarType profile
       this.bassFilter = this.audioCtx.createBiquadFilter();
       this.bassFilter.type = 'lowshelf';
@@ -321,8 +408,8 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       this.subFilter.gain.value = 5 * profile.low;
 
       this.analyser = this.audioCtx.createAnalyser();
-      this.analyser.fftSize = 256;
-      this.analyser.smoothingTimeConstant = 0.72;
+      this.analyser.fftSize = 2048;
+      this.analyser.smoothingTimeConstant = 0.78;
       this.freqData = new Uint8Array(
         new ArrayBuffer(this.analyser.frequencyBinCount),
       );
@@ -344,12 +431,16 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       this.carPanner.maxDistance = 55;
       this.carPanner.rolloffFactor = 1.4;
 
+      this.sourceBus.connect(this.bassFilter);
       this.bassFilter.connect(this.subFilter);
       this.subFilter.connect(this.analyser);
       this.analyser.connect(this.compressor);
-      this.compressor.connect(this.masterGain);
-      this.masterGain.connect(this.carPanner);
-      this.carPanner.connect(this.audioCtx.destination);
+      this.compressor.connect(this.carPanner);
+      this.carPanner.connect(this.masterGain);
+      this.masterGain.connect(this.audioCtx.destination);
+
+      this.subwoofer?.destroy();
+      this.subwoofer = addCarSubwoofer(this.sourceBus, this.carPanner, profile);
     }
 
     if (this.audioCtx.state === 'suspended') {
@@ -360,12 +451,12 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
   attachAudioElement(audioEl: HTMLMediaElement | null): void {
     if (typeof window === 'undefined' || !audioEl) return;
     this.ensureAudioGraph();
-    if (!this.audioCtx || !this.bassFilter) return;
+    if (!this.audioCtx || !this.sourceBus) return;
 
     if (!this.connectedElements.has(audioEl)) {
       try {
         const source = this.audioCtx.createMediaElementSource(audioEl);
-        source.connect(this.bassFilter);
+        source.connect(this.sourceBus);
         this.connectedElements.set(audioEl, source);
       } catch {
         // Element already bound or CORS-restricted; keep standard audio playback safe
@@ -408,6 +499,13 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       this.subFilter.Q.value = 0.8;
       this.subFilter.gain.setTargetAtTime(
         5 * profile.low,
+        this.audioCtx.currentTime,
+        0.03,
+      );
+    }
+    if (this.subwoofer && this.audioCtx) {
+      this.subwoofer.subGain.gain.setTargetAtTime(
+        Math.min(0.65, 0.2 * profile.low),
         this.audioCtx.currentTime,
         0.03,
       );
@@ -584,7 +682,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
   },
 
   triggerSynthStep(station: BuiltInRadioStation): void {
-    if (!this.audioCtx || !this.bassFilter || this.audioCtx.state !== 'running') {
+    if (!this.audioCtx || !this.sourceBus || this.audioCtx.state !== 'running') {
       return;
     }
     try {
@@ -603,7 +701,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
         g.gain.setValueAtTime(step === 0 || step === 4 ? 0.55 : 0.42, now);
         g.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
         osc.connect(g);
-        g.connect(this.bassFilter);
+        g.connect(this.sourceBus);
         osc.start(now);
         osc.stop(now + 0.36);
       }
@@ -630,7 +728,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
         sg.gain.exponentialRampToValueAtTime(0.001, now + dur);
         src.connect(hp);
         hp.connect(sg);
-        sg.connect(this.bassFilter);
+        sg.connect(this.sourceBus);
         src.start(now);
       }
 
@@ -644,7 +742,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
         lg.gain.setValueAtTime(0.075, now);
         lg.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
         leadOsc.connect(lg);
-        lg.connect(this.bassFilter);
+        lg.connect(this.sourceBus);
         leadOsc.start(now);
         leadOsc.stop(now + 0.26);
       }

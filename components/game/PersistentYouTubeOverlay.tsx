@@ -270,11 +270,15 @@ export const PersistentYouTubeOverlay = forwardRef<
 
     if (mode === 'pip') {
       const vw = window.innerWidth || 1280;
-      const pipWidth = Math.min(336, Math.max(220, Math.round(vw * 0.25)));
+      const vh = window.innerHeight || 720;
+      const isCompactLandscape = vh < 520;
+      const pipWidth = isCompactLandscape
+        ? Math.min(220, Math.max(180, Math.round(vw * 0.24)))
+        : Math.min(336, Math.max(200, Math.round(vw * 0.25)));
       const headerHeight = 32;
       const pipHeight = Math.round((pipWidth * 9) / 16) + headerHeight;
       const left = Math.max(12, vw - pipWidth - 16);
-      const top = 72;
+      const top = isCompactLandscape ? 98 : vw < 640 ? 108 : 114;
       commitStyle(`pip:${pipWidth}x${pipHeight}:${left},${top}`, () => {
         el.style.left = '0px';
         el.style.top = '0px';

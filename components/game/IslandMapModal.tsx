@@ -463,6 +463,48 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
         ctx.strokeText(lm.label, p.x + 6, p.y + 3);
         ctx.fillText(lm.label, p.x + 6, p.y + 3);
       });
+
+      // Discovered procedural caves & special caverns
+      (hud.caveSummary?.discoveredSample || []).forEach((cv) => {
+        if (cv.type !== 'regular') return;
+        const p = toPx(cv.x, cv.z);
+        ctx.fillStyle = cv.explored ? '#94a3b8' : '#64748b';
+        ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3);
+      });
+      (hud.caveSummary?.specialCaves || []).forEach((cv) => {
+        if (!cv.discovered && !isExploredWorld(cv.x, cv.z)) return;
+        const p = toPx(cv.x, cv.z);
+        const color =
+          cv.type === 'red-dragon'
+            ? '#ef4444'
+            : cv.type === 'monster-boss'
+              ? '#a855f7'
+              : cv.type === 'civilization'
+                ? '#fbbf24'
+                : cv.type === 'crystal'
+                  ? '#38bdf8'
+                  : '#4ade80';
+        const label =
+          cv.type === 'red-dragon'
+            ? cv.bossDefeated
+              ? 'Red Dragon Lair (Cleared)'
+              : 'Red Dragon Lair'
+            : cv.type === 'monster-boss'
+              ? 'Boss Cave'
+              : cv.type === 'civilization'
+                ? 'Civilization Cave'
+                : cv.type === 'crystal'
+                  ? 'Crystal Cave'
+                  : 'Lush Cave';
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#0c0a09';
+        ctx.lineWidth = 2;
+        ctx.strokeText(label, p.x + 6, p.y + 3);
+        ctx.fillText(label, p.x + 6, p.y + 3);
+      });
     }
 
     // Roller Coasters overlay (works on both Flat and Island worlds)
@@ -560,6 +602,7 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
     hud.structures,
     hud.trackedSightings,
     hud.exploredCells,
+    hud.caveSummary,
   ]);
 
   return (
@@ -644,10 +687,31 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
               </div>
             </div>
 
-            <div className="text-xs text-stone-400">
-              {isFlat
-                ? `Active Coasters: ${hud.coasters?.length ?? 0} · Placed Structures: ${hud.structures.length}`
-                : `Discovered Regions: ${hud.visitedBiomes.length} / ${Object.keys(BIOME_INFO).length}`}
+            <div className="text-xs text-stone-400 space-y-1">
+              <div>
+                {isFlat
+                  ? `Active Coasters: ${hud.coasters?.length ?? 0} · Placed Structures: ${hud.structures.length}`
+                  : `Discovered Regions: ${hud.visitedBiomes.length} / ${Object.keys(BIOME_INFO).length}`}
+              </div>
+              {!isFlat && hud.caveSummary && (
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-stone-300">
+                  <span>
+                    Caves Discovered: {hud.caveSummary.discoveredCount.toLocaleString()} /{' '}
+                    {hud.caveSummary.totalCaves.toLocaleString()}
+                  </span>
+                  <span
+                    className={
+                      hud.caveSummary.dragonUnlocked
+                        ? 'text-emerald-400 font-semibold'
+                        : 'text-red-300 font-semibold'
+                    }
+                  >
+                    {hud.caveSummary.dragonUnlocked
+                      ? 'Dragon Riding: Unlocked'
+                      : 'Dragon Riding: Defeat Red Dragon'}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </div>

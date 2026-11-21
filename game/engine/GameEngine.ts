@@ -40,6 +40,12 @@ import {
   DragonPlayerRef,
 } from '../systems/dragonValleySystem';
 import {
+  Cave,
+  CaveType,
+  caveSystem,
+  getCaveTypeLabel,
+} from '../systems/caveSystem';
+import {
   FlightAndTeleportSystem,
   FlightPlayerState,
   ISLAND_TELEPORT_DESTINATIONS,
@@ -778,6 +784,17 @@ export class GameEngine {
   private elevatorTerminalGreeted = false;
   private portalHandles = new Map<string, PortalVortexHandle>();
   private portalWarpCooldown = 0;
+  private caveEntrancePool: {
+    group: THREE.Group;
+    archMat: THREE.MeshStandardMaterial;
+    beaconMat: THREE.MeshStandardMaterial;
+    beaconMesh: THREE.Mesh;
+    caveId: string | null;
+  }[] = [];
+  private caveStreamScratch: Cave[] = [];
+  private caveStreamTimer = 0;
+  private lastCaveStreamX = -9999;
+  private lastCaveStreamZ = -9999;
 
   // Game Mode & Intro Cinematic
   private mode: 'menu' | 'playing' | 'paused' = 'menu';
@@ -2535,6 +2552,13 @@ export class GameEngine {
   public toggleMountDragon(dragonId: string): boolean {
     const target = this.dragons.find((d) => d.id === dragonId);
     if (!target) return false;
+    if (!target.isMounted && !caveSystem.canRideDragon()) {
+      this.toast(
+        'Dragon Riding Locked! Find & defeat the Red Dragon Boss in the Red Dragon Cave first.',
+        'warning',
+      );
+      return false;
+    }
     for (const other of this.dragons) {
       if (other.id !== target.id && other.isMounted) {
         DRAGON_VALLEY_SYSTEM.toggleMount(this.dragonPlayerRef, other, this.dragonFlight);
@@ -2551,6 +2575,7 @@ export class GameEngine {
         : `Dismounted ${target.name}.`,
       'discovery',
     );
+    this.emitHud();
     return mounted;
   }
 
@@ -3845,6 +3870,10 @@ export class GameEngine {
       this.cinematicCrewShout = '';
       this.shipModel.visible = false;
       if (this.pirateCinematic) this.pirateCinematic.root.visible = false;
+      caveSystem.caves = [];
+      caveSystem.dragonUnlocked = false;
+      caveSystem._rebuildIndex();
+      this.hideAllPooledCaveEntrances();
 
       // Starter Coaster Station & Park Cyclone roller coaster right beside the Park Plaza
       this.spawnStructure({
@@ -4138,6 +4167,13 @@ export class GameEngine {
     if (this.gameMode === 'boss_hunt') {
       this.creatures.spawnGuardianBosses();
     }
+    caveSystem.generateIslandCaves({
+      x: 0,
+      z: 0,
+      radius: Math.max(580, getPlayableMaxRadius() * 0.85),
+    });
+    this.lastCaveStreamX = -9999;
+    this.lastCaveStreamZ = -9999;
     this.ensurePlayerHasGun(true);
     this.applyExchangeCosmetics(true);
     saveCheckpoint(this.playerX, this.playerY, this.playerZ);
@@ -4311,6 +4347,23 @@ export class GameEngine {
     this.markExploredAroundPlayer();
     this.discoveredLocations = new Set(save.discoveredLocations || []);
     this.completedMissionIds = new Set(save.completedMissionIds || []);
+    if (loadedWorldType === 'island') {
+      caveSystem.generateIslandCaves({
+        x: 0,
+        z: 0,
+        radius: save.caveProgress?.islandRadius || Math.max(580, getPlayableMaxRadius() * 0.85),
+      });
+      if (save.caveProgress) {
+        caveSystem.hydrateCompactState(save.caveProgress);
+      }
+    } else {
+      caveSystem.caves = [];
+      caveSystem.dragonUnlocked = false;
+      caveSystem._rebuildIndex();
+      this.hideAllPooledCaveEntrances();
+    }
+    this.lastCaveStreamX = -9999;
+    this.lastCaveStreamZ = -9999;
     saveCheckpoint(save.player.x, save.player.y, save.player.z);
     saveObjectives(Array.from(this.completedMissionIds));
     this.stats = { ...this.createEmptyStats(), ...save.stats };
@@ -5277,6 +5330,8 @@ export class GameEngine {
         this.worldType === 'island'
           ? this.structureManager?.exportClearedIds() || []
           : [],
+      caveProgress:
+        this.worldType === 'island' ? caveSystem.exportCompactState() : undefined,
     };
   }
 
@@ -6689,6 +6744,11 @@ export class GameEngine {
       this.claimIslandUfoLoot();
       return;
     }
+    if (near && near.kind === 'cave_entrance') {
+      this.exploreNearbyCave(near.id);
+      this.actionCooldown = 0.45;
+      return;
+    }
     if (
       near &&
       (near.kind === 'house_couch' ||
@@ -7564,6 +7624,37 @@ export class GameEngine {
     const isDino = this.isDinosaurSpecies(c.species);
     if (isDino) {
       this.stats.dinosaursEncountered += 1;
+    }
+
+    if (c.id === 'boss_red_dragon') {
+      c.respawnTimer = 999999;
+      const redCave = caveSystem.getRedDragonCave();
+      if (redCave) {
+        caveSystem.defeatRedDragon(redCave.id);
+      } else {
+        caveSystem.dragonUnlocked = true;
+      }
+      this.coins += 250;
+      this.addItem('emerald', 4, false);
+      this.sound.playTotemUndying();
+      this.spawnParticles(c.x, c.y + 1.5, c.z, 0xef4444, 24);
+      this.spawnParticles(c.x, c.y + 1.8, c.z, 0xfbbf24, 20);
+      this.toast(
+        'RED DRAGON BOSS DEFEATED! +250 Coins, +4 Emeralds — Dragon Riding is now UNLOCKED!',
+        'discovery',
+      );
+      this.emitHud();
+    } else if (c.id === 'boss_cave_monster') {
+      c.respawnTimer = 999999;
+      const monsterCave = caveSystem.caves.find((cv) => cv.type === 'monster-boss');
+      if (monsterCave) {
+        monsterCave.bossDefeated = true;
+        caveSystem.explore(monsterCave.id);
+      }
+      this.coins += 120;
+      this.addItem('metal_ore', 5, false);
+      this.toast('Cavern Monster Boss defeated! +120 Coins & +5 Metal Ore!', 'discovery');
+      this.emitHud();
     }
 
     const isIllager =
@@ -12151,6 +12242,39 @@ export class GameEngine {
           targetZ: SHIPWRECK_POS.z,
         };
       }
+
+      if (!this.inSpacePlanet && this.currentDimension === 'overworld') {
+        const nearCave = caveSystem.findNearestCave(this.playerX, this.playerZ, 5.8);
+        if (nearCave && nearCave.distance < bestDist) {
+          const cv = nearCave.cave;
+          const labelBase = getCaveTypeLabel(cv.type);
+          const caveY = Math.max(OCEAN_LEVEL + 0.2, getTerrainHeight(cv.x, cv.z));
+          bestDist = nearCave.distance;
+          best = {
+            id: cv.id,
+            label:
+              cv.type === 'red-dragon' && !cv.bossDefeated
+                ? `Challenge ${labelBase}`
+                : cv.explored
+                  ? `Inspect ${labelBase}`
+                  : `Explore ${labelBase}`,
+            sublabel:
+              cv.type === 'red-dragon'
+                ? cv.bossDefeated
+                  ? 'Red Dragon Slain · Dragon Riding Unlocked'
+                  : 'Boss Lair · Defeat Red Dragon to Unlock Dragon Riding'
+                : cv.explored
+                  ? 'Explored · Search for ore & flint'
+                  : 'Unexplored Cavern · Loot & Discovery',
+            kind: 'cave_entrance',
+            actionCategory: 'search',
+            distance: nearCave.distance,
+            targetX: cv.x,
+            targetY: caveY,
+            targetZ: cv.z,
+          };
+        }
+      }
     }
 
     for (const st of this.structures) {
@@ -14104,7 +14228,218 @@ export class GameEngine {
         : undefined,
       modState: this.modSystem?.getSnapshot(),
       spaceState: this.buildSpaceHudSnapshot(),
+      caveSummary: this.worldType === 'island' ? caveSystem.getSummary() : undefined,
     });
+  }
+
+  private hideAllPooledCaveEntrances(): void {
+    for (let i = 0; i < this.caveEntrancePool.length; i++) {
+      this.caveEntrancePool[i].group.visible = false;
+      this.caveEntrancePool[i].caveId = null;
+    }
+  }
+
+  private ensureCaveEntrancePool(): void {
+    if (this.caveEntrancePool.length > 0 || !this.scene) return;
+    const pillarGeo = new THREE.BoxGeometry(0.95, 2.8, 0.95);
+    const lintelGeo = new THREE.BoxGeometry(3.5, 0.85, 1.15);
+    const crystalGeo = new THREE.OctahedronGeometry(0.45, 0);
+
+    for (let i = 0; i < 10; i++) {
+      const group = new THREE.Group();
+      const archMat = new THREE.MeshStandardMaterial({
+        color: 0x64748b,
+        roughness: 0.9,
+        metalness: 0.08,
+      });
+      const beaconMat = new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        emissive: 0x0284c7,
+        emissiveIntensity: 0.9,
+        roughness: 0.25,
+      });
+
+      const leftPillar = new THREE.Mesh(pillarGeo, archMat);
+      leftPillar.position.set(-1.3, 1.35, 0);
+      const rightPillar = new THREE.Mesh(pillarGeo, archMat);
+      rightPillar.position.set(1.3, 1.35, 0);
+      const topLintel = new THREE.Mesh(lintelGeo, archMat);
+      topLintel.position.set(0, 2.95, 0);
+      const beaconMesh = new THREE.Mesh(crystalGeo, beaconMat);
+      beaconMesh.position.set(0, 3.85, 0);
+
+      group.add(leftPillar, rightPillar, topLintel, beaconMesh);
+      group.visible = false;
+      this.scene.add(group);
+      this.caveEntrancePool.push({
+        group,
+        archMat,
+        beaconMat,
+        beaconMesh,
+        caveId: null,
+      });
+    }
+  }
+
+  private getCaveColors(type: CaveType): { arch: number; beacon: number; emissive: number; scale: number } {
+    switch (type) {
+      case 'red-dragon':
+        return { arch: 0x450a0a, beacon: 0xef4444, emissive: 0xdc2626, scale: 1.45 };
+      case 'monster-boss':
+        return { arch: 0x312e81, beacon: 0xa855f7, emissive: 0x7e22ce, scale: 1.3 };
+      case 'civilization':
+        return { arch: 0x92400e, beacon: 0xfbbf24, emissive: 0xd97706, scale: 1.25 };
+      case 'crystal':
+        return { arch: 0x1e293b, beacon: 0x38bdf8, emissive: 0x0284c7, scale: 1.2 };
+      case 'lush':
+        return { arch: 0x14532d, beacon: 0x4ade80, emissive: 0x16a34a, scale: 1.15 };
+      default:
+        return { arch: 0x57534e, beacon: 0x94a3b8, emissive: 0x475569, scale: 0.95 };
+    }
+  }
+
+  private updateCaveStreaming(dt: number): void {
+    if (
+      this.worldType !== 'island' ||
+      this.currentDimension !== 'overworld' ||
+      this.inSpacePlanet ||
+      caveSystem.caves.length === 0
+    ) {
+      if (this.caveEntrancePool.length > 0) this.hideAllPooledCaveEntrances();
+      return;
+    }
+
+    // Rotate visible cave beacon crystals gently
+    for (let i = 0; i < this.caveEntrancePool.length; i++) {
+      const slot = this.caveEntrancePool[i];
+      if (slot.group.visible) {
+        slot.beaconMesh.rotation.y += dt * 1.4;
+      }
+    }
+
+    this.caveStreamTimer += dt;
+    const movedSq =
+      (this.playerX - this.lastCaveStreamX) ** 2 +
+      (this.playerZ - this.lastCaveStreamZ) ** 2;
+    if (this.caveStreamTimer < 0.25 && movedSq < 4.0) {
+      return;
+    }
+    this.caveStreamTimer = 0;
+    this.lastCaveStreamX = this.playerX;
+    this.lastCaveStreamZ = this.playerZ;
+
+    this.ensureCaveEntrancePool();
+    const nearby = caveSystem.getCavesNear(
+      this.playerX,
+      this.playerZ,
+      72,
+      this.caveStreamScratch,
+    );
+
+    // Sort nearby caves by squared distance to player (typically <= 25 caves in 72m radius)
+    nearby.sort((a, b) => {
+      const da = (a.x - this.playerX) ** 2 + (a.z - this.playerZ) ** 2;
+      const db = (b.x - this.playerX) ** 2 + (b.z - this.playerZ) ** 2;
+      return da - db;
+    });
+
+    let discoveredNew = false;
+    for (let i = 0; i < nearby.length; i++) {
+      const cv = nearby[i];
+      const dist = Math.hypot(cv.x - this.playerX, cv.z - this.playerZ);
+      if (dist <= 16 && !cv.discovered) {
+        caveSystem.discover(cv.id);
+        discoveredNew = true;
+        if (cv.type === 'red-dragon') {
+          this.toast(
+            'Discovered RED DRAGON LAIR! Defeat the Red Dragon Boss to unlock Dragon Riding!',
+            'warning',
+          );
+        } else if (cv.type !== 'regular') {
+          this.toast(`Discovered ${getCaveTypeLabel(cv.type)}!`, 'discovery');
+        }
+      }
+      if (cv.type === 'red-dragon' && !cv.bossDefeated && dist <= 46) {
+        this.creatures.spawnRedDragonBoss(cv.x, cv.z);
+      } else if (cv.type === 'monster-boss' && !cv.bossDefeated && dist <= 42) {
+        this.creatures.spawnCaveMonsterBoss(cv.x, cv.z);
+      }
+    }
+
+    for (let i = 0; i < this.caveEntrancePool.length; i++) {
+      const slot = this.caveEntrancePool[i];
+      const cv = nearby[i];
+      if (!cv) {
+        slot.group.visible = false;
+        slot.caveId = null;
+        continue;
+      }
+      const gy = Math.max(OCEAN_LEVEL + 0.15, getTerrainHeight(cv.x, cv.z));
+      slot.group.position.set(cv.x, gy - 0.15, cv.z);
+      const colors = this.getCaveColors(cv.type);
+      slot.group.scale.setScalar(colors.scale);
+      if (slot.caveId !== cv.id) {
+        slot.caveId = cv.id;
+        slot.archMat.color.setHex(colors.arch);
+        slot.beaconMat.color.setHex(colors.beacon);
+        slot.beaconMat.emissive.setHex(colors.emissive);
+        slot.group.rotation.y = ((cv.x * 0.13 + cv.z * 0.29) % (Math.PI * 2));
+      }
+      slot.group.visible = true;
+    }
+
+    if (discoveredNew) {
+      this.emitHud();
+    }
+  }
+
+  private exploreNearbyCave(caveId: string): void {
+    const cave = caveSystem.getCaveById(caveId);
+    if (!cave) return;
+    const firstExplore = !cave.explored;
+    caveSystem.explore(cave.id);
+
+    if (cave.type === 'red-dragon' && !cave.bossDefeated) {
+      this.creatures.spawnRedDragonBoss(cave.x, cave.z);
+      this.toast(
+        'Red Dragon Boss awakened! Defeat it to unlock Dragon Riding!',
+        'warning',
+      );
+      this.emitHud();
+      return;
+    }
+    if (cave.type === 'monster-boss' && !cave.bossDefeated) {
+      this.creatures.spawnCaveMonsterBoss(cave.x, cave.z);
+      this.toast('Cavern Monster Boss emerged from the depths!', 'warning');
+      this.emitHud();
+      return;
+    }
+
+    if (firstExplore) {
+      if (cave.type === 'civilization') {
+        this.coins += 120;
+        this.addItem('emerald', 2, false);
+        this.addItem('metal_ore', 4, false);
+        this.toast('Explored Ancient Civilization Cavern! +120 Coins, +2 Emeralds & +4 Metal Ore!', 'discovery');
+      } else if (cave.type === 'crystal') {
+        this.addItem('diamond_crystal', 3, false);
+        this.addItem('sapphire', 2, false);
+        this.toast('Explored Resonant Crystal Cavern! +3 Diamond Crystals & +2 Sapphires!', 'discovery');
+      } else if (cave.type === 'lush') {
+        this.addItem('berries', 5, false);
+        this.addItem('wood', 4, false);
+        this.toast('Explored Bioluminescent Lush Cave! +5 Berries & +4 Wood!', 'discovery');
+      } else {
+        this.addItem('stone', 4, false);
+        this.addItem('metal_ore', 2, false);
+        this.toast(`Explored ${getCaveTypeLabel(cave.type)}! +4 Stone & +2 Metal Ore.`, 'gain');
+      }
+      this.sound.playGather('stone', 0.65);
+    } else {
+      this.addItem('stone', 1, false);
+      this.toast(`${getCaveTypeLabel(cave.type)}: Salvaged +1 Stone.`, 'info');
+    }
+    this.emitHud();
   }
 
   private handleFixedStep(fixedDt: number): void {
@@ -14228,6 +14563,7 @@ export class GameEngine {
     // 2. Run core simulation & world updates
     if (this.mode === 'playing' && !this.cinematicActive) {
       this.modSystem?.tick(dt);
+      this.updateCaveStreaming(dt);
     }
     if (this.mode === 'playing' || this.remotePlayers.size > 0 || this.p2p?.connected) {
       this.updateMultiplayer(dt);
@@ -14561,6 +14897,9 @@ export class GameEngine {
             this.sound.playGunshot('rifle');
             this.spawnParticles(creature.x, creature.y + 1.0, creature.z, 0xfef08a, 7);
             const res = this.creatures.damageCreature(creature, dmg, fromX, fromZ);
+            if (res?.killed) {
+              this.handleCreatureDefeated(creature, res.drops, 'Companion Shot');
+            }
             return Boolean(res?.killed);
           },
           onToast: (msg, tone) => this.toast(msg, tone),
@@ -19477,9 +19816,12 @@ export class GameEngine {
       for (const target of this.creatures.creatures) {
         if (target.id === c.id || !target.alive) continue;
         if (Math.hypot(target.x - c.x, target.z - c.z) < 2.8) {
-          this.creatures.damageCreature(target, 45, c.x, c.z, { stunSeconds: 0.8, knockback: 3.5 });
+          const ramRes = this.creatures.damageCreature(target, 45, c.x, c.z, { stunSeconds: 0.8, knockback: 3.5 });
           this.sound.playAttack('melee');
           this.spawnParticles(target.x, target.y + 0.8, target.z, 0xdc2626, 5);
+          if (ramRes.killed) {
+            this.handleCreatureDefeated(target, ramRes.drops, 'Mount Charge');
+          }
         }
       }
     }

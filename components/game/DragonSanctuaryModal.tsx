@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Flame, Hammer, Plus, Sparkles, Tag, Wind, X } from 'lucide-react';
+import { Flame, Hammer, Lock, MapPin, Plus, ShieldCheck, Sparkles, Tag, Wind, X } from 'lucide-react';
 import {
   DRAGON_VALLEY_SYSTEM,
   DragonCompanion,
@@ -10,6 +10,8 @@ import {
 
 interface DragonSanctuaryModalProps {
   dragons: DragonCompanion[];
+  canRideDragon?: boolean;
+  redDragonCave?: { x: number; z: number; discovered: boolean; bossDefeated?: boolean } | null;
   onHatch: (element: DragonElement, customName: string) => void;
   onFeed: (dragonId: string) => void;
   onCombine: (idA: string, idB: string, hybridName: string) => void;
@@ -27,6 +29,8 @@ const ELEMENT_BADGE: Record<DragonElement, string> = {
 
 export function DragonSanctuaryModal({
   dragons,
+  canRideDragon = false,
+  redDragonCave = null,
   onHatch,
   onFeed,
   onCombine,
@@ -69,6 +73,43 @@ export function DragonSanctuaryModal({
         </div>
 
         <div className="p-5 space-y-5 overflow-y-auto survival-scroll text-sm">
+          {/* Red Dragon Boss Unlock Gate Banner */}
+          <div
+            className={`rounded-xl border px-3.5 py-2.5 flex items-center justify-between gap-2 ${
+              canRideDragon
+                ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-200'
+                : 'bg-red-950/60 border-red-500/50 text-red-100'
+            }`}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              {canRideDragon ? (
+                <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+              ) : (
+                <Lock className="w-4 h-4 text-red-400 shrink-0" />
+              )}
+              <div className="min-w-0">
+                <div className="text-xs font-bold">
+                  {canRideDragon
+                    ? 'Dragon Riding Unlocked'
+                    : 'Dragon Riding Locked — Defeat the Red Dragon Boss'}
+                </div>
+                <div className="text-[11px] opacity-85 truncate">
+                  {canRideDragon
+                    ? 'Red Dragon Boss defeated! Mount & Fly any of your dragons.'
+                    : redDragonCave?.discovered
+                      ? `Red Dragon Lair located at X ${Math.round(redDragonCave.x)} · Z ${Math.round(redDragonCave.z)}`
+                      : 'Explore the 5,000 island caves to find & defeat the Red Dragon Boss.'}
+                </div>
+              </div>
+            </div>
+            {!canRideDragon && redDragonCave?.discovered && (
+              <span className="px-2 py-1 rounded bg-red-900/70 border border-red-400/50 text-[10px] font-mono-tabular flex items-center gap-1 shrink-0">
+                <MapPin className="w-3 h-3" />
+                {Math.round(redDragonCave.x)}, {Math.round(redDragonCave.z)}
+              </span>
+            )}
+          </div>
+
           {/* Hatch Egg Section */}
           <div className="rounded-xl bg-stone-950/75 border border-stone-800 p-4 space-y-3">
             <div className="flex items-center justify-between">
@@ -183,15 +224,31 @@ export function DragonSanctuaryModal({
                       {d.growth >= 100 ? 'Max Adult' : 'Feed & Raise (+35%)'}
                     </button>
                     <button
+                      disabled={!d.isMounted && !canRideDragon}
                       onClick={() => onToggleMount(d.id)}
                       className={`px-3 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition ${
                         d.isMounted
                           ? 'bg-amber-500 text-stone-950 border-amber-300'
-                          : 'bg-sky-600/25 hover:bg-sky-600/40 border-sky-500/50 text-sky-200'
+                          : !canRideDragon
+                            ? 'bg-stone-900/80 border-red-500/40 text-red-300/80 opacity-75 cursor-not-allowed'
+                            : 'bg-sky-600/25 hover:bg-sky-600/40 border-sky-500/50 text-sky-200'
                       }`}
+                      title={
+                        !d.isMounted && !canRideDragon
+                          ? 'Defeat the Red Dragon Boss in the Red Dragon Cave to unlock Dragon Riding'
+                          : undefined
+                      }
                     >
-                      <Wind className="w-3.5 h-3.5" />
-                      {d.isMounted ? 'Dismount Dragon' : 'Mount & Fly'}
+                      {!d.isMounted && !canRideDragon ? (
+                        <Lock className="w-3.5 h-3.5" />
+                      ) : (
+                        <Wind className="w-3.5 h-3.5" />
+                      )}
+                      {d.isMounted
+                        ? 'Dismount Dragon'
+                        : canRideDragon
+                          ? 'Mount & Fly'
+                          : 'Locked (Red Dragon)'}
                     </button>
                     <div className="flex items-center gap-1.5 flex-1 min-w-[180px]">
                       <input
