@@ -870,6 +870,9 @@ export class GameEngine {
   private gamepadGas = 0;
   private gamepadBrake = 0;
   private gamepadHandbrake = false;
+  private touchGas = 0;
+  private touchBrake = 0;
+  private touchHandbrake = false;
 
   // Survival & World State
   public ecosystem: EcosystemSimulationData = createInitialEcosystem();
@@ -1783,6 +1786,9 @@ export class GameEngine {
     this.gamepadGas = 0;
     this.gamepadBrake = 0;
     this.gamepadHandbrake = false;
+    this.touchGas = 0;
+    this.touchBrake = 0;
+    this.touchHandbrake = false;
     this.camBobBlend = 0;
     this.camStepOffsetY = 0;
   }
@@ -2521,6 +2527,16 @@ export class GameEngine {
     this.gamepadGas = THREE.MathUtils.clamp(gas, 0, 1);
     this.gamepadBrake = THREE.MathUtils.clamp(brake, 0, 1);
     this.gamepadHandbrake = handbrake;
+  }
+
+  public setTouchDrivePedals(
+    gas: number,
+    brake: number,
+    handbrake = false,
+  ): void {
+    this.touchGas = THREE.MathUtils.clamp(gas, 0, 1);
+    this.touchBrake = THREE.MathUtils.clamp(brake, 0, 1);
+    this.touchHandbrake = handbrake;
   }
 
   public triggerXboxBAction(): void {
@@ -16321,6 +16337,9 @@ export class GameEngine {
     this.gamepadGas = 0;
     this.gamepadBrake = 0;
     this.gamepadHandbrake = false;
+    this.touchGas = 0;
+    this.touchBrake = 0;
+    this.touchHandbrake = false;
     this.hydraulicMode = 'level';
     this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
@@ -16999,7 +17018,8 @@ export class GameEngine {
     if (this.keys['KeyD'] || this.keys['key_d'] || this.keys['ArrowRight']) moveRight += 1;
     if (this.keys['KeyA'] || this.keys['key_a'] || this.keys['ArrowLeft']) moveRight -= 1;
     moveRight += this.joyX;
-    moveForward += this.joyY + this.gamepadGas - this.gamepadBrake;
+    moveForward +=
+      this.joyY + this.gamepadGas + this.touchGas - this.gamepadBrake - this.touchBrake;
     moveForward = THREE.MathUtils.clamp(moveForward, -1, 1);
     moveRight = THREE.MathUtils.clamp(moveRight, -1, 1);
 
@@ -17038,7 +17058,11 @@ export class GameEngine {
           : specs.topLandSpeed * boostMult * fuelMult) * vSpeedMult;
 
     // Braking / Throttle
-    if (this.gamepadHandbrake || (!specs.canFly && !hasHyd && this.vehicleAscendHold)) {
+    if (
+      this.gamepadHandbrake ||
+      this.touchHandbrake ||
+      (!specs.canFly && !hasHyd && this.vehicleAscendHold)
+    ) {
       this.vehicleForwardSpeed = THREE.MathUtils.damp(this.vehicleForwardSpeed, 0, 9, dt);
     } else if (Math.abs(moveForward) > 0.08) {
       const targetSpd =
