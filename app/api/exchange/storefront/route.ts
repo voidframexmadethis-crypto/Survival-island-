@@ -30,8 +30,10 @@ export async function GET(req: NextRequest) {
       equippedGunSkinsByClass: {},
       equippedBackpackSkinId: null,
       equippedCosmeticIds: [],
-      products: publishedProducts,
-      coinPackages: activeCoinPackages,
+      // Launch catalog is intentionally empty. Owned/free items remain available
+      // in ownedProducts so existing saves keep their cosmetics.
+      products: [],
+      coinPackages: [],
       transactions: [],
       pendingCheckouts: [],
       paymentProvider: getPaymentProviderStatus(),
@@ -74,8 +76,8 @@ export async function GET(req: NextRequest) {
     equippedGunSkinsByClass: account.equippedGunSkinsByClass,
     equippedBackpackSkinId: account.equippedBackpackSkinId,
     equippedCosmeticIds: account.equippedCosmeticIds || [],
-    products: publishedProducts,
-    coinPackages: activeCoinPackages,
+    products: [],
+    coinPackages: [],
     transactions: playerTransactions,
     pendingCheckouts,
     paymentProvider: getPaymentProviderStatus(),

@@ -212,8 +212,12 @@ export const DEFAULT_VISUAL_SPEC: CosmeticVisualSpec = {
  * SURVIVAL ISLAND EXCHANGE starts 100% EMPTY.
  * No sample products, no premade skins, no placeholder packages.
  * Every product and coin package is created and managed exclusively by the owner.
+ * The archived seed below is retained only for data recovery and is never served.
  */
-export const DEFAULT_EXCHANGE_CATALOG: ExchangeProduct[] = [
+export const DEFAULT_EXCHANGE_CATALOG: ExchangeProduct[] = [];
+
+/** @deprecated Pre-launch demo seed. Never used by the live storefront. */
+export const LEGACY_DEFAULT_EXCHANGE_CATALOG: ExchangeProduct[] = [
   {
     id: 'vault_backpack_explorer',
     name: 'Ranger Olive Pack',
@@ -629,7 +633,11 @@ export function toBackpackSkinCatalogItem(item: ExchangeProduct): SkinCatalogIte
   };
 }
 
-export const VAULT_PAYHIP_CATALOG: SkinCatalogItem[] = [
+/** Launch vault is intentionally empty; owner uploads populate it later. */
+export const VAULT_PAYHIP_CATALOG: SkinCatalogItem[] = [];
+
+/** @deprecated Pre-launch demo seed retained for recovery only. */
+export const LEGACY_VAULT_PAYHIP_CATALOG: SkinCatalogItem[] = [
   {
     id: 'vault_backpack_explorer',
     name: 'Ranger Olive Pack',

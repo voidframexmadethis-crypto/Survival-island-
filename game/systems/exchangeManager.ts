@@ -193,6 +193,8 @@ export type ActiveCosmeticSource = 'exchange' | 'vault' | 'custom_phone';
 export interface CustomPhoneSkinRecord extends SkinCatalogItem {
   mediaDataUrl?: string;
   mediaKind?: 'image' | 'glb' | 'none';
+  /** Old pre-launch uploads stay stored for saves but do not show in the launch catalog. */
+  launchVisible?: boolean;
 }
 
 export interface CustomPhoneMarketplaceState {
@@ -263,6 +265,9 @@ if (typeof window !== 'undefined') {
 export function getCustomMarketplaceSnapshot(): CustomPhoneMarketplaceState {
   return {
     ...cachedCustomPhoneState,
+    // Launch starts with no listings. Previously uploaded records are retained
+    // in storage so equipped cosmetics and save compatibility are untouched.
+    skins: cachedCustomPhoneState.skins.filter((skin) => skin.launchVisible === true),
     unlockedIds: cachedState.ownedProductIds,
   };
 }
@@ -272,7 +277,10 @@ export function addCustomMarketplaceSkin(
 ): CustomPhoneMarketplaceState {
   cachedCustomPhoneState = {
     ...cachedCustomPhoneState,
-    skins: [skin, ...cachedCustomPhoneState.skins.filter((s) => s.id !== skin.id)],
+    skins: [
+      { ...skin, launchVisible: true },
+      ...cachedCustomPhoneState.skins.filter((s) => s.id !== skin.id),
+    ],
   };
   saveCustomPhoneState();
   notify();

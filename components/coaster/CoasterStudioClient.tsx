@@ -224,7 +224,7 @@ function fieldClass(): string {
 }
 
 function smallButton(active = false): string {
-  return `inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition ${
+  return `inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition disabled:cursor-not-allowed disabled:opacity-30 ${
     active
       ? 'border-amber-400/80 bg-amber-400/15 text-amber-100'
       : 'border-stone-700 bg-stone-900/80 text-stone-300 hover:border-stone-500 hover:text-stone-100'
@@ -1048,6 +1048,12 @@ export function CoasterStudioClient() {
       toast('Close the circuit before testing the ride.');
       return;
     }
+    if (validation.errors.length > 0) {
+      setTab('build');
+      setDrawerOpen(true);
+      toast(`Fix ${validation.errors.length} track error${validation.errors.length === 1 ? '' : 's'} before testing.`);
+      return;
+    }
     setDrawerOpen(false);
     await play();
     changeRideCamera('front');
@@ -1340,6 +1346,27 @@ export function CoasterStudioClient() {
           )}
 
           <div className="pointer-events-auto absolute bottom-[58px] left-1/2 z-30 flex max-w-[calc(100%-1rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-xl border border-stone-900/40 bg-stone-950/85 p-1 backdrop-blur [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <button
+              type="button"
+              onClick={undo}
+              disabled={!canUndo}
+              className={smallButton()}
+              title="Undo (Ctrl+Z)"
+              aria-label="Undo last track edit"
+            >
+              <Undo2 className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={redo}
+              disabled={!canRedo}
+              className={smallButton()}
+              title="Redo (Ctrl+Y)"
+              aria-label="Redo last track edit"
+            >
+              <Redo2 className="h-4 w-4" />
+            </button>
+            <span className="mx-0.5 h-6 w-px shrink-0 bg-stone-700" />
             <button type="button" onClick={() => addElement('straight')} className="flex min-h-[38px] shrink-0 items-center gap-1 rounded-lg border border-amber-300/60 bg-amber-400 px-2.5 text-[10px] font-black text-stone-950 hover:bg-amber-300">
               <Plus className="h-4 w-4" /> Add next
             </button>

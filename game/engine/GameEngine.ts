@@ -2183,6 +2183,9 @@ export class GameEngine {
     this.keys[e.code] = true;
     const keyLower = e.key ? e.key.toLowerCase() : '';
     if (keyLower) this.keys[`key_${keyLower}`] = true;
+    // Held keys stay in the movement map, but one-shot actions must not retrigger
+    // from keyboard repeat (crouch toggled every OS repeat and caused ground clipping).
+    if (e.repeat) return;
     this.sound.unlock();
     if (this.ridingCoasterId && !this.gameOver && (e.code === 'KeyE' || keyLower === 'e' || e.code === 'Space')) {
       e.preventDefault();
@@ -2293,9 +2296,7 @@ export class GameEngine {
           this.vehicleDescendHold = true;
         }
       } else {
-        this.isCrouching = !this.isCrouching;
-        this.touchCrouch = this.isCrouching;
-        this.emitHud();
+        this.setCrouch(!this.isCrouching);
       }
     } else if (e.code === 'KeyE') {
       if (this.activeVehicleId) {
@@ -2936,9 +2937,42 @@ export class GameEngine {
   }
 
   public setTouchCrouch(active: boolean): void {
-    this.touchCrouch = active;
+    this.setCrouch(active);
+  }
+
+  /**
+   * GTA-style crouch toggle with a standing clearance check. The movement
+   * capsule is the player's feet position plus body height, so staying crouched
+   * under a cave ceiling prevents the camera and torso from clipping into rock.
+   */
+  private setCrouch(active: boolean): void {
+    if (active === this.isCrouching) {
+      this.touchCrouch = active;
+      return;
+    }
+    if (!active && !this.hasStandingHeadroom()) {
+      this.toast('Not enough headroom to stand here — stay crouched.', 'warning');
+      return;
+    }
     this.isCrouching = active;
+    this.touchCrouch = active;
     this.emitHud();
+  }
+
+  private hasStandingHeadroom(): boolean {
+    if (
+      !this.activeCaveInteriorId ||
+      this.worldType !== 'island' ||
+      this.currentDimension !== 'overworld'
+    ) {
+      return true;
+    }
+    const ceiling = this.islandCaveSystem.getCeilingForCave(
+      this.activeCaveInteriorId,
+      this.playerX,
+      this.playerZ,
+    );
+    return ceiling === null || this.playerY + 1.74 <= ceiling;
   }
 
   private ensureDragonEggNestMeshes(): void {
@@ -14870,7 +14904,12 @@ export class GameEngine {
     h.group.visible = visible;
     if (!visible) return;
     h.group.rotation.y = this.playerYaw;
-    h.bodyGroup.position.y = this.isCrouching ? -0.35 : 0;
+    h.bodyGroup.position.y = THREE.MathUtils.damp(
+      h.bodyGroup.position.y,
+      this.isCrouching ? -0.42 : 0,
+      16,
+      dt,
+    );
     h.headGroup.rotation.x = THREE.MathUtils.clamp(-this.camPitch * 0.55, -0.45, 0.45);
 
     const eqItemId = this.getEquippedItemId();
@@ -20173,9 +20212,19 @@ export class GameEngine {
       return;
     }
 
-    // DONK hydraulics can ONLY go Up, Down, and Side-to-Side (no wheelie hops or leaving ground)
+    // DONK body bounces on its rear axle: the back tires stay planted while the
+    // nose and front wheels lift, then settle without launching the whole car.
     if (isDonk) {
-      if (action === 'front_hop' || action === 'lock_up') {
+      if (action === 'front_hop') {
+        this.hydraulicMode = 'front_hop';
+        this.hydVel.fl += 9.2;
+        this.hydVel.fr += 9.2;
+        this.hydVel.rl = Math.min(this.hydVel.rl, -1.4);
+        this.hydVel.rr = Math.min(this.hydVel.rr, -1.4);
+        this.hydraulicBounceTimer = 0.55;
+        this.sound.playHydraulicHop('hop');
+        this.spawnParticles(av.x, av.y + 0.3, av.z, 0xfbbf24, 7);
+      } else if (action === 'lock_up') {
         this.hydraulicMode = this.hydraulicMode === 'lock_up' ? 'level' : 'lock_up';
         if (this.hydraulicMode === 'lock_up') {
           this.hydVel.fl += 3.6;
@@ -20204,22 +20253,15 @@ export class GameEngine {
       return;
     }
 
-    // Lowrider & custom hydraulic builds: bounce high above the ground with two wheels coming off the ground
-    const floorY = Math.max(
-      getTerrainHeight(av.x, av.z),
-      this.getStructuralSurfaceY(av.x, av.z, av.y + 0.8),
-    );
-    const nearGround = av.y <= floorY + 1.15;
-
+    // Lowrider & custom hydraulic builds: the body bounces while the rear tires
+    // stay planted, so the car never launches all four wheels off the ground.
     if (action === 'front_hop' || action === 'coil_bounce') {
       this.hydraulicMode = 'front_hop';
       this.hydVel.fl = 15.5;
       this.hydVel.fr = 15.5;
       this.hydVel.rl = Math.min(this.hydVel.rl, -2.4);
       this.hydVel.rr = Math.min(this.hydVel.rr, -2.4);
-      if (nearGround) {
-        av.vy = av.y <= floorY + 0.35 ? 7.8 : Math.min(9.6, Math.max(av.vy + 4.4, 7.2));
-      }
+      // The front axle lifts while the rear tires keep their contact patch.
       this.hydraulicBounceTimer = 0.55;
       this.sound.playHydraulicHop('hop');
       this.spawnParticles(av.x, av.y + 0.35, av.z, 0xfbbf24, 9);
@@ -20229,9 +20271,7 @@ export class GameEngine {
       this.hydVel.rr = 15.5;
       this.hydVel.fl = Math.min(this.hydVel.fl, -2.4);
       this.hydVel.fr = Math.min(this.hydVel.fr, -2.4);
-      if (nearGround) {
-        av.vy = av.y <= floorY + 0.35 ? 7.4 : Math.min(9.2, Math.max(av.vy + 4.2, 6.8));
-      }
+      // The body squats on the rear axle; those tires never leave the road.
       this.hydraulicBounceTimer = 0.55;
       this.sound.playHydraulicHop('hop');
       this.spawnParticles(av.x, av.y + 0.35, av.z, 0xfbbf24, 9);
@@ -21307,18 +21347,27 @@ export class GameEngine {
         }
       } else if (isActive && activeHasHyd) {
         const { fl, fr, rl, rr } = this.hydCorners;
-        const avgHeave = (fl + fr + rl + rr) * 0.25;
-        const hydPitch = activeIsDonk ? 0 : ((rl + rr) - (fl + fr)) * 0.21;
+        const rawHeave = (fl + fr + rl + rr) * 0.25;
+        const heaveCap = activeIsDonk ? 0.34 : activeV?.preset === 'lowrider' ? 0.56 : 0.5;
+        const avgHeave = THREE.MathUtils.clamp(rawHeave, -0.12, heaveCap);
+        const hydPitch =
+          ((rl + rr) - (fl + fr)) * (activeIsDonk ? 0.12 : activeV?.preset === 'lowrider' ? 0.17 : 0.21);
         const hydRoll = ((fr + rr) - (fl + rl)) * (activeIsDonk ? 0.16 : 0.24);
         handles.chassisGroup.position.y =
           Math.max(minChassisY, baseBodyY + avgHeave) + showBassPulse * 0.025;
         handles.chassisGroup.rotation.x = hydPitch;
         handles.chassisGroup.rotation.z = hydRoll;
         const minCorner = Math.min(fl, fr, rl, rr);
+        const rearPlanted =
+          activeIsDonk || (activeV?.preset === 'lowrider' && this.hydraulicMode !== 'three_wheel');
         for (const wc of handles.wheelCorners) {
           if (activeIsDonk) {
-            // DONK keeps all 4 wheels planted while body moves up/down/side-to-side
-            wc.obj.position.y = wc.baseY;
+            // DONK rear tires stay on the road; only a front bounce lifts the nose.
+            const frontBounce = this.hydraulicMode === 'front_hop' && wc.corner.startsWith('f');
+            const cornerH = this.hydCorners[wc.corner];
+            wc.obj.position.y = frontBounce
+              ? wc.baseY + Math.min(0.34, Math.max(0, cornerH - minCorner - 0.05) * 0.7)
+              : wc.baseY;
           } else if (this.hydraulicMode === 'three_wheel') {
             // Only the rear-left wheel leaves the ground; the other three stay planted.
             wc.obj.position.y =
@@ -21326,10 +21375,14 @@ export class GameEngine {
                 ? wc.baseY + Math.max(0, this.hydCorners.rl - 0.3) * (activeIsAirbag ? 0.55 : 0.85)
                 : wc.baseY;
           } else {
-            // Lowrider, Coupe DeVille & Tahoe coil-over lift active corners cleanly
+            // Lowrider front tires lift while the rear contact patch stays planted.
             const cornerH = this.hydCorners[wc.corner];
+            const rearWheel = wc.corner === 'rl' || wc.corner === 'rr';
             const relativeLift = Math.max(0, cornerH - minCorner - 0.05);
-            wc.obj.position.y = wc.baseY + relativeLift * (activeIsAirbag ? 0.55 : 0.85);
+            const lift = rearPlanted && rearWheel
+              ? 0
+              : Math.min(0.46, relativeLift * (activeIsAirbag ? 0.55 : 0.78));
+            wc.obj.position.y = wc.baseY + lift;
           }
         }
       } else if (
