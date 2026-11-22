@@ -217,6 +217,41 @@ export function createPalmBootGeometry(): THREE.BufferGeometry {
 /*  Grass clumps                                                              */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * One softly arched grass blade for hand-placed resource tufts. The strip is
+ * split into four height rings so it bends through a real curve instead of
+ * reading as a square pyramid when a player walks up to cut it.
+ */
+export function createCurvedBladeGeometry(): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  const rings = [
+    { t: 0, width: 0.5, bend: 0 },
+    { t: 0.3, width: 0.42, bend: 0.08 },
+    { t: 0.6, width: 0.28, bend: 0.24 },
+    { t: 0.84, width: 0.13, bend: 0.42 },
+    { t: 1, width: 0, bend: 0.58 },
+  ];
+  for (const ring of rings) {
+    positions.push(-ring.width, ring.t, ring.bend, ring.width, ring.t, ring.bend);
+    normals.push(0, 0.18, 1, 0, 0.18, 1);
+    uvs.push(0, ring.t, 1, ring.t);
+  }
+  for (let i = 0; i < rings.length - 1; i++) {
+    const base = i * 2;
+    indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeBoundingSphere();
+  return geo;
+}
+
 export type GrassVariant = 'lush' | 'tall' | 'dune' | 'alpine';
 
 export interface GrassClumpOptions {

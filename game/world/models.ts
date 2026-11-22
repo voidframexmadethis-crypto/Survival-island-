@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { roundedBox } from './roundedBox';
 import {
   ArmorMaterialTier,
   BodyZone,
@@ -4565,30 +4566,30 @@ export function createHilltopHouse(
 
   // 1. Stone Foundation Plinth + Main Hardwood Floor Deck & Front Porch (+X = East entrance)
   const foundationMat = new THREE.MeshStandardMaterial({ color: 0x57534e, roughness: 0.94 });
-  const mainFoundation = new THREE.Mesh(new THREE.BoxGeometry(9.8, 1.8, 8.8), foundationMat);
+  const mainFoundation = new THREE.Mesh(roundedBox(9.8, 1.8, 8.8, 0.16, 3), foundationMat);
   mainFoundation.position.set(-0.5, -0.88, 0);
   mainFoundation.receiveShadow = true;
   mainFoundation.castShadow = true;
   group.add(mainFoundation);
 
   // House interior spans X: -5.2 to +4.2 (9.4m), Z: -4.2 to +4.2 (8.4m)
-  const mainFloor = new THREE.Mesh(new THREE.BoxGeometry(9.6, 0.14, 8.6), floorMat);
+  const mainFloor = new THREE.Mesh(roundedBox(9.6, 0.14, 8.6, 0.045, 2), floorMat);
   mainFloor.position.set(-0.5, 0.01, 0);
   mainFloor.receiveShadow = true;
   group.add(mainFloor);
 
   // Porch Stone Foundation + Deck on +X side (X: +4.2 to +6.4) + Entry Step
-  const porchFoundation = new THREE.Mesh(new THREE.BoxGeometry(2.35, 1.8, 6.35), foundationMat);
+  const porchFoundation = new THREE.Mesh(roundedBox(2.35, 1.8, 6.35, 0.14, 3), foundationMat);
   porchFoundation.position.set(5.3, -0.9, 0);
   porchFoundation.receiveShadow = true;
   group.add(porchFoundation);
 
-  const porchFloor = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.14, 6.2), trimMat);
+  const porchFloor = new THREE.Mesh(roundedBox(2.2, 0.14, 6.2, 0.045, 2), trimMat);
   porchFloor.position.set(5.3, 0.0, 0);
   porchFloor.receiveShadow = true;
   group.add(porchFloor);
 
-  const entryStep = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.16, 3.2), foundationMat);
+  const entryStep = new THREE.Mesh(roundedBox(0.7, 0.16, 3.2, 0.05, 2), foundationMat);
   entryStep.position.set(6.65, -0.02, 0);
   entryStep.receiveShadow = true;
   group.add(entryStep);
@@ -4608,13 +4609,13 @@ export function createHilltopHouse(
   // 2. Exterior & Interior Partition Walls (tall 3.1m)
   const wallH = 3.1;
   const addWall = (lx: number, lz: number, sx: number, sz: number, withColliders = true) => {
-    const w = new THREE.Mesh(new THREE.BoxGeometry(sx, wallH, sz), wallOuterMat);
+    const w = new THREE.Mesh(roundedBox(sx, wallH, sz, 0.09, 2), wallOuterMat);
     w.position.set(lx, wallH / 2 + 0.06, lz);
     w.castShadow = true;
     w.receiveShadow = true;
     w.userData.isHouseWall = true;
     const inner = new THREE.Mesh(
-      new THREE.BoxGeometry(Math.max(0.06, sx - 0.03), wallH - 0.05, Math.max(0.06, sz - 0.03)),
+      roundedBox(Math.max(0.06, sx - 0.03), wallH - 0.05, Math.max(0.06, sz - 0.03), 0.05, 1),
       wallInnerMat,
     );
     inner.position.copy(w.position);
@@ -4751,17 +4752,17 @@ export function createHilltopHouse(
   });
 
   // 3. Pitched Timber Shingle Roof + Warm Ceiling Lights
-  const roofPitchL = new THREE.Mesh(new THREE.BoxGeometry(12.2, 0.22, 5.4), roofMat);
+  const roofPitchL = new THREE.Mesh(roundedBox(12.2, 0.22, 5.4, 0.1, 3), roofMat);
   roofPitchL.position.set(0.3, 4.05, -2.2);
   roofPitchL.rotation.x = 0.38;
   roofPitchL.castShadow = true;
   roofPitchL.userData.isHouseWall = true;
-  const roofPitchR = new THREE.Mesh(new THREE.BoxGeometry(12.2, 0.22, 5.4), roofMat);
+  const roofPitchR = new THREE.Mesh(roundedBox(12.2, 0.22, 5.4, 0.1, 3), roofMat);
   roofPitchR.position.set(0.3, 4.05, 2.2);
   roofPitchR.rotation.x = -0.38;
   roofPitchR.castShadow = true;
   roofPitchR.userData.isHouseWall = true;
-  const ridgeBeam = new THREE.Mesh(new THREE.BoxGeometry(12.3, 0.25, 0.35), trimMat);
+  const ridgeBeam = new THREE.Mesh(roundedBox(12.3, 0.25, 0.35, 0.1, 2), trimMat);
   ridgeBeam.position.set(0.3, 4.95, 0);
   group.add(roofPitchL, roofPitchR, ridgeBeam);
 
@@ -4935,13 +4936,13 @@ export function createHilltopHouse(
   // G. DEDICATED MUSIC PRODUCTION STUDIO WING (Z: +4.2 .. +8.4, X: -4.2 .. +4.2)
   // Enterable via South archway from Living Room (X: +2.0 .. +4.1)
   // ==========================================================
-  const studioFoundation = new THREE.Mesh(new THREE.BoxGeometry(8.8, 1.8, 4.6), foundationMat);
+  const studioFoundation = new THREE.Mesh(roundedBox(8.8, 1.8, 4.6, 0.14, 3), foundationMat);
   studioFoundation.position.set(0.0, -0.88, 6.4);
   studioFoundation.receiveShadow = true;
   studioFoundation.castShadow = true;
   group.add(studioFoundation);
 
-  const studioFloor = new THREE.Mesh(new THREE.BoxGeometry(8.6, 0.14, 4.4), floorMat);
+  const studioFloor = new THREE.Mesh(roundedBox(8.6, 0.14, 4.4, 0.045, 2), floorMat);
   studioFloor.position.set(0.0, 0.01, 6.3);
   studioFloor.receiveShadow = true;
   group.add(studioFloor);
@@ -4963,10 +4964,10 @@ export function createHilltopHouse(
   addWall(4.2, 6.3, 0.24, 4.4);  // East outer wall
 
   // Studio Wing Acoustic Ceiling & Sloped Roof
-  const studioCeiling = new THREE.Mesh(new THREE.BoxGeometry(8.85, 0.22, 4.6), trimMat);
+  const studioCeiling = new THREE.Mesh(roundedBox(8.85, 0.22, 4.6, 0.06, 2), trimMat);
   studioCeiling.position.set(0.0, 3.22, 6.35);
   studioCeiling.userData.isHouseWall = true;
-  const studioRoof = new THREE.Mesh(new THREE.BoxGeometry(9.2, 0.22, 4.9), roofMat);
+  const studioRoof = new THREE.Mesh(roundedBox(9.2, 0.22, 4.9, 0.1, 3), roofMat);
   studioRoof.position.set(0.0, 3.55, 6.35);
   studioRoof.rotation.x = -0.14;
   studioRoof.castShadow = true;

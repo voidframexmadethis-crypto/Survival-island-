@@ -15,12 +15,12 @@ import {
 } from './vikingVillageSystem';
 import { DRAGON_VALLEY_POS, HILL_HOUSE_POS } from '../world/terrain';
 
-test('dragon valley sits exactly 50 blocks from the premade hill house', () => {
+test('dragon valley sits on a remote ridge far from the premade hill house', () => {
   const distance = Math.hypot(
     DRAGON_VALLEY_POS.x - HILL_HOUSE_POS.x,
     DRAGON_VALLEY_POS.z - HILL_HOUSE_POS.z,
   );
-  assert.ok(Math.abs(distance - 50) < 0.01, `expected 50 blocks, got ${distance}`);
+  assert.ok(distance > 780, `expected a remote valley, got ${distance} m`);
 });
 
 test('dragonValley collectEgg & hatchEgg follow exact egg-bag rules', () => {

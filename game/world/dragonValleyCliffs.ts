@@ -41,7 +41,7 @@ export function buildDragonValleyCliffRing(): THREE.Group {
   const pos = new THREE.Vector3();
   const scale = new THREE.Vector3();
 
-  const count = 34;
+  const count = 42;
   for (let i = 0; i < count; i++) {
     const angle = (i / count) * Math.PI * 2 + 0.08;
     let delta = angle - passAngle;
@@ -53,7 +53,7 @@ export function buildDragonValleyCliffRing(): THREE.Group {
     const z = DRAGON_VALLEY_POS.z + Math.sin(angle) * radius;
     const ground = getTerrainHeight(x, z);
     const height = 13 + (Math.sin(angle * 5.3 + 1.2) * 0.5 + 0.5) * 15;
-    const geo = new THREE.DodecahedronGeometry(1, 0);
+    const geo = new THREE.DodecahedronGeometry(1, 1);
     pos.set(x, ground + height * 0.26, z);
     scale.set(
       2.1 + Math.abs(Math.sin(angle * 4.2)) * 2.6,
@@ -70,7 +70,7 @@ export function buildDragonValleyCliffRing(): THREE.Group {
     parts.push(geo);
 
     if (i % 3 === 0) {
-      const ledgeGeo = new THREE.DodecahedronGeometry(1, 0);
+      const ledgeGeo = new THREE.DodecahedronGeometry(1, 1);
       const ledgeY = ground + height * (0.42 + (i % 2) * 0.16);
       pos.set(
         x - Math.cos(angle) * 2.1,

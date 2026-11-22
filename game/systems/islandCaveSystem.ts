@@ -916,10 +916,9 @@ export class IslandCaveSystem {
       color: palette.rock,
       roughness: 1,
       metalness: 0,
-      flatShading: true,
     });
     const stalCount = cave.type === 'regular' ? 8 : 16;
-    const stalGeo = new THREE.ConeGeometry(0.18, 1.4, 5);
+    const stalGeo = new THREE.ConeGeometry(0.18, 1.4, 12, 3);
     const stalactites = new THREE.InstancedMesh(stalGeo, rockMat, stalCount);
     const matrix = new THREE.Matrix4();
     const quat = new THREE.Quaternion();

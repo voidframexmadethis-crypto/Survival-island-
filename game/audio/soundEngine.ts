@@ -639,6 +639,21 @@ export class SoundEngine {
       noiseSource.start(now, Math.random() * 2.2, noiseDur + 0.02);
     }
 
+    // Supersonic snap: a very short high-passed transient on top of the body.
+    const snapSource = this.createNoiseSource('white');
+    if (snapSource) {
+      const snapFilter = this.ctx.createBiquadFilter();
+      snapFilter.type = 'highpass';
+      snapFilter.frequency.value = (isHeavy ? 2900 : isRapid ? 4100 : 3500) * bright;
+      const snapGain = this.ctx.createGain();
+      snapGain.gain.setValueAtTime((isHeavy ? 0.2 : 0.16) * Math.sqrt(weight), now);
+      snapGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.042);
+      snapSource.connect(snapFilter);
+      snapFilter.connect(snapGain);
+      snapGain.connect(this.masterGain);
+      snapSource.start(now, Math.random() * 1.8, 0.05);
+    }
+
     const crackOsc = this.ctx.createOscillator();
     const crackGain = this.ctx.createGain();
     crackOsc.type = 'sawtooth';
@@ -681,6 +696,42 @@ export class SoundEngine {
     }
 
     if (voice?.mech) this.playGunActionClick(now, voice.mech, weight);
+  }
+
+  /**
+   * Short impact transient for a bullet landing nearby. Dirt gets a dry thud,
+   * metal a ringing tick, and flesh a wet low-frequency slap.
+   */
+  public playBulletImpact(surface: 'dirt' | 'metal' | 'flesh' = 'dirt'): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const duration = surface === 'metal' ? 0.12 : surface === 'flesh' ? 0.085 : 0.075;
+    const noise = this.createNoiseSource('white');
+    if (noise) {
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = surface === 'metal' ? 'bandpass' : 'lowpass';
+      filter.frequency.value = surface === 'metal' ? 2450 : surface === 'flesh' ? 460 : 720;
+      filter.Q.value = surface === 'metal' ? 2.8 : 0.7;
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(surface === 'metal' ? 0.13 : 0.1, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+      noise.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.masterGain);
+      noise.start(now, Math.random() * 2.2, duration + 0.01);
+    }
+
+    const thump = this.ctx.createOscillator();
+    const thumpGain = this.ctx.createGain();
+    thump.type = surface === 'metal' ? 'triangle' : 'sine';
+    thump.frequency.setValueAtTime(surface === 'metal' ? 1900 : surface === 'flesh' ? 92 : 135, now);
+    thump.frequency.exponentialRampToValueAtTime(surface === 'metal' ? 760 : 38, now + duration);
+    thumpGain.gain.setValueAtTime(surface === 'metal' ? 0.07 : 0.13, now);
+    thumpGain.gain.exponentialRampToValueAtTime(0.0001, now + duration + 0.02);
+    thump.connect(thumpGain);
+    thumpGain.connect(this.masterGain);
+    thump.start(now);
+    thump.stop(now + duration + 0.03);
   }
 
   /** Pump, bolt, cylinder or slide mechanics after the shot. */

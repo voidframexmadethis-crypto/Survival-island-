@@ -1235,18 +1235,20 @@ export class GameEngine {
   private readonly rainCount = 340;
   private arrowGeo = new THREE.CylinderGeometry(0.025, 0.025, 0.85, 5);
   private arrowMat = new THREE.MeshStandardMaterial({ color: 0xe7e5e4 });
-  private bulletGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.42, 6);
-  private bulletMat = new THREE.MeshStandardMaterial({
-    color: 0xfef08a,
-    emissive: 0xf59e0b,
-    emissiveIntensity: 0.9,
-    roughness: 0.2,
+  private bulletGeo = new THREE.CylinderGeometry(0.018, 0.018, 1.5, 8);
+  private bulletMat = new THREE.MeshBasicMaterial({
+    color: 0xffe39a,
+    transparent: true,
+    opacity: 0.92,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false,
   });
   private particleInstanced!: THREE.InstancedMesh;
   private particlePool: PooledParticle[] = [];
   private particleWriteIdx = 0;
   private hasActiveParticles = false;
-  private particleGeo = new THREE.BoxGeometry(0.14, 0.14, 0.14);
+  private particleGeo = new THREE.IcosahedronGeometry(0.075, 1);
   private particleMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
   private shellCasingGeo = new THREE.CylinderGeometry(0.014, 0.014, 0.048, 6);
   private shellCasingMat = new THREE.MeshStandardMaterial({
@@ -1264,14 +1266,18 @@ export class GameEngine {
     life: number;
   }[] = [];
   private shellCasingIdx = 0;
-  private muzzleFlashGeo = new THREE.OctahedronGeometry(0.12, 0);
+  private muzzleFlashGeo = new THREE.IcosahedronGeometry(0.14, 1);
   private muzzleFlashMat = new THREE.MeshBasicMaterial({
     color: 0xfef08a,
     transparent: true,
-    opacity: 0.92,
+    opacity: 0.95,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
   });
   private muzzleFlashPool: { mesh: THREE.Mesh; life: number }[] = [];
   private muzzleFlashIdx = 0;
+  private muzzleLight: THREE.PointLight | null = null;
+  private muzzleLightLife = 0;
   private muzzleFlashTex: THREE.CanvasTexture | null = null;
   private muzzleSmokeTex: THREE.CanvasTexture | null = null;
   private muzzleGlowPool: {
@@ -1835,6 +1841,13 @@ export class GameEngine {
       this.scene.add(mesh);
       this.muzzleFlashPool.push({ mesh, life: 0 });
     }
+    // A single pooled flash light makes the barrel, hands and nearby foliage
+    // catch the shot. It is added before shader pre-compilation so the light
+    // count never changes during gameplay.
+    this.muzzleLight = new THREE.PointLight(0xffb45e, 0, 8.5, 2);
+    this.muzzleLight.castShadow = false;
+    this.muzzleLight.userData.ignoreLightingPass = true;
+    this.scene.add(this.muzzleLight);
 
     // Camera-facing muzzle flare + drifting powder smoke. Sprites give a soft
     // photographic bloom that a low-poly octahedron cannot.
@@ -9142,9 +9155,9 @@ export class GameEngine {
       this.muzzleFlashIdx += 1;
       mf.mesh.position.set(sx, sy, sz);
       mf.mesh.rotation.set(Math.random() * 3, Math.random() * 3, 0);
-      mf.mesh.scale.setScalar(spec.pelletCount > 1 ? 1.35 : 0.95);
+      mf.mesh.scale.setScalar(spec.pelletCount > 1 ? 1.55 : 1.12);
       mf.mesh.visible = true;
-      mf.life = 0.055;
+      mf.life = 0.085;
     }
 
     const isShotgunBlast = spec.pelletCount > 1;
@@ -9173,12 +9186,18 @@ export class GameEngine {
       glow.sprite.material.opacity = 0.95;
       glow.sprite.scale.setScalar(flashSize);
       glow.sprite.visible = true;
-      glow.baseScale = flashSize;
-      glow.maxLife = 0.055 + Math.random() * 0.03;
+      glow.baseScale = flashSize * 1.18;
+      glow.maxLife = 0.085 + Math.random() * 0.045;
       glow.life = glow.maxLife;
     }
+    if (this.muzzleLight) {
+      this.muzzleLight.position.set(sx + _vec3A.x * 0.18, sy + 0.03, sz + _vec3A.z * 0.18);
+      this.muzzleLight.color.setHex(flashColor);
+      this.muzzleLight.intensity = (isShotgunBlast ? 23 : isLongGun ? 18 : 12) * (0.85 + Math.random() * 0.3);
+      this.muzzleLightLife = 0.075;
+    }
     if (this.muzzleSmokePool.length > 0 && this.effectiveParticleScale > 0.05) {
-      const puffs = (isShotgunBlast ? 5 : spec.soundProfile === 'smg' ? 2 : 3) *
+      const puffs = (isShotgunBlast ? 8 : spec.soundProfile === 'smg' ? 3 : 5) *
         Math.max(0.5, this.effectiveParticleScale);
       const puffCount = Math.round(puffs);
       for (let i = 0; i < puffCount; i++) {
@@ -9194,12 +9213,12 @@ export class GameEngine {
           0.22 + Math.random() * 0.55 + _vec3A.y * 0.6,
           _vec3A.z * (0.6 + Math.random() * 1.4) + _vec3B.z * (Math.random() - 0.5) * 0.8,
         );
-        puff.sprite.material.color.setHex(i === 0 ? 0xd9d4cc : 0xb9b6b0);
-        puff.sprite.material.opacity = 0.42;
-        puff.baseScale = 0.16 + Math.random() * 0.14 + (isShotgunBlast ? 0.1 : 0);
+        puff.sprite.material.color.setHex(i === 0 ? 0xe3ddd2 : 0xb5b1aa);
+        puff.sprite.material.opacity = 0.52;
+        puff.baseScale = 0.2 + Math.random() * 0.2 + (isShotgunBlast ? 0.16 : 0);
         puff.sprite.scale.setScalar(puff.baseScale);
         puff.sprite.visible = true;
-        puff.maxLife = 0.75 + Math.random() * 0.75;
+        puff.maxLife = 0.95 + Math.random() * 0.9;
         puff.life = puff.maxLife;
       }
     }
@@ -9241,8 +9260,8 @@ export class GameEngine {
 
     const bulletLife = Math.max(0.8, spec.range / Math.max(40, spec.muzzleSpeed));
     const pellets = Math.max(1, spec.pelletCount);
-    const widthScale = spec.soundProfile === 'sniper' ? 1.2 : 0.85;
-    const lenScale = spec.soundProfile === 'sniper' ? 1.38 : 0.9;
+    const widthScale = spec.soundProfile === 'sniper' ? 1.35 : 0.9;
+    const lenScale = spec.soundProfile === 'sniper' ? 1.5 : 1.0;
 
     for (let p = 0; p < pellets; p++) {
       _vec3D.copy(_vec3A);
@@ -10443,6 +10462,40 @@ export class GameEngine {
     }
     if (this.particleInstanced.instanceColor) {
       this.particleInstanced.instanceColor.needsUpdate = true;
+    }
+  }
+
+  /** Rounded dust, sparks and a short-lived powder puff where a bullet lands. */
+  private spawnBulletImpact(
+    x: number,
+    y: number,
+    z: number,
+    surface: 'dirt' | 'metal' | 'flesh' = 'dirt',
+  ): void {
+    if (this.effectiveParticleScale <= 0) return;
+    const dustColor = surface === 'metal' ? 0xd6d3d1 : surface === 'flesh' ? 0x9f1239 : 0xc9b79d;
+    this.spawnParticles(x, y + 0.04, z, dustColor, surface === 'flesh' ? 4 : 7);
+    if (surface !== 'flesh') {
+      this.spawnParticles(x, y + 0.08, z, 0xffc247, 4);
+    }
+    if (surface !== 'flesh' && this.muzzleSmokePool.length > 0 && this.effectiveParticleScale > 0.2) {
+      const puffs = surface === 'metal' ? 1 : 2;
+      for (let i = 0; i < puffs; i++) {
+        const puff = this.muzzleSmokePool[this.muzzleSmokeIdx % this.muzzleSmokePool.length];
+        this.muzzleSmokeIdx += 1;
+        puff.sprite.position.set(x + (Math.random() - 0.5) * 0.24, y + 0.12, z + (Math.random() - 0.5) * 0.24);
+        puff.vel.set((Math.random() - 0.5) * 0.8, 0.22 + Math.random() * 0.42, (Math.random() - 0.5) * 0.8);
+        puff.sprite.material.color.setHex(surface === 'metal' ? 0xaeb3ba : 0xb9ac97);
+        puff.sprite.material.opacity = 0.38;
+        puff.baseScale = 0.16 + Math.random() * 0.12;
+        puff.sprite.scale.setScalar(puff.baseScale);
+        puff.sprite.visible = true;
+        puff.maxLife = 0.55 + Math.random() * 0.5;
+        puff.life = puff.maxLife;
+      }
+    }
+    if (Math.hypot(x - this.playerX, z - this.playerZ) < 28) {
+      this.sound.playBulletImpact(surface);
     }
   }
 
@@ -14422,13 +14475,11 @@ export class GameEngine {
 
       let remove = a.life <= 0 || a.pos.y < getTerrainHeight(a.pos.x, a.pos.z);
       if (a.pos.y < getTerrainHeight(a.pos.x, a.pos.z)) {
-        this.spawnParticles(
-          a.pos.x,
-          a.pos.y + 0.05,
-          a.pos.z,
-          a.isBullet ? 0xfde047 : 0x78716c,
-          a.isBullet ? 6 : 4,
-        );
+        if (a.isBullet) {
+          this.spawnBulletImpact(a.pos.x, a.pos.y, a.pos.z, 'dirt');
+        } else {
+          this.spawnParticles(a.pos.x, a.pos.y + 0.05, a.pos.z, 0x78716c, 4);
+        }
       }
 
       if (!remove && this.world?.caveCeilings) {
@@ -14478,6 +14529,14 @@ export class GameEngine {
               structHit.hitPoint.y,
               structHit.hitPoint.z,
             );
+            if (a.isBullet) {
+              this.spawnBulletImpact(
+                structHit.hitPoint.x,
+                structHit.hitPoint.y,
+                structHit.hitPoint.z,
+                'metal',
+              );
+            }
             remove = true;
           } else if (zoneHit) {
             const c = this.creatures.creatures.find((cr) => cr.id === zoneHit.creatureId);
@@ -14494,6 +14553,14 @@ export class GameEngine {
                 a.isBullet ? 'Gunshot' : 'Bow Shot',
                 a.isBullet ? { knockback: 2.6 } : undefined,
               );
+              if (a.isBullet) {
+                this.spawnBulletImpact(
+                  zoneHit.hitPoint.x,
+                  zoneHit.hitPoint.y,
+                  zoneHit.hitPoint.z,
+                  'flesh',
+                );
+              }
               remove = true;
             }
           }
@@ -14514,7 +14581,11 @@ export class GameEngine {
               const dx = a.pos.x - n.x;
               const dz = a.pos.z - n.z;
               if (dx * dx + dz * dz < 1.96 && a.pos.y > n.y && a.pos.y < n.y + 5.2) {
-                this.spawnParticles(a.pos.x, a.pos.y, a.pos.z, a.isBullet ? 0xffd700 : 0x85532a, 6);
+                if (a.isBullet) {
+                  this.spawnBulletImpact(a.pos.x, a.pos.y, a.pos.z, 'dirt');
+                } else {
+                  this.spawnParticles(a.pos.x, a.pos.y, a.pos.z, 0x85532a, 6);
+                }
                 this.harvestResourceNode(n.id, ITEMS[a.isBullet ? 'gun' : 'primitive_bow']);
                 remove = true;
                 break outerBulletNodes;
@@ -14729,6 +14800,11 @@ export class GameEngine {
       if (mf.life <= 0) continue;
       mf.life -= dt;
       if (mf.life <= 0) mf.mesh.visible = false;
+    }
+    if (this.muzzleLight && this.muzzleLightLife > 0) {
+      this.muzzleLightLife = Math.max(0, this.muzzleLightLife - dt);
+      this.muzzleLight.intensity *= Math.pow(0.00005, dt);
+      if (this.muzzleLightLife <= 0) this.muzzleLight.intensity = 0;
     }
     for (const glow of this.muzzleGlowPool) {
       if (glow.life <= 0) continue;

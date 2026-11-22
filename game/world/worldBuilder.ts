@@ -15,6 +15,7 @@ import {
 } from './louisianaLandmass';
 import { buildLouisianaWilds } from './louisianaWilds';
 import { buildDragonValleyCliffRing } from './dragonValleyCliffs';
+import { roundedBox } from './roundedBox';
 import {
   CaveTerrainOpening,
   filterTerrainIndexForCaveOpenings,
@@ -144,6 +145,7 @@ import {
 import {
   GRASS_VARIANTS,
   GrassVariant,
+  createCurvedBladeGeometry,
   createGrassVariantGeometry,
   createPalmBootGeometry,
   createPalmFrondGeometries,
@@ -1993,7 +1995,7 @@ export function buildIslandWorld(
   overworldGroup.add(sunkenLog);
 
   // 6) Tall Golden Savanna Grass Patch (African Lion prowling & Bison windswept prairie)
-  const goldenSavannaBladeGeo = new THREE.ConeGeometry(0.08, 1.32, 4);
+  const goldenSavannaBladeGeo = new THREE.ConeGeometry(0.08, 1.32, 8);
   goldenSavannaBladeGeo.translate(0, 0.66, 0);
   const goldenSavannaMat = enhanceSurfaceMaterial(
     new THREE.MeshStandardMaterial({ color: 0xd4a438, roughness: 0.88 }),
@@ -2227,7 +2229,7 @@ export function buildIslandWorld(
   const wheatMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.86 }), 'foliage', 0.04));
   const sugarcaneMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x84cc16, roughness: 0.72 }), 'foliage', 0.045));
   const sugarcaneNodeMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.8 }));
-  const grassMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x6f7f42, roughness: 0.92 }), 'foliage', 0.05));
+  const grassMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x6f7f42, roughness: 0.92, side: THREE.DoubleSide }), 'foliage', 0.05));
   const berryBushMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x15803d, map: leafTex, roughness: 0.85 }), 'foliage', 0.03));
   const berryFruitMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.45 }));
   const fernMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.84 }), 'foliage', 0.035));
@@ -2242,6 +2244,7 @@ export function buildIslandWorld(
   const gCylStraight8 = registerGeometry(new THREE.CylinderGeometry(1, 1, 1, 8));
   const gCylStraight5 = registerGeometry(new THREE.CylinderGeometry(0.75, 1, 1, 5));
   const gCone4 = registerGeometry(new THREE.ConeGeometry(1, 1, 4));
+  const gGrassBlade = registerGeometry(createCurvedBladeGeometry());
   const gCone5 = registerGeometry(new THREE.ConeGeometry(1, 1, 5));
   const gCone8 = registerGeometry(new THREE.ConeGeometry(1, 1, 8));
   const gCone10 = registerGeometry(new THREE.ConeGeometry(1, 1, 10));
@@ -3057,11 +3060,15 @@ export function buildIslandWorld(
         root.add(cane, joint, tuft);
       }
     } else if (kind === 'grass_tuft') {
-      for (let i = 0; i < 8; i++) {
-        const blade = new THREE.Mesh(gCone4, grassMat);
-        blade.scale.set(0.07, 0.85, 0.07);
-        blade.position.set((nodeRand() - 0.5) * 0.6, 0.4, (nodeRand() - 0.5) * 0.6);
-        blade.rotation.z = (nodeRand() - 0.5) * 0.35;
+      for (let i = 0; i < 10; i++) {
+        const blade = new THREE.Mesh(gGrassBlade, grassMat);
+        blade.scale.set(0.14, 0.85, 0.14);
+        blade.position.set((nodeRand() - 0.5) * 0.62, 0.01, (nodeRand() - 0.5) * 0.62);
+        blade.rotation.set(
+          (nodeRand() - 0.5) * 0.22,
+          nodeRand() * Math.PI * 2,
+          (nodeRand() - 0.5) * 0.5,
+        );
         root.add(blade);
       }
     } else if (kind === 'berry_bush') {
@@ -4088,7 +4095,7 @@ export function buildIslandWorld(
 
   // Main leveled polished reflective concrete foundation pad (28.0m x 13.0m for 4 bays)
   const garagePad = new THREE.Mesh(
-    ensureGeometryHasUv(new THREE.BoxGeometry(28.0, 0.18, 13.0)),
+    ensureGeometryHasUv(roundedBox(28.0, 0.18, 13.0, 0.18, 3)),
     concreteBaseMat,
   );
   garagePad.position.set(0, 0.04, 0);
@@ -4100,7 +4107,7 @@ export function buildIslandWorld(
 
   // Wide beveled polished concrete driveway apron leading south (+Z) onto the island trails & beach
   const driveApron = new THREE.Mesh(
-    ensureGeometryHasUv(new THREE.BoxGeometry(28.6, 0.12, 3.8)),
+    ensureGeometryHasUv(roundedBox(28.6, 0.12, 3.8, 0.12, 2)),
     apronMat,
   );
   driveApron.position.set(0, 0.01, 7.8);
@@ -4116,7 +4123,7 @@ export function buildIslandWorld(
   bayCenters.forEach((bx, bayIdx) => {
     const trimMat = bayTrimMats[bayIdx];
     const bayPad = new THREE.Mesh(
-      ensureGeometryHasUv(new THREE.BoxGeometry(5.0, 0.04, 8.2)),
+      ensureGeometryHasUv(roundedBox(5.0, 0.04, 8.2, 0.04, 2)),
       concreteBayPadMat,
     );
     bayPad.position.set(bx, 0.145, 0.6);
@@ -4163,15 +4170,15 @@ export function buildIslandWorld(
   });
 
   // Back workshop low retaining wall + timber wainscot + steel roof trusses
-  const backWall = new THREE.Mesh(new THREE.BoxGeometry(26.2, 2.4, 0.28), concreteBaseMat);
+  const backWall = new THREE.Mesh(roundedBox(26.2, 2.4, 0.28, 0.1, 2), concreteBaseMat);
   backWall.position.set(0, 1.3, -5.85);
   backWall.castShadow = true;
   backWall.receiveShadow = true;
   garageGroup.add(backWall);
 
-  const frontHeaderBeam = new THREE.Mesh(new THREE.BoxGeometry(26.8, 0.42, 0.38), steelFrameMat);
+  const frontHeaderBeam = new THREE.Mesh(roundedBox(26.8, 0.42, 0.38, 0.1, 2), steelFrameMat);
   frontHeaderBeam.position.set(0, 4.85, 5.4);
-  const backHeaderBeam = new THREE.Mesh(new THREE.BoxGeometry(26.8, 0.42, 0.38), steelFrameMat);
+  const backHeaderBeam = new THREE.Mesh(roundedBox(26.8, 0.42, 0.38, 0.1, 2), steelFrameMat);
   backHeaderBeam.position.set(0, 4.85, -5.8);
   garageGroup.add(frontHeaderBeam, backHeaderBeam);
 
@@ -4182,7 +4189,7 @@ export function buildIslandWorld(
   });
 
   // Sloped corrugated steel canopy roof (28.4m x 13.4m)
-  const canopyRoof = new THREE.Mesh(new THREE.BoxGeometry(28.4, 0.2, 13.4), garageRoofMat);
+  const canopyRoof = new THREE.Mesh(roundedBox(28.4, 0.2, 13.4, 0.12, 3), garageRoofMat);
   canopyRoof.position.set(0, 5.22, -0.2);
   canopyRoof.rotation.x = -0.07;
   canopyRoof.castShadow = true;
@@ -4516,7 +4523,7 @@ export function buildIslandWorld(
     const upperHall = new THREE.Mesh(new THREE.BoxGeometry(13.0, 3.2, 8.8), mansionPlankMat);
     upperHall.position.y = 5.75;
     upperHall.castShadow = true;
-    const pitchedRoof = new THREE.Mesh(new THREE.ConeGeometry(9.2, 3.4, 4), roofSlateMat);
+    const pitchedRoof = new THREE.Mesh(new THREE.ConeGeometry(9.2, 3.4, 12), roofSlateMat);
     pitchedRoof.rotation.y = Math.PI / 4;
     pitchedRoof.scale.set(1.22, 1, 0.92);
     pitchedRoof.position.y = 9.05;
@@ -4579,7 +4586,7 @@ export function buildIslandWorld(
 
     const roofBase = new THREE.Mesh(new THREE.BoxGeometry(5.0, 0.14, 4.6), oakTrunkMat);
     roofBase.position.y = 2.86;
-    const roof = new THREE.Mesh(new THREE.ConeGeometry(3.8, 2.0, 4), snowy ? snowCapMat : pineTrunkMat);
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(3.8, 2.0, 10), snowy ? snowCapMat : pineTrunkMat);
     roof.rotation.y = Math.PI / 4;
     roof.position.y = 3.92;
     roof.castShadow = true;
@@ -4654,7 +4661,7 @@ export function buildIslandWorld(
     midTower.castShadow = true;
     const crownDeck = new THREE.Mesh(new THREE.BoxGeometry(6.2, 0.55, 6.2), birchTrunkMat);
     crownDeck.position.y = 6.75;
-    const towerRoof = new THREE.Mesh(new THREE.ConeGeometry(4.4, 2.4, 4), roofSlateMat);
+    const towerRoof = new THREE.Mesh(new THREE.ConeGeometry(4.4, 2.4, 12), roofSlateMat);
     towerRoof.rotation.y = Math.PI / 4;
     towerRoof.position.y = 8.65;
     towerRoof.castShadow = true;
@@ -4793,7 +4800,7 @@ export function buildIslandWorld(
     const wellWater = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 1.8), freshwaterMat);
     wellWater.rotation.x = -Math.PI / 2;
     wellWater.position.y = 0.92;
-    const wellRoof = new THREE.Mesh(new THREE.ConeGeometry(2.2, 1.2, 4), oakTrunkMat);
+    const wellRoof = new THREE.Mesh(new THREE.ConeGeometry(2.2, 1.2, 10), oakTrunkMat);
     wellRoof.rotation.y = Math.PI / 4;
     wellRoof.position.y = 3.1;
     vGroup.add(wellBase, wellWater, wellRoof);
@@ -4813,7 +4820,7 @@ export function buildIslandWorld(
       const body = new THREE.Mesh(new THREE.BoxGeometry(5.2, 3.0, 4.4), birchTrunkMat);
       body.position.y = 1.5;
       body.castShadow = true;
-      const roof = new THREE.Mesh(new THREE.ConeGeometry(4.1, 2.1, 4), oakTrunkMat);
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(4.1, 2.1, 12), oakTrunkMat);
       roof.rotation.y = Math.PI / 4;
       roof.position.y = 4.05;
       roof.castShadow = true;
@@ -4868,7 +4875,7 @@ export function buildIslandWorld(
     const tower = new THREE.Mesh(new THREE.BoxGeometry(4.2, 6.2, 4.2), darkOakTrunkMat);
     tower.position.y = 3.3;
     tower.castShadow = true;
-    const roof = new THREE.Mesh(new THREE.ConeGeometry(4.0, 2.4, 4), roofSlateMat);
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(4.0, 2.4, 12), roofSlateMat);
     roof.rotation.y = Math.PI / 4;
     roof.position.y = 7.6;
     const banner = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.8, 0.12), bannerRedMat);
@@ -5010,7 +5017,7 @@ export function buildIslandWorld(
       const body = new THREE.Mesh(new THREE.BoxGeometry(4.6, 3.0, 4.2), acaciaTrunkMat);
       body.position.y = 1.5;
       body.castShadow = true;
-      const roof = new THREE.Mesh(new THREE.ConeGeometry(3.8, 2.4, 4), terracottaOrangeMat);
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(3.8, 2.4, 12), terracottaOrangeMat);
       roof.position.y = 4.1;
       roof.rotation.y = Math.PI / 4;
       hut.add(body, roof);
@@ -5063,7 +5070,7 @@ export function buildIslandWorld(
     const cabin = new THREE.Mesh(new THREE.BoxGeometry(4.4, 2.8, 4.4), spruceTrunkMat);
     cabin.position.y = 3.95;
     cabin.castShadow = true;
-    const roof = new THREE.Mesh(new THREE.ConeGeometry(3.8, 2.1, 4), darkOakTrunkMat);
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(3.8, 2.1, 12), darkOakTrunkMat);
     roof.position.y = 6.3;
     roof.rotation.y = Math.PI / 4;
     hut.add(deck, cabin, roof);
@@ -5179,9 +5186,8 @@ export function buildIslandWorld(
     const dvGroup = new THREE.Group();
     const dvY = getTerrainHeight(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z);
     dvGroup.position.set(DRAGON_VALLEY_POS.x, dvY, DRAGON_VALLEY_POS.z);
-    // The obsidian cliff and its roosts were authored on the southwest side of
-    // the valley. Rotate the set north so the 50-block move cannot crowd the
-    // Sunflower Village to the southwest.
+    // Keep the authored roost layout facing the valley pass. The basin now sits
+    // on the remote northern ridge, so there is no nearby village to crowd.
     dvGroup.rotation.y = Math.PI * 0.5;
     const lavaPool = new THREE.Mesh(new THREE.CylinderGeometry(11, 12, 0.3, 18), magmaGlowMat);
     lavaPool.position.y = 0.16;
@@ -5190,15 +5196,27 @@ export function buildIslandWorld(
       const ang = (i / 8) * Math.PI * 2;
       const dist = 16 + (i % 2) * 5;
       const h = 9 + (i % 3) * 4.5;
-      const spire = new THREE.Mesh(new THREE.ConeGeometry(2.6, h, 6), obsidianMat);
-      spire.position.set(Math.cos(ang) * dist, h * 0.45, Math.sin(ang) * dist);
+      // A lathed, arched profile replaces the old six-sided cone so the
+      // obsidian needles swell at the base and curve to a fine point.
+      const spireProfile = [
+        new THREE.Vector2(2.7, 0),
+        new THREE.Vector2(2.45, h * 0.18),
+        new THREE.Vector2(1.95, h * 0.42),
+        new THREE.Vector2(1.3, h * 0.64),
+        new THREE.Vector2(0.62, h * 0.83),
+        new THREE.Vector2(0.06, h),
+      ];
+      const spire = new THREE.Mesh(new THREE.LatheGeometry(spireProfile, 18), obsidianMat);
+      spire.position.set(Math.cos(ang) * dist, 0.05, Math.sin(ang) * dist);
       spire.rotation.z = (i % 2 === 0 ? 1 : -1) * 0.12;
+      spire.castShadow = true;
+      spire.receiveShadow = true;
       dvGroup.add(spire);
     }
     // Heroic perched dragon on the central obsidian plinth. Layered PBR scale
     // relief, veined membranes, slit pupils and swept horns replace the old
     // capsule-and-box silhouette.
-    const dragonPlinth = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 5.4, 2.4, 7), obsidianMat);
+    const dragonPlinth = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 5.4, 2.4, 26), obsidianMat);
     dragonPlinth.position.y = 1.2;
     const plinthDragon = createRealisticDragon({
       variant: 'ember',
@@ -5214,25 +5232,25 @@ export function buildIslandWorld(
     // The valley's signature landmark: a sheer dragon cliff with broad roosting
     // shelves. The beacon sits on its summit and is visible from the hill house.
     const dragonCliff = new THREE.Mesh(
-      new THREE.CylinderGeometry(12, 18, 34, 9),
+      new THREE.CylinderGeometry(12, 18, 34, 28, 6),
       obsidianMat,
     );
     dragonCliff.position.set(-20, 17, -8);
     dragonCliff.castShadow = true;
     dragonCliff.receiveShadow = true;
     const cliffLedgeLow = new THREE.Mesh(
-      new THREE.CylinderGeometry(17, 17, 1.2, 9),
+      new THREE.CylinderGeometry(17, 17.8, 1.2, 28, 2),
       obsidianMat,
     );
     cliffLedgeLow.position.set(-20, 9.4, -8);
     cliffLedgeLow.castShadow = true;
     const cliffLedgeHigh = new THREE.Mesh(
-      new THREE.CylinderGeometry(10.5, 10.5, 1.0, 9),
+      new THREE.CylinderGeometry(10.5, 11.2, 1.0, 28, 2),
       obsidianMat,
     );
     cliffLedgeHigh.position.set(-20, 23.4, -8);
     cliffLedgeHigh.castShadow = true;
-    const cliffTop = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 0.8, 9), obsidianMat);
+    const cliffTop = new THREE.Mesh(new THREE.CylinderGeometry(8, 8.8, 0.8, 28, 2), obsidianMat);
     cliffTop.position.set(-20, 34.2, -8);
     cliffTop.castShadow = true;
     dvGroup.add(dragonCliff, cliffLedgeLow, cliffLedgeHigh, cliffTop);
@@ -5286,7 +5304,7 @@ export function buildIslandWorld(
     const beaconGroup = new THREE.Group();
     // Matches the rotated cliff summit: local (-20, -8) becomes (-8, +20).
     beaconGroup.position.set(DRAGON_VALLEY_POS.x - 8, dvY + 35, DRAGON_VALLEY_POS.z + 20);
-    const beaconBase = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 6.0, 2.2, 9), obsidianMat);
+    const beaconBase = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 6.0, 2.2, 24), obsidianMat);
     beaconBase.position.y = 0.4;
     const beaconBeamMat = new THREE.MeshBasicMaterial({
       color: 0xfbbf24,
@@ -5307,12 +5325,12 @@ export function buildIslandWorld(
       fog: false,
     });
     const beaconBeam = new THREE.Mesh(
-      new THREE.CylinderGeometry(1.4, 3.2, 230, 10, 1, true),
+      new THREE.CylinderGeometry(1.4, 3.2, 230, 20, 1, true),
       beaconBeamMat,
     );
     beaconBeam.position.y = 116;
     const beaconCore = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.45, 1.0, 238, 8, 1, true),
+      new THREE.CylinderGeometry(0.45, 1.0, 238, 18, 1, true),
       beaconCoreMat,
     );
     beaconCore.position.y = 120;
@@ -5381,16 +5399,14 @@ export function buildIslandWorld(
         variant,
       });
     };
+    // The wild flight stays over the remote northern basin. No ambient dragon
+    // patrols orbit the starter shelter now that the valley has moved.
     addValleyFlyer(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 340, 25, 15, 0.22, 0.3, 1.0, 'ember');
     addValleyFlyer(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 340, 33, 21, 0.17, 2.5, 1.35, 'storm');
     addValleyFlyer(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 340, 20, 11, 0.28, 4.4, 0.85, 'shadow');
-
-    // Island-wide patrols keep dragons visible over the shelter, homestead and
-    // central island, not just inside Dragon Valley.
-    addValleyFlyer(HILL_HOUSE_POS.x, HILL_HOUSE_POS.z, 280, 72, 30, 0.11, 1.1, 1.15, 'storm');
-    addValleyFlyer(HILL_HOUSE_POS.x, HILL_HOUSE_POS.z, 280, 48, 22, 0.16, 4.0, 0.8, 'shadow');
-    addValleyFlyer(0, 0, 360, 180, 56, 0.055, 3.2, 1.55, 'ember');
-    addValleyFlyer(HOMESTEAD_POS.x, HOMESTEAD_POS.z, 260, 58, 26, 0.13, 5.2, 1.0, 'ember');
+    addValleyFlyer(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 430, 58, 30, 0.12, 1.1, 1.15, 'storm');
+    addValleyFlyer(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 430, 44, 24, 0.16, 4.0, 0.8, 'shadow');
+    addValleyFlyer(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 470, 82, 46, 0.075, 3.2, 1.5, 'ember');
 
     // Abandoned adult dragon curled around its old hoard at the valley edge.
     abandonedDragonGroup = new THREE.Group();
@@ -5437,7 +5453,7 @@ export function buildIslandWorld(
     // Main Nordic Mead Hall Longhouse
     const hallWalls = new THREE.Mesh(new THREE.BoxGeometry(14, 4.2, 8.5), vikingTimberMat);
     hallWalls.position.set(0, 2.1, 0);
-    const hallRoof = new THREE.Mesh(new THREE.ConeGeometry(10.6, 4.4, 4), obsidianMat);
+    const hallRoof = new THREE.Mesh(new THREE.ConeGeometry(10.6, 4.4, 16), obsidianMat);
     hallRoof.rotation.y = Math.PI * 0.25;
     hallRoof.scale.set(1.2, 1, 0.78);
     hallRoof.position.set(0, 6.2, 0);
@@ -5447,7 +5463,7 @@ export function buildIslandWorld(
     // Secondary Viking Hut + Shield Racks & Rune Stones
     const hut = new THREE.Mesh(new THREE.BoxGeometry(7.2, 3.2, 6.0), vikingTimberMat);
     hut.position.set(-14, 1.6, -5);
-    const hutRoof = new THREE.Mesh(new THREE.ConeGeometry(5.6, 3.0, 4), obsidianMat);
+    const hutRoof = new THREE.Mesh(new THREE.ConeGeometry(5.6, 3.0, 14), obsidianMat);
     hutRoof.rotation.y = Math.PI * 0.25;
     hutRoof.position.set(-14, 4.7, -5);
     vvGroup.add(hut, hutRoof);

@@ -82,12 +82,12 @@ export const FROZEN_OCEAN_ICEBERG_POS = { x: -175, z: -755 };
 export const BURIED_TREASURE_POS = { x: 72, z: 702 };
 
 // Grand Finale Pack Expanded Outer Biomes (740m Grand Island Expansion)
-// Dragon Valley sits on a towering cliff exactly 50 blocks northwest of the
-// premade hill house (dx -35, dz 35.71). This bearing keeps the flat pad clear
-// of the garage apron/driveways and just clear of the Sunflower Village, while
-// the summit beacon stays visible from the shelter.
-export const DRAGON_VALLEY_POS = { x: -113, z: 163.707 };
-export const DRAGON_VALLEY_ABANDONED_POS = { x: -138, z: 168.707 };
+// Dragon Valley now occupies a remote volcanic basin on the far northern ridge,
+// more than 800 m from the premade hill house. Its pass still points back toward
+// the homestead, but the valley and its resident dragons no longer crowd the
+// starter shelter, garage, farmland or sunflower village.
+export const DRAGON_VALLEY_POS = { x: 160, z: -640 };
+export const DRAGON_VALLEY_ABANDONED_POS = { x: 134, z: -634 };
 // Stop the red biome tint before it reaches the hill house or Sunflower Village.
 export const DRAGON_VALLEY_BIOME_RADIUS = 38;
 export const VIKING_VILLAGE_POS = { x: 560, z: -260 };
@@ -127,9 +127,12 @@ export function getPlayableMaxRadius(): number {
 }
 
 export const TERRAIN_SIZE = 1920;
-export const TERRAIN_SEGS = 256;
+// A denser heightfield removes the broad triangular shoulders and stair-stepped
+// ridge lines that made the old 7.5 m grid read as blocky terrain. 320 segments
+// keeps the mesh at 6 m spacing, well inside the island renderer's budget.
+export const TERRAIN_SEGS = 320;
 export const TERRAIN_VERTS = TERRAIN_SEGS + 1;
-export const TERRAIN_STEP = TERRAIN_SIZE / TERRAIN_SEGS; // 7.5m per vertex
+export const TERRAIN_STEP = TERRAIN_SIZE / TERRAIN_SEGS; // 6m per vertex
 export const TERRAIN_HALF = TERRAIN_SIZE * 0.5;
 
 export const terrainDeltaGrid = new Float32Array(TERRAIN_VERTS * TERRAIN_VERTS);
