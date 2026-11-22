@@ -20879,9 +20879,13 @@ export class GameEngine {
         }
       }
       if (handles.quarterPanels && handles.quarterPanels.length > 0) {
-        const shakeAmp = showBassPulse * 0.022 * rattleShake;
+        // DONK rear quarters get an extra multiplier so they visibly slap harder
+        // than the doors, trunk lid, and the rest of the body.
+        const quarterPanelBoost = v.preset === 'donk' ? 2.35 : 1;
+        const shakeAmp = showBassPulse * 0.022 * rattleShake * quarterPanelBoost;
         const flexWave = Math.sin(this.elapsed * 52);
-        const panelBuzz = Math.sin(this.elapsed * 61) * shakeAmp * 0.6;
+        const panelBuzz =
+          Math.sin(this.elapsed * 61) * shakeAmp * (v.preset === 'donk' ? 0.85 : 0.6);
         for (const qp of handles.quarterPanels) {
           const baseX = (qp.userData.baseX as number | undefined) ?? qp.position.x;
           const baseZ = (qp.userData.baseZ as number | undefined) ?? qp.position.z;
@@ -20892,7 +20896,12 @@ export class GameEngine {
             qp.position.x =
               baseX + side * Math.abs(flexWave) * shakeAmp + flexWave * shakeAmp * 0.35;
             qp.position.z = baseZ + panelBuzz;
-            qp.rotation.z = Math.sin(this.elapsed * 67) * 0.007 * showBassPulse * rattleShake;
+            qp.rotation.z =
+              Math.sin(this.elapsed * 67) *
+              0.007 *
+              showBassPulse *
+              rattleShake *
+              quarterPanelBoost;
           } else {
             qp.position.x = baseX;
             qp.position.z = baseZ;

@@ -68,6 +68,7 @@ function makeMockGraph() {
   const gains: MockNode[] = [];
   const sources: MockSource[] = [];
   const connections: Array<[unknown, unknown]> = [];
+  let analyserLevel = 1;
 
   const makeNode = (kind: string): MockNode => ({
     kind,
@@ -111,7 +112,7 @@ function makeMockGraph() {
         fftSize: 0,
         smoothingTimeConstant: 0,
         getByteFrequencyData(data: Uint8Array) {
-          data.fill(255);
+          data.fill(Math.round(analyserLevel * 255));
         },
       };
       analysers.push(analyser);
@@ -148,7 +149,18 @@ function makeMockGraph() {
     },
   };
 
-  return { ctx, filters, compressors, analysers, gains, sources, connections };
+  return {
+    ctx,
+    filters,
+    compressors,
+    analysers,
+    gains,
+    sources,
+    connections,
+    setAnalyserLevel(level: number) {
+      analyserLevel = level;
+    },
+  };
 }
 
 test('averageSubBassBins isolates the 40-170 Hz analyser window', () => {
@@ -184,16 +196,20 @@ test('attachGraph builds the 58 Hz trunk DSP without a second media source', () 
   );
 
   const subBoost = graph.filters.find((f) => f.frequency.value === 58);
+  const subPeak = graph.filters.find((f) => f.frequency.value === 64);
   const cabin = graph.filters.find((f) => f.frequency.value === 18000);
   assert.ok(subBoost);
   assert.equal(subBoost.type, 'lowshelf');
-  assert.equal(subBoost.gain.value, 16);
+  assert.equal(subBoost.gain.value, 18);
+  assert.ok(subPeak);
+  assert.equal(subPeak.type, 'peaking');
+  assert.equal(subPeak.gain.value, 7);
   assert.ok(cabin);
   assert.equal(cabin.type, 'lowpass');
   assert.equal(graph.compressors[0].threshold.value, -14);
   assert.equal(graph.compressors[0].ratio.value, 8);
   assert.equal(graph.analysers[0].fftSize, 1024);
-  assert.equal(graph.analysers[0].smoothingTimeConstant, 0.65);
+  assert.equal(graph.analysers[0].smoothingTimeConstant, 0.45);
   // A single looping rattle voice is created up front, not per hit.
   assert.equal(graph.sources.length, 1);
   assert.equal(graph.sources[0].started, true);
@@ -223,13 +239,26 @@ test('step converts sub-bass hits into rattle bursts and respects proximity', ()
   assert.equal(system.rattleBursts, 1);
   assert.equal(graph.sources.length, 1);
 
-  // Outside the 14 m near field, a hit must not rattle the trunk.
+  // A sustained 808 must not machine-gun the rattle between beats.
+  graph.ctx.currentTime = 1.2;
+  system.step(true, 0, true);
+  assert.equal(system.rattleBursts, 1);
+
+  // Outside the 14 m near field, even a new bass hit must not rattle the trunk.
+  graph.setAnalyserLevel(0.2);
   graph.ctx.currentTime = 2;
+  system.step(false, 20, true);
+  graph.setAnalyserLevel(1);
+  graph.ctx.currentTime = 2.1;
   system.step(false, 20, true);
   assert.equal(system.rattleBursts, 1);
 
-  // Once inside again, the next hit after the 55 ms cap retriggers the same voice.
-  graph.ctx.currentTime = 2.1;
+  // A fresh rising attack inside the car retriggers the same preallocated voice.
+  graph.setAnalyserLevel(0.2);
+  graph.ctx.currentTime = 2.3;
+  system.step(true, 0, true);
+  graph.setAnalyserLevel(1);
+  graph.ctx.currentTime = 2.4;
   system.step(true, 0, true);
   assert.equal(system.rattleBursts, 2);
   assert.equal(graph.sources.length, 1);

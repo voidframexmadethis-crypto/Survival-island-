@@ -12,8 +12,8 @@
  * - one looping rattle voice is preallocated; hits only gate its gain.
  */
 
-const RATTLE_SECONDS = 0.045;
-const RATTLE_MIN_INTERVAL_SECONDS = 0.055;
+const RATTLE_SECONDS = 0.055;
+const RATTLE_MIN_INTERVAL_SECONDS = 0.085;
 const TRUNK_RATTLE_RANGE_METERS = 28;
 const TRUNK_RATTLE_NEAR_METERS = 14;
 
@@ -48,6 +48,7 @@ export class CarTrunkBassSystem {
   private readonly fftData = new Uint8Array(new ArrayBuffer(64));
   private rattleNoiseBuffer: AudioBuffer | null = null;
   private lastRattleTime = -Infinity;
+  private previousSubBass = 0;
   private rattleEnabled = true;
 
   /** 0.0 to 1.0, driven by the real playing track's sub-band energy. */
@@ -119,18 +120,18 @@ export class CarTrunkBassSystem {
   }
 
   private buildChain(ctx: AudioContext, output: AudioNode, masterLevel: number): void {
-    // 1. Deep slab shelf: 58 Hz with +16 dB of trunk-moving weight, plus a
+    // 1. Deep slab shelf: 58 Hz with +18 dB of trunk-moving weight, plus a
     // focused 64 Hz resonance so the sub reads through the mix.
     this.subBoostFilter = ctx.createBiquadFilter();
     this.subBoostFilter.type = 'lowshelf';
     this.subBoostFilter.frequency.value = 58;
-    this.subBoostFilter.gain.value = 16;
+    this.subBoostFilter.gain.value = 18;
 
     this.subPeakFilter = ctx.createBiquadFilter();
     this.subPeakFilter.type = 'peaking';
     this.subPeakFilter.frequency.value = 64;
     this.subPeakFilter.Q.value = 0.9;
-    this.subPeakFilter.gain.value = 5;
+    this.subPeakFilter.gain.value = 7;
 
     // 2. Cabin vs. outside-trunk acoustics.
     this.cabinLowpassFilter = ctx.createBiquadFilter();
@@ -151,7 +152,9 @@ export class CarTrunkBassSystem {
     // 1024 gives ~43 Hz bin spacing: enough resolution for sub-bass at half
     // the FFT cost of the meter pass.
     this.analyser.fftSize = 1024;
-    this.analyser.smoothingTimeConstant = 0.65;
+    // Lower smoothing keeps kick/808 attacks sharp enough to drive the rattle
+    // on the beat instead of smearing hits into a constant buzz.
+    this.analyser.smoothingTimeConstant = 0.45;
 
     this.masterGain = ctx.createGain();
     this.masterGain.gain.value = masterLevel;
@@ -209,12 +212,12 @@ export class CarTrunkBassSystem {
       0.006,
     );
 
-    const perspectiveMult = this.isInsideCar ? 0.28 : 0.78;
-    const level = Math.min(0.52, Math.max(0, intensity) * perspectiveMult);
+    const perspectiveMult = this.isInsideCar ? 0.36 : 0.95;
+    const level = Math.min(0.64, Math.max(0, intensity) * perspectiveMult);
     const gain = this.rattleGain.gain;
     gain.cancelScheduledValues(now);
     gain.setValueAtTime(level, now);
-    gain.exponentialRampToValueAtTime(0.001, now + 0.042);
+    gain.exponentialRampToValueAtTime(0.001, now + 0.052);
     gain.setValueAtTime(0, now + RATTLE_SECONDS);
   }
 
@@ -241,6 +244,7 @@ export class CarTrunkBassSystem {
 
     if (!radioPlaying) {
       this.bassEnergy *= 0.85;
+      this.previousSubBass = 0;
       if (!this.attachedToExternalGraph) {
         this.masterGain.gain.setTargetAtTime(0, now, 0.08);
       }
@@ -264,20 +268,28 @@ export class CarTrunkBassSystem {
 
     this.analyser.getByteFrequencyData(this.fftData);
     const subAvg = averageSubBassBins(this.fftData);
+    const bassRise = Math.max(0, subAvg - this.previousSubBass);
     this.bassEnergy = subAvg;
+    this.previousSubBass = subAvg;
 
+    // Rattle on the rising edge of a bass hit, not for every frame a long 808
+    // is held. That makes the sheet metal follow the uploaded track's beat.
     if (
-      subAvg > 0.58 &&
+      subAvg > 0.5 &&
+      bassRise > 0.075 &&
       (isInsideCar || distanceToTrunkMeters < TRUNK_RATTLE_NEAR_METERS) &&
       falloff > 0
     ) {
-      this.triggerTrunkRattle((subAvg - 0.58) / 0.42);
+      this.triggerTrunkRattle(
+        Math.min(1, 0.45 + bassRise * 1.1 + subAvg * 0.25),
+      );
     }
   }
 
   public dispose(): void {
     this.disposed = true;
     this.bassEnergy = 0;
+    this.previousSubBass = 0;
     try {
       this.sourceNode?.disconnect();
     } catch {

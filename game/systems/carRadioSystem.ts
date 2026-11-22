@@ -134,7 +134,7 @@ export function addCarSubwoofer(
   resonance.type = 'peaking';
   resonance.frequency.value = 72;
   resonance.Q.value = 1.1;
-  resonance.gain.value = 9;
+  resonance.gain.value = 12;
 
   // Amplifier-style harmonic saturation. Pushing harder adds the gritty upper
   // harmonics you hear when a real system is loud enough to rattle panels.
@@ -160,7 +160,7 @@ export function addCarSubwoofer(
   limiter.release.value = 0.16;
 
   const subGain = ctx.createGain();
-  subGain.gain.value = Math.min(1, 0.42 * profile.low);
+  subGain.gain.value = Math.min(1, 0.5 * profile.low);
 
   // Parallel branch: original stereo remains untouched.
   sourceBus.connect(subsonic);
@@ -515,7 +515,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     }
     if (this.subwoofer) {
       this.subwoofer.subGain.gain.setTargetAtTime(
-        Math.min(1, 0.42 * profile.low) * (next ? 1 : 0.62),
+        Math.min(1, 0.5 * profile.low) * (next ? 1 : 0.62),
         t,
         0.05,
       );
@@ -554,7 +554,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     }
     if (this.subwoofer && this.audioCtx) {
       this.subwoofer.subGain.gain.setTargetAtTime(
-        Math.min(1, 0.42 * profile.low) * (boost ? 1 : 0.62),
+        Math.min(1, 0.5 * profile.low) * (boost ? 1 : 0.62),
         this.audioCtx.currentTime,
         0.03,
       );
