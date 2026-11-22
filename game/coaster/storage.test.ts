@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CoasterProjectStore, MemoryStorage, sanitizeProject } from './storage';
-import { createDefaultProject } from './track';
+import { createTestLayoutProject } from './testFixture';
 
 test('projects save, list, load, duplicate, and delete independently', () => {
   const store = new CoasterProjectStore(new MemoryStorage());
-  const project = createDefaultProject();
+  const project = createTestLayoutProject();
   const saved = store.save(project);
   assert.equal(store.list().length, 1);
   assert.equal(store.list()[0].name, project.name);
@@ -25,7 +25,7 @@ test('projects save, list, load, duplicate, and delete independently', () => {
 
 test('draft autosave restores the exact working project', () => {
   const store = new CoasterProjectStore(new MemoryStorage());
-  const project = createDefaultProject();
+  const project = createTestLayoutProject();
   project.name = 'Draft Layout';
   store.saveDraft(project);
   const draft = store.loadDraft();
@@ -38,7 +38,7 @@ test('draft autosave restores the exact working project', () => {
 
 test('JSON export and import preserve track data with a fresh identity', () => {
   const store = new CoasterProjectStore(new MemoryStorage());
-  const project = createDefaultProject();
+  const project = createTestLayoutProject();
   const json = store.exportJson(project);
   const imported = store.importJson(json);
   assert.notEqual(imported.id, project.id);
@@ -66,7 +66,7 @@ test('sanitizer rejects missing points and clamps invalid numbers', () => {
 
 test('train designs persist separately from projects', () => {
   const store = new CoasterProjectStore(new MemoryStorage());
-  const design = createDefaultProject().train;
+  const design = createTestLayoutProject().train;
   store.saveTrain(design);
   assert.equal(store.listTrains().length, 1);
   assert.equal(store.listTrains()[0].name, design.name);
@@ -86,9 +86,9 @@ test('storage writes only in the coaster studio namespace', () => {
     },
   };
   const store = new CoasterProjectStore(spy);
-  store.save(createDefaultProject());
-  store.saveDraft(createDefaultProject());
-  store.saveTrain(createDefaultProject().train);
+  store.save(createTestLayoutProject());
+  store.saveDraft(createTestLayoutProject());
+  store.saveTrain(createTestLayoutProject().train);
   assert.ok(keys.size >= 3);
   for (const key of keys) {
     assert.match(key, /^si_ultimate_coaster_studio_v1/);

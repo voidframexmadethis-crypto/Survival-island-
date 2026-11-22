@@ -1,6 +1,26 @@
-import { newId, createDefaultTrain } from './track';
+import {
+  createDefaultCameraPose,
+  createDefaultSupportSettings,
+  createDefaultTrain,
+  newId,
+} from './track';
+import {
+  COASTER_TYPES,
+  DEFAULT_COASTER_TYPE_ID,
+  DEFAULT_MANUFACTURER_ID,
+} from './catalog';
 import { validateTrainDesign } from './trainDesigner';
-import type { CoasterProject, TrackPoint, TrackPointKind, TrainDesign } from './types';
+import type {
+  CameraPose,
+  CoasterProject,
+  CoasterTypeId,
+  ManualSupport,
+  SupportMaterial,
+  SupportSettings,
+  TrackPoint,
+  TrackPointKind,
+  TrainDesign,
+} from './types';
 
 export const STORAGE_PREFIX = 'si_ultimate_coaster_studio_v1';
 export const PROJECTS_KEY = `${STORAGE_PREFIX}:projects`;
@@ -32,6 +52,8 @@ export class MemoryStorage implements StorageLike {
 const POINT_KINDS: TrackPointKind[] = [
   'track',
   'station',
+  'unload_station',
+  'storage',
   'chain_lift',
   'cable_lift',
   'launch',
@@ -73,6 +95,68 @@ function safePoint(raw: unknown, index: number): TrackPoint | null {
   };
 }
 
+const SUPPORT_MATERIALS: SupportMaterial[] = ['steel', 'wood', 'concrete'];
+
+function safeSupports(raw: unknown): SupportSettings {
+  const fallback = createDefaultSupportSettings();
+  if (!raw || typeof raw !== 'object') return fallback;
+  const source = raw as Partial<SupportSettings>;
+  const manual = Array.isArray(source.manual)
+    ? source.manual
+        .slice(0, 120)
+        .map((entry, index): ManualSupport | null => {
+          if (!entry || typeof entry !== 'object') return null;
+          const support = entry as Partial<ManualSupport>;
+          return {
+            id: typeof support.id === 'string' && support.id ? support.id : `support_${index}`,
+            x: finite(support.x),
+            y: finite(support.y),
+            z: finite(support.z),
+            height: Math.min(140, Math.max(0.8, finite(support.height, 4))),
+            material: SUPPORT_MATERIALS.includes(support.material as SupportMaterial)
+              ? (support.material as SupportMaterial)
+              : fallback.material,
+            crossBrace: support.crossBrace !== false,
+          };
+        })
+        .filter((entry): entry is ManualSupport => entry !== null)
+    : [];
+  return {
+    auto: source.auto !== false,
+    material: SUPPORT_MATERIALS.includes(source.material as SupportMaterial)
+      ? (source.material as SupportMaterial)
+      : fallback.material,
+    crossBrace: source.crossBrace !== false,
+    manual,
+  };
+}
+
+function safeCamera(raw: unknown): CameraPose {
+  const fallback = createDefaultCameraPose();
+  if (!raw || typeof raw !== 'object') return fallback;
+  const source = raw as Partial<CameraPose>;
+  const position = source.position;
+  const target = source.target;
+  return {
+    projection: source.projection === 'orthographic' ? 'orthographic' : 'perspective',
+    position: {
+      x: finite(position?.x, fallback.position.x),
+      y: finite(position?.y, fallback.position.y),
+      z: finite(position?.z, fallback.position.z),
+    },
+    target: {
+      x: finite(target?.x, fallback.target.x),
+      y: finite(target?.y, fallback.target.y),
+      z: finite(target?.z, fallback.target.z),
+    },
+    rideMode: ['free', 'front', 'rear', 'passenger', 'side', 'trackside'].includes(
+      source.rideMode ?? '',
+    )
+      ? (source.rideMode as CameraPose['rideMode'])
+      : 'free',
+  };
+}
+
 export function sanitizeProject(raw: unknown): CoasterProject {
   if (!raw || typeof raw !== 'object') throw new Error('Project data is not an object.');
   const source = raw as Partial<CoasterProject>;
@@ -87,6 +171,9 @@ export function sanitizeProject(raw: unknown): CoasterProject {
     ...(source.train && typeof source.train === 'object' ? (source.train as TrainDesign) : {}),
     prompt: source.train?.prompt ?? '',
   });
+  const coasterTypeId: CoasterTypeId = COASTER_TYPES.some((type) => type.id === source.coasterTypeId)
+    ? (source.coasterTypeId as CoasterTypeId)
+    : DEFAULT_COASTER_TYPE_ID;
   const now = Date.now();
   return {
     schemaVersion: 1,
@@ -101,6 +188,14 @@ export function sanitizeProject(raw: unknown): CoasterProject {
     supportColor: /^#[0-9a-f]{6}$/i.test(source.supportColor ?? '') ? source.supportColor! : '#5d6a72',
     train,
     trainCount: Math.min(3, Math.max(1, Math.round(finite(source.trainCount, 1)))),
+    manufacturerId:
+      typeof source.manufacturerId === 'string' && source.manufacturerId
+        ? source.manufacturerId.slice(0, 80)
+        : DEFAULT_MANUFACTURER_ID,
+    coasterTypeId,
+    editingMode: source.editingMode === 'advanced' ? 'advanced' : 'beginner',
+    supports: safeSupports(source.supports),
+    camera: safeCamera(source.camera),
   };
 }
 
@@ -160,6 +255,18 @@ export class CoasterProjectStore {
   remove(id: string): void {
     const projects = this.readArray<CoasterProject>(PROJECTS_KEY).filter((project) => project.id !== id);
     this.storage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+  }
+
+  rename(id: string, name: string): CoasterProject | null {
+    const project = this.load(id);
+    if (!project) return null;
+    const trimmed = name.trim();
+    if (!trimmed) return null;
+    return this.save({ ...project, name: trimmed.slice(0, 80) });
+  }
+
+  exists(id: string): boolean {
+    return this.readArray<CoasterProject>(PROJECTS_KEY).some((project) => project.id === id);
   }
 
   duplicate(id: string): CoasterProject | null {

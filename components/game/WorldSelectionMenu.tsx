@@ -829,11 +829,13 @@ export function WorldSelectionMenu({
                       </span>
                     </span>
                     <span className="mt-1 block text-[11px] leading-snug text-stone-300">
-                      A separate flat, empty creative world for UC3-style spline track building, mechanical systems,
-                      prompt-built trains and ride physics. Never touches island saves.
+                      A separate flat, empty creative world for manual spline track building, working mechanical systems,
+                      the manufacturer catalog, 3D train customization and ride physics. Every coaster is built from
+                      scratch. Never touches island saves.
                     </span>
                     <span className="mt-1.5 flex flex-wrap gap-1.5 text-[9px] font-bold uppercase tracking-wider text-sky-200/90">
-                      <span className="rounded border border-sky-400/30 bg-sky-400/10 px-1.5 py-0.5">3D spline editor</span>
+                      <span className="rounded border border-sky-400/30 bg-sky-400/10 px-1.5 py-0.5">Manual-only builds</span>
+                      <span className="rounded border border-sky-400/30 bg-sky-400/10 px-1.5 py-0.5">Manufacturer catalog</span>
                       <span className="rounded border border-sky-400/30 bg-sky-400/10 px-1.5 py-0.5">Train designer</span>
                       <span className="rounded border border-sky-400/30 bg-sky-400/10 px-1.5 py-0.5">Ride simulation</span>
                     </span>

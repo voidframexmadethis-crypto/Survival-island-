@@ -48,6 +48,10 @@ export function buildBlockRanges(samples: TrackSample[]): BlockRange[] {
   for (const sample of samples) {
     if (sample.kind === 'block_brake' && sample.distance > 1) {
       cuts.push({ distance: sample.distance, kind: 'Block brake' });
+    } else if (sample.kind === 'unload_station' && sample.distance > 1) {
+      cuts.push({ distance: sample.distance, kind: 'Unload block' });
+    } else if (sample.kind === 'storage' && sample.distance > 1) {
+      cuts.push({ distance: sample.distance, kind: 'Storage block' });
     }
   }
   if (!cuts.some((cut) => cut.kind === 'Block brake')) {

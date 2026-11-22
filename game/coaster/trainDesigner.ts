@@ -100,6 +100,25 @@ function extractWheels(prompt: string): WheelStyle {
   return /exposed|visible|open wheel|wheel assembly/i.test(prompt) ? 'exposed' : 'covered';
 }
 
+function extractChassis(prompt: string): TrainDesign['chassisStyle'] {
+  if (/monocoque|unibody|structural shell/i.test(prompt)) return 'monocoque';
+  if (/enclosed|closed body|full body|panelled|paneled/i.test(prompt)) return 'enclosed';
+  return 'open';
+}
+
+function extractNose(prompt: string): TrainDesign['noseStyle'] {
+  if (/shark|aggressive nose|splitter/i.test(prompt)) return 'shark';
+  if (/pointed|needle|sharp nose/i.test(prompt)) return 'pointed';
+  if (/flat nose|blunt nose|box nose/i.test(prompt)) return 'flat';
+  return 'rounded';
+}
+
+function extractSeatMaterial(prompt: string): TrainDesign['seatMaterial'] {
+  if (/timber seat|wooden seat|wood seat/i.test(prompt)) return 'timber';
+  if (/molded|moulded|composite seat|bucket seat/i.test(prompt)) return 'molded';
+  return 'padded';
+}
+
 function extractColors(prompt: string): string[] {
   const found: { index: number; color: string }[] = [];
   for (const match of prompt.matchAll(HEX_RE)) {
@@ -152,6 +171,9 @@ export function trainDesignFromPrompt(
   const accent = colors[2] ?? base?.accentColor ?? '#f2c230';
   const { seatsPerRow, rowsPerCar } = extractSeats(text);
   const bodyStyle = extractBody(text);
+  const chassisStyle = extractChassis(text);
+  const noseStyle = extractNose(text);
+  const seatMaterial = extractSeatMaterial(text);
   const restraint = extractRestraint(text);
   const wheels = extractWheels(text);
   const cars = extractCars(text);
@@ -160,6 +182,7 @@ export function trainDesignFromPrompt(
   const notes = [
     `${cars}-car ${bodyStyle} body`,
     `${rowsPerCar} rows × ${seatsPerRow} seats`,
+    `${chassisStyle} chassis · ${noseStyle} nose · ${seatMaterial} seats`,
     `${restraint === 'otsr' ? 'Over-the-shoulder' : restraint === 'lap_bar' ? 'Lap-bar' : restraint === 'harness' ? 'Harness' : 'No'} restraints`,
     wheels === 'exposed' ? 'Exposed wheel assemblies' : 'Covered wheel bogies',
     aeroFairing ? 'Aerodynamic bodywork' : 'Open chassis bodywork',
@@ -174,8 +197,12 @@ export function trainDesignFromPrompt(
     rowsPerCar,
     seatsPerRow,
     bodyStyle,
+    chassisStyle,
+    noseStyle,
+    seatMaterial,
     restraint,
     wheels,
+    wheelColor: base?.wheelColor ?? '#202329',
     primaryColor: primary,
     secondaryColor: secondary,
     accentColor: accent,
@@ -269,10 +296,20 @@ export function validateTrainDesign(design: TrainDesign): TrainDesign {
     bodyStyle: ['steel', 'launch', 'wood', 'wing', 'invert', 'flying'].includes(design.bodyStyle)
       ? design.bodyStyle
       : fallback.bodyStyle,
+    chassisStyle: ['open', 'enclosed', 'monocoque'].includes(design.chassisStyle)
+      ? design.chassisStyle
+      : fallback.chassisStyle,
+    noseStyle: ['rounded', 'pointed', 'flat', 'shark'].includes(design.noseStyle)
+      ? design.noseStyle
+      : fallback.noseStyle,
+    seatMaterial: ['padded', 'molded', 'timber'].includes(design.seatMaterial)
+      ? design.seatMaterial
+      : fallback.seatMaterial,
     restraint: ['lap_bar', 'otsr', 'harness', 'none'].includes(design.restraint)
       ? design.restraint
       : fallback.restraint,
     wheels: ['exposed', 'covered'].includes(design.wheels) ? design.wheels : fallback.wheels,
+    wheelColor: /^#[0-9a-f]{6}$/i.test(design.wheelColor) ? design.wheelColor : fallback.wheelColor,
     primaryColor: /^#[0-9a-f]{6}$/i.test(design.primaryColor) ? design.primaryColor : fallback.primaryColor,
     secondaryColor: /^#[0-9a-f]{6}$/i.test(design.secondaryColor)
       ? design.secondaryColor
@@ -285,5 +322,5 @@ export function validateTrainDesign(design: TrainDesign): TrainDesign {
 
 export function describeTrain(design: TrainDesign): string {
   const seats = design.cars * design.rowsPerCar * design.seatsPerRow;
-  return `${design.cars} cars · ${seats} riders · ${design.bodyStyle} chassis · ${design.restraint.replace('_', ' ')}`;
+  return `${design.cars} cars · ${seats} riders · ${design.bodyStyle}/${design.chassisStyle} chassis · ${design.restraint.replace('_', ' ')}`;
 }

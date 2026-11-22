@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CoasterSimulation } from './physics';
-import { createDefaultProject, makePoint, sampleTrack, trackLength, vec } from './track';
+import { makePoint, sampleTrack, trackLength, vec } from './track';
+import { createTestLayoutProject } from './testFixture';
 import type { TrackSample } from './types';
 
 function makeSamples(): TrackSample[] {
@@ -19,7 +20,7 @@ function makeSamples(): TrackSample[] {
 }
 
 test('default layout produces a running train and real telemetry', () => {
-  const project = createDefaultProject();
+  const project = createTestLayoutProject();
   project.trainCount = 1;
   const samples = sampleTrack(project.points, project.closed, 16);
   const sim = new CoasterSimulation(samples, true, 1, {
@@ -73,7 +74,7 @@ test('block safety prevents dispatch into an occupied block', () => {
 });
 
 test('simulation never emits NaN through a full multi-minute run', () => {
-  const project = createDefaultProject();
+  const project = createTestLayoutProject();
   const samples = sampleTrack(project.points, project.closed, 20);
   const sim = new CoasterSimulation(samples, true, 2, {
     targetSpeeds: project.points.map((point) => point.targetSpeed),
@@ -93,7 +94,7 @@ test('simulation never emits NaN through a full multi-minute run', () => {
 });
 
 test('a dispatched train completes the circuit and parks at the station', () => {
-  const project = createDefaultProject();
+  const project = createTestLayoutProject();
   const samples = sampleTrack(project.points, project.closed, 20);
   const sim = new CoasterSimulation(samples, true, 1, {
     targetSpeeds: project.points.map((point) => point.targetSpeed),
@@ -108,7 +109,7 @@ test('a dispatched train completes the circuit and parks at the station', () => 
 });
 
 test('a second train waits for the first to clear the platform and block', () => {
-  const project = createDefaultProject();
+  const project = createTestLayoutProject();
   const samples = sampleTrack(project.points, project.closed, 20);
   const sim = new CoasterSimulation(samples, true, 2, {
     targetSpeeds: project.points.map((point) => point.targetSpeed),

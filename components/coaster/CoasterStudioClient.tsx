@@ -9,15 +9,21 @@ import {
   CheckCircle2,
   Copy,
   Download,
+  Eye,
+  Factory,
   Focus,
   FolderOpen,
   Gauge,
+  Globe2,
   Grid3x3,
   Layers,
   Loader2,
+  Search,
+  SlidersHorizontal,
   MousePointer2,
   Move3d,
   Pause,
+  Pencil,
   Play,
   Plus,
   Redo2,
@@ -45,14 +51,35 @@ import {
   clamp,
   computeTrackStats,
   createBlankProject,
-  createDefaultProject,
+  dePumpPoints,
   duplicatePoint,
+  addManualSupport,
   newId,
+  offsetPointLateral,
+  projectFromCsv,
+  projectToCsv,
+  removeManualSupport,
   removePoint,
   sampleTrack,
+  segmentLength,
+  setSegmentLength,
+  updateManualSupport,
   updatePoint,
   validateTrack,
 } from '@/game/coaster/track';
+import {
+  CATALOG_STATS,
+  COASTER_TYPES,
+  MANUFACTURER_CATEGORIES,
+  MANUFACTURERS,
+  defaultTrainForType,
+  getCoasterType,
+  getManufacturer,
+  manufacturerSupportsElement,
+  manufacturerSupportsType,
+  searchManufacturers,
+  type ManufacturerCategory,
+} from '@/game/coaster/catalog';
 import {
   CoasterProjectStore,
   type ProjectSummary,
@@ -63,10 +90,15 @@ import {
   describeTrain,
 } from '@/game/coaster/trainDesigner';
 import type {
+  CameraProjection,
   CoasterElementKind,
   CoasterProject,
+  CoasterTypeId,
+  EditingMode,
   MechanicalSnapshot,
   RestraintKind,
+  RideCameraMode,
+  SupportMaterial,
   TrainBodyStyle,
   TrainDesign,
   TrainTelemetry,
@@ -76,11 +108,12 @@ import type {
   Vec3,
 } from '@/game/coaster/types';
 
-type Tab = 'build' | 'elements' | 'properties' | 'trains' | 'mechanics' | 'test' | 'projects';
+type Tab = 'build' | 'elements' | 'catalog' | 'properties' | 'trains' | 'mechanics' | 'test' | 'projects';
 
 const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
   { key: 'build', label: 'Build', icon: Grid3x3 },
   { key: 'elements', label: 'Elements', icon: Layers },
+  { key: 'catalog', label: 'Catalog', icon: Factory },
   { key: 'properties', label: 'Point', icon: Move3d },
   { key: 'trains', label: 'Trains', icon: TrainFront },
   { key: 'mechanics', label: 'Mechanics', icon: Wrench },
@@ -91,6 +124,8 @@ const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
 const KINDS: TrackPointKind[] = [
   'track',
   'station',
+  'unload_station',
+  'storage',
   'chain_lift',
   'cable_lift',
   'launch',
@@ -110,6 +145,8 @@ const EMPTY_STATS: TrackStats = {
   inversions: 0,
   maxBank: 0,
   estimatedPeakSpeedKmh: 0,
+  estimatedMaxLateralG: 0,
+  estimatedMaxVerticalG: 0,
   pointCount: 0,
 };
 
@@ -164,7 +201,7 @@ export function CoasterStudioClient() {
   const undoRef = useRef<() => void>(() => {});
   const redoRef = useRef<() => void>(() => {});
 
-  const [project, setProject] = useState<CoasterProject>(createDefaultProject);
+  const [project, setProject] = useState<CoasterProject>(() => createBlankProject());
   const projectRef = useRef(project);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('build');
@@ -178,7 +215,6 @@ export function CoasterStudioClient() {
   const [stats, setStats] = useState<TrackStats>(EMPTY_STATS);
   const [notice, setNotice] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [onboard, setOnboard] = useState(false);
   const [muted, setMuted] = useState(false);
   const [autoDispatch, setAutoDispatch] = useState(false);
   const [designPrompt, setDesignPrompt] = useState(project.train.prompt);
@@ -186,6 +222,10 @@ export function CoasterStudioClient() {
   const [trainDesigns, setTrainDesigns] = useState<TrainDesign[]>([]);
   const [generating, setGenerating] = useState(false);
   const [sceneError, setSceneError] = useState<string | null>(null);
+  const [catalogCategory, setCatalogCategory] = useState<ManufacturerCategory>('united_states');
+  const [catalogQuery, setCatalogQuery] = useState('');
+  const [projection, setProjectionState] = useState<CameraProjection>(project.camera.projection);
+  const [rideCamera, setRideCameraState] = useState<RideCameraMode>(project.camera.rideMode);
   const trainService = useMemo(() => {
     const endpoint = process.env.NEXT_PUBLIC_COASTER_TRAIN_PROVIDER_URL;
     return new TrainDesignService({
@@ -234,6 +274,8 @@ export function CoasterStudioClient() {
         setProject(draft);
         setDesign(draft.train);
         setDesignPrompt(draft.train.prompt);
+        setProjectionState(draft.camera.projection);
+        setRideCameraState(draft.camera.rideMode);
         setStats(computeTrackStats(sampleTrack(draft.points, draft.closed, 10), draft.points.length));
         sceneRef.current?.setProject(draft);
       }
@@ -269,6 +311,8 @@ export function CoasterStudioClient() {
     sceneRef.current = scene;
     scene.setTool(tool);
     scene.setSnap(snap);
+    scene.setProjection(projectRef.current.camera.projection);
+    scene.setRideCamera(projectRef.current.camera.rideMode);
     scene.focusTrack();
     return () => {
       scene.dispose();
@@ -280,7 +324,14 @@ export function CoasterStudioClient() {
 
   useEffect(() => {
     if (!hydrated) return;
-    const timer = setTimeout(() => storeRef.current?.saveDraft(project), 650);
+    const timer = setTimeout(
+      () =>
+        storeRef.current?.saveDraft({
+          ...project,
+          camera: sceneRef.current?.getCameraPose() ?? project.camera,
+        }),
+      650,
+    );
     return () => clearTimeout(timer);
   }, [project, hydrated]);
 
@@ -391,6 +442,13 @@ export function CoasterStudioClient() {
   const canUndo = historyCounts.past > 0;
   const canRedo = historyCounts.future > 0;
   const installs = mechanical;
+  const manufacturer = getManufacturer(project.manufacturerId);
+  const coasterType = getCoasterType(project.coasterTypeId);
+  const isAdvanced = project.editingMode === 'advanced';
+  const catalogManufacturers = searchManufacturers(catalogQuery).filter(
+    (entry) => entry.category === catalogCategory,
+  );
+  const typeCompatible = manufacturer ? manufacturerSupportsType(manufacturer, project.coasterTypeId) : true;
 
   const patchSelected = (patch: Parameters<typeof updatePoint>[2]) => {
     if (!selectedPoint) return;
@@ -407,7 +465,14 @@ export function CoasterStudioClient() {
 
   const saveProject = () => {
     if (!storeRef.current) return;
-    const saved = storeRef.current.save(project);
+    if (
+      storeRef.current.exists(project.id) &&
+      !window.confirm(`Overwrite the saved coaster “${project.name}”? Your draft remains available.`)
+    ) {
+      return;
+    }
+    const withCamera = { ...project, camera: sceneRef.current?.getCameraPose() ?? project.camera };
+    const saved = storeRef.current.save(withCamera);
     projectRef.current = saved;
     setProject(saved);
     refreshProjectList();
@@ -420,6 +485,7 @@ export function CoasterStudioClient() {
     if (!name?.trim()) return;
     const copy = storeRef.current.save({
       ...project,
+      camera: sceneRef.current?.getCameraPose() ?? project.camera,
       id: newId('project'),
       name: name.trim(),
       createdAt: Date.now(),
@@ -437,7 +503,11 @@ export function CoasterStudioClient() {
     applyProject(blank, false, null);
     setDesign(blank.train);
     setDesignPrompt(blank.train.prompt);
+    setProjectionState(blank.camera.projection);
+    setRideCameraState(blank.camera.rideMode);
     setIsPlaying(false);
+    sceneRef.current?.setProjection(blank.camera.projection);
+    sceneRef.current?.setRideCamera(blank.camera.rideMode);
     sceneRef.current?.reset();
     setTab('build');
   };
@@ -449,6 +519,8 @@ export function CoasterStudioClient() {
       applyProject(imported, true, null);
       setDesign(imported.train);
       setDesignPrompt(imported.train.prompt);
+      setProjectionState(imported.camera.projection);
+      setRideCameraState(imported.camera.rideMode);
       toast(`Imported “${imported.name}”.`);
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Could not import that project.');
@@ -457,7 +529,8 @@ export function CoasterStudioClient() {
 
   const exportProject = () => {
     if (!storeRef.current) return;
-    const blob = new Blob([storeRef.current.exportJson(project)], { type: 'application/json' });
+    const withCamera = { ...project, camera: sceneRef.current?.getCameraPose() ?? project.camera };
+    const blob = new Blob([storeRef.current.exportJson(withCamera)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
@@ -465,6 +538,31 @@ export function CoasterStudioClient() {
     anchor.click();
     URL.revokeObjectURL(url);
     toast('Project JSON exported.');
+  };
+
+  const exportCsv = () => {
+    const blob = new Blob([projectToCsv(project)], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${project.name.replace(/[^a-z0-9-_]+/gi, '-').toLowerCase() || 'coaster'}-track.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    toast('Track geometry CSV exported.');
+  };
+
+  const importCsv = async (file: File | null) => {
+    if (!file) return;
+    try {
+      const imported = projectFromCsv(projectRef.current, await file.text());
+      applyProject(imported, true, null);
+      setDesign(imported.train);
+      setDesignPrompt(imported.train.prompt);
+      setTab('build');
+      toast(`Imported ${imported.points.length} track points from CSV as a new project.`);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Could not import that CSV.');
+    }
   };
 
   const generateTrain = async () => {
@@ -510,15 +608,76 @@ export function CoasterStudioClient() {
     applyProject(loaded, true, null);
     setDesign(loaded.train);
     setDesignPrompt(loaded.train.prompt);
+    setProjectionState(loaded.camera.projection);
+    setRideCameraState(loaded.camera.rideMode);
+    sceneRef.current?.setProjection(loaded.camera.projection);
+    sceneRef.current?.setRideCamera(loaded.camera.rideMode);
     sceneRef.current?.reset();
     setIsPlaying(false);
     toast(`Loaded “${loaded.name}”.`);
   };
 
+  const renameProject = (id: string, currentName: string) => {
+    const name = window.prompt('Rename this coaster project:', currentName);
+    if (!name?.trim()) return;
+    const renamed = storeRef.current?.rename(id, name);
+    if (!renamed) return;
+    refreshProjectList();
+    if (projectRef.current.id === id) {
+      projectRef.current = { ...projectRef.current, name: renamed.name };
+      setProject((current) => ({ ...current, name: renamed.name }));
+    }
+    toast(`Renamed to “${renamed.name}”.`);
+  };
+
   const deleteProject = (id: string) => {
-    if (!window.confirm('Delete this saved coaster project? This does not affect island saves.')) return;
+    if (!window.confirm('Delete this saved coaster project? This does not affect island drafts or island saves.')) return;
     storeRef.current?.remove(id);
     refreshProjectList();
+  };
+
+  const chooseCoasterType = (typeId: CoasterTypeId) => {
+    const defaults = defaultTrainForType(typeId);
+    const type = getCoasterType(typeId);
+    const train = { ...project.train, ...defaults };
+    const next: CoasterProject = {
+      ...project,
+      coasterTypeId: typeId,
+      train,
+      supports: type
+        ? { ...project.supports, material: type.supportMaterial }
+        : project.supports,
+    };
+    applyProject(next, true, selectedId);
+    setDesign(train);
+    setDesignPrompt(train.prompt);
+    toast(`${type?.label ?? typeId} type selected. Build every track section yourself.`);
+  };
+
+  const chooseManufacturer = (manufacturerId: string) => {
+    const manufacturer = getManufacturer(manufacturerId);
+    applyProject({ ...project, manufacturerId }, true, selectedId);
+    toast(
+      manufacturer
+        ? `${manufacturer.name} profile selected — ${manufacturer.specialization}. No track has been generated.`
+        : 'Independent profile selected. No track has been generated.',
+    );
+  };
+
+  const changeProjection = (next: CameraProjection) => {
+    setProjectionState(next);
+    sceneRef.current?.setProjection(next);
+    const updated = { ...project, camera: { ...project.camera, projection: next } };
+    projectRef.current = updated;
+    setProject(updated);
+  };
+
+  const changeRideCamera = (mode: RideCameraMode) => {
+    setRideCameraState(mode);
+    sceneRef.current?.setRideCamera(mode);
+    const updated = { ...project, camera: { ...project.camera, rideMode: mode } };
+    projectRef.current = updated;
+    setProject(updated);
   };
 
   const play = async () => {
@@ -545,15 +704,8 @@ export function CoasterStudioClient() {
 
   const resetRide = () => {
     sceneRef.current?.reset();
-    sceneRef.current?.setOnboard(false);
     setIsPlaying(false);
-    setOnboard(false);
-  };
-
-  const toggleOnboard = () => {
-    const enabled = !onboard;
-    setOnboard(enabled);
-    sceneRef.current?.setOnboard(enabled);
+    changeRideCamera('free');
   };
 
   const toggleMuted = () => {
@@ -592,6 +744,9 @@ export function CoasterStudioClient() {
             aria-label="Coaster project name"
             className="mt-0.5 w-full max-w-[260px] truncate border-0 bg-transparent p-0 text-sm font-bold text-stone-100 outline-none focus:text-amber-100"
           />
+          <div className="hidden truncate text-[9px] uppercase tracking-wider text-stone-500 sm:block">
+            {manufacturer?.name ?? 'Independent profile'} · {coasterType?.label ?? project.coasterTypeId}
+          </div>
         </div>
         <div className="hidden items-center gap-2 sm:flex">
           <button type="button" onClick={undo} disabled={!canUndo} className={smallButton()} title="Undo (Ctrl+Z)">
@@ -601,6 +756,28 @@ export function CoasterStudioClient() {
             <Redo2 className="h-4 w-4" />
           </button>
         </div>
+        <button
+          type="button"
+          onClick={() => changeProjection(projection === 'perspective' ? 'orthographic' : 'perspective')}
+          className={smallButton(projection === 'orthographic')}
+          title="Toggle perspective / orthographic construction camera"
+        >
+          <Eye className="h-4 w-4" />
+          <span className="hidden lg:inline">{projection === 'orthographic' ? 'Ortho' : 'Persp'}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const nextMode: EditingMode = isAdvanced ? 'beginner' : 'advanced';
+            applyProject({ ...project, editingMode: nextMode }, false, selectedId);
+            toast(nextMode === 'advanced' ? 'Advanced editing enabled.' : 'Beginner editing enabled.');
+          }}
+          className={smallButton(isAdvanced)}
+          title="Beginner / advanced editing"
+        >
+          <SlidersHorizontal className="h-4 w-4" />
+          <span className="hidden xl:inline">{isAdvanced ? 'Advanced' : 'Beginner'}</span>
+        </button>
         <button type="button" onClick={saveProject} className={smallButton()}>
           <Save className="h-4 w-4" />
           <span className="hidden sm:inline">Save</span>
@@ -662,22 +839,45 @@ export function CoasterStudioClient() {
                 </select>
               </label>
             </div>
-            <div className="pointer-events-auto flex items-center gap-1.5 rounded-xl border border-stone-900/30 bg-stone-950/75 p-1 backdrop-blur">
-              <button type="button" onClick={() => sceneRef.current?.focusTrack()} className={smallButton()} title="Frame the whole layout">
-                <Focus className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const index = selectedId ? project.points.findIndex((point) => point.id === selectedId) : -1;
-                  if (index >= 0) sceneRef.current?.focusPoint(index);
-                  else sceneRef.current?.focusTrack();
-                }}
-                className={smallButton()}
-                title="Focus selected point"
-              >
-                <Crosshair className="h-4 w-4" />
-              </button>
+            <div className="pointer-events-auto flex flex-col items-end gap-1">
+              <div className="flex items-center gap-1.5 rounded-xl border border-stone-900/30 bg-stone-950/75 p-1 backdrop-blur">
+                <button type="button" onClick={() => sceneRef.current?.focusTrack()} className={smallButton()} title="Frame the whole layout">
+                  <Focus className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const index = selectedId ? project.points.findIndex((point) => point.id === selectedId) : -1;
+                    if (index >= 0) sceneRef.current?.focusPoint(index);
+                    else sceneRef.current?.focusTrack();
+                  }}
+                  className={smallButton()}
+                  title="Focus selected point"
+                >
+                  <Crosshair className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="flex items-center gap-1 rounded-xl border border-stone-900/30 bg-stone-950/75 p-1 backdrop-blur">
+                {([
+                  ['top', 'Top'],
+                  ['front', 'Front'],
+                  ['side', 'Side'],
+                  ['iso', '3/4'],
+                ] as const).map(([preset, label]) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => {
+                      sceneRef.current?.setCameraPreset(preset);
+                      setRideCameraState('free');
+                    }}
+                    className="rounded px-1.5 py-1 text-[9px] font-black uppercase tracking-wider text-stone-300 hover:bg-stone-800 hover:text-amber-200"
+                    title={`Align camera: ${label}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -686,6 +886,7 @@ export function CoasterStudioClient() {
               ['Length', `${fmt(stats.length, 0)} m`],
               ['Peak', `${fmt(stats.maxHeight, 1)} m`],
               ['Est. speed', `${fmt(stats.estimatedPeakSpeedKmh, 0)} km/h`],
+              ['Est. G', `${fmt(stats.estimatedMaxVerticalG, 2)} G`],
               ['Inversions', `${stats.inversions}`],
               ['Points', `${project.points.length}`],
             ].map(([label, value]) => (
@@ -712,7 +913,7 @@ export function CoasterStudioClient() {
             <div className="pointer-events-none absolute right-2.5 top-16 rounded-xl border border-stone-900/30 bg-stone-950/75 px-3 py-2 text-right backdrop-blur">
               <div className="font-mono text-lg font-black leading-none text-amber-300">{fmt(telemetry.speedKmh, 1)}</div>
               <div className="text-[9px] font-bold uppercase tracking-wider text-stone-400">km/h</div>
-              <div className="mt-1 font-mono text-[10px] text-stone-300">{fmt(telemetry.gForce, 2)} G · {telemetry.state}</div>
+              <div className="mt-1 font-mono text-[10px] text-stone-300">{fmt(telemetry.gForce, 2)} G · {fmt(telemetry.lateralG, 2)} lat · {telemetry.state}</div>
             </div>
           )}
         </main>
@@ -838,6 +1039,125 @@ export function CoasterStudioClient() {
                 </section>
 
                 <section className="rounded-xl border border-stone-800 bg-stone-900/40 p-3">
+                  <h2 className="mb-1.5 flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider text-stone-300">
+                    <Wand2 className="h-3.5 w-3.5 text-amber-300" /> Transition smoothing
+                  </h2>
+                  <p className="mb-2 text-[10px] leading-relaxed text-stone-500">
+                    De-pump blends uneven height and bank transitions without moving the layout footprint.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const points = dePumpPoints(project.points, project.closed, isAdvanced ? 0.7 : 0.45);
+                      applyProject({ ...project, points }, true, selectedId);
+                      toast('De-pump smoothing applied to height and bank transitions.');
+                    }}
+                    className={`${secondaryButton()} w-full`}
+                  >
+                    <Wand2 className="h-4 w-4" /> De-pump / smooth transitions
+                  </button>
+                </section>
+
+                {isAdvanced ? (
+                <section className="rounded-xl border border-stone-800 bg-stone-900/40 p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <h2 className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider text-stone-300">
+                      <Layers className="h-3.5 w-3.5 text-amber-300" /> Structural supports
+                    </h2>
+                    <span className="rounded border border-stone-700 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider text-stone-400">
+                      {project.supports.manual.length} manual
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => applyProject({ ...project, supports: { ...project.supports, auto: !project.supports.auto } }, true, selectedId)}
+                      className={smallButton(project.supports.auto)}
+                    >
+                      Auto {project.supports.auto ? 'on' : 'off'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyProject({ ...project, supports: { ...project.supports, crossBrace: !project.supports.crossBrace } }, true, selectedId)}
+                      className={smallButton(project.supports.crossBrace)}
+                    >
+                      Bracing
+                    </button>
+                    <select
+                      value={project.supports.material}
+                      onChange={(event) =>
+                        applyProject(
+                          {
+                            ...project,
+                            supports: { ...project.supports, material: event.target.value as SupportMaterial },
+                          },
+                          true,
+                          selectedId,
+                        )
+                      }
+                      className={fieldClass()}
+                      aria-label="Support material"
+                    >
+                      <option value="steel">Steel</option>
+                      <option value="wood">Timber</option>
+                      <option value="concrete">Concrete</option>
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!selectedPoint}
+                    onClick={() => {
+                      if (!selectedPoint) return;
+                      applyProject(addManualSupport(project, selectedIndex), true, selectedId);
+                      toast('Manual support added beneath the selected control point.');
+                    }}
+                    className={`${secondaryButton()} mt-1.5 w-full`}
+                  >
+                    <Plus className="h-4 w-4" /> Add support at selected point
+                  </button>
+                  {project.supports.manual.length > 0 && (
+                    <div className="mt-2 max-h-40 space-y-1 overflow-y-auto pr-1">
+                      {project.supports.manual.map((support, index) => (
+                        <div key={support.id} className="flex items-center gap-1.5 rounded-lg border border-stone-800 bg-stone-950/60 p-1.5">
+                          <span className="w-5 font-mono text-[9px] text-stone-500">{index + 1}</span>
+                          <input
+                            type="number"
+                            min={0.8}
+                            max={140}
+                            step={1}
+                            value={Number(support.height.toFixed(1))}
+                            onChange={(event) =>
+                              applyProject(
+                                updateManualSupport(project, support.id, { height: Number(event.target.value) }),
+                                true,
+                                selectedId,
+                              )
+                            }
+                            className={`${fieldClass()} min-h-[32px] flex-1 py-1`}
+                            aria-label={`Support ${index + 1} height`}
+                          />
+                          <span className="text-[9px] text-stone-500">m</span>
+                          <button
+                            type="button"
+                            onClick={() => applyProject(removeManualSupport(project, support.id), true, selectedId)}
+                            className="rounded p-1.5 text-stone-500 hover:text-rose-300"
+                            aria-label={`Remove support ${index + 1}`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+                ) : (
+                  <div className="rounded-xl border border-stone-800 bg-stone-900/40 p-3 text-[10px] leading-relaxed text-stone-500">
+                    Beginner mode uses automatic structural supports. Switch to Advanced in the header for manual support placement,
+                    height editing and material overrides.
+                  </div>
+                )}
+
+                <section className="rounded-xl border border-stone-800 bg-stone-900/40 p-3">
                   <div className="mb-2 flex items-center justify-between">
                     <h2 className="text-[11px] font-black uppercase tracking-wider text-stone-300">Control points</h2>
                     <span className="font-mono text-[10px] text-stone-500">{project.points.length}</span>
@@ -909,22 +1229,201 @@ export function CoasterStudioClient() {
                   <section key={group.category}>
                     <h2 className="mb-1.5 text-[10px] font-black uppercase tracking-[0.18em] text-stone-400">{group.category}</h2>
                     <div className="grid grid-cols-2 gap-1.5">
-                      {group.items.map((item) => (
-                        <button
-                          key={item.key}
-                          type="button"
-                          onClick={() => addElement(item.key)}
-                          className="group rounded-lg border border-stone-800 bg-stone-900/60 p-2 text-left transition hover:border-amber-400/60 hover:bg-amber-400/5"
-                        >
-                          <span className="block text-[11px] font-bold text-stone-100 group-hover:text-amber-100">
-                            {item.label}
-                          </span>
-                          <span className="mt-0.5 block text-[9px] leading-snug text-stone-400">{item.detail}</span>
-                        </button>
-                      ))}
+                      {group.items.map((item) => {
+                        const supported = !manufacturer || manufacturerSupportsElement(manufacturer, item.key);
+                        return (
+                          <button
+                            key={item.key}
+                            type="button"
+                            onClick={() => addElement(item.key)}
+                            className={`group rounded-lg border p-2 text-left transition ${
+                              supported
+                                ? 'border-stone-800 bg-stone-900/60 hover:border-amber-400/60 hover:bg-amber-400/5'
+                                : 'border-stone-800/60 bg-stone-950/50 hover:border-amber-400/30'
+                            }`}
+                            title={supported ? item.detail : `${item.detail} · not listed for the selected manufacturer profile`}
+                          >
+                            <span className={`block text-[11px] font-bold ${supported ? 'text-stone-100 group-hover:text-amber-100' : 'text-stone-400'}`}>
+                              {item.label}
+                              {!supported && <span className="ml-1 text-[8px] font-black uppercase text-amber-200/60">non-profile</span>}
+                            </span>
+                            <span className="mt-0.5 block text-[9px] leading-snug text-stone-400">{item.detail}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </section>
                 ))}
+              </div>
+            )}
+
+            {tab === 'catalog' && (
+              <div className="space-y-3">
+                <div className="rounded-xl border border-amber-400/25 bg-amber-400/5 p-3 text-[11px] leading-relaxed text-amber-100/90">
+                  Manufacturer and coaster-type profiles set design language, materials, compatible elements and train
+                  defaults. They never create a roller coaster: every track point and section remains player-built.
+                </div>
+
+                <section className="grid grid-cols-4 gap-1.5">
+                  {[
+                    ['USA', CATALOG_STATS.american],
+                    ['China', CATALOG_STATS.chinese],
+                    ['World', CATALOG_STATS.international],
+                    ['Types', CATALOG_STATS.coasterTypes],
+                  ].map(([label, value]) => (
+                    <div key={label as string} className="rounded-lg border border-stone-800 bg-stone-900/60 px-2 py-1.5 text-center">
+                      <div className="font-mono text-sm font-black text-amber-200">{value as number}</div>
+                      <div className="text-[8px] font-bold uppercase tracking-wider text-stone-500">{label as string}</div>
+                    </div>
+                  ))}
+                </section>
+
+                <section className="rounded-xl border border-stone-800 bg-stone-900/40 p-3">
+                  <h2 className="mb-2 flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider text-stone-300">
+                    <Factory className="h-3.5 w-3.5 text-amber-300" /> Manufacturer browser
+                  </h2>
+                  <div className="mb-2 grid grid-cols-3 gap-1">
+                    {MANUFACTURER_CATEGORIES.map((entry) => (
+                      <button
+                        key={entry.id}
+                        type="button"
+                        onClick={() => setCatalogCategory(entry.id)}
+                        className={smallButton(catalogCategory === entry.id)}
+                        title={entry.description}
+                      >
+                        {entry.id === 'international' ? <Globe2 className="h-3.5 w-3.5" /> : null}
+                        {entry.shortLabel}
+                      </button>
+                    ))}
+                  </div>
+                  <label className="mb-2 flex items-center gap-1.5 rounded-lg border border-stone-700 bg-stone-950/80 px-2">
+                    <Search className="h-3.5 w-3.5 shrink-0 text-stone-500" />
+                    <input
+                      value={catalogQuery}
+                      onChange={(event) => setCatalogQuery(event.target.value)}
+                      placeholder={`Search ${MANUFACTURERS.length} profiles, countries, examples…`}
+                      className="min-h-[36px] w-full bg-transparent text-[11px] text-stone-100 outline-none placeholder:text-stone-600"
+                    />
+                  </label>
+                  <p className="mb-2 text-[9px] leading-relaxed text-stone-500">
+                    {MANUFACTURER_CATEGORIES.find((entry) => entry.id === catalogCategory)?.description}
+                  </p>
+                  <div className="max-h-64 space-y-1 overflow-y-auto pr-1">
+                    {catalogManufacturers.map((entry) => (
+                      <button
+                        key={entry.id}
+                        type="button"
+                        onClick={() => chooseManufacturer(entry.id)}
+                        className={`w-full rounded-lg border px-2 py-1.5 text-left transition ${
+                          project.manufacturerId === entry.id
+                            ? 'border-amber-400/70 bg-amber-400/10'
+                            : 'border-stone-800 bg-stone-950/50 hover:border-stone-600'
+                        }`}
+                      >
+                        <span className="flex items-start justify-between gap-2">
+                          <span className="min-w-0">
+                            <span className="block truncate text-[11px] font-bold text-stone-200">{entry.name}</span>
+                            <span className="block truncate text-[9px] text-stone-500">
+                              {entry.country} · {entry.specialization}
+                            </span>
+                          </span>
+                          <span className={`shrink-0 rounded px-1 py-0.5 text-[8px] font-black uppercase tracking-wider ${
+                            entry.status === 'historical'
+                              ? 'bg-stone-700/60 text-stone-300'
+                              : entry.status === 'unverified'
+                                ? 'bg-amber-500/15 text-amber-200'
+                                : 'bg-emerald-500/15 text-emerald-200'
+                          }`}>
+                            {entry.status}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                    {catalogManufacturers.length === 0 && (
+                      <p className="py-3 text-center text-[10px] text-stone-500">No profiles match this search.</p>
+                    )}
+                  </div>
+                </section>
+
+                <section className="rounded-xl border border-stone-800 bg-stone-900/40 p-3">
+                  <div className="mb-2 flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h2 className="truncate text-[12px] font-black text-stone-100">
+                        {manufacturer?.name ?? 'Independent / unassigned'}
+                      </h2>
+                      <p className="mt-0.5 text-[9px] uppercase tracking-wider text-stone-500">
+                        {manufacturer ? `${manufacturer.country} · ${manufacturer.classification.replace('_', ' ')} · ${manufacturer.status}` : 'No manufacturer profile selected'}
+                      </p>
+                    </div>
+                    {manufacturer?.successor && (
+                      <span className="shrink-0 rounded border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[8px] font-bold text-amber-200">
+                        → {manufacturer.successor}
+                      </span>
+                    )}
+                  </div>
+                  {manufacturer ? (
+                    <div className="space-y-1.5 text-[10px] leading-relaxed text-stone-400">
+                      <p>{manufacturer.trackCharacteristics}</p>
+                      <p>{manufacturer.trainCharacteristics}</p>
+                      <div className="flex flex-wrap gap-1">
+                        {manufacturer.materials.map((material) => (
+                          <span key={material} className="rounded border border-stone-700 px-1.5 py-0.5 text-[8px] uppercase text-stone-300">{material}</span>
+                        ))}
+                        {manufacturer.restraints.map((restraint) => (
+                          <span key={restraint} className="rounded border border-sky-400/25 bg-sky-400/5 px-1.5 py-0.5 text-[8px] uppercase text-sky-200">{restraint.replace('_', ' ')}</span>
+                        ))}
+                      </div>
+                      {manufacturer.documentedExamples.length > 0 && (
+                        <p className="text-[9px] text-stone-500">Documented examples: {manufacturer.documentedExamples.join(' · ')}</p>
+                      )}
+                      {manufacturer.notes && <p className="text-[9px] text-amber-200/70">{manufacturer.notes}</p>}
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-stone-500">Select a manufacturer profile to use its design language. Track construction remains fully manual.</p>
+                  )}
+                </section>
+
+                <section className="rounded-xl border border-stone-800 bg-stone-900/40 p-3">
+                  <h2 className="mb-1.5 flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider text-stone-300">
+                    <TrainFront className="h-3.5 w-3.5 text-amber-300" /> Coaster technology
+                  </h2>
+                  <p className="mb-2 text-[10px] text-stone-500">Selected: <span className="font-bold text-stone-200">{coasterType?.label ?? project.coasterTypeId}</span></p>
+                  <div className="grid max-h-56 grid-cols-2 gap-1 overflow-y-auto pr-1">
+                    {COASTER_TYPES.map((entry) => {
+                      const compatible = !manufacturer || manufacturerSupportsType(manufacturer, entry.id);
+                      return (
+                        <button
+                          key={entry.id}
+                          type="button"
+                          onClick={() => chooseCoasterType(entry.id)}
+                          className={`rounded-lg border px-2 py-1.5 text-left text-[10px] transition ${
+                            project.coasterTypeId === entry.id
+                              ? 'border-amber-400/70 bg-amber-400/10 text-amber-100'
+                              : compatible
+                                ? 'border-stone-800 bg-stone-950/50 text-stone-300 hover:border-stone-600'
+                                : 'border-stone-800/60 bg-stone-950/40 text-stone-500 hover:border-stone-700'
+                          }`}
+                          title={compatible ? entry.detail : `${entry.detail} · outside the selected manufacturer's listed categories`}
+                        >
+                          <span className="flex items-center justify-between gap-1 font-bold">
+                            {entry.label}
+                            {!compatible && <span className="text-[7px] font-black uppercase text-amber-200/50">outside</span>}
+                          </span>
+                          <span className="block text-[8px] uppercase tracking-wider text-stone-500">{entry.group} · {entry.trackStyle}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {coasterType && (
+                    <p className="mt-2 text-[10px] leading-relaxed text-stone-500">{coasterType.detail}</p>
+                  )}
+                  {!typeCompatible && (
+                    <p className="mt-1.5 flex items-start gap-1.5 rounded border border-amber-400/20 bg-amber-400/5 p-1.5 text-[9px] leading-snug text-amber-200">
+                      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                      This manufacturer profile lists different coaster categories. You can still build it, but review the profile before relying on compatibility claims.
+                    </p>
+                  )}
+                </section>
               </div>
             )}
 
@@ -965,6 +1464,68 @@ export function CoasterStudioClient() {
                           </label>
                         ))}
                       </div>
+                      {selectedIndex > 0 && (
+                        <div className="mt-2 grid grid-cols-2 gap-1.5">
+                          <label className="block">
+                            <span className="mb-0.5 block text-[9px] font-bold uppercase tracking-wider text-stone-500">
+                              Segment length (m)
+                            </span>
+                            <input
+                              type="number"
+                              min={0.25}
+                              max={500}
+                              step={0.5}
+                              value={Number(segmentLength(project.points, selectedIndex).toFixed(2))}
+                              onChange={(event) =>
+                                applyProject(
+                                  {
+                                    ...project,
+                                    points: setSegmentLength(project.points, selectedIndex, Number(event.target.value)),
+                                  },
+                                  true,
+                                  selectedId,
+                                )
+                              }
+                              className={fieldClass()}
+                            />
+                          </label>
+                          <div>
+                            <span className="mb-0.5 block text-[9px] font-bold uppercase tracking-wider text-stone-500">
+                              Curve bias
+                            </span>
+                            <div className="grid grid-cols-2 gap-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  applyProject(
+                                    { ...project, points: offsetPointLateral(project.points, selectedIndex, 1) },
+                                    true,
+                                    selectedId,
+                                  )
+                                }
+                                className={smallButton()}
+                                title="Bend this control point 1 m to the right"
+                              >
+                                ← 1 m
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  applyProject(
+                                    { ...project, points: offsetPointLateral(project.points, selectedIndex, -1) },
+                                    true,
+                                    selectedId,
+                                  )
+                                }
+                                className={smallButton()}
+                                title="Bend this control point 1 m to the left"
+                              >
+                                1 m →
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                       <div className="mt-2 grid grid-cols-2 gap-1.5">
                         <label className="block">
                           <span className="mb-0.5 block text-[9px] font-bold uppercase tracking-wider text-stone-500">Bank °</span>
@@ -1120,6 +1681,37 @@ export function CoasterStudioClient() {
                       </select>
                     </label>
                   </div>
+                  <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                    <label className="block">
+                      <span className="mb-0.5 block text-[9px] font-bold uppercase tracking-wider text-stone-500">Chassis</span>
+                      <select value={design.chassisStyle} onChange={(event) => updateDesign('chassisStyle', event.target.value as TrainDesign['chassisStyle'])} className={fieldClass()}>
+                        <option value="open">Open frame</option>
+                        <option value="enclosed">Enclosed body</option>
+                        <option value="monocoque">Monocoque</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="mb-0.5 block text-[9px] font-bold uppercase tracking-wider text-stone-500">Nose</span>
+                      <select value={design.noseStyle} onChange={(event) => updateDesign('noseStyle', event.target.value as TrainDesign['noseStyle'])} className={fieldClass()}>
+                        <option value="rounded">Rounded</option>
+                        <option value="pointed">Pointed</option>
+                        <option value="flat">Flat</option>
+                        <option value="shark">Shark</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="mb-0.5 block text-[9px] font-bold uppercase tracking-wider text-stone-500">Seat material</span>
+                      <select value={design.seatMaterial} onChange={(event) => updateDesign('seatMaterial', event.target.value as TrainDesign['seatMaterial'])} className={fieldClass()}>
+                        <option value="padded">Padded</option>
+                        <option value="molded">Molded</option>
+                        <option value="timber">Timber</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="mb-0.5 block text-[9px] font-bold uppercase tracking-wider text-stone-500">Wheel colour</span>
+                      <input type="color" value={design.wheelColor} onChange={(event) => updateDesign('wheelColor', event.target.value)} className="h-9 w-full cursor-pointer rounded-lg border border-stone-700 bg-stone-950 p-0.5" />
+                    </label>
+                  </div>
                   <div className="mt-2 grid grid-cols-3 gap-1.5">
                     {(['primaryColor', 'secondaryColor', 'accentColor'] as const).map((key, index) => (
                       <label key={key} className="block">
@@ -1266,13 +1858,35 @@ export function CoasterStudioClient() {
                       ['Speed', `${fmt(telemetry?.speedKmh ?? 0, 1)} km/h`],
                       ['Height', `${fmt(telemetry?.height ?? 0, 1)} m`],
                       ['Vertical G', `${fmt(telemetry?.gForce ?? 1, 2)} G`],
+                      ['Lateral G', `${fmt(telemetry?.lateralG ?? 0, 2)} G`],
+                      ['Combined G', `${fmt(telemetry?.combinedG ?? 1, 2)} G`],
                       ['Section', telemetry ? SECTION_LABELS[telemetry.section] : 'Station'],
                       ['Lap', `${fmt((telemetry?.lapProgress ?? 0) * 100, 0)}%`],
                       ['State', telemetry?.state ?? 'stopped'],
+                      ['Train mass', `${fmt((telemetry?.massKg ?? 0) / 1000, 1)} t`],
+                      ['Riders', `${telemetry?.riders ?? 0}`],
                     ].map(([label, value]) => (
                       <div key={label} className="rounded-lg border border-stone-800 bg-stone-950/60 px-2 py-1.5">
                         <div className="text-[9px] font-bold uppercase tracking-wider text-stone-500">{label}</div>
                         <div className="mt-0.5 font-mono text-[12px] font-bold text-stone-100">{value}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-2 space-y-1 rounded-lg border border-stone-800 bg-stone-950/60 p-2">
+                    <div className="flex items-center justify-between text-[9px] font-bold uppercase tracking-wider text-stone-500">
+                      <span>G-force comb</span>
+                      <span className="font-mono text-stone-300">{fmt(telemetry?.combinedG ?? 1, 2)} G</span>
+                    </div>
+                    {[
+                      ['Vertical', telemetry?.gForce ?? 1, 'bg-amber-400'],
+                      ['Lateral', telemetry?.lateralG ?? 0, 'bg-sky-400'],
+                    ].map(([label, value, colour]) => (
+                      <div key={label as string} className="flex items-center gap-2">
+                        <span className="w-12 text-[8px] uppercase text-stone-500">{label as string}</span>
+                        <div className="h-2 flex-1 overflow-hidden rounded-full bg-stone-800">
+                          <div className={`h-full rounded-full ${colour as string} transition-[width]`} style={{ width: `${clamp(Math.abs(value as number) / 6, 0, 1) * 100}%` }} />
+                        </div>
+                        <span className="w-9 text-right font-mono text-[9px] text-stone-400">{fmt(value as number, 2)}</span>
                       </div>
                     ))}
                   </div>
@@ -1293,24 +1907,37 @@ export function CoasterStudioClient() {
                     <button type="button" onClick={resetRide} className={secondaryButton()}>
                       <RotateCcw className="h-4 w-4" /> Reset
                     </button>
-                    <button type="button" onClick={toggleOnboard} className={smallButton(onboard)}>
-                      <Camera className="h-4 w-4" /> On-ride
-                    </button>
                     <button type="button" onClick={toggleMuted} className={smallButton(muted)}>
                       {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
                       {muted ? 'Muted' : 'Sound'}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        sceneRef.current?.setOnboard(false);
-                        setOnboard(false);
-                        sceneRef.current?.focusTrack();
-                      }}
-                      className={smallButton()}
-                    >
-                      <Focus className="h-4 w-4" /> External
-                    </button>
+                  </div>
+                  <div className="mt-2">
+                    <div className="mb-1 flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wider text-stone-500">
+                      <Camera className="h-3.5 w-3.5" /> Ride cameras
+                    </div>
+                    <div className="grid grid-cols-3 gap-1">
+                      {([
+                        ['front', 'Front seat'],
+                        ['rear', 'Rear seat'],
+                        ['passenger', 'Passenger'],
+                        ['side', 'Side follow'],
+                        ['trackside', 'Trackside'],
+                        ['free', 'Free / builder'],
+                      ] as [RideCameraMode, string][]).map(([mode, label]) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => {
+                            changeRideCamera(mode);
+                            if (mode === 'free') sceneRef.current?.focusTrack();
+                          }}
+                          className={smallButton(rideCamera === mode)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </section>
 
@@ -1363,10 +1990,10 @@ export function CoasterStudioClient() {
                       <Plus className="h-4 w-4" /> New
                     </button>
                     <button type="button" onClick={exportProject} className={secondaryButton()}>
-                      <Download className="h-4 w-4" /> Export
+                      <Download className="h-4 w-4" /> Export JSON
                     </button>
                     <label className={`${secondaryButton()} cursor-pointer`}>
-                      <Upload className="h-4 w-4" /> Import
+                      <Upload className="h-4 w-4" /> Import JSON
                       <input
                         type="file"
                         accept="application/json,.json"
@@ -1377,7 +2004,32 @@ export function CoasterStudioClient() {
                         }}
                       />
                     </label>
-                    <button type="button" onClick={saveProject} className={secondaryButton()}>
+                    <button type="button" onClick={exportCsv} className={secondaryButton()}>
+                      <Download className="h-4 w-4" /> Export CSV
+                    </button>
+                    <label className={`${secondaryButton()} cursor-pointer`}>
+                      <Upload className="h-4 w-4" /> Import CSV
+                      <input
+                        type="file"
+                        accept="text/csv,.csv"
+                        className="hidden"
+                        onChange={(event) => {
+                          void importCsv(event.target.files?.[0] ?? null);
+                          event.target.value = '';
+                        }}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        storeRef.current?.saveDraft({
+                          ...project,
+                          camera: sceneRef.current?.getCameraPose() ?? project.camera,
+                        });
+                        toast('Draft saved with the current camera position.');
+                      }}
+                      className={secondaryButton()}
+                    >
                       <CheckCircle2 className="h-4 w-4" /> Save draft
                     </button>
                   </div>
@@ -1403,6 +2055,14 @@ export function CoasterStudioClient() {
                             <span className="block truncate font-mono text-[9px] text-stone-500">
                               {saved.pointCount} pts · {new Date(saved.updatedAt).toLocaleString()}
                             </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => renameProject(saved.id, saved.name)}
+                            className="rounded p-1.5 text-stone-500 hover:text-sky-300"
+                            aria-label={`Rename ${saved.name}`}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
                           </button>
                           <button
                             type="button"
@@ -1436,8 +2096,9 @@ export function CoasterStudioClient() {
                   <div className="mb-1 flex items-center gap-1.5 font-bold text-stone-300">
                     <Route className="h-3.5 w-3.5 text-amber-300" /> Studio rules
                   </div>
-                  Flat, empty terrain · independent of Survival Island · autosaved draft · project JSON import/export ·
-                  all changes reversible with undo/redo.
+                  Flat, empty terrain · independent of Survival Island · every coaster built manually · autosaved
+                  draft · JSON and CSV exchange · saved projects are never overwritten without confirmation · all
+                  construction changes reversible with undo/redo.
                 </section>
               </div>
             )}

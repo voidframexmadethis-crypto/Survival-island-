@@ -5,7 +5,6 @@ import {
   appendElement,
   autoBankPoints,
   computeTrackStats,
-  createDefaultProject,
   distance,
   duplicatePoint,
   removePoint,
@@ -15,11 +14,12 @@ import {
   alignPoints,
 } from './track';
 import type { CoasterElementKind } from './types';
+import { createTestLayoutProject } from './testFixture';
 
-const project = createDefaultProject();
+const project = createTestLayoutProject();
 const samples = sampleTrack(project.points, project.closed, 12);
 
-test('default project is a valid closed circuit with stations', () => {
+test('test fixture is a valid closed circuit with stations', () => {
   assert.ok(project.points.length >= 12);
   assert.equal(project.closed, true);
   assert.ok(project.points.some((point) => point.kind === 'station'));
@@ -65,7 +65,7 @@ test('spline frames are finite, orthonormal, and continuously sampled', () => {
 });
 
 test('vertical loop generates an inversion and adds real height', () => {
-  const base = createDefaultProject();
+  const base = createTestLayoutProject();
   const points = appendElement(base.points, 'vertical_loop', { radius: 9 });
   const loopSamples = sampleTrack(points, false, 16);
   const stats = computeTrackStats(loopSamples, points.length);
@@ -83,7 +83,7 @@ test('every catalog element appends finite geometry', () => {
   assert.ok(elements.includes('drop'));
   assert.ok(elements.includes('zero_g_roll'));
   for (const element of elements as CoasterElementKind[]) {
-    const points = appendElement(createDefaultProject().points, element);
+    const points = appendElement(createTestLayoutProject().points, element);
     const elementSamples = sampleTrack(points, false, 8);
     assert.ok(elementSamples.length > 0, `${element} produced samples`);
     assert.ok(points[points.length - 1].element === element, `${element} tagged its last point`);
@@ -99,7 +99,7 @@ test('auto-bank rolls turns and leaves straights flat', () => {
   const maxBank = Math.max(...banked.map((point) => Math.abs(point.bank)));
   assert.ok(maxBank > 8, `max bank ${maxBank}`);
   assert.ok(maxBank <= 72);
-  const straightProject = createDefaultProject();
+  const straightProject = createTestLayoutProject();
   straightProject.points = [
     straightProject.points[0],
     { ...straightProject.points[0], id: 'a', position: { x: 0, y: 5, z: 10 }, bank: 0 },
@@ -123,7 +123,7 @@ test('point editing helpers preserve intended data', () => {
 });
 
 test('validation catches ground penetration and open circuits', () => {
-  const bad = createDefaultProject();
+  const bad = createTestLayoutProject();
   bad.points[3] = { ...bad.points[3], position: { ...bad.points[3].position, y: -2 } };
   const badSamples = sampleTrack(bad.points, false, 10);
   const validation = validateTrack(bad.points, badSamples, false);

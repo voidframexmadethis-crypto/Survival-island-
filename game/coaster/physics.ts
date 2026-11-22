@@ -23,6 +23,9 @@ export interface SimulationOptions {
   launchSpeed?: number;
   /** Per-control-point launch targets, indexed by pointIndex. */
   targetSpeeds?: (number | undefined)[];
+  emptyTrainMassKg?: number;
+  riderMassKg?: number;
+  ridersPerTrain?: number;
 }
 
 const SUBSTEP = 1 / 120;
@@ -50,6 +53,9 @@ export class CoasterSimulation {
       launchAccel: options.launchAccel ?? 14,
       launchSpeed: options.launchSpeed ?? 34,
       targetSpeeds: options.targetSpeeds ?? [],
+      emptyTrainMassKg: options.emptyTrainMassKg ?? 7200,
+      riderMassKg: options.riderMassKg ?? 78,
+      ridersPerTrain: options.ridersPerTrain ?? 0,
     };
     this.total = trackLength(samples);
     this.findStation();
@@ -73,9 +79,14 @@ export class CoasterSimulation {
   }
 
   private findBlocks(): void {
-    const bounds: number[] = [0];
+    const     bounds: number[] = [0];
     for (const sample of this.samples) {
-      if (sample.kind === 'block_brake' && sample.distance > 1) bounds.push(sample.distance);
+      if (
+        (sample.kind === 'block_brake' || sample.kind === 'unload_station' || sample.kind === 'storage') &&
+        sample.distance > 1
+      ) {
+        bounds.push(sample.distance);
+      }
     }
     if (bounds.length === 1 && this.total > 0) {
       // No block brakes: automatic block boundaries still isolate the platform
@@ -94,6 +105,14 @@ export class CoasterSimulation {
     return this.total;
   }
 
+  get riders(): number {
+    return this.options.ridersPerTrain;
+  }
+
+  get massKg(): number {
+    return this.options.emptyTrainMassKg + this.options.ridersPerTrain * this.options.riderMassKg;
+  }
+
   get station(): { start: number; end: number } {
     return { start: this.stationDistance, end: this.stationExitDistance };
   }
@@ -105,8 +124,9 @@ export class CoasterSimulation {
       const index = this.trains.length;
       this.trains.push({
         id: index,
-        // All trains wait in the boarding block; only one may leave at a time.
-        s: this.stationDistance + 1.5 + index * 2,
+        // Queue trains front-to-back inside the boarding block so a dispatched
+        // train never starts behind a waiting train.
+        s: this.stationDistance + 6.5 - index * 2,
         v: 0,
         state: 'stopped',
         lap: 0,
@@ -119,7 +139,7 @@ export class CoasterSimulation {
   reset(): void {
     this.accumulator = 0;
     this.trains.forEach((train, index) => {
-      train.s = this.stationDistance + 1.5 + index * 2;
+      train.s = this.stationDistance + 6.5 - index * 2;
       train.v = 0;
       train.state = 'stopped';
       train.lap = 0;
@@ -197,7 +217,9 @@ export class CoasterSimulation {
         sample.kind === 'launch' ||
         sample.kind === 'brake' ||
         sample.kind === 'magnetic_brake' ||
-        sample.kind === 'station';
+        sample.kind === 'station' ||
+        sample.kind === 'unload_station' ||
+        sample.kind === 'storage';
 
       if (arriving) {
         train.state = 'arriving';
@@ -205,8 +227,11 @@ export class CoasterSimulation {
       } else {
         train.state = 'running';
         let acceleration = -this.options.gravity * sample.tangent.y;
-        acceleration -= this.options.rollingResistance * Math.sign(train.v);
-        acceleration -= this.options.drag * train.v * Math.abs(train.v);
+        // A loaded train carries more momentum: rolling resistance and aero
+        // drag decelerate it less than an empty train with the same frontal area.
+        const massRatio = this.massKg > 0 ? this.options.emptyTrainMassKg / this.massKg : 1;
+        acceleration -= this.options.rollingResistance * Math.sign(train.v) * massRatio;
+        acceleration -= this.options.drag * train.v * Math.abs(train.v) * massRatio;
 
         if (sample.kind === 'chain_lift') {
           acceleration += (this.options.chainSpeed - train.v) * 2.2;
@@ -227,6 +252,12 @@ export class CoasterSimulation {
         } else if (sample.kind === 'station') {
           // Station drive tires carry the train clear of the platform.
           acceleration += (6 - train.v) * 2.6;
+        } else if (sample.kind === 'unload_station') {
+          train.v = Math.max(0.8, train.v - 6.5 * dt);
+          acceleration = 0;
+        } else if (sample.kind === 'storage') {
+          train.v = Math.max(0, train.v - 12 * dt);
+          acceleration = 0;
         }
 
         train.v += acceleration * dt;
@@ -255,6 +286,25 @@ export class CoasterSimulation {
         train.hasLeftStation = false;
       }
     }
+    this.preventCollisions();
+  }
+
+  /** Last-resort physical interlock if block spacing is ever violated. */
+  private preventCollisions(): void {
+    if (this.trains.length < 2 || this.total <= 0) return;
+    if (!this.trains.some((train) => train.state === 'running' || train.state === 'arriving')) return;
+    for (let i = 0; i < this.trains.length; i++) {
+      for (let j = i + 1; j < this.trains.length; j++) {
+        const a = this.trains[i];
+        const b = this.trains[j];
+        const forward = (b.s - a.s + this.total) % this.total;
+        const backward = (a.s - b.s + this.total) % this.total;
+        if (Math.min(forward, backward) >= 5) continue;
+        const rear = forward <= backward ? a : b;
+        rear.v = 0;
+        rear.state = 'stalled';
+      }
+    }
   }
 
   private isInStation(s: number): boolean {
@@ -277,15 +327,21 @@ export class CoasterSimulation {
     const sample = sampleAtDistance(this.samples, train.s);
     if (!sample) return null;
     const curvatureG = (train.v * train.v * sample.curvature) / this.options.gravity;
+    const lateralG = clamp(curvatureG, 0, 5);
+    const gForce = clamp(1 + curvatureG * Math.sign(sample.up.y || 1), -2, 6.5);
     return {
       speedKmh: train.v * 3.6,
+      speedMs: train.v,
       height: sample.position.y,
-      gForce: clamp(1 + curvatureG * Math.sign((sample.up.y ?? 1)), -2, 6.5),
-      lateralG: clamp(curvatureG, 0, 5),
+      gForce,
+      lateralG,
+      combinedG: Math.hypot(gForce, lateralG),
       section: sample.kind,
       distance: train.s,
       lapProgress: this.total > 0 ? train.s / this.total : 0,
       state: train.state,
+      massKg: this.massKg,
+      riders: this.riders,
     };
   }
 

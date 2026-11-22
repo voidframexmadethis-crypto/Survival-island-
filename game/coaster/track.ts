@@ -1,6 +1,13 @@
+import {
+  DEFAULT_COASTER_TYPE_ID,
+  DEFAULT_MANUFACTURER_ID,
+} from './catalog';
 import type {
+  CameraPose,
   CoasterElementKind,
   CoasterProject,
+  ManualSupport,
+  SupportSettings,
   TrackPoint,
   TrackPointKind,
   TrackSample,
@@ -18,6 +25,8 @@ export const TRACK_GAUGE = 1.22;
 export const SECTION_LABELS: Record<TrackPointKind, string> = {
   track: 'Track',
   station: 'Station',
+  unload_station: 'Unload station',
+  storage: 'Storage track',
   chain_lift: 'Chain lift',
   cable_lift: 'Cable lift',
   launch: 'Launch',
@@ -40,6 +49,12 @@ export const ELEMENT_LIBRARY: {
       { key: 'straight', label: 'Straight', detail: '8 m alignment section' },
       { key: 'turn_left', label: 'Left turn', detail: 'Smooth 90° banked curve' },
       { key: 'turn_right', label: 'Right turn', detail: 'Smooth 90° banked curve' },
+      { key: 's_bend_left', label: 'Left S-bend', detail: 'Linked left/right transition' },
+      { key: 's_bend_right', label: 'Right S-bend', detail: 'Linked right/left transition' },
+      { key: 'banked_turn_left', label: 'Banked left turn', detail: '45° heartline-banked turn' },
+      { key: 'banked_turn_right', label: 'Banked right turn', detail: '45° heartline-banked turn' },
+      { key: 'overbanked_turn_left', label: 'Overbanked left', detail: '120° overbanked sweep' },
+      { key: 'overbanked_turn_right', label: 'Overbanked right', detail: '120° overbanked sweep' },
       { key: 'helix_left', label: 'Left helix', detail: 'Two-turn climbing helix' },
       { key: 'helix_right', label: 'Right helix', detail: 'Two-turn descending helix' },
       { key: 'wave_turn', label: 'Wave turn', detail: 'S-bend with outward roll' },
@@ -50,21 +65,32 @@ export const ELEMENT_LIBRARY: {
     category: 'Inversions',
     items: [
       { key: 'vertical_loop', label: 'Vertical loop', detail: 'Classic 360° loop' },
+      { key: 'immelmann', label: 'Immelmann', detail: 'Half loop into roll-out' },
+      { key: 'dive_loop', label: 'Dive loop', detail: 'Diving half-loop inversion' },
+      { key: 'cobra_roll', label: 'Cobra roll', detail: 'Twin half-loops with roll' },
       { key: 'corkscrew_left', label: 'Left corkscrew', detail: '540° corkscrew' },
       { key: 'corkscrew_right', label: 'Right corkscrew', detail: '540° corkscrew' },
       { key: 'barrel_roll', label: 'Barrel roll', detail: 'Full 360° inline roll' },
       { key: 'zero_g_roll', label: 'Zero-G roll', detail: 'Floating 360° roll' },
-      { key: 'dive_loop', label: 'Dive loop', detail: 'Diving half-loop inversion' },
-      { key: 'immelmann', label: 'Immelmann', detail: 'Half loop into roll-out' },
+      { key: 'heartline_roll', label: 'Heartline roll', detail: 'Roll around the heartline' },
+      { key: 'inline_twist', label: 'Inline twist', detail: 'Compact 360° twist' },
+      { key: 'flying_transition', label: 'Flying transition', detail: 'Prone roll into a dive' },
       { key: 'custom_inversion', label: 'Custom inversion', detail: 'Freeform 360° roll' },
     ],
   },
   {
-    category: 'Airtime',
+    category: 'Airtime & drops',
     items: [
       { key: 'airtime_hill', label: 'Airtime hill', detail: 'Floating parabolic crest' },
       { key: 'camelback', label: 'Camelback', detail: 'Twin airtime crests' },
       { key: 'bunny_hills', label: 'Bunny hills', detail: 'Three rapid hops' },
+      { key: 'double_up', label: 'Double-up', detail: 'Two climbing airtime crests' },
+      { key: 'double_down', label: 'Double-down', detail: 'Two descending airtime crests' },
+      { key: 'steep_drop', label: 'Steep drop', detail: '70° first-drop profile' },
+      { key: 'beyond_vertical_drop', label: 'Beyond-vertical drop', detail: '105° overhung drop' },
+      { key: 'dive_track', label: 'Dive track', detail: 'Hold, plunge and pull-out' },
+      { key: 'vertical_track', label: 'Vertical track', detail: 'True vertical climb/drop' },
+      { key: 'spike', label: 'Spike track', detail: 'Vertical spike and return crest' },
     ],
   },
   {
@@ -72,24 +98,40 @@ export const ELEMENT_LIBRARY: {
     items: [
       { key: 'lift_chain', label: 'Chain lift', detail: 'Rises 18 m on a chain' },
       { key: 'lift_cable', label: 'Cable lift', detail: 'Fast cable lift hill' },
-      { key: 'launch', label: 'LSM launch', detail: 'Accelerates to 34 m/s' },
+      { key: 'launch', label: 'Launch section', detail: 'Configurable target speed' },
+      { key: 'launch_tire', label: 'Tire launch', detail: 'Drive-tire launch to 28 m/s' },
+      { key: 'launch_magnetic', label: 'Magnetic launch', detail: 'Magnetic drive launch' },
+      { key: 'launch_lsm', label: 'LSM launch', detail: 'Linear synchronous launch' },
+      { key: 'launch_hydraulic', label: 'Hydraulic launch', detail: 'High-acceleration cable launch' },
+      { key: 'swing_launch', label: 'Swing launch', detail: 'Multi-pass launch staging profile' },
     ],
   },
   {
     category: 'Brakes & blocks',
     items: [
-      { key: 'brake', label: 'Friction brake', detail: 'Trim brake run' },
-      { key: 'block_brake', label: 'Block brake', detail: 'Adds a safety block' },
-      { key: 'magnetic_brake', label: 'Magnetic brake', detail: 'Smooth magnetic stop' },
+      { key: 'brake', label: 'Brake run', detail: 'Configurable trim brake run' },
+      { key: 'brake_friction', label: 'Friction brake', detail: 'Classic clamped brake run' },
+      { key: 'brake_block', label: 'Block brake', detail: 'Adds a safety block' },
+      { key: 'brake_magnetic', label: 'Magnetic brake', detail: 'Smooth eddy-current stop' },
+      { key: 'magnetic_brake', label: 'Magnetic trim', detail: 'Smooth magnetic trim' },
+      { key: 'block_brake', label: 'Block section', detail: 'Adds a safety block' },
     ],
   },
   {
-    category: 'Mechanical',
+    category: 'Stations & mechanical',
     items: [
+      { key: 'station', label: 'Loading station', detail: '8 m boarding platform section' },
+      { key: 'unload_station', label: 'Unload station', detail: 'Separate alighting platform' },
+      { key: 'storage_track', label: 'Storage track', detail: 'Parked-train storage spur' },
       { key: 'transfer', label: 'Transfer track', detail: 'Automatic storage transfer' },
+      { key: 'transfer_track', label: 'Transfer table', detail: 'Automatic storage transfer' },
       { key: 'switch', label: 'Switch track', detail: 'Automatic route select' },
+      { key: 'switch_track', label: 'Switch section', detail: 'Automatic route select' },
       { key: 'drop', label: 'Drop track', detail: 'Lowers and resets' },
+      { key: 'drop_track', label: 'Drop section', detail: 'Lowers and resets' },
       { key: 'tilt', label: 'Tilt track', detail: 'Tilts to vertical' },
+      { key: 'tilt_track', label: 'Tilt section', detail: 'Tilts to vertical' },
+      { key: 'movable_track', label: 'Movable track', detail: 'Tilting maintenance section' },
     ],
   },
 ];
@@ -144,14 +186,36 @@ export function createDefaultTrain(): TrainDesign {
     rowsPerCar: 2,
     seatsPerRow: 2,
     bodyStyle: 'steel',
+    chassisStyle: 'open',
+    noseStyle: 'rounded',
+    seatMaterial: 'padded',
     restraint: 'lap_bar',
     wheels: 'exposed',
+    wheelColor: '#202329',
     primaryColor: '#d81f26',
     secondaryColor: '#16181d',
     accentColor: '#f5c542',
     lighting: true,
     aeroFairing: true,
     notes: ['Default steel train'],
+  };
+}
+
+export function createDefaultSupportSettings(): SupportSettings {
+  return {
+    auto: true,
+    material: 'steel',
+    crossBrace: true,
+    manual: [],
+  };
+}
+
+export function createDefaultCameraPose(): CameraPose {
+  return {
+    projection: 'perspective',
+    position: { x: 54, y: 40, z: 74 },
+    target: { x: 0, y: 8, z: 26 },
+    rideMode: 'free',
   };
 }
 
@@ -170,47 +234,15 @@ export function createBlankProject(name = 'Untitled Coaster'): CoasterProject {
     supportColor: '#58646c',
     train,
     trainCount: 1,
+    manufacturerId: DEFAULT_MANUFACTURER_ID,
+    coasterTypeId: DEFAULT_COASTER_TYPE_ID,
+    editingMode: 'beginner',
+    supports: createDefaultSupportSettings(),
+    camera: createDefaultCameraPose(),
     points: [
       makePoint(vec(0, 4, 0), 'station'),
       makePoint(vec(0, 4, 8), 'station'),
     ],
-  };
-}
-
-export function createDefaultProject(): CoasterProject {
-  const now = Date.now();
-  const train = createDefaultTrain();
-  const coords: [number, number, number, TrackPointKind, number][] = [
-    [0, 5, 0, 'station', 0],
-    [0, 5, 7, 'station', 0],
-    [0, 8, 17, 'chain_lift', 0],
-    [0, 20, 43, 'chain_lift', 0],
-    [0, 26, 57, 'chain_lift', 0],
-    [0, 24, 66, 'track', 0],
-    [3, 14, 77, 'track', 20],
-    [15, 8, 84, 'track', 28],
-    [29, 16, 79, 'track', 36],
-    [37, 21, 67, 'track', 30],
-    [41, 13, 51, 'track', 24],
-    [39, 19, 36, 'track', 28],
-    [29, 21, 24, 'track', 18],
-    [16, 18, 15, 'track', 10],
-    [7, 9, 5, 'brake', 0],
-    [2, 6, -2, 'station', 0],
-  ];
-  return {
-    schemaVersion: 1,
-    id: newId('project'),
-    name: 'Aether Loop',
-    createdAt: now,
-    updatedAt: now,
-    closed: true,
-    autoBank: true,
-    trackColor: '#dbe3ea',
-    supportColor: '#5d6a72',
-    train,
-    trainCount: 1,
-    points: coords.map(([x, y, z, kind, bank]) => makePoint(vec(x, y, z), kind, bank)),
   };
 }
 
@@ -435,6 +467,8 @@ export function computeTrackStats(samples: TrackSample[], pointCount: number): T
       inversions: 0,
       maxBank: 0,
       estimatedPeakSpeedKmh: 0,
+      estimatedMaxLateralG: 0,
+      estimatedMaxVerticalG: 0,
       pointCount,
     };
   }
@@ -442,6 +476,8 @@ export function computeTrackStats(samples: TrackSample[], pointCount: number): T
   let minHeight = Infinity;
   let maxBank = 0;
   let inversions = 0;
+  let estimatedMaxLateralG = 0;
+  let estimatedMaxVerticalG = 0;
   let inverted = false;
   for (let i = 0; i < samples.length; i++) {
     const sample = samples[i];
@@ -451,6 +487,11 @@ export function computeTrackStats(samples: TrackSample[], pointCount: number): T
     const isInverted = sample.up.y < -0.18;
     if (isInverted && !inverted) inversions += 1;
     inverted = isInverted;
+    const localDrop = Math.max(0, maxHeight - sample.position.y);
+    const localSpeed = Math.sqrt(2 * GRAVITY * localDrop + 25);
+    const lateral = (localSpeed * localSpeed * sample.curvature) / GRAVITY;
+    estimatedMaxLateralG = Math.max(estimatedMaxLateralG, lateral);
+    estimatedMaxVerticalG = Math.max(estimatedMaxVerticalG, Math.abs(1 + lateral * sample.up.y));
   }
   const drop = Math.max(0, maxHeight - minHeight);
   const estimatedPeakSpeedKmh = Math.sqrt(2 * GRAVITY * drop + 25) * 3.6;
@@ -461,6 +502,8 @@ export function computeTrackStats(samples: TrackSample[], pointCount: number): T
     inversions,
     maxBank,
     estimatedPeakSpeedKmh,
+    estimatedMaxLateralG,
+    estimatedMaxVerticalG,
     pointCount,
   };
 }
@@ -585,6 +628,229 @@ export function alignPoints(
   return points.map((p) => ({ ...p, position: { ...p.position, [axis]: value } }));
 }
 
+/**
+ * Reduces local height and bank spikes without changing the layout footprint.
+ * This is the de-pump pass used after hand-placing control points or importing
+ * a CSV track: it blends each interior point toward its neighbours' average.
+ */
+export function dePumpPoints(
+  points: TrackPoint[],
+  closed: boolean,
+  strength = 0.55,
+): TrackPoint[] {
+  if (points.length < 3) return points;
+  const amount = clamp(strength, 0, 1);
+  const result = points.map((point) => ({ ...point, position: { ...point.position } }));
+  const source = result.map((point) => ({ ...point.position, bank: point.bank }));
+  const n = result.length;
+  for (let i = 0; i < n; i++) {
+    const interior = closed || (i > 0 && i < n - 1);
+    if (!interior) continue;
+    const prev = source[closed ? (i - 1 + n) % n : i - 1];
+    const next = source[closed ? (i + 1) % n : i + 1];
+    result[i].position.y = source[i].y + ((prev.y + next.y) / 2 - source[i].y) * amount;
+    result[i].bank = source[i].bank + ((prev.bank + next.bank) / 2 - source[i].bank) * amount;
+  }
+  return result;
+}
+
+export function addManualSupport(
+  project: CoasterProject,
+  pointIndex: number,
+): CoasterProject {
+  const point = project.points[pointIndex];
+  if (!point) return project;
+  const support: ManualSupport = {
+    id: newId('support'),
+    x: point.position.x,
+    y: 0,
+    z: point.position.z,
+    height: Math.max(0.8, point.position.y),
+    material: project.supports.material,
+    crossBrace: project.supports.crossBrace,
+  };
+  return {
+    ...project,
+    supports: { ...project.supports, manual: [...project.supports.manual, support].slice(-120) },
+  };
+}
+
+export function removeManualSupport(project: CoasterProject, supportId: string): CoasterProject {
+  return {
+    ...project,
+    supports: {
+      ...project.supports,
+      manual: project.supports.manual.filter((support) => support.id !== supportId),
+    },
+  };
+}
+
+export function segmentLength(points: TrackPoint[], index: number): number {
+  if (index <= 0 || index >= points.length) return 0;
+  return distance(points[index - 1].position, points[index].position);
+}
+
+/** Moves a control point to an exact straight-line distance from its predecessor. */
+export function setSegmentLength(points: TrackPoint[], index: number, length: number): TrackPoint[] {
+  if (index <= 0 || index >= points.length) return points;
+  const previous = points[index - 1].position;
+  const point = points[index];
+  const dx = point.position.x - previous.x;
+  const dy = point.position.y - previous.y;
+  const dz = point.position.z - previous.z;
+  const current = Math.hypot(dx, dy, dz);
+  const target = clamp(length, 0.25, 500);
+  const scale = current > 1e-5 ? target / current : 0;
+  return points.map((candidate, candidateIndex) =>
+    candidateIndex === index
+      ? {
+          ...candidate,
+          position: {
+            x: previous.x + dx * scale,
+            y: previous.y + dy * scale,
+            z: previous.z + dz * scale,
+          },
+        }
+      : candidate,
+  );
+}
+
+/** Bends the layout at one point by offsetting it laterally in metres. */
+export function offsetPointLateral(points: TrackPoint[], index: number, amount: number): TrackPoint[] {
+  if (index <= 0 || index >= points.length - 1) return points;
+  const previous = points[index - 1].position;
+  const next = points[index + 1].position;
+  const direction = normalize({ x: next.x - previous.x, y: 0, z: next.z - previous.z });
+  const right = Math.hypot(direction.x, direction.z) > 1e-4 ? normalize(cross(UP, direction)) : { x: 1, y: 0, z: 0 };
+  const offset = clamp(amount, -50, 50);
+  return points.map((candidate, candidateIndex) =>
+    candidateIndex === index
+      ? {
+          ...candidate,
+          position: {
+            x: candidate.position.x + right.x * offset,
+            y: candidate.position.y,
+            z: candidate.position.z + right.z * offset,
+          },
+        }
+      : candidate,
+  );
+}
+
+export function updateManualSupport(
+  project: CoasterProject,
+  supportId: string,
+  patch: Partial<Omit<ManualSupport, 'id'>>,
+): CoasterProject {
+  return {
+    ...project,
+    supports: {
+      ...project.supports,
+      manual: project.supports.manual.map((support) =>
+        support.id === supportId
+          ? {
+              ...support,
+              ...patch,
+              height: clamp(patch.height ?? support.height, 0.8, 140),
+              material: patch.material ?? support.material,
+            }
+          : support,
+      ),
+    },
+  };
+}
+
+const CSV_HEADER = 'point_index,x,y,z,bank_deg,kind,element,target_speed_ms';
+
+/** Plain-text exchange format for track geometry. */
+export function projectToCsv(project: CoasterProject): string {
+  const lines = [
+    `# ${project.name.replace(/[\r\n]/g, ' ')}`,
+    `# schema=1 closed=${project.closed}`,
+    CSV_HEADER,
+  ];
+  project.points.forEach((point, index) => {
+    lines.push(
+      [
+        index,
+        point.position.x.toFixed(4),
+        point.position.y.toFixed(4),
+        point.position.z.toFixed(4),
+        point.bank.toFixed(3),
+        point.kind,
+        point.element ?? '',
+        point.targetSpeed === undefined ? '' : point.targetSpeed.toFixed(2),
+      ].join(','),
+    );
+  });
+  return `${lines.join('\n')}\n`;
+}
+
+const POINT_KIND_SET = new Set<TrackPointKind>([
+  'track',
+  'station',
+  'unload_station',
+  'storage',
+  'chain_lift',
+  'cable_lift',
+  'launch',
+  'brake',
+  'block_brake',
+  'magnetic_brake',
+  'transfer',
+  'switch',
+  'drop',
+  'tilt',
+]);
+
+export function pointsFromCsv(csv: string): TrackPoint[] {
+  const rows = csv
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'));
+  if (!rows.length) throw new Error('CSV contains no track rows.');
+  if (rows[0].toLowerCase().startsWith('point_index')) rows.shift();
+  const points: TrackPoint[] = [];
+  rows.slice(0, 500).forEach((row) => {
+    const cells = row.split(',').map((cell) => cell.trim());
+    // Accept both a plain x,y,z,bank,kind file and the studio's indexed export.
+    const offset = cells.length >= 8 ? 1 : 0;
+    const x = Number(cells[offset]);
+    const y = Number(cells[offset + 1]);
+    const z = Number(cells[offset + 2]);
+    if (![x, y, z].every(Number.isFinite)) return;
+    const kind = POINT_KIND_SET.has(cells[offset + 4] as TrackPointKind)
+      ? (cells[offset + 4] as TrackPointKind)
+      : 'track';
+    const element = cells[offset + 5] ? (cells[offset + 5] as CoasterElementKind) : undefined;
+    const targetSpeed = cells[offset + 6] ? Number(cells[offset + 6]) : undefined;
+    points.push(
+      makePoint(
+        vec(x, y, z),
+        kind,
+        Number.isFinite(Number(cells[offset + 3])) ? Number(cells[offset + 3]) : 0,
+        element,
+        targetSpeed !== undefined && Number.isFinite(targetSpeed) ? targetSpeed : undefined,
+      ),
+    );
+  });
+  if (points.length < 2) throw new Error('CSV needs at least two valid geometry rows.');
+  return points;
+}
+
+export function projectFromCsv(project: CoasterProject, csv: string): CoasterProject {
+  const points = pointsFromCsv(csv);
+  return {
+    ...project,
+    id: newId('project'),
+    name: `${project.name} CSV`,
+    points,
+    closed: false,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
 function headingFromPoints(points: TrackPoint[]): Vec3 {
   if (points.length === 0) return { x: 0, y: 0, z: 1 };
   const last = points[points.length - 1].position;
@@ -617,36 +883,64 @@ export function appendElement(
   const dir = headingFromPoints(base);
   const right = normalize(cross(UP, dir));
   const created: TrackPoint[] = [];
+  const launchElements: CoasterElementKind[] = [
+    'launch',
+    'launch_tire',
+    'launch_magnetic',
+    'launch_lsm',
+    'launch_hydraulic',
+    'swing_launch',
+  ];
+  const brakeElements: CoasterElementKind[] = ['brake', 'brake_friction'];
+  const blockElements: CoasterElementKind[] = ['block_brake', 'brake_block'];
+  const magneticElements: CoasterElementKind[] = ['magnetic_brake', 'brake_magnetic'];
+  const transferElements: CoasterElementKind[] = ['transfer', 'transfer_track'];
+  const switchElements: CoasterElementKind[] = ['switch', 'switch_track'];
+  const dropElements: CoasterElementKind[] = ['drop', 'drop_track'];
+  const tiltElements: CoasterElementKind[] = ['tilt', 'tilt_track', 'movable_track'];
   const kind: TrackPointKind =
-    element === 'lift_chain'
+    element === 'station'
+      ? 'station'
+      : element === 'unload_station'
+        ? 'unload_station'
+        : element === 'storage_track'
+          ? 'storage'
+          : element === 'lift_chain'
       ? 'chain_lift'
       : element === 'lift_cable'
         ? 'cable_lift'
-        : element === 'launch'
+        : launchElements.includes(element)
           ? 'launch'
-          : element === 'brake'
+          : brakeElements.includes(element)
             ? 'brake'
-            : element === 'block_brake'
+            : blockElements.includes(element)
               ? 'block_brake'
-              : element === 'magnetic_brake'
+              : magneticElements.includes(element)
                 ? 'magnetic_brake'
-                : element === 'transfer'
+                : transferElements.includes(element)
                   ? 'transfer'
-                  : element === 'switch'
+                  : switchElements.includes(element)
                     ? 'switch'
-                    : element === 'drop'
+                    : dropElements.includes(element)
                       ? 'drop'
-                      : element === 'tilt'
+                      : tiltElements.includes(element)
                         ? 'tilt'
                         : 'track';
-  const add = (forward: number, lateral: number, lift: number, bank: number, sectionKind = kind) => {
+  const add = (
+    forward: number,
+    lateral: number,
+    lift: number,
+    bank: number,
+    sectionKind = kind,
+    targetSpeed = options.targetSpeed,
+  ) => {
     created.push(
       makePoint(
         vec(p.x + dir.x * forward + right.x * lateral, p.y + lift, p.z + dir.z * forward + right.z * lateral),
         sectionKind,
         bank,
         element,
-        options.targetSpeed,
+        targetSpeed,
       ),
     );
   };
@@ -664,6 +958,51 @@ export function appendElement(
       for (let i = 1; i <= 7; i++) {
         const a = (i / 7) * (Math.PI / 2);
         add(radius * Math.sin(a), side * radius * (1 - Math.cos(a)), 0, side * 34 * (i / 7), 'track');
+      }
+      break;
+    }
+    case 's_bend_left':
+    case 's_bend_right': {
+      const side = element === 's_bend_right' ? 1 : -1;
+      const len = options.length ?? 22;
+      const amplitude = options.radius ?? 4.2;
+      for (let i = 1; i <= 12; i++) {
+        const f = i / 12;
+        add(
+          len * f,
+          side * amplitude * Math.sin(Math.PI * 2 * f),
+          0.4 * Math.sin(Math.PI * f),
+          side * 22 * Math.sin(Math.PI * 2 * f),
+          'track',
+        );
+      }
+      break;
+    }
+    case 'banked_turn_left':
+    case 'banked_turn_right': {
+      const side = element === 'banked_turn_right' ? 1 : -1;
+      const radius = options.radius ?? 14;
+      for (let i = 1; i <= 8; i++) {
+        const f = i / 8;
+        const a = f * (Math.PI / 2);
+        add(radius * Math.sin(a), side * radius * (1 - Math.cos(a)), 0, side * 45, 'track');
+      }
+      break;
+    }
+    case 'overbanked_turn_left':
+    case 'overbanked_turn_right': {
+      const side = element === 'overbanked_turn_right' ? 1 : -1;
+      const radius = options.radius ?? 17;
+      for (let i = 1; i <= 10; i++) {
+        const f = i / 10;
+        const a = f * (Math.PI * 0.67);
+        add(
+          radius * Math.sin(a),
+          side * radius * (1 - Math.cos(a)),
+          1.8 * Math.sin(Math.PI * f),
+          side * 120 * f,
+          'track',
+        );
       }
       break;
     }
@@ -692,6 +1031,38 @@ export function appendElement(
       }
       break;
     }
+    case 'cobra_roll': {
+      for (let i = 1; i <= 14; i++) {
+        const f = i / 14;
+        const a = f * Math.PI * 2;
+        add(8 * f + 2.2 * Math.sin(a), 2.5 * Math.sin(Math.PI * f), 7 * (1 - Math.cos(a)), 360 * f, 'track');
+      }
+      break;
+    }
+    case 'heartline_roll': {
+      const len = options.length ?? 16;
+      for (let i = 1; i <= 10; i++) {
+        const f = i / 10;
+        add(f * len, 0, 2.4 * Math.sin(Math.PI * f), 360 * f, 'track');
+      }
+      break;
+    }
+    case 'inline_twist': {
+      const len = options.length ?? 12;
+      for (let i = 1; i <= 8; i++) {
+        const f = i / 8;
+        add(f * len, 0, 0.6 * Math.sin(Math.PI * f), 360 * f, 'track');
+      }
+      break;
+    }
+    case 'flying_transition': {
+      const len = options.length ?? 14;
+      for (let i = 1; i <= 10; i++) {
+        const f = i / 10;
+        add(f * len, 1.4 * Math.sin(Math.PI * f), -2.2 * Math.sin(Math.PI * f), 180 * f, 'track');
+      }
+      break;
+    }
     case 'corkscrew_left':
     case 'corkscrew_right': {
       const side = element === 'corkscrew_right' ? 1 : -1;
@@ -715,6 +1086,55 @@ export function appendElement(
       for (let i = 1; i <= 8; i++) {
         const f = i / 8;
         add(f * len, 0, 3.1 * Math.sin(Math.PI * f), 360 * f, 'track');
+      }
+      break;
+    }
+    case 'double_up':
+    case 'double_down': {
+      const len = options.length ?? 22;
+      const height = options.height ?? 5.5;
+      const direction = element === 'double_down' ? -1 : 1;
+      for (let i = 1; i <= 10; i++) {
+        const f = i / 10;
+        add(f * len, 0, direction * Math.abs(Math.sin(Math.PI * 2 * f)) * height, last.bank, 'track');
+      }
+      break;
+    }
+    case 'steep_drop': {
+      const len = options.length ?? 8;
+      const drop = options.height ?? 18;
+      for (let i = 1; i <= 8; i++) {
+        const f = i / 8;
+        add(f * len, 0, -f * drop, last.bank, 'track');
+      }
+      break;
+    }
+    case 'beyond_vertical_drop': {
+      const drop = options.height ?? 22;
+      for (let i = 1; i <= 9; i++) {
+        const f = i / 9;
+        add(f * 5.5, 0, -f * drop, 12 * Math.sin(Math.PI * f), 'track');
+      }
+      break;
+    }
+    case 'vertical_track': {
+      const rise = options.height ?? 8;
+      for (let i = 1; i <= 6; i++) {
+        add((i / 6) * 0.25, 0, (i / 6) * rise, 0, 'track');
+      }
+      break;
+    }
+    case 'dive_track': {
+      const drop = options.height ?? 10;
+      add(3, 0, 0, 0, 'track');
+      add(4.2, 0, -drop, 0, 'track');
+      add(11, 0, -drop + 1.5, last.bank, 'track');
+      break;
+    }
+    case 'spike': {
+      for (let i = 1; i <= 10; i++) {
+        const f = i / 10;
+        add(2.2 * f, 0, Math.sin(Math.PI * f) * 12, 0, 'track');
       }
       break;
     }
@@ -787,6 +1207,24 @@ export function appendElement(
       }
       break;
     }
+    case 'station': {
+      const len = options.length ?? 8;
+      add(len * 0.5, 0, 0, 0, 'station');
+      add(len, 0, 0, 0, 'station');
+      break;
+    }
+    case 'unload_station': {
+      const len = options.length ?? 8;
+      add(len * 0.5, 0, 0, 0, 'unload_station');
+      add(len, 0, 0, 0, 'unload_station');
+      break;
+    }
+    case 'storage_track': {
+      const len = options.length ?? 10;
+      add(len * 0.5, 0, 0, 0, 'storage');
+      add(len, 0, 0, 0, 'storage');
+      break;
+    }
     case 'lift_chain':
     case 'lift_cable': {
       const rise = options.height ?? (element === 'lift_cable' ? 20 : 18);
@@ -797,35 +1235,61 @@ export function appendElement(
       }
       break;
     }
-    case 'launch': {
+    case 'launch':
+    case 'launch_tire':
+    case 'launch_magnetic':
+    case 'launch_lsm':
+    case 'launch_hydraulic':
+    case 'swing_launch': {
       const length = options.length ?? 18;
-      for (let i = 1; i <= 3; i++) add((length * i) / 3, 0, 0, 0, 'launch');
+      const target =
+        options.targetSpeed ??
+        (element === 'launch_tire'
+          ? 28
+          : element === 'launch_magnetic'
+            ? 32
+            : element === 'launch_hydraulic'
+              ? 42
+              : element === 'swing_launch'
+                ? 38
+                : element === 'launch_lsm'
+                  ? 36
+                  : 34);
+      for (let i = 1; i <= 3; i++) add((length * i) / 3, 0, 0, 0, 'launch', target);
       break;
     }
     case 'brake':
+    case 'brake_friction':
     case 'block_brake':
-    case 'magnetic_brake': {
-      const len = element === 'block_brake' ? 10 : 12;
+    case 'brake_block':
+    case 'magnetic_brake':
+    case 'brake_magnetic': {
+      const len = blockElements.includes(element) ? 10 : 12;
       add(len * 0.5, 0, 0, 0, kind);
       add(len, 0, 0, 0, kind);
       break;
     }
-    case 'transfer': {
+    case 'transfer':
+    case 'transfer_track': {
       add(4, 0, 0, 0, 'transfer');
       add(8, 0, 0, 0, 'transfer');
       break;
     }
-    case 'switch': {
+    case 'switch':
+    case 'switch_track': {
       add(3, 0, 0, 0, 'switch');
       add(6, 2.4, 0, 0, 'switch');
       break;
     }
-    case 'drop': {
+    case 'drop':
+    case 'drop_track': {
       add(2, 0, 0, 0, 'drop');
       add(3.6, 0, -(options.height ?? 8), 0, 'drop');
       break;
     }
-    case 'tilt': {
+    case 'tilt':
+    case 'tilt_track':
+    case 'movable_track': {
       add(2, 0, 0, 0, 'tilt');
       add(4, 0, 0, 90, 'tilt');
       break;
