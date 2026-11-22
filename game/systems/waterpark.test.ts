@@ -16,6 +16,7 @@ import {
   WATERPARK_TOWERS,
   buildWaterparkSlidePath,
   getWaterparkStats,
+  getWaterparkSlideAccess,
   getWaterparkSurfaceY,
   getWaterparkTowerStairTurns,
   getWaterparkTowerStairY,
@@ -105,7 +106,7 @@ test('every tower staircase is continuously solid from deck to summit', () => {
       const wx = WATERPARK_SITE.x + tower.x + Math.cos(angle) * WATERPARK_TOWER_STAIR.radius;
       const wz = WATERPARK_SITE.z + tower.z + Math.sin(angle) * WATERPARK_TOWER_STAIR.radius;
       const expectedY = getWaterparkTowerStairY(tower.height, t);
-      const surfaceY = getWaterparkSurfaceY(wx, wz, expectedY + 0.1, expectedY + 0.1);
+      const surfaceY = getWaterparkSurfaceY(wx, wz, expectedY + 0.01, expectedY + 0.01);
       assertClose(surfaceY, expectedY, 0.02);
       assert.ok(surfaceY - previousY <= 0.52, `${tower.id} stair has a non-walkable step`);
       previousY = surfaceY;
@@ -122,26 +123,124 @@ test('every tower staircase is continuously solid from deck to summit', () => {
   }
 });
 
-test('every slide boards from its walkable summit deck, never from the ground', () => {
+test('every slide has a walkable catwalk, launch deck, and no interaction prompt', () => {
   const scene = new THREE.Scene();
   const runtime = new WaterparkRuntime(scene);
-  const mainTower = WATERPARK_TOWERS.find((tower) => tower.id === 'main')!;
-  const mainSlides = WATERPARK_SLIDES.filter((slide) => slide.tower === 'main');
-  const first = mainSlides[0];
-  const angle = 0.18;
-  const summitY = WATERPARK_DECK_Y + mainTower.height + WATERPARK_TOWER_STAIR.landingRise;
-  const near = runtime.getNearbyInteraction(
-    WATERPARK_SITE.x + mainTower.x + Math.cos(angle) * 3.95,
-    summitY,
-    WATERPARK_SITE.z + mainTower.z + Math.sin(angle) * 3.95,
-  );
-  assert.equal(near?.rideId, first.id);
-  const ground = runtime.getNearbyInteraction(
-    WATERPARK_SITE.x + mainTower.x,
-    WATERPARK_DECK_Y,
-    WATERPARK_SITE.z + mainTower.z,
-  );
-  assert.equal(ground, null);
+  for (const slide of WATERPARK_SLIDES) {
+    const access = getWaterparkSlideAccess(slide);
+    const entry = runtime.getPhysicalSlideEntry(slide.id);
+    assert.ok(entry, `${slide.id} has no physical mouth`);
+    assert.ok(
+      Math.abs(entry.y - access.startY) < 1.0,
+      `${slide.id} mouth must connect to its launch deck`,
+    );
+    assertClose(entry.x, WATERPARK_SITE.x + access.startX, 0.35);
+    assertClose(entry.z, WATERPARK_SITE.z + access.startZ, 0.35);
+
+    const launchSurface = getWaterparkSurfaceY(
+      WATERPARK_SITE.x + access.startX,
+      WATERPARK_SITE.z + access.startZ,
+      access.startY,
+      access.startY,
+    );
+    assertClose(launchSurface, access.startY, 0.03);
+
+    for (let i = 1; i < access.catwalk.length; i++) {
+      const catwalkX = (access.catwalk[i - 1].x + access.catwalk[i].x) * 0.5;
+      const catwalkZ = (access.catwalk[i - 1].z + access.catwalk[i].z) * 0.5;
+      const catwalkSurface = getWaterparkSurfaceY(
+        WATERPARK_SITE.x + catwalkX,
+        WATERPARK_SITE.z + catwalkZ,
+        access.startY,
+        access.startY,
+      );
+      assertClose(catwalkSurface, access.startY, 0.03);
+    }
+
+    const prompt = runtime.getNearbyInteraction(entry.x, entry.y + 0.1, entry.z);
+    assert.equal(prompt, null, `${slide.id} must never ask for an interaction key`);
+  }
+  runtime.dispose();
+});
+
+test('all 28 slides are physically ridden end-to-end at 30, 60 and 120 Hz', () => {
+  const scene = new THREE.Scene();
+  const runtime = new WaterparkRuntime(scene);
+  const rates = [1 / 30, 1 / 60, 1 / 120];
+  const entrySpeeds = [1.2, 3.4, 7.5];
+  for (let rateIndex = 0; rateIndex < rates.length; rateIndex++) {
+    const dt = rates[rateIndex];
+    const entrySpeed = entrySpeeds[rateIndex];
+    for (const slide of WATERPARK_SLIDES) {
+      runtime.cancelPhysicalSlide();
+      const access = getWaterparkSlideAccess(slide);
+      const entry = runtime.getPhysicalSlideEntry(slide.id)!;
+      const approachDx = access.stairX - access.startX;
+      const approachDz = access.stairZ - access.startZ;
+      const approachLength = Math.hypot(approachDx, approachDz);
+      if (approachLength > 2.2) {
+        const before = runtime.tryEnterPhysicalSlide(
+          entry.x + (approachDx / approachLength) * 1.8,
+          access.startY + 0.1,
+          entry.z + (approachDz / approachLength) * 1.8,
+          entrySpeed,
+        );
+        assert.equal(before, null, `${slide.id} must not engage far from its mouth`);
+      }
+
+      let snapshot = runtime.tryEnterPhysicalSlide(
+        entry.x,
+        access.startY + 0.1,
+        entry.z,
+        entrySpeed,
+      );
+      assert.ok(snapshot, `${slide.id} did not engage by walking into it`);
+      assert.equal(snapshot.slideId, slide.id);
+      let previous = snapshot;
+      let steps = 0;
+      while (!snapshot.finished && steps < 20000) {
+        const next = runtime.stepPhysicalSlide(dt);
+        assert.ok(next, `${slide.id} lost its collision surface at ${dt.toFixed(3)} s`);
+        snapshot = next;
+        assert.ok(Number.isFinite(snapshot.x));
+        assert.ok(Number.isFinite(snapshot.y));
+        assert.ok(Number.isFinite(snapshot.z));
+        assert.ok(Number.isFinite(snapshot.speed));
+        assert.ok(snapshot.speed <= 32.01, `${slide.id} exceeded the speed limit`);
+        assert.ok(
+          snapshot.progressPercent >= previous.progressPercent - 0.001,
+          `${slide.id} travelled backwards`,
+        );
+        assert.ok(
+          Math.abs(snapshot.lateralOffset) <= snapshot.lateralLimit + 0.002,
+          `${slide.id} clipped through a slide wall`,
+        );
+        assert.ok(
+          Math.abs(snapshot.y - previous.y) <= 2.5,
+          `${slide.id} tunnelled vertically at ${dt.toFixed(3)} s`,
+        );
+        assert.ok(snapshot.y >= WATERPARK_DECK_Y - 1.2, `${slide.id} fell below the deck`);
+        assert.ok(
+          snapshot.y <= WATERPARK_DECK_Y + slide.topHeight + 0.6,
+          `${slide.id} launched above its launch height`,
+        );
+        previous = snapshot;
+        steps++;
+      }
+      assert.ok(snapshot.finished, `${slide.id} never reached splashdown`);
+      assert.equal(snapshot.progressPercent, 100);
+      assertClose(snapshot.x, WATERPARK_SITE.x + slide.exit.x, 0.001);
+      assertClose(snapshot.z, WATERPARK_SITE.z + slide.exit.z, 0.001);
+      assertClose(snapshot.y, WATERPARK_DECK_Y, 0.001);
+      const exitSurface = getWaterparkSurfaceY(
+        snapshot.x,
+        snapshot.z,
+        snapshot.y + 0.1,
+        snapshot.y + 0.1,
+      );
+      assertClose(exitSurface, WATERPARK_DECK_Y, 0.03);
+    }
+  }
   runtime.dispose();
 });
 

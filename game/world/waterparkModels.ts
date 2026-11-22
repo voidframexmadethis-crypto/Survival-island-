@@ -8,11 +8,13 @@ import {
   WATERPARK_NAME,
   WATERPARK_POOLS,
   WATERPARK_SITE,
+  WATERPARK_LAUNCH,
   WATERPARK_SLIDES,
   WATERPARK_TOWER_STAIR,
   WATERPARK_TOWERS,
   buildWaterparkSlidePath,
   getWaterparkBridgeLine,
+  getWaterparkSlideAccess,
   getWaterparkTowerStairTurns,
   type WaterparkSlideKind,
   type WaterparkSlideSpec,
@@ -71,6 +73,14 @@ const _prevRight = new THREE.Vector3(1, 0, 0);
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+export function getWaterparkSlideWidth(kind: WaterparkSlideKind): number {
+  return slideWidth(kind);
+}
+
+export function isWaterparkSlideEnclosed(kind: WaterparkSlideKind): boolean {
+  return kind === 'tube' || kind === 'drop';
 }
 
 function slideWidth(kind: WaterparkSlideKind): number {
@@ -858,7 +868,7 @@ export function buildWaterparkModel(): WaterparkModelHandles {
     towerGroup.add(stairMesh);
     addSign(
       towerGroup,
-      `STAIRS TO SUMMIT · ${WATERPARK_SLIDES.filter((s) => s.tower === tower.id).length} RIDES`,
+      `CLIMB STAIRS TO ${WATERPARK_SLIDES.filter((s) => s.tower === tower.id).length} SLIDE ENTRIES`,
       '#fef3c7',
       5.4,
       0.7,
@@ -887,15 +897,16 @@ export function buildWaterparkModel(): WaterparkModelHandles {
     const tower = WATERPARK_TOWERS.find((t) => t.id === spec.tower) ?? WATERPARK_TOWERS[0];
     const siblings = slidesByTower.get(spec.tower) ?? [spec];
     const index = siblings.findIndex((s) => s.id === spec.id);
-    const boardingRadius = 3.95;
+    const boardingRadius = tower.id === 'main' || tower.id === 'east' ? 8.4 : 7.2;
     const angle =
       (index / Math.max(1, siblings.length)) * Math.PI * 2 +
       (tower.id === 'main' ? 0.18 : tower.id === 'east' ? 0.9 : tower.id === 'family' ? 1.7 : 2.4);
     const boarding = {
       x: tower.x + Math.cos(angle) * boardingRadius,
-      y: tower.height + WATERPARK_TOWER_STAIR.landingRise,
+      y: 0.02,
       z: tower.z + Math.sin(angle) * boardingRadius,
     };
+    const access = getWaterparkSlideAccess(spec);
     slides.push({ spec, curve, samples, length, boarding });
 
     // Metal or plastic shell.
@@ -949,10 +960,27 @@ export function buildWaterparkModel(): WaterparkModelHandles {
       root.add(waterRibbon);
     }
 
-    // Slide mouth at the launch platform and splash mouth at the pool.
-    const start = rawPath[0];
+    // Slide mouth at the physical launch platform and splash mouth at the pool.
+    const start = new THREE.Vector3(
+      access.startX,
+      access.startY - WATERPARK_DECK_Y,
+      access.startZ,
+    );
     const end = rawPath[rawPath.length - 1];
-    const startTan = curve.getTangentAt(0).normalize();
+    let startSample = samples[0];
+    let sampleDistance = Infinity;
+    for (const sample of samples) {
+      const candidate = Math.hypot(
+        sample.point.x - start.x,
+        sample.point.y - start.y,
+        sample.point.z - start.z,
+      );
+      if (candidate < sampleDistance) {
+        sampleDistance = candidate;
+        startSample = sample;
+      }
+    }
+    const startTan = startSample.tangent.clone().normalize();
     const startUp = new THREE.Vector3().crossVectors(
       new THREE.Vector3().crossVectors(startTan, UP).normalize(),
       startTan,
@@ -967,6 +995,70 @@ export function buildWaterparkModel(): WaterparkModelHandles {
     addBox(root, steelMat, 3.4, 0.3, 3.4, start.x, start.y - 0.15, start.z);
     addBox(root, whiteMat, 2.4, 1.7, 0.25, start.x, start.y + 0.9, start.z + 1.5);
     addSign(root, spec.name, spec.accent, 2.4, 0.42, start.x, start.y + 0.9, start.z + 1.64);
+
+    // Physical stair-to-launch catwalk, following the exact routed polyline
+    // used by the collision solver. It wraps around the tower deck instead of
+    // cutting through the core, so every mouth is walk-reachable.
+    if (access.catwalkLength > 0.35) {
+      for (let i = 1; i < access.catwalk.length; i++) {
+        const a = access.catwalk[i - 1];
+        const b = access.catwalk[i];
+        const sx = b.x - a.x;
+        const sz = b.z - a.z;
+        const length = Math.hypot(sx, sz);
+        if (length < 0.08) continue;
+        const catwalk = new THREE.Group();
+        catwalk.position.set((a.x + b.x) * 0.5, start.y, (a.z + b.z) * 0.5);
+        catwalk.rotation.y = -Math.atan2(sz, sx);
+        root.add(catwalk);
+        addBox(
+          catwalk,
+          deckMat,
+          length + 0.16,
+          0.14,
+          WATERPARK_LAUNCH.catwalkHalfWidth * 2,
+          0,
+          -0.07,
+          0,
+        );
+        addBox(
+          catwalk,
+          concreteMat,
+          length + 0.08,
+          0.12,
+          0.38,
+          0,
+          -0.2,
+          0,
+        );
+        for (const side of [-1, 1]) {
+          addBox(
+            catwalk,
+            steelMat,
+            length + 0.1,
+            0.055,
+            0.055,
+            0,
+            0.58,
+            side * WATERPARK_LAUNCH.catwalkHalfWidth,
+          );
+          for (const end of [-1, 1]) {
+            addBox(
+              catwalk,
+              steelMat,
+              0.05,
+              0.58,
+              0.05,
+              end * length * 0.5,
+              0.29,
+              side * WATERPARK_LAUNCH.catwalkHalfWidth,
+              0,
+              false,
+            );
+          }
+        }
+      }
+    }
     const splashGeo = new THREE.TorusGeometry(width * 0.9, 0.25, 7, 22);
     geometries.add(splashGeo);
     const splash = new THREE.Mesh(splashGeo, foamMat);
@@ -994,10 +1086,10 @@ export function buildWaterparkModel(): WaterparkModelHandles {
       postMatrices.push(matrix);
     }
 
-    // Boarding gate on the walkable summit deck.
+    // Queue kiosk at the tower base, with the actual slide entrance marked by
+    // the launch platform and its new physical access catwalk above.
     const kiosk = new THREE.Group();
-    kiosk.position.set(boarding.x, boarding.y + 0.02, boarding.z);
-    kiosk.scale.setScalar(0.82);
+    kiosk.position.set(boarding.x, 0.02, boarding.z);
     const faceYaw = Math.atan2(tower.x - boarding.x, tower.z - boarding.z);
     kiosk.rotation.y = faceYaw;
     root.add(kiosk);

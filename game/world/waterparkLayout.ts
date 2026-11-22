@@ -103,6 +103,160 @@ export function getWaterparkTowerStairY(height: number, t: number): number {
   );
 }
 
+/** Physical access catwalk from the tower stair to each slide's launch mouth. */
+export const WATERPARK_LAUNCH = {
+  platformHalf: 1.7,
+  catwalkHalfWidth: 0.68,
+} as const;
+
+export interface WaterparkSlideAccess {
+  startX: number;
+  startY: number;
+  startZ: number;
+  stairX: number;
+  stairZ: number;
+  stairAngle: number;
+  catwalkLength: number;
+  catwalkYaw: number;
+  /** Polyline routed around the outside of the tower deck. */
+  catwalk: Array<{ x: number; z: number }>;
+}
+
+export function isPointOnWaterparkSlideAccess(
+  slide: WaterparkSlideSpec,
+  x: number,
+  z: number,
+  footY: number,
+): boolean {
+  const access = getWaterparkSlideAccess(slide);
+  const dx = x - WATERPARK_SITE.x;
+  const dz = z - WATERPARK_SITE.z;
+  if (Math.abs(footY - access.startY) > 0.45) return false;
+  if (
+    Math.abs(dx - access.startX) <= WATERPARK_LAUNCH.platformHalf &&
+    Math.abs(dz - access.startZ) <= WATERPARK_LAUNCH.platformHalf
+  ) {
+    return true;
+  }
+  for (let i = 1; i < access.catwalk.length; i++) {
+    if (
+      distanceToSegment2D(
+        dx,
+        dz,
+        access.catwalk[i - 1].x,
+        access.catwalk[i - 1].z,
+        access.catwalk[i].x,
+        access.catwalk[i].z,
+      ) <=
+      WATERPARK_LAUNCH.catwalkHalfWidth + 0.32
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function getWaterparkSlideAccess(
+  slide: WaterparkSlideSpec,
+): WaterparkSlideAccess {
+  const tower = WATERPARK_TOWERS.find((entry) => entry.id === slide.tower) ?? WATERPARK_TOWERS[0];
+  // A number of authored slide mouths begin inside the tower core. Pick the
+  // first exposed point on the identical rendered curve so the entrance is
+  // physically reachable instead of trying to cut a tunnel through the tower.
+  const points = buildWaterparkSlidePath(slide);
+  let entrance = points[0];
+  for (let i = 1; i < points.length - 2; i++) {
+    const point = points[i];
+    const clearOfTowers = WATERPARK_TOWERS.every((entry) => {
+      const radial = Math.hypot(point.x - entry.x, point.z - entry.z);
+      const summitY =
+        WATERPARK_DECK_Y + entry.height + WATERPARK_TOWER_STAIR.landingRise;
+      // Never enter through the solid tower column. Lower mouths may sit under
+      // the summit deck overhang, but top mouths need to clear its footprint.
+      if (radial <= 2.55) return false;
+      if (summitY - point.y < 1.85 && radial <= 4.85) return false;
+      return true;
+    });
+    if (clearOfTowers && point.y > WATERPARK_DECK_Y + 0.45) {
+      entrance = point;
+      break;
+    }
+  }
+  const startX = entrance.x;
+  const startY = entrance.y;
+  const startZ = entrance.z;
+  const turns = getWaterparkTowerStairTurns(tower.height);
+  const t = clamp(
+    (startY - WATERPARK_DECK_Y - WATERPARK_TOWER_STAIR.baseRise) /
+      (tower.height - 0.1),
+    0,
+    1,
+  );
+  const stairAngle = t * turns * Math.PI * 2;
+  const stairX = tower.x + Math.cos(stairAngle) * WATERPARK_TOWER_STAIR.radius;
+  const stairZ = tower.z + Math.sin(stairAngle) * WATERPARK_TOWER_STAIR.radius;
+  const dx = startX - stairX;
+  const dz = startZ - stairZ;
+
+  // A straight chord can cross the tower core. Route the access catwalk
+  // radially out, around the deck at a safe radius, then back to the mouth.
+  const entryAngle = Math.atan2(startZ - tower.z, startX - tower.x);
+  let delta = entryAngle - stairAngle;
+  while (delta > Math.PI) delta -= Math.PI * 2;
+  while (delta < -Math.PI) delta += Math.PI * 2;
+  const entryRadius = Math.hypot(startX - tower.x, startZ - tower.z);
+  const outerRadius = Math.max(6.25, entryRadius);
+  const arcSteps = Math.max(1, Math.min(18, Math.ceil(Math.abs(delta) * outerRadius / 1.2)));
+  const catwalk = [
+    { x: stairX, z: stairZ },
+    {
+      x: tower.x + Math.cos(stairAngle) * outerRadius,
+      z: tower.z + Math.sin(stairAngle) * outerRadius,
+    },
+  ];
+  for (let i = 1; i <= arcSteps; i++) {
+    const angle = stairAngle + (delta * i) / arcSteps;
+    catwalk.push({
+      x: tower.x + Math.cos(angle) * outerRadius,
+      z: tower.z + Math.sin(angle) * outerRadius,
+    });
+  }
+  catwalk.push({ x: startX, z: startZ });
+  let catwalkLength = 0;
+  for (let i = 1; i < catwalk.length; i++) {
+    catwalkLength += Math.hypot(
+      catwalk[i].x - catwalk[i - 1].x,
+      catwalk[i].z - catwalk[i - 1].z,
+    );
+  }
+  return {
+    startX,
+    startY,
+    startZ,
+    stairX,
+    stairZ,
+    stairAngle,
+    catwalkLength,
+    catwalkYaw: -Math.atan2(dz, dx),
+    catwalk,
+  };
+}
+
+function distanceToSegment2D(
+  x: number,
+  z: number,
+  x0: number,
+  z0: number,
+  x1: number,
+  z1: number,
+): number {
+  const dx = x1 - x0;
+  const dz = z1 - z0;
+  const lenSq = dx * dx + dz * dz;
+  const t = lenSq > 0 ? clamp(((x - x0) * dx + (z - z0) * dz) / lenSq, 0, 1) : 0;
+  return Math.hypot(x - (x0 + dx * t), z - (z0 + dz * t));
+}
+
 export const WATERPARK_POOLS = [
   { id: 'wave', name: 'Hurricane Bay Wave Pool', x: -2, z: 26, w: 38, d: 20, depth: 1.8 },
   { id: 'splash', name: 'Anaconda Splash Basin', x: 36, z: 12, w: 18, d: 14, depth: 1.4 },
@@ -288,7 +442,8 @@ export const WATERPARK_SLIDES: readonly WaterparkSlideSpec[] = [
     style: 'drop',
     tower: 'east',
     topHeight: 30,
-    start: { x: 29, z: 3 },
+    // The drop mouth sits outside the tower core so it can be walked into.
+    start: { x: 36, z: 3 },
     exit: { x: 35, z: 5 },
     side: -1,
     color: '#f59e0b',
@@ -450,7 +605,8 @@ export const WATERPARK_SLIDES: readonly WaterparkSlideSpec[] = [
     style: 'kids',
     tower: 'kids',
     topHeight: 11,
-    start: { x: -30, z: 17 },
+    // Keep the kids slide mouth clear of the tower column.
+    start: { x: -24, z: 17 },
     exit: { x: -30, z: 26 },
     side: -1,
     color: '#0ea5e9',
@@ -670,7 +826,7 @@ export function getWaterparkSurfaceY(
     // Spiral stair ribbon. Multiple turns occupy the same X/Z footprint at
     // different heights, so pick the tread closest to the player's feet.
     const radial = Math.hypot(localX, localZ);
-    if (Math.abs(radial - WATERPARK_TOWER_STAIR.radius) > 0.82) continue;
+    if (Math.abs(radial - WATERPARK_TOWER_STAIR.radius) > 0.5) continue;
     let angle = Math.atan2(localZ, localX);
     if (angle < 0) angle += Math.PI * 2;
     const turns = getWaterparkTowerStairTurns(tower.height);
@@ -681,6 +837,52 @@ export function getWaterparkSurfaceY(
       if (stairY <= sweepFootY + 0.62 && stairY > bestY) {
         bestY = stairY;
       }
+    }
+  }
+
+  // Every slide mouth has a solid launch platform plus a catwalk from the
+  // matching stair height. These are the physical walk-in entrances.
+  for (const slide of WATERPARK_SLIDES) {
+    const access = getWaterparkSlideAccess(slide);
+    // Only snap to a launch deck/catwalk when the player's feet are within a
+    // step of its height. This keeps the many overlapping stair/catwalk
+    // footprints from reporting a higher arbitrary landing.
+    const reachable =
+      access.startY <= sweepFootY + 0.08 && access.startY >= sweepFootY - 0.75;
+    if (
+      reachable &&
+      Math.abs(dx - access.startX) <= WATERPARK_LAUNCH.platformHalf &&
+      Math.abs(dz - access.startZ) <= WATERPARK_LAUNCH.platformHalf &&
+      access.startY > bestY
+    ) {
+      bestY = access.startY;
+    }
+    let catwalkDistance = Infinity;
+    for (let i = 1; i < access.catwalk.length; i++) {
+      catwalkDistance = Math.min(
+        catwalkDistance,
+        distanceToSegment2D(
+          dx,
+          dz,
+          access.catwalk[i - 1].x,
+          access.catwalk[i - 1].z,
+          access.catwalk[i].x,
+          access.catwalk[i].z,
+        ),
+      );
+    }
+    const nearTowerCore = WATERPARK_TOWERS.some(
+      (entry) =>
+        Math.abs(Math.hypot(dx - entry.x, dz - entry.z) - WATERPARK_TOWER_STAIR.radius) <
+        0.18,
+    );
+    if (
+      reachable &&
+      !nearTowerCore &&
+      catwalkDistance <= WATERPARK_LAUNCH.catwalkHalfWidth + 0.24 &&
+      access.startY > bestY
+    ) {
+      bestY = access.startY;
     }
   }
 

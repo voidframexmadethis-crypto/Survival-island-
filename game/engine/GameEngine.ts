@@ -418,7 +418,10 @@ import {
   type AmusementParkSite,
   type SavedAmusementPark,
 } from '../systems/amusementParkRuntime';
-import { WaterparkRuntime } from '../systems/waterparkRuntime';
+import {
+  WaterparkRuntime,
+  type PhysicalSlideSnapshot,
+} from '../systems/waterparkRuntime';
 import { getWaterparkSurfaceY } from '../world/waterparkLayout';
 import {
   sanitizePark,
@@ -4577,6 +4580,7 @@ export class GameEngine {
     this.clearMovementInputs();
     this.ridingCoasterId = null;
     this.ridingWaterparkId = null;
+    this.waterpark?.cancelPhysicalSlide();
     this.waterpark?.resetProgress();
     this.currentDimension = 'overworld';
     if (this.activeDimensionWorld) {
@@ -5116,6 +5120,7 @@ export class GameEngine {
     this.clearMovementInputs();
     this.ridingCoasterId = null;
     this.ridingWaterparkId = null;
+    this.waterpark?.cancelPhysicalSlide();
     this.currentDimension = 'overworld';
     if (this.activeDimensionWorld) {
       disposeDimensionWorld(this.activeDimensionWorld);
@@ -5537,6 +5542,7 @@ export class GameEngine {
     this.seatedState = null;
     this.ridingCoasterId = null;
     this.ridingWaterparkId = null;
+    this.waterpark?.cancelPhysicalSlide();
     this.waterpark?.exitRide();
     if (this.worldType === 'flat') {
       this.playerX = FLAT_PLAYER_SPAWN.x;
@@ -11163,6 +11169,16 @@ export class GameEngine {
     moveForward += this.joyY;
 
     const inputMag = Math.min(1, Math.hypot(moveRight, moveForward));
+
+    const physicalSlide =
+      this.worldType === 'island' && this.currentDimension === 'overworld'
+        ? this.waterpark?.stepPhysicalSlide(dt) ?? null
+        : null;
+    if (physicalSlide) {
+      this.applyPhysicalSlideSnapshot(physicalSlide, dt);
+      return;
+    }
+
     if (this.seatedState) {
       if (inputMag > 0.35) {
         this.standUp();
@@ -11854,6 +11870,27 @@ export class GameEngine {
       }
     }
 
+    // Walking into a physical slide mouth automatically starts the slide.
+    // No interaction key, camera path, or teleport is involved.
+    if (
+      !isFlat &&
+      this.worldType === 'island' &&
+      this.currentDimension === 'overworld' &&
+      !this.isSwimming &&
+      !this.waterpark?.isPhysicallySliding
+    ) {
+      const entered = this.waterpark?.tryEnterPhysicalSlide(
+        this.playerX,
+        this.playerY,
+        this.playerZ,
+        this.currentSpeedMps,
+      );
+      if (entered) {
+        this.applyPhysicalSlideSnapshot(entered, dt);
+        return;
+      }
+    }
+
     // Smooth camera step offset when walking cleanly across steps, decks, and uneven terrain seams
     if (wasGrounded && this.grounded && !this.isSwimming && Number.isFinite(prevPlayerY)) {
       const stepDeltaY = this.playerY - prevPlayerY;
@@ -11979,6 +12016,47 @@ export class GameEngine {
       daylight > 0.35,
       !isFlat && currentBiome === 'forest',
     );
+  }
+
+  private applyPhysicalSlideSnapshot(
+    snapshot: PhysicalSlideSnapshot,
+    dt: number,
+  ): void {
+    this.playerX = snapshot.x;
+    this.playerY = snapshot.y;
+    this.playerZ = snapshot.z;
+    this.playerYaw = snapshot.yaw;
+    this.camYaw = snapshot.yaw - Math.PI;
+    this.playerVelY = 0;
+    this.grounded = snapshot.finished;
+    this.isSwimming = false;
+    this.isSprinting = false;
+    this.wallRunTimer = 0;
+    this.wallRunSide = 0;
+    this.currentSpeedMps = snapshot.speed;
+    this.wallTiltAngle = THREE.MathUtils.damp(
+      this.wallTiltAngle,
+      snapshot.bank,
+      12,
+      dt,
+    );
+    this.camPitch = THREE.MathUtils.damp(
+      this.camPitch,
+      snapshot.finished ? -0.05 : -0.12,
+      10,
+      dt,
+    );
+    this.currentEyeHeight = THREE.MathUtils.damp(
+      this.currentEyeHeight,
+      snapshot.finished ? 1.62 : 1.24,
+      10,
+      dt,
+    );
+    this.camStepOffsetY = 0;
+    this.vaultTimer = 0;
+    this.nearbyInteraction = null;
+    this.targetHitbox = null;
+    this.updateFirstPersonHands(0);
   }
 
   private probeTargetHitbox(): void {
@@ -25089,6 +25167,7 @@ export class GameEngine {
     if (!this.ridingWaterparkId || !this.waterpark) return;
     const exit = this.waterpark.exitRide();
     this.ridingWaterparkId = null;
+    this.waterpark?.cancelPhysicalSlide();
     this.playerX = exit.x;
     this.playerY = exit.y;
     this.playerZ = exit.z;
@@ -25117,7 +25196,11 @@ export class GameEngine {
   private handleWaterparkEvents(): void {
     if (!this.waterpark) return;
     for (const event of this.waterpark.consumeEvents()) {
-      if (event.type === 'ride_complete') {
+      if (event.type === 'physical_enter') {
+        this.sound.playWashBottle();
+        this.cameraShakeTimer = Math.max(this.cameraShakeTimer, 0.1);
+        this.toast(`Walk-in entry — sliding ${event.name}!`, 'discovery');
+      } else if (event.type === 'ride_complete') {
         this.sound.playWashBottle();
         this.cameraShakeTimer = Math.max(this.cameraShakeTimer, 0.18);
         this.spawnParticles(this.playerX, this.playerY + 0.25, this.playerZ, 0x7dd3fc, 24);

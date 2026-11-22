@@ -9,13 +9,16 @@ import {
   WATERPARK_SITE,
   WATERPARK_SLIDES,
   DEFAULT_WATERPARK_STATE,
+  getWaterparkSlideAccess,
+  isPointOnWaterparkSlideAccess,
   sanitizeWaterparkState,
   type WaterparkSavedState,
-  type WaterparkSlideKind,
 } from '../world/waterparkLayout';
 import {
   buildWaterparkModel,
   getWaterparkSlideEyeHeight,
+  getWaterparkSlideWidth,
+  isWaterparkSlideEnclosed,
   sampleWaterparkPath,
   type WaterparkModelHandles,
   type WaterparkSlideHandles,
@@ -73,6 +76,11 @@ export type WaterparkEvent =
       type: 'soaked';
       source: 'bucket';
       amount: number;
+    }
+  | {
+      type: 'physical_enter';
+      rideId: string;
+      name: string;
     };
 
 interface SlideRide {
@@ -105,19 +113,49 @@ interface BucketRide {
 
 type ActiveRide = SlideRide | LazyRide | WaveRide | BucketRide;
 
+interface PhysicalSlideRide {
+  slide: WaterparkSlideHandles;
+  entryDistance: number;
+  distance: number;
+  speed: number;
+  lateral: number;
+  lateralVelocity: number;
+  elapsed: number;
+}
+
+export interface PhysicalSlideSnapshot {
+  slideId: string;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  bank: number;
+  lateralOffset: number;
+  lateralLimit: number;
+  speed: number;
+  speedKmh: number;
+  progressPercent: number;
+  heightM: number;
+  finished: boolean;
+}
+
+export interface PhysicalSlideEntry {
+  slideId: string;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  /** Walkable launch-platform height at this mouth. */
+  surfaceY: number;
+  distance: number;
+}
+
 interface ExitPoint {
   x: number;
   y: number;
   z: number;
   yaw: number;
-}
-
-interface Kiosk {
-  rideId: string;
-  slide: WaterparkSlideHandles;
-  x: number;
-  y: number;
-  z: number;
 }
 
 const MAX_PARTICLES = 520;
@@ -132,33 +170,6 @@ function smoothstep(edge0: number, edge1: number, value: number): number {
   return t * t * (3 - 2 * t);
 }
 
-function slideKindLabel(kind: WaterparkSlideKind): string {
-  switch (kind) {
-    case 'body':
-      return 'Body slide';
-    case 'tube':
-      return 'Enclosed tube';
-    case 'raft':
-      return 'Family raft';
-    case 'mat':
-      return 'Mat racer';
-    case 'bowl':
-      return 'Bowl slide';
-    case 'halfpipe':
-      return 'Halfpipe';
-    case 'watercoaster':
-      return 'Water coaster';
-    case 'drop':
-      return 'Capsule drop';
-    case 'log':
-      return 'Log flume';
-    case 'kids':
-      return 'Kids slide';
-    default:
-      return 'Water slide';
-  }
-}
-
 /**
  * The complete Hilltop Waterpark runtime. Geometry is built once; this class
  * owns guest interactions, ride cameras, gravity/water physics, splashes and
@@ -168,7 +179,6 @@ export class WaterparkRuntime {
   private readonly scene: THREE.Scene;
   private readonly handles: WaterparkModelHandles;
   private readonly root: THREE.Group;
-  private readonly kiosks: Kiosk[] = [];
   private readonly events: WaterparkEvent[] = [];
   private readonly partPositions = new Float32Array(MAX_PARTICLES * 3);
   private readonly partVelocity = new Float32Array(MAX_PARTICLES * 3);
@@ -185,6 +195,8 @@ export class WaterparkRuntime {
   private readonly rideUp = new THREE.Vector3();
 
   private active: ActiveRide | null = null;
+  private physical: PhysicalSlideRide | null = null;
+  private physicalCooldown = 0;
   private visible = true;
   private disposed = false;
   private elapsed = 0;
@@ -210,16 +222,6 @@ export class WaterparkRuntime {
     this.root = this.handles.root;
     this.root.name = 'hilltop-waterpark-runtime';
     this.scene.add(this.root);
-
-    for (const slide of this.handles.slides) {
-      this.kiosks.push({
-        rideId: slide.spec.id,
-        slide,
-        x: slide.boarding.x,
-        y: slide.boarding.y,
-        z: slide.boarding.z,
-      });
-    }
 
     this.particleGeometry = new THREE.BufferGeometry();
     this.particleGeometry.setAttribute(
@@ -247,6 +249,10 @@ export class WaterparkRuntime {
     return this.active !== null;
   }
 
+  public get isPhysicallySliding(): boolean {
+    return this.physical !== null;
+  }
+
   public get activeRideId(): string | null {
     return this.active ? this.getActiveId() : null;
   }
@@ -269,12 +275,288 @@ export class WaterparkRuntime {
   public resetProgress(): void {
     this.stats = { ...DEFAULT_WATERPARK_STATE, bestTimes: {} };
     this.active = null;
+    this.physical = null;
+    this.physicalCooldown = 0;
     this.lastRideSeconds = 0;
   }
 
   public setVisible(visible: boolean): void {
     this.visible = visible;
     this.root.visible = visible;
+    if (!visible) this.physical = null;
+  }
+
+  /** Exact walk-in mouth of a slide, derived from the rendered curve. */
+  public getPhysicalSlideEntry(rideId: string): PhysicalSlideEntry | null {
+    const slide = this.handles.slides.find((entry) => entry.spec.id === rideId);
+    if (!slide) return null;
+    const access = getWaterparkSlideAccess(slide.spec);
+    let entrance = slide.samples[0];
+    let bestDistance = Infinity;
+    for (const sample of slide.samples) {
+      const distance = Math.hypot(
+        sample.point.x - access.startX,
+        sample.point.y - (access.startY - WATERPARK_SITE.y),
+        sample.point.z - access.startZ,
+      );
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        entrance = sample;
+      }
+    }
+    const offset = this.physicalFootOffset(slide);
+    return {
+      slideId: rideId,
+      name: slide.spec.name,
+      x: WATERPARK_SITE.x + entrance.point.x - entrance.up.x * offset,
+      y: WATERPARK_SITE.y + entrance.point.y - entrance.up.y * offset,
+      z: WATERPARK_SITE.z + entrance.point.z - entrance.up.z * offset,
+      surfaceY: access.startY,
+      distance: entrance.distance,
+    };
+  }
+
+  /**
+   * Automatically engage a slide when the player's feet reach its mouth.
+   * Called after ordinary walking; there is no interaction key or teleport.
+   */
+  public tryEnterPhysicalSlide(
+    playerX: number,
+    playerY: number,
+    playerZ: number,
+    entrySpeed = 2.4,
+  ): PhysicalSlideSnapshot | null {
+    if (this.physical || this.active || this.physicalCooldown > 0) return null;
+    let bestSlide: WaterparkSlideHandles | null = null;
+    let bestDistance = Infinity;
+    for (const slide of this.handles.slides) {
+      if (
+        !isPointOnWaterparkSlideAccess(
+          slide.spec,
+          playerX,
+          playerZ,
+          playerY,
+        )
+      ) {
+        continue;
+      }
+      const entry = this.getPhysicalSlideEntry(slide.spec.id);
+      if (!entry) continue;
+      const width = getWaterparkSlideWidth(slide.spec.kind);
+      const horizontal = Math.hypot(playerX - entry.x, playerZ - entry.z);
+      const vertical = Math.abs(playerY - entry.y);
+      const entryRadius = Math.min(1.2, Math.max(0.68, width * 0.5));
+      if (horizontal > entryRadius || vertical > 1.3) continue;
+      if (horizontal < bestDistance) {
+        bestDistance = horizontal;
+        bestSlide = slide;
+      }
+    }
+    if (!bestSlide) return null;
+
+    const entry = this.getPhysicalSlideEntry(bestSlide.spec.id)!;
+    const first = bestSlide.samples[0];
+    const width = getWaterparkSlideWidth(bestSlide.spec.kind);
+    const lateralLimit = this.physicalLateralLimit(bestSlide);
+    const lateral = Math.min(
+      lateralLimit,
+      Math.max(
+        -lateralLimit,
+        (playerX - entry.x) * first.right.x + (playerZ - entry.z) * first.right.z,
+      ),
+    );
+    this.physical = {
+      slide: bestSlide,
+      entryDistance: entry.distance,
+      distance: entry.distance,
+      speed: Math.max(2.4, Math.min(12, Number.isFinite(entrySpeed) ? entrySpeed : 2.4)),
+      lateral,
+      lateralVelocity: 0,
+      elapsed: 0,
+    };
+    this.physicalCooldown = 0;
+    this.stats.visits += 1;
+    this.stats.lastRideId = bestSlide.spec.id;
+    this.lastRideSeconds = 0;
+    this.events.push({
+      type: 'physical_enter',
+      rideId: bestSlide.spec.id,
+      name: bestSlide.spec.name,
+    });
+    return this.buildPhysicalSnapshot(
+      bestSlide,
+      this.physical.distance,
+      this.physical.speed,
+      0,
+    );
+  }
+
+  /** Advance the player along the rendered slide curve with gravity, water and wall limits. */
+  public stepPhysicalSlide(dt: number): PhysicalSlideSnapshot | null {
+    const ride = this.physical;
+    if (!ride) return null;
+    const frameDt = Number.isFinite(dt) ? Math.min(0.05, Math.max(0, dt)) : 0;
+    if (frameDt <= 0) {
+      return this.buildPhysicalSnapshot(
+        ride.slide,
+        ride.distance,
+        ride.speed,
+        ride.elapsed,
+      );
+    }
+    sampleWaterparkPath(
+      ride.slide.samples,
+      ride.distance,
+      this.scratchPoint,
+      this.scratchTangent,
+      this.scratchRight,
+      this.scratchUp,
+    );
+    const boost =
+      ride.slide.spec.kind === 'watercoaster' || ride.slide.spec.kind === 'log' ? 1 : 0;
+    ride.speed = stepWaterparkSpeed(
+      ride.speed,
+      this.scratchTangent.y,
+      frameDt,
+      ride.slide.spec.kind,
+      boost,
+    );
+    ride.elapsed += frameDt;
+    ride.distance += ride.speed * frameDt;
+
+    if (ride.distance >= ride.slide.length - 0.03) {
+      const finished = this.finishPhysicalSlide(ride);
+      return finished;
+    }
+
+    const limit = this.physicalLateralLimit(ride.slide);
+    ride.lateralVelocity += -ride.lateral * 2.1 * frameDt;
+    ride.lateral += ride.lateralVelocity * frameDt;
+    if (Math.abs(ride.lateral) > limit) {
+      ride.lateral = Math.sign(ride.lateral) * limit;
+      ride.lateralVelocity = 0;
+    }
+    return this.buildPhysicalSnapshot(
+      ride.slide,
+      ride.distance,
+      ride.speed,
+      ride.elapsed,
+    );
+  }
+
+  public cancelPhysicalSlide(): void {
+    this.physical = null;
+    this.physicalCooldown = 0;
+  }
+
+  private physicalFootOffset(slide: WaterparkSlideHandles): number {
+    const radius = getWaterparkSlideWidth(slide.spec.kind) * 0.62;
+    return isWaterparkSlideEnclosed(slide.spec.kind)
+      ? Math.max(0.18, radius - 0.24)
+      : 0.14;
+  }
+
+  private physicalLateralLimit(slide: WaterparkSlideHandles): number {
+    const width = getWaterparkSlideWidth(slide.spec.kind);
+    return isWaterparkSlideEnclosed(slide.spec.kind)
+      ? Math.max(0.2, width * 0.62 - 0.34)
+      : Math.max(0.2, width * 0.5 - 0.34);
+  }
+
+  private buildPhysicalSnapshot(
+    slide: WaterparkSlideHandles,
+    distance: number,
+    speed: number,
+    elapsed: number,
+  ): PhysicalSlideSnapshot {
+    const sample = sampleWaterparkPath(
+      slide.samples,
+      distance,
+      this.scratchPoint,
+      this.scratchTangent,
+      this.scratchRight,
+      this.scratchUp,
+    );
+    const offset = this.physicalFootOffset(slide);
+    const lateral = this.physical?.lateral ?? 0;
+    const x =
+      WATERPARK_SITE.x +
+      this.scratchPoint.x +
+      this.scratchRight.x * lateral -
+      this.scratchUp.x * offset;
+    const y =
+      WATERPARK_SITE.y +
+      this.scratchPoint.y +
+      this.scratchRight.y * lateral -
+      this.scratchUp.y * offset;
+    const z =
+      WATERPARK_SITE.z +
+      this.scratchPoint.z +
+      this.scratchRight.z * lateral -
+      this.scratchUp.z * offset;
+    const yaw = Math.atan2(this.scratchTangent.x, this.scratchTangent.z);
+    const speedScale = clamp(speed / 14, 0, 1.45);
+    const bank = clamp(sample.roll * speedScale * 0.8, -0.38, 0.38);
+    return {
+      slideId: slide.spec.id,
+      name: slide.spec.name,
+      x,
+      y,
+      z,
+      yaw,
+      bank,
+      lateralOffset: lateral,
+      lateralLimit: this.physicalLateralLimit(slide),
+      speed,
+      speedKmh: speed * 3.6,
+      progressPercent:
+        clamp(
+          (distance - (this.physical?.entryDistance ?? 0)) /
+            Math.max(0.1, slide.length - (this.physical?.entryDistance ?? 0)),
+          0,
+          1,
+        ) * 100,
+      heightM: Math.max(0, y - WATERPARK_DECK_Y),
+      finished: false,
+    };
+  }
+
+  private finishPhysicalSlide(ride: PhysicalSlideRide): PhysicalSlideSnapshot {
+    const best = this.stats.bestTimes[ride.slide.spec.id] ?? Infinity;
+    const timeSeconds = Math.max(0.1, ride.elapsed);
+    const newBest = timeSeconds < best;
+    if (newBest) this.stats.bestTimes[ride.slide.spec.id] = timeSeconds;
+    this.stats.ridesCompleted += 1;
+    this.stats.lastRideId = ride.slide.spec.id;
+    this.lastRideSeconds = timeSeconds;
+    this.events.push({
+      type: 'ride_complete',
+      rideId: ride.slide.spec.id,
+      name: ride.slide.spec.name,
+      timeSeconds,
+      speedKmh: ride.speed * 3.6,
+      newBest,
+    });
+    const exit = ride.slide.spec.exit;
+    const snapshot: PhysicalSlideSnapshot = {
+      slideId: ride.slide.spec.id,
+      name: ride.slide.spec.name,
+      x: WATERPARK_SITE.x + exit.x,
+      y: WATERPARK_DECK_Y,
+      z: WATERPARK_SITE.z + exit.z,
+      yaw: 0,
+      bank: 0,
+      lateralOffset: 0,
+      lateralLimit: this.physicalLateralLimit(ride.slide),
+      speed: ride.speed,
+      speedKmh: ride.speed * 3.6,
+      progressPercent: 100,
+      heightM: 0,
+      finished: true,
+    };
+    this.physical = null;
+    this.physicalCooldown = 0.8;
+    return snapshot;
   }
 
   public getNearbyInteraction(
@@ -282,34 +564,15 @@ export class WaterparkRuntime {
     playerY: number,
     playerZ: number,
   ): WaterparkInteraction | null {
-    if (!this.visible || this.active) return null;
+    if (!this.visible || this.active || this.physical) return null;
     let best: WaterparkInteraction | null = null;
     const consider = (candidate: WaterparkInteraction) => {
       if (candidate.distance > 3.9) return;
       if (!best || candidate.distance < best.distance) best = candidate;
     };
 
-    // Rides board from the summit. The player must physically climb the tower
-    // stairs, where the walkable collision surface meets these gates.
-    for (const kiosk of this.kiosks) {
-      const x = WATERPARK_SITE.x + kiosk.x;
-      const y = WATERPARK_DECK_Y + kiosk.y;
-      const z = WATERPARK_SITE.z + kiosk.z;
-      if (Math.abs(playerY - y) > 2.4) continue;
-      const distance = Math.hypot(playerX - x, playerZ - z);
-      if (distance > 3.9) continue;
-      consider({
-        rideId: kiosk.rideId,
-        label: `Ride ${kiosk.slide.spec.name}`,
-        sublabel: `${slideKindLabel(kiosk.slide.spec.kind)} · summit boarding · ${kiosk.slide.spec.topHeight.toFixed(0)} m drop · press E`,
-        kind: 'slide',
-        x,
-        y,
-        z,
-        distance,
-      });
-    }
-
+    // Waterslides intentionally have no interaction prompt. They are entered
+    // by walking into their launch mouths and use the physical slide solver.
     if (Math.abs(playerY - WATERPARK_DECK_Y) > 3.0) return best;
     for (const feature of WATERPARK_FEATURES) {
       const x = WATERPARK_SITE.x + feature.x;
@@ -493,6 +756,9 @@ export class WaterparkRuntime {
     if (this.disposed) return;
     const frameTime = Number.isFinite(dt) ? clamp(dt, 0, 0.25) : 0;
     if (frameTime <= 0) return;
+    if (this.physicalCooldown > 0) {
+      this.physicalCooldown = Math.max(0, this.physicalCooldown - frameTime);
+    }
     this.elapsed += frameTime;
     this.animateWavePool(frameTime);
     this.updateInnerTubes();
