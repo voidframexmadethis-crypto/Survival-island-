@@ -4486,7 +4486,8 @@ export interface HouseStationTarget {
     | 'house_shower'
     | 'house_music_studio'
     | 'house_studio_drums'
-    | 'house_studio_booth';
+    | 'house_studio_booth'
+    | 'house_door';
   label: string;
   sublabel: string;
   x: number;
@@ -4499,12 +4500,21 @@ export interface HouseStationTarget {
   sitYaw?: number;
 }
 
+export interface HilltopHouseDoorHandle {
+  pivotL: THREE.Group;
+  pivotR: THREE.Group;
+  x: number;
+  z: number;
+  halfSpan: number;
+}
+
 export interface HilltopHouseResult {
   group: THREE.Group;
   colliders: { x: number; z: number; radius: number }[];
   stations: HouseStationTarget[];
   tvScreenMesh: THREE.Mesh;
   tvScreenMat: THREE.MeshStandardMaterial;
+  door: HilltopHouseDoorHandle;
 }
 
 /**
@@ -4653,6 +4663,63 @@ export function createHilltopHouse(
   doorHeader.position.set(4.2, 2.78, 0);
   doorHeader.userData.isHouseWall = true;
   group.add(doorHeader);
+
+  // Openable oak double doors. Hinges sit on both jambs and swing inward.
+  const doorMat = new THREE.MeshStandardMaterial({
+    color: 0x8b5a2b,
+    map: woodTex,
+    roughness: 0.78,
+  });
+  const doorIronMat = new THREE.MeshStandardMaterial({
+    color: 0x44403c,
+    roughness: 0.5,
+    metalness: 0.55,
+  });
+  const doorPanelH = 2.42;
+  const doorPanelW = 1.24;
+  const doorPivotL = new THREE.Group();
+  doorPivotL.position.set(4.2, 0.08, -1.3);
+  const doorPivotR = new THREE.Group();
+  doorPivotR.position.set(4.2, 0.08, 1.3);
+  const buildDoorLeaf = (
+    pivot: THREE.Group,
+    direction: 1 | -1,
+  ): void => {
+    const panel = new THREE.Mesh(
+      new THREE.BoxGeometry(0.12, doorPanelH, doorPanelW),
+      doorMat,
+    );
+    panel.position.set(0, doorPanelH * 0.5, direction * (doorPanelW * 0.5));
+    panel.castShadow = true;
+    panel.receiveShadow = true;
+    pivot.add(panel);
+    for (const bandY of [0.48, 1.92]) {
+      const band = new THREE.Mesh(
+        new THREE.BoxGeometry(0.15, 0.11, doorPanelW * 0.92),
+        doorIronMat,
+      );
+      band.position.set(0.035, bandY, direction * (doorPanelW * 0.5));
+      pivot.add(band);
+    }
+    const knob = new THREE.Mesh(new THREE.SphereGeometry(0.065, 8, 6), doorIronMat);
+    knob.position.set(0.085, 1.08, direction * (doorPanelW - 0.15));
+    pivot.add(knob);
+  };
+  buildDoorLeaf(doorPivotL, 1);
+  buildDoorLeaf(doorPivotR, -1);
+  for (const pivot of [doorPivotL, doorPivotR]) {
+    pivot.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh) obj.userData.noStaticMerge = true;
+    });
+  }
+  group.add(doorPivotL, doorPivotR);
+  const door: HilltopHouseDoorHandle = {
+    pivotL: doorPivotL,
+    pivotR: doorPivotR,
+    x: worldX + 4.2,
+    z: worldZ,
+    halfSpan: doorPanelW + 0.06,
+  };
 
   // Decorative Glazed Windows on West & Front walls
   [
@@ -5325,9 +5392,19 @@ export function createHilltopHouse(
       z: worldZ - 2.8,
       range: 2.3,
     },
+    {
+      id: 'house_double_door',
+      kind: 'house_door',
+      label: 'Open / Close Front Double Doors',
+      sublabel: 'Oak double doors · porch entrance',
+      x: worldX + 5.2,
+      y: worldY,
+      z: worldZ,
+      range: 2.8,
+    },
   ];
 
-  return { group, colliders, stations, tvScreenMesh, tvScreenMat };
+  return { group, colliders, stations, tvScreenMesh, tvScreenMat, door };
 }
 
 /**

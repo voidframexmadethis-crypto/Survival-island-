@@ -2,8 +2,10 @@
 
 import React, { useMemo, useState } from 'react';
 import {
+  BookOpen,
   Egg,
   Flame,
+  Gem,
   Hammer,
   Heart,
   Lock,
@@ -21,13 +23,18 @@ import {
   DRAGON_COLOR_OPTIONS,
   DRAGON_SPECIES_INFO,
   DRAGON_VALLEY_SYSTEM,
+  DragonCard,
   DragonCompanion,
   DragonElement,
+  DragonRarity,
+  rarityFromElements,
 } from '@/game/systems/dragonValleySystem';
 
 interface DragonSanctuaryModalProps {
   dragons: DragonCompanion[];
   eggs: string[];
+  cards: DragonCard[];
+  abandonedDragonRescued?: boolean;
   canRideDragon?: boolean;
   redDragonCave?: { x: number; z: number; discovered: boolean; bossDefeated?: boolean } | null;
   onHatch: (element: DragonElement, customName: string, requireCollectedEgg?: boolean) => void;
@@ -47,9 +54,18 @@ const ELEMENT_BADGE: Record<DragonElement, string> = {
   Shadow: 'bg-purple-700/30 text-purple-200 border-purple-500/45',
 };
 
+const RARITY_BADGE: Record<DragonRarity, string> = {
+  Common: 'bg-stone-700/50 text-stone-200 border-stone-500/45',
+  Rare: 'bg-sky-600/20 text-sky-200 border-sky-400/45',
+  Epic: 'bg-fuchsia-700/25 text-fuchsia-200 border-fuchsia-400/45',
+  Legendary: 'bg-amber-500/20 text-amber-200 border-amber-400/55',
+};
+
 export function DragonSanctuaryModal({
   dragons,
   eggs,
+  cards,
+  abandonedDragonRescued = false,
   canRideDragon = false,
   redDragonCave = null,
   onHatch,
@@ -102,7 +118,7 @@ export function DragonSanctuaryModal({
               </h2>
               <p className="text-xs text-stone-400 truncate">
                 {dragons.length} / {DRAGON_VALLEY_SYSTEM.maxActiveDragons} Active Dragons ·{' '}
-                {eggs.length} Collected Eggs · Hatch, Feed, Customize &amp; Grow
+                {eggs.length} Eggs · {cards.length} Cards · Hatch, Feed, Rescue &amp; Fly
               </p>
             </div>
           </div>
@@ -151,6 +167,69 @@ export function DragonSanctuaryModal({
                 <MapPin className="w-3.5 h-3.5" />
                 {Math.round(redDragonCave.x)}, {Math.round(redDragonCave.z)}
               </span>
+            )}
+          </div>
+
+          {/* Dragon Codex & Abandoned Dragon Encounter */}
+          <div className="rounded-xl bg-stone-950/75 border border-amber-500/35 p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="font-display text-sm font-bold text-amber-300 flex items-center gap-2">
+                <BookOpen className="w-4 h-4" />
+                <span>Dragon Cards &amp; Valley Encounters</span>
+              </div>
+              <span className="text-[11px] font-mono-tabular text-stone-400">
+                {cards.length} Cards Collected
+              </span>
+            </div>
+
+            <div className="rounded-lg border border-indigo-500/35 bg-indigo-950/30 px-3 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2 min-w-0">
+                <Gem className="w-4 h-4 text-indigo-300 shrink-0" />
+                <div className="min-w-0">
+                  <div className="font-bold text-indigo-100">
+                    {abandonedDragonRescued
+                      ? 'Ashwing rescued — Legendary card claimed'
+                      : 'Abandoned Ashwing roams the valley edge'}
+                  </div>
+                  <div className="text-indigo-200/75">
+                    {abandonedDragonRescued
+                      ? 'The grown Storm-Shadow dragon now lives in your sanctuary.'
+                      : 'Find the grown Storm-Shadow dragon at X 401, Z -365 for a Legendary card, 2 Gold Bars & 1 Diamond Crystal.'}
+                  </div>
+                </div>
+              </div>
+              <span className="px-2 py-1 rounded-md border border-amber-400/50 bg-amber-500/15 text-amber-200 font-bold shrink-0">
+                {abandonedDragonRescued ? 'Claimed' : 'Rescue'}
+              </span>
+            </div>
+
+            {cards.length === 0 ? (
+              <div className="text-xs text-stone-400 text-center py-3">
+                No cards yet. Hatch an egg, combine a hybrid, or rescue Ashwing to build your codex.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {cards.map((card) => (
+                  <div
+                    key={card.id}
+                    className={`rounded-lg border bg-stone-900/85 px-3 py-2.5 ${RARITY_BADGE[card.rarity]}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-stone-100 truncate">{card.name}</span>
+                      <span className="text-[10px] font-bold uppercase tracking-wide shrink-0">
+                        {card.rarity}
+                      </span>
+                    </div>
+                    <div className="text-[11px] opacity-85 mt-1 flex flex-wrap items-center gap-1.5">
+                      <span>{card.species}</span>
+                      <span>·</span>
+                      <span>{card.stage}</span>
+                      <span>·</span>
+                      <span>{card.source}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
 
@@ -281,6 +360,13 @@ export function DragonSanctuaryModal({
                             {el}
                           </span>
                         ))}
+                        <span
+                          className={`px-2 py-0.5 rounded-md border text-[11px] font-bold uppercase tracking-wide ${
+                            RARITY_BADGE[rarityFromElements(d.elements, d.species)]
+                          }`}
+                        >
+                          {rarityFromElements(d.elements, d.species)}
+                        </span>
                       </div>
                       <div className="text-xs font-mono-tabular text-amber-300">
                         Speed {d.speed}

@@ -32,6 +32,7 @@ import {
   DESERT_VILLAGE_POS,
   DESERT_WELL_POS,
   DRAGON_VALLEY_POS,
+  DRAGON_VALLEY_ABANDONED_POS,
   ERODED_BADLANDS_POS,
   EXPEDITION_POS,
   FARMER_POS,
@@ -183,6 +184,16 @@ export interface ShipwreckChestHandle {
   glowMesh: THREE.Mesh;
 }
 
+export interface DragonValleyFlyerHandle {
+  group: THREE.Group;
+  wingL: THREE.Group;
+  wingR: THREE.Group;
+  radius: number;
+  height: number;
+  speed: number;
+  phase: number;
+}
+
 export interface WorldHandles {
   terrainMesh: THREE.Mesh;
   baseTerrainColors: Float32Array;
@@ -217,6 +228,9 @@ export interface WorldHandles {
   tvScreenMesh: THREE.Mesh;
   tvWorldPos: THREE.Vector3;
   hillHousePos: THREE.Vector3;
+  hillHouseDoor: import('./models').HilltopHouseDoorHandle;
+  dragonValleyFlyers: DragonValleyFlyerHandle[];
+  abandonedDragonGroup: THREE.Group;
   garagePos: THREE.Vector3;
   garageBenchPos: THREE.Vector3;
   armoryChest: ShipwreckChestHandle;
@@ -898,6 +912,8 @@ export function buildIslandWorld(
   // Track shadow-casting world objects so Graphics Settings can toggle shadows cleanly
   const shadowCasters: THREE.Object3D[] = [];
   const staticMergeTargets: { group: THREE.Object3D; protectedObjs?: THREE.Object3D[] }[] = [];
+  const dragonValleyFlyers: DragonValleyFlyerHandle[] = [];
+  let abandonedDragonGroup: THREE.Group | null = null;
   const disposableGeos: THREE.BufferGeometry[] = [];
   const disposableMats: THREE.Material[] = [];
   const disposableTexs: THREE.Texture[] = [
@@ -5192,6 +5208,114 @@ export function buildIslandWorld(
     overworldGroup.add(dvGroup);
     staticMergeTargets.push({ group: dvGroup });
 
+    // Wild dragons continuously circle the valley. They stay unmerged so the
+    // engine can animate wing beats and cull them beyond the draw distance.
+    const stormScaleMat = new THREE.MeshStandardMaterial({
+      color: 0x6366f1,
+      roughness: 0.58,
+      metalness: 0.16,
+    });
+    const shadowScaleMat = new THREE.MeshStandardMaterial({
+      color: 0x7e22ce,
+      roughness: 0.62,
+      metalness: 0.12,
+    });
+    disposableMats.push(stormScaleMat, shadowScaleMat);
+    const addValleyFlyer = (
+      radius: number,
+      height: number,
+      speed: number,
+      phase: number,
+      scale: number,
+      scaleMat: THREE.Material,
+    ) => {
+      const group = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.72, 2.7, 4, 8), scaleMat);
+      body.rotation.x = Math.PI * 0.5;
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.72, 1.5), scaleMat);
+      head.position.set(0, 0.25, 2.15);
+      const tail = new THREE.Mesh(new THREE.ConeGeometry(0.42, 3.0, 6), scaleMat);
+      tail.rotation.x = -Math.PI * 0.5;
+      tail.position.z = -2.6;
+      const wingL = new THREE.Group();
+      wingL.position.set(-0.18, 0.18, 0);
+      const wingLMesh = new THREE.Mesh(new THREE.BoxGeometry(4.3, 0.1, 1.7), dragonWingMat);
+      wingLMesh.position.x = -2.15;
+      wingL.add(wingLMesh);
+      const wingR = new THREE.Group();
+      wingR.position.set(0.18, 0.18, 0);
+      const wingRMesh = new THREE.Mesh(new THREE.BoxGeometry(4.3, 0.1, 1.7), dragonWingMat);
+      wingRMesh.position.x = 2.15;
+      wingR.add(wingRMesh);
+      group.add(body, head, tail, wingL, wingR);
+      group.scale.setScalar(scale);
+      group.position.set(
+        DRAGON_VALLEY_POS.x + Math.cos(phase) * radius,
+        dvY + height + Math.sin(phase * 2.3) * 1.6,
+        DRAGON_VALLEY_POS.z + Math.sin(phase) * radius,
+      );
+      group.rotation.y = -phase;
+      group.traverse((obj) => {
+        if ((obj as THREE.Mesh).isMesh) {
+          obj.castShadow = false;
+          obj.userData.noShadowCast = true;
+        }
+      });
+      overworldGroup.add(group);
+      dragonValleyFlyers.push({ group, wingL, wingR, radius, height, speed, phase });
+    };
+    addValleyFlyer(25, 15, 0.22, 0.3, 1.0, dragonScaleMat);
+    addValleyFlyer(33, 21, 0.17, 2.5, 1.35, stormScaleMat);
+    addValleyFlyer(20, 11, 0.28, 4.4, 0.85, shadowScaleMat);
+
+    // Abandoned adult dragon curled around its old hoard at the valley edge.
+    abandonedDragonGroup = new THREE.Group();
+    const abandonY = getTerrainHeight(DRAGON_VALLEY_ABANDONED_POS.x, DRAGON_VALLEY_ABANDONED_POS.z);
+    abandonedDragonGroup.position.set(
+      DRAGON_VALLEY_ABANDONED_POS.x,
+      abandonY,
+      DRAGON_VALLEY_ABANDONED_POS.z,
+    );
+    abandonedDragonGroup.rotation.y = -0.8;
+    const hoardPile = new THREE.Mesh(new THREE.CylinderGeometry(2.5, 2.9, 0.28, 12), goldMat);
+    hoardPile.position.y = 0.14;
+    const abandonedBody = new THREE.Mesh(
+      new THREE.CapsuleGeometry(1.1, 3.6, 5, 10),
+      stormScaleMat,
+    );
+    abandonedBody.rotation.x = Math.PI * 0.5;
+    abandonedBody.position.y = 1.05;
+    const abandonedHead = new THREE.Mesh(new THREE.BoxGeometry(1.25, 1.0, 1.9), stormScaleMat);
+    abandonedHead.position.set(0, 1.55, 2.9);
+    abandonedHead.rotation.z = 0.22;
+    const abandonedTail = new THREE.Mesh(new THREE.ConeGeometry(0.62, 4.2, 6), stormScaleMat);
+    abandonedTail.rotation.x = -Math.PI * 0.5;
+    abandonedTail.position.set(0.8, 0.55, -2.9);
+    const abandonedWingL = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.12, 2.5), dragonWingMat);
+    abandonedWingL.position.set(-2.4, 0.7, -0.4);
+    abandonedWingL.rotation.z = -0.32;
+    const abandonedWingR = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.12, 2.5), dragonWingMat);
+    abandonedWingR.position.set(2.4, 0.7, -0.4);
+    abandonedWingR.rotation.z = 0.32;
+    const oldSaddleMat = new THREE.MeshStandardMaterial({ color: 0x57534e, roughness: 0.92 });
+    const oldSaddle = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.2, 1.3), oldSaddleMat);
+    oldSaddle.position.set(0, 1.62, 0.2);
+    const saddleStrap = new THREE.Mesh(new THREE.TorusGeometry(1.18, 0.07, 6, 14), oldSaddleMat);
+    saddleStrap.rotation.y = Math.PI * 0.5;
+    saddleStrap.position.set(0, 1.12, 0.2);
+    abandonedDragonGroup.add(
+      hoardPile,
+      abandonedBody,
+      abandonedHead,
+      abandonedTail,
+      abandonedWingL,
+      abandonedWingR,
+      oldSaddle,
+      saddleStrap,
+    );
+    disposableMats.push(oldSaddleMat);
+    overworldGroup.add(abandonedDragonGroup);
+
     // 2. VIKING VILLAGE (560, -260) — Nordic Longhouse, Shield Racks, Rune Stones & Moored Viking Longship
     const vvGroup = new THREE.Group();
     const vvY = getTerrainHeight(VIKING_VILLAGE_POS.x, VIKING_VILLAGE_POS.z);
@@ -7425,6 +7549,9 @@ gl_Position = projectionMatrix * mvPosition;`,
     tvScreenMesh: hillHouse.tvScreenMesh,
     tvWorldPos: new THREE.Vector3(HILL_HOUSE_POS.x + 0.75, HILL_HOUSE_Y + 1.24, HILL_HOUSE_POS.z + 0.41),
     hillHousePos: new THREE.Vector3(HILL_HOUSE_POS.x, HILL_HOUSE_Y, HILL_HOUSE_POS.z),
+    hillHouseDoor: hillHouse.door,
+    dragonValleyFlyers,
+    abandonedDragonGroup: abandonedDragonGroup ?? new THREE.Group(),
     garagePos,
     garageBenchPos,
     armoryChest,

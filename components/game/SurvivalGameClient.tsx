@@ -161,7 +161,7 @@ import {
 } from '@/game/systems/exchangeManager';
 import { SkinCatalogItem } from '@/game/data/exchangeCatalog';
 import { EcosystemSimulationData } from '@/game/systems/livingEcosystemSystem';
-import { DragonCompanion } from '@/game/systems/dragonValleySystem';
+import { DragonCard, DragonCompanion } from '@/game/systems/dragonValleySystem';
 import { UI_LAYOUT, getSafeHudLayoutMetrics } from '@/game/systems/caveSystem';
 
 function mainlandTabFromId(id?: string): MainlandTab {
@@ -221,6 +221,8 @@ export function SurvivalGameClient() {
   const [ecosystemSnapshot, setEcosystemSnapshot] = useState<EcosystemSimulationData | null>(null);
   const [dragonsSnapshot, setDragonsSnapshot] = useState<DragonCompanion[]>([]);
   const [dragonEggsSnapshot, setDragonEggsSnapshot] = useState<string[]>([]);
+  const [dragonCardsSnapshot, setDragonCardsSnapshot] = useState<DragonCard[]>([]);
+  const [abandonedDragonRescued, setAbandonedDragonRescued] = useState(false);
   const [toasts, setToasts] = useState<ResourceToast[]>([]);
   const [telemetryExpanded, setTelemetryExpanded] = useState(false);
   const [hudWindowStart, setHudWindowStart] = useState(0);
@@ -1127,6 +1129,8 @@ export function SurvivalGameClient() {
       if (modal === 'dragon_sanctuary' && engineRef.current) {
         setDragonsSnapshot(engineRef.current.getDragons());
         setDragonEggsSnapshot(engineRef.current.getDragonEggs());
+        setDragonCardsSnapshot(engineRef.current.getDragonCards());
+        setAbandonedDragonRescued(engineRef.current.hasRescuedAbandonedDragon());
       }
       setActiveStationStructureId(structureId);
       setActiveModal(modal);
@@ -4432,6 +4436,8 @@ export function SurvivalGameClient() {
         <DragonSanctuaryModal
           dragons={dragonsSnapshot}
           eggs={hud?.dragonEggs ?? dragonEggsSnapshot}
+          cards={dragonCardsSnapshot}
+          abandonedDragonRescued={abandonedDragonRescued}
           canRideDragon={hud?.caveSummary?.dragonUnlocked ?? false}
           redDragonCave={
             hud?.caveSummary?.specialCaves.find((c) => c.type === 'red-dragon') ?? null
@@ -4441,6 +4447,7 @@ export function SurvivalGameClient() {
             if (engineRef.current) {
               setDragonsSnapshot(engineRef.current.getDragons());
               setDragonEggsSnapshot(engineRef.current.getDragonEggs());
+              setDragonCardsSnapshot(engineRef.current.getDragonCards());
             }
           }}
           onFeed={(id) => {
@@ -4457,7 +4464,10 @@ export function SurvivalGameClient() {
           }}
           onCombine={(idA, idB, hybridName) => {
             engineRef.current?.combineDragons(idA, idB, hybridName);
-            if (engineRef.current) setDragonsSnapshot(engineRef.current.getDragons());
+            if (engineRef.current) {
+              setDragonsSnapshot(engineRef.current.getDragons());
+              setDragonCardsSnapshot(engineRef.current.getDragonCards());
+            }
           }}
           onRename={(id, rawTag) => {
             engineRef.current?.renameDragonWithAnvil(id, rawTag);

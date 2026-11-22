@@ -34,6 +34,7 @@ import {
 } from '../data/grandFinalePack';
 import {
   DRAGON_VALLEY_SYSTEM,
+  DragonCard,
   DragonCompanion,
   DragonElement,
   DragonFlightSystem,
@@ -304,6 +305,7 @@ import {
   AUTUMN_GROVE_POS,
   BIOME_INFO,
   CAVE_POS,
+  DRAGON_VALLEY_ABANDONED_POS,
   DRAGON_VALLEY_POS,
   EXPEDITION_POS,
   FARMER_POS,
@@ -880,6 +882,12 @@ export class GameEngine {
       this.togglePlayerFlight(active, active ? Math.max(32, this.dragonFlight.flySpeed * 0.85) : 32);
     },
   };
+  private abandonedDragonEncounter = {
+    id: 'dv_abandoned_ashwing',
+    name: 'Ashwing',
+  };
+  private hillHouseDoorOpen = false;
+  private hillHouseDoorAngle = 0;
 
   // Multiverse & Portal Vortex Handles
   private activeDimensionWorld: DimensionWorldHandle | null = null;
@@ -1703,6 +1711,7 @@ export class GameEngine {
     this.islandCaveSystem.isCaveSiteAllowed = (x, z) =>
       this.isCaveSiteClearOfPlayerBuilds(x, z);
     this.ensureDragonEggNestMeshes();
+    this.syncDragonValleyEncounterVisuals();
     this.registerWorldPerformanceObjects();
     this.sanitizeWorld();
 
@@ -2837,6 +2846,14 @@ export class GameEngine {
     return this.dragons.map((d) => ({ ...d, elements: [...d.elements] }));
   }
 
+  public getDragonCards(): DragonCard[] {
+    return dragonValley.cards.map((c) => ({ ...c, elements: [...c.elements] }));
+  }
+
+  public hasRescuedAbandonedDragon(): boolean {
+    return DRAGON_VALLEY_SYSTEM.hasRescuedEncounter(this.abandonedDragonEncounter.id);
+  }
+
   public getDragonEggs(): string[] {
     return [...dragonValley.eggs];
   }
@@ -2866,7 +2883,11 @@ export class GameEngine {
       return null;
     }
     this.dragons.push(dragon);
-    this.toast(`Hatched ${dragon.name} (${element} Hatchling · Age 0)!`, 'discovery');
+    DRAGON_VALLEY_SYSTEM.recordDragonCard(dragon, 'Hatched');
+    this.toast(
+      `Hatched ${dragon.name} (${element} Hatchling · Age 0)! Dragon Card added to the Codex.`,
+      'discovery',
+    );
     this.emitHud();
     return dragon;
   }
@@ -2930,12 +2951,65 @@ export class GameEngine {
       this.dragons = this.dragons.filter((d) => d.id !== a.id && d.id !== b.id);
     }
     this.dragons.push(hybrid);
+    DRAGON_VALLEY_SYSTEM.recordDragonCard(hybrid, 'Hybrid');
     this.toast(
-      `Combined into ${hybrid.name} (${hybrid.elements.join('-')} • Speed ${hybrid.speed})!`,
+      `Combined into ${hybrid.name} (${hybrid.elements.join('-')} • Speed ${hybrid.speed})! Legendary card unlocked.`,
       'discovery',
     );
     this.emitHud();
     return hybrid;
+  }
+
+  public rescueAbandonedDragon(): DragonCompanion | null {
+    if (DRAGON_VALLEY_SYSTEM.hasRescuedEncounter(this.abandonedDragonEncounter.id)) {
+      this.toast('Ashwing already flies with your sanctuary.', 'info');
+      return null;
+    }
+    if (this.dragons.length >= DRAGON_VALLEY_SYSTEM.maxActiveDragons) {
+      this.toast(
+        `Sanctuary full (${DRAGON_VALLEY_SYSTEM.maxActiveDragons} max). Make room before rescuing Ashwing.`,
+        'warning',
+      );
+      return null;
+    }
+    const elements: DragonElement[] = ['Storm', 'Shadow'];
+    const rescued: DragonCompanion = {
+      id: 'dv_ashwing_rescued',
+      name: this.abandonedDragonEncounter.name,
+      species: 'Storm-Shadow',
+      color: 'Amethyst',
+      age: 3,
+      hunger: 70,
+      bond: 30,
+      hatched: true,
+      rideable: true,
+      elements,
+      stage: 'Adult',
+      growth: 100,
+      speed: 68,
+      isMounted: false,
+    };
+    this.dragons.push(rescued);
+    DRAGON_VALLEY_SYSTEM.ensureCoreEntry(rescued);
+    DRAGON_VALLEY_SYSTEM.recordDragonCard(rescued, 'Rescued');
+    DRAGON_VALLEY_SYSTEM.markEncounterRescued(this.abandonedDragonEncounter.id);
+    if (this.world?.abandonedDragonGroup) this.world.abandonedDragonGroup.visible = false;
+    this.addItem('gold_bar', 2, false);
+    this.addItem('diamond_crystal', 1, false);
+    this.sound.playCraftSuccess();
+    this.spawnParticles(
+      DRAGON_VALLEY_ABANDONED_POS.x,
+      getTerrainHeight(DRAGON_VALLEY_ABANDONED_POS.x, DRAGON_VALLEY_ABANDONED_POS.z) + 1.8,
+      DRAGON_VALLEY_ABANDONED_POS.z,
+      0x818cf8,
+      26,
+    );
+    this.toast(
+      `Rescued Ashwing (Legendary Storm-Shadow Adult · Rideable)! Legendary Dragon Card + Dragon Hoard: 2 Gold Bars & 1 Diamond Crystal.`,
+      'discovery',
+    );
+    this.emitHud();
+    return rescued;
   }
 
   public renameDragonWithAnvil(dragonId: string, rawTagText: string): boolean {
@@ -4449,9 +4523,12 @@ export class GameEngine {
       this.syncIslandCaveTerrainAndTunnels();
       this.dragons = DRAGON_VALLEY_SYSTEM.resetToStarter();
       this.dragonPlayerRef.mountedDragonId = null;
+      this.hillHouseDoorOpen = false;
+      this.hillHouseDoorAngle = 0;
       vikingVillage.reset();
       for (const nest of this.dragonEggNests) nest.collected = false;
       this.syncDragonEggNestVisibility();
+      this.syncDragonValleyEncounterVisuals();
 
       // Starter Coaster Station & Park Cyclone roller coaster right beside the Park Plaza
       this.spawnStructure({
@@ -4767,9 +4844,12 @@ export class GameEngine {
     this.lastCaveStreamZ = -9999;
     this.dragons = DRAGON_VALLEY_SYSTEM.resetToStarter();
     this.dragonPlayerRef.mountedDragonId = null;
+    this.hillHouseDoorOpen = false;
+    this.hillHouseDoorAngle = 0;
     vikingVillage.reset();
     for (const nest of this.dragonEggNests) nest.collected = false;
     this.syncDragonEggNestVisibility();
+    this.syncDragonValleyEncounterVisuals();
     this.ensurePlayerHasGun(true);
     this.applyExchangeCosmetics(true);
     saveCheckpoint(this.playerX, this.playerY, this.playerZ);
@@ -4983,9 +5063,12 @@ export class GameEngine {
     this.lastCaveStreamZ = -9999;
     this.dragons = DRAGON_VALLEY_SYSTEM.importSave(save.dragonValleySave);
     this.dragonPlayerRef.mountedDragonId = null;
+    this.hillHouseDoorOpen = false;
+    this.hillHouseDoorAngle = 0;
     vikingVillage.importSave(save.vikingVillageSave);
     for (const nest of this.dragonEggNests) nest.collected = false;
     this.syncDragonEggNestVisibility();
+    this.syncDragonValleyEncounterVisuals();
     saveCheckpoint(save.player.x, save.player.y, save.player.z);
     saveObjectives(Array.from(this.completedMissionIds));
     this.stats = { ...this.createEmptyStats(), ...save.stats };
@@ -7165,7 +7248,73 @@ export class GameEngine {
         this.emitHud();
         break;
       }
+      case 'house_door': {
+        this.toggleHillHouseDoor();
+        break;
+      }
     }
+  }
+
+  private toggleHillHouseDoor(): void {
+    this.hillHouseDoorOpen = !this.hillHouseDoorOpen;
+    this.sound.playWeldSnap();
+    this.toast(
+      this.hillHouseDoorOpen
+        ? 'Opened the hill house oak double doors.'
+        : 'Closed and latched the hill house oak double doors.',
+      'info',
+    );
+    this.emitHud();
+  }
+
+  private updateHillHouseDoor(dt: number): void {
+    const target = this.hillHouseDoorOpen ? 1.62 : 0;
+    this.hillHouseDoorAngle += (target - this.hillHouseDoorAngle) * Math.min(1, dt * 9);
+    const door = this.world?.hillHouseDoor;
+    if (!door) return;
+    door.pivotL.rotation.y = -this.hillHouseDoorAngle;
+    door.pivotR.rotation.y = this.hillHouseDoorAngle;
+  }
+
+  private updateDragonValleyWorld(): void {
+    const world = this.world;
+    if (!world) return;
+    const active =
+      this.worldType === 'island' &&
+      this.currentDimension === 'overworld' &&
+      !this.inSpacePlanet;
+    const nearValley =
+      Math.hypot(this.playerX - DRAGON_VALLEY_POS.x, this.playerZ - DRAGON_VALLEY_POS.z) <
+      320;
+    for (let i = 0; i < world.dragonValleyFlyers.length; i++) {
+      const flyer = world.dragonValleyFlyers[i];
+      flyer.group.visible = active && nearValley;
+      if (!flyer.group.visible) continue;
+      const angle = this.elapsed * flyer.speed + flyer.phase;
+      const x = DRAGON_VALLEY_POS.x + Math.cos(angle) * flyer.radius;
+      const z = DRAGON_VALLEY_POS.z + Math.sin(angle) * flyer.radius;
+      flyer.group.position.set(
+        x,
+        getTerrainHeight(x, z) + flyer.height + Math.sin(angle * 2.3) * 1.6,
+        z,
+      );
+      flyer.group.rotation.y = -angle;
+      flyer.group.rotation.z = Math.sin(angle * 1.7) * 0.12;
+      const flap = Math.sin(this.elapsed * 6.4 + flyer.phase) * 0.62;
+      flyer.wingL.rotation.z = flap;
+      flyer.wingR.rotation.z = -flap;
+    }
+    const rescued = DRAGON_VALLEY_SYSTEM.hasRescuedEncounter(
+      this.abandonedDragonEncounter.id,
+    );
+    world.abandonedDragonGroup.visible = active && nearValley && !rescued;
+  }
+
+  private syncDragonValleyEncounterVisuals(): void {
+    if (!this.world) return;
+    this.world.abandonedDragonGroup.visible = !DRAGON_VALLEY_SYSTEM.hasRescuedEncounter(
+      this.abandonedDragonEncounter.id,
+    );
   }
 
   private handleShipwreckInteraction(near: NearbyInteraction): void {
@@ -7424,7 +7573,8 @@ export class GameEngine {
         near.kind === 'house_shower' ||
         near.kind === 'house_music_studio' ||
         near.kind === 'house_studio_drums' ||
-        near.kind === 'house_studio_booth')
+        near.kind === 'house_studio_booth' ||
+        near.kind === 'house_door')
     ) {
       const st = this.getActiveStations().find((s) => s.id === near.id);
       if (st) {
@@ -7903,6 +8053,11 @@ export class GameEngine {
           this.collectDragonEgg(nest.species, 'Found Wild');
         }
         this.actionCooldown = 0.4;
+        return;
+      }
+      if (near.kind === 'dragon_abandoned') {
+        this.rescueAbandonedDragon();
+        this.actionCooldown = 0.5;
         return;
       }
       if (near.kind === 'planted_crop') {
@@ -11065,6 +11220,18 @@ export class GameEngine {
         nextZ = cavePush.z;
       }
 
+      // Closed hill-house double doors physically block the doorway until opened.
+      const houseDoor = this.world?.hillHouseDoor;
+      if (!isFlat && houseDoor && !this.hillHouseDoorOpen) {
+        const doorDz = nextZ - houseDoor.z;
+        if (Math.abs(doorDz) <= houseDoor.halfSpan + 0.42) {
+          const doorDx = nextX - houseDoor.x;
+          if (Math.abs(doorDx) < 0.72) {
+            nextX = houseDoor.x + (doorDx >= 0 ? 0.72 : -0.72);
+          }
+        }
+      }
+
       // Solid structural block & pillar wall collisions (allow walking under stone arches & atop decks)
       for (const b of this.structuralBlocks) {
         if (b.kind === 'stone_arch' || b.kind === 'timber_beam') continue;
@@ -13220,6 +13387,32 @@ export class GameEngine {
             targetY: caveY,
             targetZ: cv.z,
           };
+        }
+
+        // Abandoned adult dragon at the valley edge — rescue it to gain a Legendary card & hoard.
+        if (!DRAGON_VALLEY_SYSTEM.hasRescuedEncounter(this.abandonedDragonEncounter.id)) {
+          const abandonedDist = Math.hypot(
+            DRAGON_VALLEY_ABANDONED_POS.x - this.playerX,
+            DRAGON_VALLEY_ABANDONED_POS.z - this.playerZ,
+          );
+          if (abandonedDist < 4.6 && abandonedDist < bestDist) {
+            bestDist = abandonedDist;
+            best = {
+              id: this.abandonedDragonEncounter.id,
+              label: 'Rescue Abandoned Ashwing',
+              sublabel: 'Grown Storm-Shadow Dragon · Legendary Card & Dragon Hoard',
+              kind: 'dragon_abandoned',
+              actionCategory: 'use',
+              distance: abandonedDist,
+              targetX: DRAGON_VALLEY_ABANDONED_POS.x,
+              targetY:
+                getTerrainHeight(
+                  DRAGON_VALLEY_ABANDONED_POS.x,
+                  DRAGON_VALLEY_ABANDONED_POS.z,
+                ) + 1.4,
+              targetZ: DRAGON_VALLEY_ABANDONED_POS.z,
+            };
+          }
         }
 
         // Wild Dragon Egg Nests & Dragon Valley Sanctuary Altar around DRAGON_VALLEY_POS
@@ -16707,6 +16900,8 @@ export class GameEngine {
           if (inOverworld) {
             this.updateStructuralAndTerrainSystems(dt);
             this.updateKineticNetwork(dt);
+            this.updateHillHouseDoor(dt);
+            this.updateDragonValleyWorld();
             this.coasterRuntime?.update(dt, this.playerX, this.playerZ);
           }
           this.updateVehicles(dt);

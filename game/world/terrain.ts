@@ -83,6 +83,7 @@ export const BURIED_TREASURE_POS = { x: 72, z: 702 };
 
 // Grand Finale Pack Expanded Outer Biomes (740m Grand Island Expansion)
 export const DRAGON_VALLEY_POS = { x: 420, z: -380 };
+export const DRAGON_VALLEY_ABANDONED_POS = { x: 401, z: -365 };
 export const VIKING_VILLAGE_POS = { x: 560, z: -260 };
 export const RESORT_CORNER_POS = { x: -480, z: 410 };
 export const RUINED_CASTLE_POS = { x: -360, z: -520 };

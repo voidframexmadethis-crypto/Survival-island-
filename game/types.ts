@@ -1302,6 +1302,7 @@ export interface NearbyInteraction {
     | 'house_music_studio'
     | 'house_studio_drums'
     | 'house_studio_booth'
+    | 'house_door'
     | 'structural_block'
     | 'kinetic_node'
     | 'modular_vehicle'
@@ -1317,6 +1318,7 @@ export interface NearbyInteraction {
     | 'viking_villager'
     | 'dragon_egg'
     | 'dragon_sanctuary'
+    | 'dragon_abandoned'
     | 'ferry_pickup'
     | 'mainland_terminal'
     | 'mainland_business';

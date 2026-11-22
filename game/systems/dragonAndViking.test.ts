@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import {
   DRAGON_VALLEY_SYSTEM,
   Dragon,
+  DragonCompanion,
+  createDragonCard,
   dragonValley,
+  rarityFromElements,
 } from './dragonValleySystem';
 import {
   VIKING_QUESTS,
@@ -97,6 +100,47 @@ test('DRAGON_VALLEY_SYSTEM save/load preserves eggs, colors, age, bond, and ride
   assert.equal(dragonValley.canRide(restored[0].id), true);
 });
 
+test('dragon cards track rarity, codex entries, and rescued encounters through save/load', () => {
+  const starters = DRAGON_VALLEY_SYSTEM.resetToStarter();
+  assert.equal(dragonValley.cards.length, 1);
+  assert.equal(dragonValley.cards[0].rarity, 'Common');
+  assert.equal(dragonValley.cards[0].source, 'Starter');
+
+  assert.equal(rarityFromElements(['Ember']), 'Common');
+  assert.equal(rarityFromElements(['Storm']), 'Rare');
+  assert.equal(rarityFromElements(['Shadow']), 'Epic');
+  assert.equal(rarityFromElements(['Storm', 'Shadow'], 'Storm-Shadow'), 'Legendary');
+
+  const rescued: DragonCompanion = {
+    ...starters[0],
+    id: 'test_ashwing',
+    name: 'Ashwing',
+    species: 'Storm-Shadow',
+    elements: ['Storm', 'Shadow'],
+    stage: 'Adult',
+    growth: 100,
+    age: 3,
+    rideable: true,
+  };
+  const card = createDragonCard(rescued, 'Rescued');
+  assert.equal(card.rarity, 'Legendary');
+  assert.equal(card.source, 'Rescued');
+  DRAGON_VALLEY_SYSTEM.recordDragonCard(rescued, 'Rescued');
+  DRAGON_VALLEY_SYSTEM.markEncounterRescued('dv_abandoned_ashwing');
+  assert.equal(dragonValley.cards.length, 2);
+  assert.equal(DRAGON_VALLEY_SYSTEM.hasRescuedEncounter('dv_abandoned_ashwing'), true);
+
+  const saved = DRAGON_VALLEY_SYSTEM.exportSave([...starters, rescued]);
+  DRAGON_VALLEY_SYSTEM.resetToStarter();
+  assert.equal(dragonValley.cards.length, 1);
+  assert.equal(DRAGON_VALLEY_SYSTEM.hasRescuedEncounter('dv_abandoned_ashwing'), false);
+
+  DRAGON_VALLEY_SYSTEM.importSave(saved);
+  assert.equal(dragonValley.cards.length, 2);
+  assert.equal(dragonValley.cards[1].rarity, 'Legendary');
+  assert.equal(DRAGON_VALLEY_SYSTEM.hasRescuedEncounter('dv_abandoned_ashwing'), true);
+});
+
 test('vikingVillage provides friendly villagers with conversation, trading, and quests', () => {
   vikingVillage.reset();
   assert.ok(vikingVillage.villagers.length >= 3);
@@ -114,6 +158,10 @@ test('vikingVillage provides friendly villagers with conversation, trading, and 
   assert.equal(vikingVillage.interact('unknown_viking'), null);
   assert.ok(VIKING_TRADE_OFFERS.length >= 4);
   assert.ok(VIKING_QUESTS.length >= 3);
+  assert.ok(VIKING_TRADE_OFFERS.some((offer) => offer.giveItemId === 'magnum_44'));
+  assert.ok(VIKING_TRADE_OFFERS.some((offer) => offer.giveItemId === 'sawed_off'));
+  assert.ok(VIKING_TRADE_OFFERS.some((offer) => offer.giveItemId === 'roasted_meat'));
+  assert.ok(VIKING_TRADE_OFFERS.some((offer) => offer.giveItemId === 'grilled_fish'));
 
   vikingVillage.markQuestCompleted(VIKING_QUESTS[0].id);
   const save = vikingVillage.exportSave();

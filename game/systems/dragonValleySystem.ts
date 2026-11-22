@@ -1,5 +1,17 @@
 export type DragonElement = 'Ember' | 'Frost' | 'Storm' | 'Shadow';
 export type DragonStage = 'Hatchling' | 'Juvenile' | 'Adult';
+export type DragonRarity = 'Common' | 'Rare' | 'Epic' | 'Legendary';
+export type DragonCardSource = 'Starter' | 'Hatched' | 'Rescued' | 'Hybrid';
+
+export interface DragonCard {
+  id: string;
+  name: string;
+  species: string;
+  elements: DragonElement[];
+  rarity: DragonRarity;
+  stage: DragonStage;
+  source: DragonCardSource;
+}
 
 export type Dragon = {
   id: string;
@@ -115,9 +127,36 @@ export function speedFromDragon(age: number, bond: number, elements: DragonEleme
   return base + bondBonus + hybridBonus;
 }
 
+export function rarityFromElements(
+  elements: DragonElement[],
+  species = '',
+): DragonRarity {
+  if (elements.length > 1 || species.includes('-')) return 'Legendary';
+  if (elements.includes('Shadow')) return 'Epic';
+  if (elements.includes('Storm')) return 'Rare';
+  return 'Common';
+}
+
+export function createDragonCard(
+  dragon: DragonCompanion,
+  source: DragonCardSource,
+): DragonCard {
+  return {
+    id: dragon.id,
+    name: dragon.name,
+    species: dragon.species,
+    elements: [...dragon.elements],
+    rarity: rarityFromElements(dragon.elements, dragon.species),
+    stage: dragon.stage,
+    source,
+  };
+}
+
 export const dragonValley = {
   eggs: [] as string[],
   dragons: [] as Dragon[],
+  cards: [] as DragonCard[],
+  rescuedEncounterIds: [] as string[],
 
   collectEgg(species: string): void {
     this.eggs.push(species);
@@ -178,6 +217,8 @@ export const dragonValley = {
 export interface DragonValleySaveData {
   eggs: string[];
   dragons: DragonCompanion[];
+  cards?: DragonCard[];
+  rescuedEncounterIds?: string[];
 }
 
 export const DRAGON_VALLEY_SYSTEM = {
@@ -188,6 +229,8 @@ export const DRAGON_VALLEY_SYSTEM = {
   resetToStarter(): DragonCompanion[] {
     dragonValley.eggs = ['Ember', 'Frost'];
     dragonValley.dragons = [];
+    dragonValley.cards = [];
+    dragonValley.rescuedEncounterIds = [];
     const starter: DragonCompanion = {
       id: generateDragonUuid(),
       name: 'Ignis',
@@ -215,7 +258,25 @@ export const DRAGON_VALLEY_SYSTEM = {
       hatched: starter.hatched,
       rideable: starter.rideable,
     });
+    this.recordDragonCard(starter, 'Starter');
     return [starter];
+  },
+
+  recordDragonCard(dragon: DragonCompanion, source: DragonCardSource): DragonCard {
+    const card = createDragonCard(dragon, source);
+    const existing = dragonValley.cards.find((c) => c.id === card.id);
+    if (!existing) dragonValley.cards.push(card);
+    return existing ?? card;
+  },
+
+  hasRescuedEncounter(id: string): boolean {
+    return dragonValley.rescuedEncounterIds.includes(id);
+  },
+
+  markEncounterRescued(id: string): void {
+    if (!dragonValley.rescuedEncounterIds.includes(id)) {
+      dragonValley.rescuedEncounterIds.push(id);
+    }
   },
 
   syncCompanionFromCore(companion: DragonCompanion): DragonCompanion {
@@ -420,6 +481,8 @@ export const DRAGON_VALLEY_SYSTEM = {
         elements: [...d.elements],
         isMounted: false,
       })),
+      cards: dragonValley.cards.map((c) => ({ ...c, elements: [...c.elements] })),
+      rescuedEncounterIds: [...dragonValley.rescuedEncounterIds],
     };
   },
 
@@ -467,6 +530,26 @@ export const DRAGON_VALLEY_SYSTEM = {
       hatched: c.hatched,
       rideable: c.rideable,
     }));
+    dragonValley.cards = Array.isArray(save.cards)
+      ? save.cards.map((c) => {
+          const elements =
+            Array.isArray(c.elements) && c.elements.length > 0
+              ? c.elements
+              : resolveElementsFromSpecies(c.species || 'Ember');
+          return {
+            id: c.id,
+            name: c.name,
+            species: c.species || elements.join('-'),
+            elements,
+            rarity: c.rarity ?? rarityFromElements(elements, c.species),
+            stage: c.stage ?? 'Adult',
+            source: c.source ?? 'Hatched',
+          };
+        })
+      : companions.map((c) => createDragonCard(c, 'Hatched'));
+    dragonValley.rescuedEncounterIds = Array.isArray(save.rescuedEncounterIds)
+      ? save.rescuedEncounterIds.map((id) => String(id))
+      : [];
     return companions;
   },
 };

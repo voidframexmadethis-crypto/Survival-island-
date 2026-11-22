@@ -175,6 +175,25 @@ test('premade hilltop base, porch, entry step, and music studio wing have solid 
   }
 });
 
+test('premade hill house exposes hinged double doors and a door interaction station', () => {
+  const house = createHilltopHouse(
+    HILL_HOUSE_POS.x,
+    HILL_HOUSE_Y,
+    HILL_HOUSE_POS.z,
+    new THREE.Texture() as unknown as THREE.CanvasTexture,
+  );
+  assert.equal(house.door.pivotL.rotation.y, 0);
+  assert.equal(house.door.pivotR.rotation.y, 0);
+  assert.ok(house.door.pivotL.children.length > 0);
+  assert.ok(house.door.pivotR.children.length > 0);
+  assert.equal(house.door.x, HILL_HOUSE_POS.x + 4.2);
+  assert.equal(house.door.z, HILL_HOUSE_POS.z);
+
+  const doorStation = house.stations.find((station) => station.kind === 'house_door');
+  assert.ok(doorStation);
+  assert.match(doorStation!.label, /Double Doors/i);
+});
+
 test('walking from East porch through living room into Music Studio and Recording Booth is unobstructed and never falls through floor', () => {
   const house = createHilltopHouse(
     HILL_HOUSE_POS.x,
