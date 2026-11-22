@@ -237,6 +237,7 @@ export function createBlankProject(name = 'Untitled Coaster'): CoasterProject {
     manufacturerId: DEFAULT_MANUFACTURER_ID,
     coasterTypeId: DEFAULT_COASTER_TYPE_ID,
     editingMode: 'beginner',
+    splineResolution: 14,
     supports: createDefaultSupportSettings(),
     camera: createDefaultCameraPose(),
     points: [
@@ -283,7 +284,42 @@ function catmullRom(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, u: number, alpha = 0
   return mix(b1, b2, t1, t2);
 }
 
-export function sampleTrack(points: TrackPoint[], closed: boolean, resolution = 14): TrackSample[] {
+function hermitePoint(p0: Vec3, m0: Vec3, p1: Vec3, m1: Vec3, u: number): Vec3 {
+  const u2 = u * u;
+  const u3 = u2 * u;
+  const h00 = 2 * u3 - 3 * u2 + 1;
+  const h10 = u3 - 2 * u2 + u;
+  const h01 = -2 * u3 + 3 * u2;
+  const h11 = u3 - u2;
+  return {
+    x: p0.x * h00 + m0.x * h10 + p1.x * h01 + m1.x * h11,
+    y: p0.y * h00 + m0.y * h10 + p1.y * h01 + m1.y * h11,
+    z: p0.z * h00 + m0.z * h10 + p1.z * h01 + m1.z * h11,
+  };
+}
+
+export function autoTangentFor(points: TrackPoint[], index: number, closed: boolean): Vec3 {
+  const n = points.length;
+  const at = (i: number) => points[closed ? ((i % n) + n) % n : clamp(i, 0, n - 1)];
+  const prev = at(index - 1).position;
+  const point = at(index).position;
+  const next = at(index + 1).position;
+  const before = distance(prev, point);
+  const after = distance(point, next);
+  const direction = normalize({
+    x: next.x - prev.x,
+    y: next.y - prev.y,
+    z: next.z - prev.z,
+  });
+  const handleLength = clamp((before + after) / 6, 1.2, 18);
+  return { x: direction.x * handleLength, y: direction.y * handleLength, z: direction.z * handleLength };
+}
+
+export function sampleTrack(
+  points: TrackPoint[],
+  closed: boolean,
+  resolution = 14,
+): TrackSample[] {
   if (points.length < 2) return [];
   const n = points.length;
   const segments = closed ? n : n - 1;
@@ -292,6 +328,15 @@ export function sampleTrack(points: TrackPoint[], closed: boolean, resolution = 
   const at = (index: number): TrackPoint => {
     if (closed) return points[((index % n) + n) % n];
     return points[clamp(index, 0, n - 1)];
+  };
+  const hasHandles = points.some((point) => point.tangentIn || point.tangentOut);
+  const tangentOut = (index: number): Vec3 => {
+    const point = at(index);
+    return point.tangentOut ?? autoTangentFor(points, ((index % n) + n) % n, closed);
+  };
+  const tangentIn = (index: number): Vec3 => {
+    const point = at(index);
+    return point.tangentIn ?? autoTangentFor(points, ((index % n) + n) % n, closed);
   };
 
   for (let i = 0; i < segments; i++) {
@@ -302,7 +347,9 @@ export function sampleTrack(points: TrackPoint[], closed: boolean, resolution = 
     for (let j = 0; j < res; j++) {
       const u = j / res;
       positions.push({
-        pos: catmullRom(p0.position, p1.position, p2.position, p3.position, u),
+        pos: hasHandles
+          ? hermitePoint(p1.position, tangentOut(i), p2.position, tangentIn(i + 1), u)
+          : catmullRom(p0.position, p1.position, p2.position, p3.position, u),
         pointIndex: i,
         bank: (p1.bank + (p2.bank - p1.bank) * smooth(u)) * (Math.PI / 180),
         kind: p1.kind,
@@ -583,10 +630,193 @@ export function autoBankPoints(points: TrackPoint[], closed: boolean): TrackPoin
   return result;
 }
 
+export function segmentEndIndex(points: TrackPoint[], index: number, closed: boolean): number {
+  if (index < 0 || index >= points.length) return -1;
+  if (index + 1 < points.length) return index + 1;
+  return closed && points.length > 2 ? 0 : -1;
+}
+
+export interface SegmentMetrics {
+  start: Vec3;
+  end: Vec3;
+  length: number;
+  pitch: number;
+  yaw: number;
+  height: number;
+  curvature: number;
+}
+
+export function segmentMetrics(points: TrackPoint[], index: number, closed: boolean): SegmentMetrics | null {
+  const endIndex = segmentEndIndex(points, index, closed);
+  if (endIndex < 0) return null;
+  const start = points[index].position;
+  const end = points[endIndex].position;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const dz = end.z - start.z;
+  const length = Math.max(0.001, Math.hypot(dx, dy, dz));
+  const horizontal = Math.max(0.001, Math.hypot(dx, dz));
+  return {
+    start: { ...start },
+    end: { ...end },
+    length,
+    pitch: (Math.atan2(dy, horizontal) * 180) / Math.PI,
+    yaw: (Math.atan2(dx, dz) * 180) / Math.PI,
+    height: end.y,
+    curvature: (Math.abs(dy) / length) * 100,
+  };
+}
+
+function rotateVectorAroundAxis(v: Vec3, axis: Vec3, radians: number): Vec3 {
+  const k = normalize(axis);
+  const c = Math.cos(radians);
+  const s = Math.sin(radians);
+  const kv = cross(k, v);
+  const kd = dot(k, v);
+  return {
+    x: v.x * c + kv.x * s + k.x * kd * (1 - c),
+    y: v.y * c + kv.y * s + k.y * kd * (1 - c),
+    z: v.z * c + kv.z * s + k.z * kd * (1 - c),
+  };
+}
+
+export function moveSegmentEnd(points: TrackPoint[], index: number, end: Vec3, closed: boolean): TrackPoint[] {
+  const endIndex = segmentEndIndex(points, index, closed);
+  if (endIndex < 0) return points;
+  return points.map((point, pointIndex) =>
+    pointIndex === endIndex ? { ...point, position: { ...end } } : point,
+  );
+}
+
+export function setSegmentLengthBetween(
+  points: TrackPoint[],
+  index: number,
+  length: number,
+  closed: boolean,
+): TrackPoint[] {
+  const endIndex = segmentEndIndex(points, index, closed);
+  if (endIndex < 0) return points;
+  const start = points[index].position;
+  const end = points[endIndex].position;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const dz = end.z - start.z;
+  const current = Math.hypot(dx, dy, dz);
+  if (current < 1e-5) return points;
+  const scale = clamp(length, 0.25, 500) / current;
+  return moveSegmentEnd(
+    points,
+    index,
+    { x: start.x + dx * scale, y: start.y + dy * scale, z: start.z + dz * scale },
+    closed,
+  );
+}
+
+export function rotateSegmentYaw(
+  points: TrackPoint[],
+  index: number,
+  degrees: number,
+  closed: boolean,
+): TrackPoint[] {
+  const endIndex = segmentEndIndex(points, index, closed);
+  if (endIndex < 0) return points;
+  const start = points[index].position;
+  const end = points[endIndex].position;
+  const v = { x: end.x - start.x, y: end.y - start.y, z: end.z - start.z };
+  const rotated = rotateVectorAroundAxis(v, UP, (degrees * Math.PI) / 180);
+  return moveSegmentEnd(
+    points,
+    index,
+    { x: start.x + rotated.x, y: start.y + rotated.y, z: start.z + rotated.z },
+    closed,
+  );
+}
+
+export function pitchSegment(
+  points: TrackPoint[],
+  index: number,
+  degrees: number,
+  closed: boolean,
+): TrackPoint[] {
+  const endIndex = segmentEndIndex(points, index, closed);
+  if (endIndex < 0) return points;
+  const start = points[index].position;
+  const end = points[endIndex].position;
+  const v = { x: end.x - start.x, y: end.y - start.y, z: end.z - start.z };
+  const flat = normalize({ x: v.x, y: 0, z: v.z });
+  const right = Math.hypot(flat.x, flat.z) > 1e-4 ? normalize(cross(UP, flat)) : { x: 1, y: 0, z: 0 };
+  const rotated = rotateVectorAroundAxis(v, right, -(degrees * Math.PI) / 180);
+  return moveSegmentEnd(
+    points,
+    index,
+    { x: start.x + rotated.x, y: start.y + rotated.y, z: start.z + rotated.z },
+    closed,
+  );
+}
+
+export function curveSegment(
+  points: TrackPoint[],
+  index: number,
+  offset: number,
+  closed: boolean,
+): TrackPoint[] {
+  const endIndex = segmentEndIndex(points, index, closed);
+  if (endIndex < 0) return points;
+  const start = points[index].position;
+  const end = points[endIndex].position;
+  const direction = normalize({ x: end.x - start.x, y: 0, z: end.z - start.z });
+  const right = Math.hypot(direction.x, direction.z) > 1e-4 ? normalize(cross(UP, direction)) : { x: 1, y: 0, z: 0 };
+  const shift = clamp(offset, -40, 40);
+  return moveSegmentEnd(
+    points,
+    index,
+    { x: end.x + right.x * shift, y: end.y, z: end.z + right.z * shift },
+    closed,
+  );
+}
+
+export function autoTangents(points: TrackPoint[], closed: boolean): TrackPoint[] {
+  return points.map((point, index) => {
+    const tangent = autoTangentFor(points, index, closed);
+    return { ...point, tangentOut: tangent, tangentIn: { ...tangent } };
+  });
+}
+
+export function setPointTangent(points: TrackPoint[], index: number, tangent: Vec3): TrackPoint[] {
+  if (!points[index]) return points;
+  return points.map((point, pointIndex) =>
+    pointIndex === index
+      ? { ...point, tangentOut: { ...tangent }, tangentIn: { ...tangent } }
+      : point,
+  );
+}
+
+export function insertControlPoint(points: TrackPoint[], index: number, closed: boolean): TrackPoint[] {
+  const endIndex = segmentEndIndex(points, index, closed);
+  if (endIndex < 0) return points;
+  const start = points[index];
+  const end = points[endIndex];
+  const position = {
+    x: (start.position.x + end.position.x) / 2,
+    y: (start.position.y + end.position.y) / 2,
+    z: (start.position.z + end.position.z) / 2,
+  };
+  const inserted: TrackPoint = {
+    id: newId('pt'),
+    position,
+    bank: (start.bank + end.bank) / 2,
+    kind: start.kind,
+    element: start.element,
+    targetSpeed: start.targetSpeed,
+  };
+  if (endIndex === 0) return [...points, inserted];
+  return [...points.slice(0, index + 1), inserted, ...points.slice(index + 1)];
+}
+
 export function updatePoint(
   points: TrackPoint[],
   id: string,
-  patch: Partial<Pick<TrackPoint, 'kind' | 'bank' | 'targetSpeed' | 'element'>> & {
+  patch: Partial<Pick<TrackPoint, 'kind' | 'bank' | 'targetSpeed' | 'element' | 'tangentIn' | 'tangentOut'>> & {
     position?: Partial<Vec3>;
   },
 ): TrackPoint[] {
@@ -760,7 +990,8 @@ export function updateManualSupport(
   };
 }
 
-const CSV_HEADER = 'point_index,x,y,z,bank_deg,kind,element,target_speed_ms';
+const CSV_HEADER =
+  'point_index,x,y,z,bank_deg,kind,element,target_speed_ms,tangent_out_x,tangent_out_y,tangent_out_z,tangent_in_x,tangent_in_y,tangent_in_z';
 
 /** Plain-text exchange format for track geometry. */
 export function projectToCsv(project: CoasterProject): string {
@@ -780,6 +1011,12 @@ export function projectToCsv(project: CoasterProject): string {
         point.kind,
         point.element ?? '',
         point.targetSpeed === undefined ? '' : point.targetSpeed.toFixed(2),
+        point.tangentOut?.x.toFixed(3) ?? '',
+        point.tangentOut?.y.toFixed(3) ?? '',
+        point.tangentOut?.z.toFixed(3) ?? '',
+        point.tangentIn?.x.toFixed(3) ?? '',
+        point.tangentIn?.y.toFixed(3) ?? '',
+        point.tangentIn?.z.toFixed(3) ?? '',
       ].join(','),
     );
   });
@@ -814,7 +1051,9 @@ export function pointsFromCsv(csv: string): TrackPoint[] {
   rows.slice(0, 500).forEach((row) => {
     const cells = row.split(',').map((cell) => cell.trim());
     // Accept both a plain x,y,z,bank,kind file and the studio's indexed export.
-    const offset = cells.length >= 8 ? 1 : 0;
+    const indexed = cells.length >= 8;
+    const offset = indexed ? 1 : 0;
+    const tangentOffset = indexed ? 8 : 7;
     const x = Number(cells[offset]);
     const y = Number(cells[offset + 1]);
     const z = Number(cells[offset + 2]);
@@ -824,15 +1063,36 @@ export function pointsFromCsv(csv: string): TrackPoint[] {
       : 'track';
     const element = cells[offset + 5] ? (cells[offset + 5] as CoasterElementKind) : undefined;
     const targetSpeed = cells[offset + 6] ? Number(cells[offset + 6]) : undefined;
-    points.push(
-      makePoint(
-        vec(x, y, z),
-        kind,
-        Number.isFinite(Number(cells[offset + 3])) ? Number(cells[offset + 3]) : 0,
-        element,
-        targetSpeed !== undefined && Number.isFinite(targetSpeed) ? targetSpeed : undefined,
-      ),
+    const hasTangent = (base: number) =>
+      [0, 1, 2].every(
+        (column) => Boolean(cells[base + column]) && Number.isFinite(Number(cells[base + column])),
+      );
+    const tangentOut = hasTangent(tangentOffset)
+      ? vec(
+          Number(cells[tangentOffset]),
+          Number(cells[tangentOffset + 1]),
+          Number(cells[tangentOffset + 2]),
+        )
+      : undefined;
+    const tangentIn = hasTangent(tangentOffset + 3)
+      ? vec(
+          Number(cells[tangentOffset + 3]),
+          Number(cells[tangentOffset + 4]),
+          Number(cells[tangentOffset + 5]),
+        )
+      : undefined;
+    const point = makePoint(
+      vec(x, y, z),
+      kind,
+      Number.isFinite(Number(cells[offset + 3])) ? Number(cells[offset + 3]) : 0,
+      element,
+      targetSpeed !== undefined && Number.isFinite(targetSpeed) ? targetSpeed : undefined,
     );
+    if (tangentOut && tangentIn) {
+      point.tangentOut = tangentOut;
+      point.tangentIn = tangentIn;
+    }
+    points.push(point);
   });
   if (points.length < 2) throw new Error('CSV needs at least two valid geometry rows.');
   return points;

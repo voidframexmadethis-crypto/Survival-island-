@@ -18,15 +18,22 @@ import {
   ELEMENT_LIBRARY,
   addManualSupport,
   appendElement,
+  autoTangents,
   createBlankProject,
+  curveSegment,
   dePumpPoints,
+  insertControlPoint,
   offsetPointLateral,
+  pitchSegment,
   projectFromCsv,
   projectToCsv,
   removeManualSupport,
+  rotateSegmentYaw,
   sampleTrack,
   segmentLength,
+  segmentMetrics,
   setSegmentLength,
+  setSegmentLengthBetween,
   updateManualSupport,
 } from './track';
 import { createTestLayoutProject } from './testFixture';
@@ -237,12 +244,80 @@ test('manual supports add, clamp, update and remove safely', () => {
   assert.equal(removed.supports.manual.length, 0);
 });
 
+test('segment transforms pitch, yaw, curve and resize without replacing the layout', () => {
+  const base = createBlankProject();
+  const points = [
+    { ...base.points[0], id: 'a', position: { x: 0, y: 4, z: 0 } },
+    { ...base.points[0], id: 'b', position: { x: 0, y: 4, z: 12 } },
+    { ...base.points[0], id: 'c', position: { x: 0, y: 4, z: 24 } },
+  ];
+  const before = segmentMetrics(points, 0, false);
+  assert.ok(before);
+  const pitched = pitchSegment(points, 0, 25, false);
+  const pitchMetrics = segmentMetrics(pitched, 0, false);
+  assert.ok(pitchMetrics);
+  assert.ok(pitchMetrics.pitch > 20);
+  assert.ok(Math.abs(pitchMetrics.length - before.length) < 1e-5);
+
+  const yawed = rotateSegmentYaw(points, 0, 30, false);
+  const yawMetrics = segmentMetrics(yawed, 0, false);
+  assert.ok(yawMetrics);
+  assert.ok(Math.abs(yawMetrics.length - before.length) < 1e-5);
+  assert.ok(yawed[1].position.x > 0);
+
+  const curved = curveSegment(points, 0, 4, false);
+  assert.ok(curved[1].position.x > 3.9);
+  assert.equal(curved[2].position.z, 24);
+
+  const resized = setSegmentLengthBetween(points, 0, 30, false);
+  const resizedMetrics = segmentMetrics(resized, 0, false);
+  assert.ok(resizedMetrics);
+  assert.ok(Math.abs(resizedMetrics.length - 30) < 1e-5);
+  assert.equal(resized[0].id, 'a');
+});
+
+test('control point insertion and tangent handles produce continuous geometry', () => {
+  const base = createBlankProject();
+  const points = [
+    { ...base.points[0], id: 'a', position: { x: 0, y: 4, z: 0 } },
+    { ...base.points[0], id: 'b', position: { x: 0, y: 10, z: 12 } },
+    { ...base.points[0], id: 'c', position: { x: 8, y: 4, z: 24 } },
+  ];
+  const inserted = insertControlPoint(points, 0, false);
+  assert.equal(inserted.length, 4);
+  assert.ok(Math.abs(inserted[1].position.z - 6) < 1e-6);
+  assert.equal(inserted[0].id, 'a');
+  assert.equal(inserted[2].id, 'b');
+
+  const tangentPoints = autoTangents(points, false);
+  const samples = sampleTrack(tangentPoints, false, 10);
+  assert.ok(samples.length > 20);
+  for (const point of points) {
+    assert.ok(
+      samples.some(
+        (sample) =>
+          Math.abs(sample.position.x - point.position.x) < 1e-2 &&
+          Math.abs(sample.position.y - point.position.y) < 1e-2 &&
+          Math.abs(sample.position.z - point.position.z) < 1e-2,
+      ),
+      `curve misses control point ${point.id}`,
+    );
+  }
+});
+
 test('CSV export and import round-trip track geometry as a new project', () => {
   const base = createBlankProject();
   const withLaunch = appendElement(base.points, 'launch_lsm', { targetSpeed: 31 });
-  const project = { ...base, points: withLaunch, closed: false };
+  const withTangents = withLaunch.map((point, index) => ({
+    ...point,
+    tangentOut: { x: 0.1 * index, y: 0.2, z: 1 },
+    tangentIn: { x: 0.3, y: 0.4 + index * 0.1, z: 1 },
+  }));
+  const project = { ...base, points: withTangents, closed: false };
   const csv = projectToCsv(project);
   const imported = projectFromCsv(project, csv);
+  assert.deepEqual(imported.points[0].tangentOut, { x: 0, y: 0.2, z: 1 });
+  assert.deepEqual(imported.points[1].tangentIn, { x: 0.3, y: 0.5, z: 1 });
   assert.notEqual(imported.id, project.id);
   assert.equal(imported.points.length, project.points.length);
   assert.equal(imported.points[imported.points.length - 1].kind, 'launch');
@@ -267,6 +342,12 @@ test('project storage keeps supports, camera, manufacturer and rename identities
       ...base,
       manufacturerId: 'rmc',
       coasterTypeId: 'hybrid',
+      splineResolution: 22,
+      points: base.points.map((point, index) => ({
+        ...point,
+        tangentOut: { x: index, y: 0.5, z: 1 },
+        tangentIn: { x: index + 0.25, y: 0.75, z: 1 },
+      })),
       camera: { ...base.camera, projection: 'orthographic', rideMode: 'passenger' },
     },
     0,
@@ -280,6 +361,8 @@ test('project storage keeps supports, camera, manufacturer and rename identities
   assert.equal(loaded.camera.projection, 'orthographic');
   assert.equal(loaded.camera.rideMode, 'passenger');
   assert.equal(loaded.supports.manual.length, 1);
+  assert.equal(loaded.splineResolution, 22);
+  assert.deepEqual(loaded.points[1].tangentIn, { x: 1.25, y: 0.75, z: 1 });
 
   const renamed = store.rename(saved.id, 'Renamed Project');
   assert.ok(renamed);

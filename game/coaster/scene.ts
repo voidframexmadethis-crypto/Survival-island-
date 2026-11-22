@@ -6,9 +6,17 @@ import { CoasterSimulation } from './physics';
 import { MechanicalController, deriveMechanics } from './mechanics';
 import {
   TRACK_GAUGE,
+  autoTangentFor,
   computeTrackStats,
+  curveSegment,
+  moveSegmentEnd,
+  pitchSegment,
+  rotateSegmentYaw,
   sampleAtDistance,
   sampleTrack,
+  segmentEndIndex,
+  segmentMetrics,
+  setSegmentLengthBetween,
 } from './track';
 import type {
   CameraPose,
@@ -17,6 +25,7 @@ import type {
   MechanicalSnapshot,
   RideCameraMode,
   SupportMaterial,
+  TrackPoint,
   TrackSample,
   TrackStats,
   TrainDesign,
@@ -25,11 +34,27 @@ import type {
 } from './types';
 
 export type StudioTool = 'select' | 'add';
+export type StudioEditorMode = 'segment' | 'nurbs';
+export type StudioHandleKind =
+  | 'height'
+  | 'length'
+  | 'yaw'
+  | 'pitch'
+  | 'bank'
+  | 'curve'
+  | 'point_height'
+  | 'tangent_out'
+  | 'tangent_in';
 
 export interface CoasterSceneCallbacks {
   onSelectPoint: (index: number) => void;
   onAddPoint: (position: Vec3) => void;
   onMovePoint: (index: number, position: Vec3) => void;
+  /** One committed edit after a drag; keeps a whole handle gesture as one undo step. */
+  onEditPoints: (points: TrackPoint[], selectedIndex: number) => void;
+  /** A tap on the selected open endpoint extends the track from that endpoint. */
+  onExtendTrack: (index: number) => void;
+  onHandlePreview: (kind: StudioHandleKind, value: number) => void;
   onTelemetry: (telemetry: TrainTelemetry, mechanical: MechanicalSnapshot, stats: TrackStats) => void;
   onNotice: (message: string) => void;
 }
@@ -52,6 +77,16 @@ const _ray = new THREE.Raycaster();
 const _ndc = new THREE.Vector2();
 const _plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const _hit = new THREE.Vector3();
+
+function rodBetween(start: THREE.Vector3, end: THREE.Vector3, radius: number, material: THREE.Material): THREE.Mesh {
+  const direction = end.clone().sub(start);
+  const length = Math.max(0.001, direction.length());
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, 8), material);
+  rod.position.copy(start).add(end).multiplyScalar(0.5);
+  rod.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+  rod.renderOrder = 6;
+  return rod;
+}
 
 function basisQuaternion(sample: TrackSample): THREE.Quaternion {
   _right.set(sample.right.x, sample.right.y, sample.right.z);
@@ -133,9 +168,22 @@ export class CoasterStudioScene {
     world: new THREE.Group(),
     track: new THREE.Group(),
     nodes: new THREE.Group(),
+    handles: new THREE.Group(),
     mechanical: new THREE.Group(),
     trains: new THREE.Group(),
   };
+  private editorMode: StudioEditorMode = 'segment';
+  private handleMeshes: THREE.Mesh[] = [];
+  private trackMeshes: THREE.Mesh[] = [];
+  private selectedHandle: {
+    kind: StudioHandleKind;
+    index: number;
+    pointer: { x: number; y: number };
+    points: TrackPoint[];
+  } | null = null;
+  private activePointers = new Set<number>();
+  private lastPreviewAt = 0;
+  private lastPointerPosition = { x: 0, y: 0 };
   private readonly raycaster = new THREE.Raycaster();
   private project: CoasterProject;
   private samples: TrackSample[] = [];
@@ -156,7 +204,13 @@ export class CoasterStudioScene {
   private onboard = false;
   private autoDispatch = false;
   private autoTimer = 0;
-  private selectedDrag: { index: number; moved: boolean; position: Vec3 } | null = null;
+  private selectedDrag: {
+    index: number;
+    moved: boolean;
+    wasSelected: boolean;
+    position: Vec3;
+    points: TrackPoint[];
+  } | null = null;
   private pointerStart = { x: 0, y: 0 };
   private animationFrame = 0;
   private disposed = false;
@@ -188,7 +242,14 @@ export class CoasterStudioScene {
 
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.Fog(0xc9d8e4, 140, 380);
-    this.scene.add(this.groups.world, this.groups.track, this.groups.nodes, this.groups.mechanical, this.groups.trains);
+    this.scene.add(
+      this.groups.world,
+      this.groups.track,
+      this.groups.nodes,
+      this.groups.handles,
+      this.groups.mechanical,
+      this.groups.trains,
+    );
 
     const aspect = Math.max(0.1, container.clientWidth / Math.max(1, container.clientHeight));
     this.camera = new THREE.PerspectiveCamera(48, aspect, 0.1, 900);
@@ -221,7 +282,7 @@ export class CoasterStudioScene {
 
     this.applyCameraPose(project.camera);
     this.buildWorld();
-    this.samples = sampleTrack(project.points, project.closed, 14);
+    this.samples = sampleTrack(project.points, project.closed, project.splineResolution ?? 14);
     this.simulation = this.createSimulation();
     this.mechanics = new MechanicalController(this.samples, deriveMechanics(project.points));
     this.rebuildAll();
@@ -402,6 +463,7 @@ export class CoasterStudioScene {
       this.project.id !== project.id ||
       this.project.trackColor !== project.trackColor ||
       this.project.supportColor !== project.supportColor ||
+      this.project.splineResolution !== project.splineResolution ||
       this.project.supports !== project.supports;
     const projectChanged = this.project.id !== project.id;
     this.project = project;
@@ -413,7 +475,7 @@ export class CoasterStudioScene {
     }
     if (projectChanged) this.applyCameraPose(project.camera);
     if (geometryChanged) {
-      this.samples = sampleTrack(project.points, project.closed, 14);
+      this.samples = sampleTrack(project.points, project.closed, project.splineResolution ?? 14);
       this.simulation = this.createSimulation();
       this.mechanics = new MechanicalController(this.samples, deriveMechanics(project.points));
       this.playing = false;
@@ -431,6 +493,16 @@ export class CoasterStudioScene {
       mesh.material = markerIndex === index ? this.nodeSelectedMaterial : this.nodeBaseMaterial;
       mesh.scale.setScalar(markerIndex === index ? 1.35 : 1);
     });
+    this.rebuildHandles();
+  }
+
+  setEditorMode(mode: StudioEditorMode): void {
+    this.editorMode = mode;
+    this.rebuildHandles();
+  }
+
+  getEditorMode(): StudioEditorMode {
+    return this.editorMode;
   }
 
   setTool(tool: StudioTool): void {
@@ -597,12 +669,14 @@ export class CoasterStudioScene {
     this.rebuildNodes();
     this.rebuildMechanicals();
     this.rebuildTrains();
+    this.rebuildHandles();
     this.setSelected(this.selectedIndex);
   }
 
   private rebuildTrack(): void {
     disposeObject(this.groups.track);
     this.groups.track.clear();
+    this.trackMeshes = [];
     if (this.samples.length < 2) return;
 
     const railMat = new THREE.MeshStandardMaterial({
@@ -614,6 +688,9 @@ export class CoasterStudioScene {
     const rightRail = new THREE.Mesh(railGeometry(this.samples, -TRACK_GAUGE / 2), railMat);
     leftRail.castShadow = true;
     rightRail.castShadow = true;
+    leftRail.userData.trackSurface = true;
+    rightRail.userData.trackSurface = true;
+    this.trackMeshes.push(leftRail, rightRail);
     this.groups.track.add(leftRail, rightRail);
 
     const spineMat = new THREE.MeshStandardMaterial({
@@ -629,6 +706,8 @@ export class CoasterStudioScene {
       spineMat,
     );
     spine.castShadow = true;
+    spine.userData.trackSurface = true;
+    this.trackMeshes.push(spine);
     this.groups.track.add(spine);
 
     const tieMat = new THREE.MeshStandardMaterial({ color: 0x4b5054, metalness: 0.4, roughness: 0.72 });
@@ -647,6 +726,7 @@ export class CoasterStudioScene {
     ties.instanceMatrix.needsUpdate = true;
     ties.castShadow = true;
     ties.receiveShadow = true;
+    this.trackMeshes.push(ties);
     this.groups.track.add(ties);
 
     this.buildSupports();
@@ -775,6 +855,156 @@ export class CoasterStudioScene {
     this.stationGate = gate;
     this.stationGroup = group;
     this.groups.track.add(group);
+  }
+
+  private addHandle(mesh: THREE.Mesh, kind: StudioHandleKind, index: number): void {
+    mesh.userData.handleKind = kind;
+    mesh.userData.pointIndex = index;
+    mesh.renderOrder = 6;
+    this.handleMeshes.push(mesh);
+    this.groups.handles.add(mesh);
+  }
+
+  private rebuildHandles(): void {
+    disposeObject(this.groups.handles);
+    this.groups.handles.clear();
+    this.handleMeshes = [];
+    const index = this.selectedIndex;
+    const point = this.project.points[index];
+    if (!point) return;
+    const endIndex = segmentEndIndex(this.project.points, index, this.project.closed);
+    const start = new THREE.Vector3(point.position.x, point.position.y, point.position.z);
+    const endPoint = endIndex >= 0 ? this.project.points[endIndex] : null;
+    const end = endPoint
+      ? new THREE.Vector3(endPoint.position.x, endPoint.position.y, endPoint.position.z)
+      : start.clone().add(new THREE.Vector3(0, 0, 8));
+    const metrics = endIndex >= 0 ? segmentMetrics(this.project.points, index, this.project.closed) : null;
+    const material = (color: number) =>
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.96, depthTest: false });
+
+    if (this.editorMode === 'segment') {
+      // Selected segment is painted over the rails so the player can see exactly
+      // which piece the contextual controls will edit.
+      if (endIndex >= 0) {
+        const segmentSamples = this.samples.filter((sample) => sample.pointIndex === index);
+        if (segmentSamples.length > 1) {
+          const highlightMaterial = new THREE.MeshBasicMaterial({
+            color: 0xffc72c,
+            transparent: true,
+            opacity: 0.42,
+            depthTest: false,
+          });
+          const highlight = new THREE.Mesh(railGeometry(segmentSamples, 0), highlightMaterial);
+          highlight.renderOrder = 4;
+          this.groups.handles.add(highlight);
+        }
+      }
+
+      const heightMaterial = material(0xffc247);
+      const heightTop = end.clone().add(new THREE.Vector3(0, 3.8, 0));
+      this.addHandle(rodBetween(end, heightTop, 0.065, heightMaterial), 'height', index);
+      const heightCap = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.8, 10), heightMaterial);
+      heightCap.position.copy(heightTop);
+      this.addHandle(heightCap, 'height', index);
+
+      if (endIndex >= 0 && metrics) {
+        const direction = end.clone().sub(start).normalize();
+        const lengthStart = start.clone().addScaledVector(direction, 1.1);
+        const lengthEnd = lengthStart.clone().addScaledVector(direction, 2.7);
+        const lengthMaterial = material(0x45d6d2);
+        this.addHandle(rodBetween(lengthStart, lengthEnd, 0.055, lengthMaterial), 'length', index);
+        const lengthCap = new THREE.Mesh(new THREE.ConeGeometry(0.23, 0.65, 10), lengthMaterial);
+        lengthCap.position.copy(lengthEnd);
+        lengthCap.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
+        this.addHandle(lengthCap, 'length', index);
+
+        const yawMaterial = material(0x79dd88);
+        const yawRing = new THREE.Mesh(new THREE.TorusGeometry(2.1, 0.045, 8, 40), yawMaterial);
+        yawRing.rotation.x = Math.PI / 2;
+        yawRing.position.copy(start);
+        this.addHandle(yawRing, 'yaw', index);
+
+        const flatDirection = new THREE.Vector3(direction.x, 0, direction.z).normalize();
+        const right = new THREE.Vector3().crossVectors(UP, flatDirection).normalize();
+        const pitchMaterial = material(0xff8b3d);
+        const pitchRing = new THREE.Mesh(new THREE.TorusGeometry(2.1, 0.045, 8, 40), pitchMaterial);
+        pitchRing.position.copy(start);
+        pitchRing.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), right);
+        this.addHandle(pitchRing, 'pitch', index);
+
+        const bankSample = sampleAtDistance(this.samples, this.samples.find((sample) => sample.pointIndex === index)?.distance ?? 0);
+        if (bankSample) {
+          const bankNormal = new THREE.Vector3(bankSample.tangent.x, bankSample.tangent.y, bankSample.tangent.z).normalize();
+          const bankRing = new THREE.Mesh(
+            new THREE.TorusGeometry(1.5, 0.04, 8, 36),
+            material(0x64a8ff),
+          );
+          bankRing.position.copy(start);
+          bankRing.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), bankNormal);
+          this.addHandle(bankRing, 'bank', index);
+        }
+
+        const curveMaterial = material(0xff73b0);
+        const curveStart = end.clone();
+        const curveEnd = end.clone().addScaledVector(right, 2.3);
+        this.addHandle(rodBetween(curveStart, curveEnd, 0.05, curveMaterial), 'curve', index);
+        const curveCap = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.55, 9), curveMaterial);
+        curveCap.position.copy(curveEnd);
+        curveCap.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), right);
+        this.addHandle(curveCap, 'curve', index);
+      }
+    } else {
+      const tangentMaterial = material(0xff62c8);
+      const indices = this.project.points.length <= 40 ? this.project.points.map((_, i) => i) : [index];
+      for (const pointIndex of indices) {
+        const source = this.project.points[pointIndex];
+        if (!source) continue;
+        const tangent = source.tangentOut ?? autoTangentFor(this.project.points, pointIndex, this.project.closed);
+        const tangentVector = new THREE.Vector3(tangent.x, tangent.y, tangent.z);
+        const origin = new THREE.Vector3(source.position.x, source.position.y, source.position.z);
+        const out = origin.clone().add(tangentVector);
+        const incoming = origin.clone().sub(tangentVector);
+        const isSelected = pointIndex === index;
+        this.addHandle(
+          rodBetween(origin, out, isSelected ? 0.038 : 0.022, tangentMaterial),
+          'tangent_out',
+          pointIndex,
+        );
+        this.addHandle(
+          rodBetween(origin, incoming, isSelected ? 0.038 : 0.022, tangentMaterial),
+          'tangent_in',
+          pointIndex,
+        );
+        const outCap = new THREE.Mesh(
+          new THREE.SphereGeometry(isSelected ? 0.22 : 0.13, 10, 8),
+          tangentMaterial,
+        );
+        outCap.position.copy(out);
+        this.addHandle(outCap, 'tangent_out', pointIndex);
+        const inCap = new THREE.Mesh(
+          new THREE.SphereGeometry(isSelected ? 0.22 : 0.13, 10, 8),
+          tangentMaterial,
+        );
+        inCap.position.copy(incoming);
+        this.addHandle(inCap, 'tangent_in', pointIndex);
+      }
+      const selectedRing = new THREE.Mesh(
+        new THREE.TorusGeometry(0.62, 0.055, 8, 24),
+        material(0xffffff),
+      );
+      selectedRing.position.copy(start);
+      selectedRing.renderOrder = 7;
+      this.groups.handles.add(selectedRing);
+
+      // Direct vertical control-point editing: drag the cap to raise or lower
+      // the selected spline point without touching the rest of the layout.
+      const elevationMaterial = material(0x8ef0b0);
+      const elevationTop = start.clone().add(new THREE.Vector3(0, 3.6, 0));
+      this.addHandle(rodBetween(start, elevationTop, 0.045, elevationMaterial), 'point_height', index);
+      const elevationCap = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.7, 10), elevationMaterial);
+      elevationCap.position.copy(elevationTop);
+      this.addHandle(elevationCap, 'point_height', index);
+    }
   }
 
   private rebuildNodes(): void {
@@ -1153,16 +1383,229 @@ export class CoasterStudioScene {
     }
   }
 
+  private previewPoints(points: TrackPoint[]): void {
+    this.project = { ...this.project, points };
+    this.samples = sampleTrack(points, this.project.closed, this.project.splineResolution ?? 14);
+    this.rebuildTrack();
+    this.rebuildHandles();
+    this.syncNodePositions();
+  }
+
+  private syncNodePositions(): void {
+    this.nodeMeshes.forEach((marker, index) => {
+      const point = this.project.points[index];
+      if (point) marker.position.set(point.position.x, point.position.y + 0.35, point.position.z);
+    });
+  }
+
+  private commitLocalGeometry(): void {
+    this.samples = sampleTrack(this.project.points, this.project.closed, this.project.splineResolution ?? 14);
+    this.simulation = this.createSimulation();
+    this.mechanics = new MechanicalController(this.samples, deriveMechanics(this.project.points));
+    this.playing = false;
+    this.rebuildMechanicals();
+    this.rebuildTrains();
+    this.callbacks.onEditPoints(this.project.points, this.selectedIndex);
+  }
+
+  private cancelInteraction(): void {
+    if (this.selectedHandle) {
+      this.previewPoints(this.selectedHandle.points);
+      this.selectedHandle = null;
+    }
+    if (this.selectedDrag) {
+      this.previewPoints(this.selectedDrag.points);
+      this.selectedDrag = null;
+    }
+    this.activeControls.enabled = this.rideCamera === 'free';
+  }
+
+  private worldUnitsPerPixel(anchor: THREE.Vector3): number {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (this.projection === 'orthographic') {
+      const visibleHeight = (this.orthoCamera.top - this.orthoCamera.bottom) / this.orthoCamera.zoom;
+      return visibleHeight / Math.max(1, rect.height);
+    }
+    const distanceToAnchor = this.camera.position.distanceTo(anchor);
+    const visibleHeight =
+      2 * Math.tan((this.camera.fov * Math.PI) / 360) * Math.max(0.5, distanceToAnchor);
+    return visibleHeight / Math.max(1, rect.height);
+  }
+
+  private pickViewPlane(event: PointerEvent, anchor: THREE.Vector3): THREE.Vector3 | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    _ndc.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(_ndc, this.activeCamera);
+    const normal = new THREE.Vector3();
+    this.activeCamera.getWorldDirection(normal);
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal.negate(), anchor);
+    const hit = new THREE.Vector3();
+    return this.raycaster.ray.intersectPlane(plane, hit) ? hit : null;
+  }
+
+  private updateHandleDrag(event: PointerEvent): void {
+    const drag = this.selectedHandle;
+    if (!drag) return;
+    const points = drag.points;
+    const metrics = segmentMetrics(points, drag.index, this.project.closed);
+    const point = points[drag.index];
+    if (!point) return;
+    const dx = event.clientX - drag.pointer.x;
+    const dy = event.clientY - drag.pointer.y;
+    const origin = new THREE.Vector3(point.position.x, point.position.y, point.position.z);
+    const unit = this.worldUnitsPerPixel(origin);
+    let next = points;
+
+    if (drag.kind === 'point_height') {
+      const height = Math.max(0.6, point.position.y - dy * unit);
+      this.callbacks.onHandlePreview(drag.kind, height);
+      next = points.map((candidate, index) =>
+        index === drag.index
+          ? { ...candidate, position: { ...candidate.position, y: height } }
+          : candidate,
+      );
+    } else if (drag.kind === 'tangent_out' || drag.kind === 'tangent_in') {
+      const anchor =
+        drag.kind === 'tangent_out'
+          ? origin.clone().add(
+              new THREE.Vector3(
+                point.tangentOut?.x ?? autoTangentFor(points, drag.index, this.project.closed).x,
+                point.tangentOut?.y ?? autoTangentFor(points, drag.index, this.project.closed).y,
+                point.tangentOut?.z ?? autoTangentFor(points, drag.index, this.project.closed).z,
+              ),
+            )
+          : origin.clone().sub(
+              new THREE.Vector3(
+                point.tangentIn?.x ?? autoTangentFor(points, drag.index, this.project.closed).x,
+                point.tangentIn?.y ?? autoTangentFor(points, drag.index, this.project.closed).y,
+                point.tangentIn?.z ?? autoTangentFor(points, drag.index, this.project.closed).z,
+              ),
+            );
+      const hit = this.pickViewPlane(event, anchor);
+      if (!hit) return;
+      const tangent =
+        drag.kind === 'tangent_out'
+          ? hit.clone().sub(origin)
+          : origin.clone().sub(hit);
+      const length = tangent.length();
+      if (length < 0.35) return;
+      if (length > 32) tangent.multiplyScalar(32 / length);
+      next = points.map((candidate, index) =>
+        index === drag.index
+          ? { ...candidate, tangentOut: { x: tangent.x, y: tangent.y, z: tangent.z }, tangentIn: { x: tangent.x, y: tangent.y, z: tangent.z } }
+          : candidate,
+      );
+      this.callbacks.onHandlePreview(drag.kind, length);
+    } else if (metrics) {
+      if (drag.kind === 'height') {
+        this.callbacks.onHandlePreview(drag.kind, metrics.end.y - dy * unit);
+        next = moveSegmentEnd(
+          points,
+          drag.index,
+          { ...metrics.end, y: Math.max(0.6, metrics.end.y - dy * unit) },
+          this.project.closed,
+        );
+      } else if (drag.kind === 'length') {
+        const length = Math.max(0.5, metrics.length - dy * unit * 1.6 + dx * unit * 0.45);
+        this.callbacks.onHandlePreview(drag.kind, length);
+        next = setSegmentLengthBetween(points, drag.index, length, this.project.closed);
+      } else if (drag.kind === 'yaw') {
+        this.callbacks.onHandlePreview(drag.kind, metrics.yaw + dx * 0.55);
+        next = rotateSegmentYaw(points, drag.index, dx * 0.55, this.project.closed);
+      } else if (drag.kind === 'pitch') {
+        this.callbacks.onHandlePreview(drag.kind, metrics.pitch - dy * 0.55);
+        next = pitchSegment(points, drag.index, -dy * 0.55, this.project.closed);
+      } else if (drag.kind === 'bank') {
+        const bank = point.bank + dx * 0.6;
+        this.callbacks.onHandlePreview(drag.kind, bank);
+        next = points.map((candidate, index) =>
+          index === drag.index ? { ...candidate, bank } : candidate,
+        );
+      } else if (drag.kind === 'curve') {
+        this.callbacks.onHandlePreview(drag.kind, dx * unit);
+        next = curveSegment(points, drag.index, dx * unit * 1.8, this.project.closed);
+      }
+    }
+    this.previewPoints(next);
+  }
+
+  private pickHandle(event: PointerEvent): { kind: StudioHandleKind; index: number } | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    _ndc.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(_ndc, this.activeCamera);
+    const hits = this.raycaster.intersectObjects(this.handleMeshes, false);
+    if (!hits.length) return null;
+    const data = hits[0].object.userData;
+    return { kind: data.handleKind as StudioHandleKind, index: Number(data.pointIndex) };
+  }
+
+  private pickTrack(event: PointerEvent): number | null {
+    if (!this.trackMeshes.length) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    _ndc.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(_ndc, this.activeCamera);
+    const hits = this.raycaster.intersectObjects(this.trackMeshes, false);
+    if (!hits.length) return null;
+    const hit = hits[0].point;
+    let nearest = this.samples[0];
+    let nearestDistance = Infinity;
+    for (const sample of this.samples) {
+      const d = (sample.position.x - hit.x) ** 2 + (sample.position.y - hit.y) ** 2 + (sample.position.z - hit.z) ** 2;
+      if (d < nearestDistance) {
+        nearestDistance = d;
+        nearest = sample;
+      }
+    }
+    return nearest?.pointIndex ?? null;
+  }
+
   private onPointerDown = (event: PointerEvent): void => {
     if (event.button !== 0) return;
+    this.activePointers.add(event.pointerId);
     this.pointerStart = { x: event.clientX, y: event.clientY };
+    this.lastPointerPosition = { x: event.clientX, y: event.clientY };
+    if (this.activePointers.size > 1) {
+      this.cancelInteraction();
+      return;
+    }
+    const handle = this.pickHandle(event);
+    if (handle) {
+      event.stopPropagation();
+      this.selectedHandle = {
+        ...handle,
+        pointer: { x: event.clientX, y: event.clientY },
+        points: this.project.points.map((point) => ({
+          ...point,
+          position: { ...point.position },
+          tangentIn: point.tangentIn ? { ...point.tangentIn } : undefined,
+          tangentOut: point.tangentOut ? { ...point.tangentOut } : undefined,
+        })),
+      };
+      this.setSelected(handle.index);
+      this.callbacks.onSelectPoint(handle.index);
+      this.activeControls.enabled = false;
+      this.renderer.domElement.setPointerCapture?.(event.pointerId);
+      return;
+    }
     const index = this.pickNode(event);
     if (index >= 0) {
       event.stopPropagation();
+      const wasSelected = this.selectedIndex === index;
       this.setSelected(index);
       this.callbacks.onSelectPoint(index);
       const point = this.project.points[index];
-      this.selectedDrag = { index, moved: false, position: { ...point.position } };
+      this.selectedDrag = {
+        index,
+        moved: false,
+        wasSelected,
+        position: { ...point.position },
+        points: this.project.points.map((candidate) => ({
+          ...candidate,
+          position: { ...candidate.position },
+          tangentIn: candidate.tangentIn ? { ...candidate.tangentIn } : undefined,
+          tangentOut: candidate.tangentOut ? { ...candidate.tangentOut } : undefined,
+        })),
+      };
       this.activeControls.enabled = false;
       this.renderer.domElement.setPointerCapture?.(event.pointerId);
       return;
@@ -1178,6 +1621,13 @@ export class CoasterStudioScene {
   };
 
   private onPointerMove = (event: PointerEvent): void => {
+    this.lastPointerPosition = { x: event.clientX, y: event.clientY };
+    if (this.activePointers.size > 1) return;
+    if (this.selectedHandle) {
+      event.stopPropagation();
+      this.updateHandleDrag(event);
+      return;
+    }
     if (!this.selectedDrag) return;
     event.stopPropagation();
     const ground = this.pickGround(event, this.selectedDrag.position.y);
@@ -1195,22 +1645,60 @@ export class CoasterStudioScene {
       break;
     }
     this.selectedDrag.position = next;
-    const marker = this.nodeMeshes[this.selectedDrag.index];
-    if (marker) marker.position.set(next.x, next.y + 0.35, next.z);
+    const points = this.selectedDrag.points.map((point, index) =>
+      index === this.selectedDrag!.index ? { ...point, position: next } : point,
+    );
+    this.previewPoints(points);
   };
 
   private onPointerUp = (event: PointerEvent): void => {
-    if (!this.selectedDrag) return;
-    event.stopPropagation();
-    const drag = this.selectedDrag;
-    this.selectedDrag = null;
-    this.activeControls.enabled = !this.onboard;
-    try {
-      this.renderer.domElement.releasePointerCapture?.(event.pointerId);
-    } catch {
-      // Pointer capture may already be released.
+    this.activePointers.delete(event.pointerId);
+    const travel = Math.hypot(
+      event.clientX - this.pointerStart.x,
+      event.clientY - this.pointerStart.y,
+    );
+    if (this.selectedHandle) {
+      event.stopPropagation();
+      this.selectedHandle = null;
+      this.activeControls.enabled = this.rideCamera === 'free';
+      this.commitLocalGeometry();
+      try {
+        this.renderer.domElement.releasePointerCapture?.(event.pointerId);
+      } catch {
+        // Pointer capture may already be released.
+      }
+      return;
     }
-    if (drag.moved) this.callbacks.onMovePoint(drag.index, drag.position);
+    if (this.selectedDrag) {
+      event.stopPropagation();
+      const drag = this.selectedDrag;
+      this.selectedDrag = null;
+      this.activeControls.enabled = !this.onboard;
+      try {
+        this.renderer.domElement.releasePointerCapture?.(event.pointerId);
+      } catch {
+        // Pointer capture may already be released.
+      }
+      if (drag.moved) {
+        this.commitLocalGeometry();
+      } else if (
+        drag.wasSelected &&
+        !this.project.closed &&
+        drag.index === this.project.points.length - 1
+      ) {
+        this.callbacks.onExtendTrack(drag.index);
+      } else {
+        this.callbacks.onSelectPoint(drag.index);
+      }
+      return;
+    }
+    if (this.tool === 'select' && travel < 7 && this.activePointers.size === 0) {
+      const index = this.pickTrack(event);
+      if (index !== null) {
+        this.setSelected(index);
+        this.callbacks.onSelectPoint(index);
+      }
+    }
   };
 
   private pickNode(event: PointerEvent): number {

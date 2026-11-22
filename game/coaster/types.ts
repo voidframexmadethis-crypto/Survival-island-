@@ -145,6 +145,12 @@ export interface TrackPoint {
   element?: CoasterElementKind;
   /** Target speed for launches and powered sections, m/s. */
   targetSpeed?: number;
+  /**
+   * Optional forward tangent handle (world-space offset). The advanced NURBS
+   * editor stores both directions so a point can be kept smooth or broken.
+   */
+  tangentOut?: Vec3;
+  tangentIn?: Vec3;
 }
 
 export type RestraintKind = 'lap_bar' | 'otsr' | 'harness' | 'none';
@@ -192,6 +198,7 @@ export interface CoasterProject {
   manufacturerId: string;
   coasterTypeId: CoasterTypeId;
   editingMode: EditingMode;
+  splineResolution?: number;
   supports: SupportSettings;
   camera: CameraPose;
 }

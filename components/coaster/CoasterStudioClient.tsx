@@ -36,33 +36,50 @@ import {
   Undo2,
   Upload,
   Volume2,
+  Waves,
   VolumeX,
   Wand2,
   Wrench,
   Crosshair,
   ChevronLeft,
+  Ruler,
+  X,
 } from 'lucide-react';
-import { CoasterStudioScene, type StudioTool } from '@/game/coaster/scene';
+import {
+  CoasterStudioScene,
+  type StudioEditorMode,
+  type StudioHandleKind,
+  type StudioTool,
+} from '@/game/coaster/scene';
 import {
   SECTION_LABELS,
   ELEMENT_LIBRARY,
   appendElement,
   autoBankPoints,
+  autoTangents,
   clamp,
   computeTrackStats,
   createBlankProject,
+  curveSegment,
   dePumpPoints,
   duplicatePoint,
   addManualSupport,
+  insertControlPoint,
+  moveSegmentEnd,
   newId,
   offsetPointLateral,
+  pitchSegment,
   projectFromCsv,
   projectToCsv,
   removeManualSupport,
   removePoint,
+  rotateSegmentYaw,
   sampleTrack,
+  segmentEndIndex,
   segmentLength,
+  segmentMetrics,
   setSegmentLength,
+  setSegmentLengthBetween,
   updateManualSupport,
   updatePoint,
   validateTrack,
@@ -94,7 +111,6 @@ import type {
   CoasterElementKind,
   CoasterProject,
   CoasterTypeId,
-  EditingMode,
   MechanicalSnapshot,
   RestraintKind,
   RideCameraMode,
@@ -136,6 +152,27 @@ const KINDS: TrackPointKind[] = [
   'switch',
   'drop',
   'tilt',
+];
+
+const QUICK_SEGMENTS: { key: CoasterElementKind; label: string }[] = [
+  { key: 'straight', label: 'Straight' },
+  { key: 'turn_left', label: 'Left turn' },
+  { key: 'turn_right', label: 'Right turn' },
+  { key: 'banked_turn_left', label: 'Banked' },
+  { key: 'overbanked_turn_left', label: 'Overbank' },
+  { key: 'airtime_hill', label: 'Hill' },
+  { key: 'steep_drop', label: 'Steep drop' },
+  { key: 'vertical_loop', label: 'Loop' },
+  { key: 'corkscrew_left', label: 'Corkscrew' },
+  { key: 'zero_g_roll', label: 'Zero-G' },
+  { key: 'launch_lsm', label: 'Launch' },
+  { key: 'lift_chain', label: 'Lift' },
+  { key: 'brake', label: 'Brake' },
+  { key: 'block_brake', label: 'Block' },
+  { key: 'switch', label: 'Switch' },
+  { key: 'transfer', label: 'Transfer' },
+  { key: 'drop', label: 'Drop track' },
+  { key: 'tilt', label: 'Tilt' },
 ];
 
 const EMPTY_STATS: TrackStats = {
@@ -195,8 +232,19 @@ export function CoasterStudioClient() {
     select: (index: number) => void;
     add: (position: Vec3) => void;
     move: (index: number, position: Vec3) => void;
+    extend: () => void;
+    editPoints: (points: TrackPoint[], selectedIndex: number) => void;
+    handlePreview: (kind: StudioHandleKind, value: number) => void;
     telemetry: (telemetry: TrainTelemetry, mechanical: MechanicalSnapshot, stats: TrackStats) => void;
-  }>({ select: () => {}, add: () => {}, move: () => {}, telemetry: () => {} });
+  }>({
+    select: () => {},
+    add: () => {},
+    move: () => {},
+    extend: () => {},
+    editPoints: () => {},
+    handlePreview: () => {},
+    telemetry: () => {},
+  });
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const undoRef = useRef<() => void>(() => {});
   const redoRef = useRef<() => void>(() => {});
@@ -226,6 +274,12 @@ export function CoasterStudioClient() {
   const [catalogQuery, setCatalogQuery] = useState('');
   const [projection, setProjectionState] = useState<CameraProjection>(project.camera.projection);
   const [rideCamera, setRideCameraState] = useState<RideCameraMode>(project.camera.rideMode);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
+  const [handleReadout, setHandleReadout] = useState<{ kind: StudioHandleKind; value: number } | null>(null);
+  const [curveOffset, setCurveOffset] = useState(0);
+  const [scalePercent, setScalePercent] = useState(100);
+  const [scaleBaseLength, setScaleBaseLength] = useState(1);
   const trainService = useMemo(() => {
     const endpoint = process.env.NEXT_PUBLIC_COASTER_TRAIN_PROVIDER_URL;
     return new TrainDesignService({
@@ -257,7 +311,12 @@ export function CoasterStudioClient() {
       selectedIdRef.current = nextSelected;
       setProject(stamped);
       setSelectedId(nextSelected);
-      setStats(computeTrackStats(sampleTrack(stamped.points, stamped.closed, 10), stamped.points.length));
+      setStats(
+        computeTrackStats(
+          sampleTrack(stamped.points, stamped.closed, stamped.splineResolution ?? 14),
+          stamped.points.length,
+        ),
+      );
       sceneRef.current?.setProject(stamped);
       setHistoryCounts({ past: historyRef.current.past.length, future: 0 });
     },
@@ -276,7 +335,12 @@ export function CoasterStudioClient() {
         setDesignPrompt(draft.train.prompt);
         setProjectionState(draft.camera.projection);
         setRideCameraState(draft.camera.rideMode);
-        setStats(computeTrackStats(sampleTrack(draft.points, draft.closed, 10), draft.points.length));
+        setStats(
+          computeTrackStats(
+            sampleTrack(draft.points, draft.closed, draft.splineResolution ?? 14),
+            draft.points.length,
+          ),
+        );
         sceneRef.current?.setProject(draft);
       }
       refreshProjectList();
@@ -294,6 +358,9 @@ export function CoasterStudioClient() {
         onSelectPoint: (index) => callbacksRef.current.select(index),
         onAddPoint: (position) => callbacksRef.current.add(position),
         onMovePoint: (index, position) => callbacksRef.current.move(index, position),
+        onExtendTrack: () => callbacksRef.current.extend(),
+        onEditPoints: (points, selectedIndex) => callbacksRef.current.editPoints(points, selectedIndex),
+        onHandlePreview: (kind, value) => callbacksRef.current.handlePreview(kind, value),
         onTelemetry: (nextTelemetry, nextMechanical, nextStats) =>
           callbacksRef.current.telemetry(nextTelemetry, nextMechanical, nextStats),
         onNotice: (message) => toast(message),
@@ -355,7 +422,12 @@ export function CoasterStudioClient() {
     projectRef.current = previous;
     setProject(previous);
     setSelectedId((id) => (id && previous.points.some((point) => point.id === id) ? id : null));
-    setStats(computeTrackStats(sampleTrack(previous.points, previous.closed, 10), previous.points.length));
+    setStats(
+      computeTrackStats(
+        sampleTrack(previous.points, previous.closed, previous.splineResolution ?? 14),
+        previous.points.length,
+      ),
+    );
     sceneRef.current?.setProject(previous);
     setHistoryCounts({ past: historyRef.current.past.length, future: historyRef.current.future.length });
   };
@@ -367,7 +439,12 @@ export function CoasterStudioClient() {
     projectRef.current = next;
     setProject(next);
     setSelectedId((id) => (id && next.points.some((point) => point.id === id) ? id : null));
-    setStats(computeTrackStats(sampleTrack(next.points, next.closed, 10), next.points.length));
+    setStats(
+      computeTrackStats(
+        sampleTrack(next.points, next.closed, next.splineResolution ?? 14),
+        next.points.length,
+      ),
+    );
     sceneRef.current?.setProject(next);
     setHistoryCounts({ past: historyRef.current.past.length, future: historyRef.current.future.length });
   };
@@ -400,6 +477,7 @@ export function CoasterStudioClient() {
         if (point) {
           selectedIdRef.current = point.id;
           setSelectedId(point.id);
+          setContextOpen(true);
         }
       },
       add: (position) => {
@@ -421,6 +499,20 @@ export function CoasterStudioClient() {
         );
         applyProject({ ...projectRef.current, points }, true, point.id);
       },
+      extend: () => {
+        const start = projectRef.current.points[projectRef.current.points.length - 1];
+        if (!start) return;
+        const points = appendElement(projectRef.current.points, 'straight');
+        applyProject({ ...projectRef.current, points, closed: false }, true, start.id);
+        setContextOpen(true);
+        toast('Track extended. Shape the new segment with the 3D handles.');
+      },
+      editPoints: (points, selectedIndex) => {
+        const selected = points[selectedIndex] ?? null;
+        setHandleReadout(null);
+        applyProject({ ...projectRef.current, points }, true, selected?.id ?? selectedIdRef.current);
+      },
+      handlePreview: (kind, value) => setHandleReadout({ kind, value }),
       telemetry: (nextTelemetry, nextMechanical, nextStats) => {
         setTelemetry(nextTelemetry);
         setMechanical(nextMechanical);
@@ -429,9 +521,37 @@ export function CoasterStudioClient() {
     };
   });
 
+  useEffect(() => {
+    sceneRef.current?.setEditorMode(project.editingMode === 'advanced' ? 'nurbs' : 'segment');
+  }, [project.editingMode, project.points, project.closed]);
+
+  useEffect(() => {
+    if (selectedIdRef.current) return;
+    const last = projectRef.current.points[projectRef.current.points.length - 1];
+    if (!last) return;
+    selectedIdRef.current = last.id;
+    setSelectedId(last.id);
+    sceneRef.current?.setSelected(projectRef.current.points.length - 1);
+  }, [project.id, hydrated]);
+
+  useEffect(() => {
+    setCurveOffset(0);
+    setScalePercent(100);
+    const current = projectRef.current;
+    const activeIndex = current.points.findIndex((point) => point.id === selectedIdRef.current);
+    setScaleBaseLength(
+      activeIndex >= 0
+        ? segmentMetrics(current.points, activeIndex, current.closed)?.length ?? 1
+        : 1,
+    );
+    setHandleReadout(null);
+    // Only reset when the active segment changes; geometry edits should not
+    // steal the current scale slider value.
+  }, [selectedId, project.id]);
+
   const samples = useMemo(
-    () => sampleTrack(project.points, project.closed, 10),
-    [project.points, project.closed],
+    () => sampleTrack(project.points, project.closed, project.splineResolution ?? 14),
+    [project.points, project.closed, project.splineResolution],
   );
   const validation = useMemo(
     () => validateTrack(project.points, samples, project.closed),
@@ -449,6 +569,36 @@ export function CoasterStudioClient() {
     (entry) => entry.category === catalogCategory,
   );
   const typeCompatible = manufacturer ? manufacturerSupportsType(manufacturer, project.coasterTypeId) : true;
+  const selectedSegmentIndex =
+    selectedIndex >= 0 && segmentEndIndex(project.points, selectedIndex, project.closed) >= 0
+      ? selectedIndex
+      : -1;
+  const selectedMetrics =
+    selectedSegmentIndex >= 0 ? segmentMetrics(project.points, selectedSegmentIndex, project.closed) : null;
+  const selectedEndIndex =
+    selectedSegmentIndex >= 0 ? segmentEndIndex(project.points, selectedSegmentIndex, project.closed) : -1;
+  const selectedElementLabel = selectedPoint
+    ? ELEMENT_LIBRARY.flatMap((group) => group.items).find((item) => item.key === selectedPoint.element)?.label ??
+      SECTION_LABELS[selectedPoint.kind]
+    : 'No segment';
+  const selectedSpecial =
+    selectedPoint && ['switch', 'transfer', 'drop', 'tilt'].includes(selectedPoint.kind)
+      ? (selectedPoint.kind as 'switch' | 'transfer' | 'drop' | 'tilt')
+      : null;
+  const selectedSpecialStatus = !selectedSpecial
+    ? ''
+    : selectedSpecial === 'switch'
+      ? `${Math.round(installs.switchTrack.progress * 100)}% · ${installs.switchTrack.route} route`
+      : selectedSpecial === 'transfer'
+        ? `${Math.round(installs.transfer.progress * 100)}% · ${installs.transfer.side} side`
+        : selectedSpecial === 'drop'
+          ? `${Math.round(installs.drop.progress * 100)}% · ${installs.drop.phase}`
+          : `${Math.round(installs.tilt.progress * 100)}% · ${installs.tilt.phase}`;
+  const editorMode: StudioEditorMode = project.editingMode === 'advanced' ? 'nurbs' : 'segment';
+  const workflowStep = project.closed ? 3 : project.points.length <= 2 ? 0 : selectedMetrics ? 2 : 1;
+  const tangentLength = selectedPoint?.tangentOut
+    ? Math.hypot(selectedPoint.tangentOut.x, selectedPoint.tangentOut.y, selectedPoint.tangentOut.z)
+    : 0;
 
   const patchSelected = (patch: Parameters<typeof updatePoint>[2]) => {
     if (!selectedPoint) return;
@@ -457,10 +607,58 @@ export function CoasterStudioClient() {
   };
 
   const addElement = (element: CoasterElementKind) => {
+    const segmentStart = project.points[project.points.length - 1] ?? null;
     const points = appendElement(project.points, element);
     const added = points[points.length - 1];
-    applyProject({ ...project, points, closed: false }, true, added?.id ?? null);
-    toast(`${ELEMENT_LIBRARY.flatMap((group) => group.items).find((item) => item.key === element)?.label ?? element} added. Circuit opened for editing.`);
+    // Keep the just-created segment selected so its handles and numeric controls
+    // are immediately available; the new endpoint stays one tap away for extension.
+    applyProject({ ...project, points, closed: false }, true, segmentStart?.id ?? added?.id ?? null);
+    setContextOpen(true);
+    toast(
+      `${ELEMENT_LIBRARY.flatMap((group) => group.items).find((item) => item.key === element)?.label ?? element} added. Drag the 3D handles to shape it.`,
+    );
+  };
+
+  const setEditorMode = (mode: StudioEditorMode) => {
+    if (mode === 'nurbs') {
+      applyProject(
+        {
+          ...project,
+          editingMode: 'advanced',
+          splineResolution: Math.max(18, project.splineResolution ?? 14),
+          points: autoTangents(project.points, project.closed),
+        },
+        true,
+        selectedId,
+      );
+      toast('Advanced NURBS editor: drag the pink tangent handles to shape the track.');
+    } else {
+      applyProject({ ...project, editingMode: 'beginner' }, true, selectedId);
+    }
+  };
+
+  const editSegment = (points: TrackPoint[]) => {
+    applyProject({ ...project, points }, true, selectedId);
+  };
+
+  const selectNextSegment = () => {
+    if (selectedEndIndex < 0) return;
+    const next = project.points[selectedEndIndex];
+    if (!next) return;
+    selectedIdRef.current = next.id;
+    setSelectedId(next.id);
+    sceneRef.current?.setSelected(selectedEndIndex);
+  };
+
+  const smoothSelected = () => {
+    const points = dePumpPoints(project.points, project.closed, 0.55);
+    editSegment(points);
+    toast('Depump smoothing applied to the continuous track.');
+  };
+
+  const resetTangents = () => {
+    editSegment(autoTangents(project.points, project.closed));
+    toast('Tangent handles aligned to the control-point flow.');
   };
 
   const saveProject = () => {
@@ -697,6 +895,16 @@ export function CoasterStudioClient() {
     setTab('test');
   };
 
+  const startRide = async () => {
+    if (!project.closed) {
+      toast('Close the circuit before testing the ride.');
+      return;
+    }
+    setDrawerOpen(false);
+    await play();
+    changeRideCamera('front');
+  };
+
   const pause = () => {
     sceneRef.current?.pause();
     setIsPlaying(false);
@@ -767,20 +975,28 @@ export function CoasterStudioClient() {
         </button>
         <button
           type="button"
-          onClick={() => {
-            const nextMode: EditingMode = isAdvanced ? 'beginner' : 'advanced';
-            applyProject({ ...project, editingMode: nextMode }, false, selectedId);
-            toast(nextMode === 'advanced' ? 'Advanced editing enabled.' : 'Beginner editing enabled.');
-          }}
+          onClick={() => setEditorMode(isAdvanced ? 'segment' : 'nurbs')}
           className={smallButton(isAdvanced)}
-          title="Beginner / advanced editing"
+          title="Switch between direct segment editing and the advanced NURBS curve editor"
         >
           <SlidersHorizontal className="h-4 w-4" />
-          <span className="hidden xl:inline">{isAdvanced ? 'Advanced' : 'Beginner'}</span>
+          <span className="hidden lg:inline">{isAdvanced ? 'NURBS' : 'Segment'}</span>
         </button>
         <button type="button" onClick={saveProject} className={smallButton()}>
           <Save className="h-4 w-4" />
           <span className="hidden sm:inline">Save</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (isPlaying) pause();
+            else void startRide();
+          }}
+          className={smallButton(isPlaying)}
+          title="Close-circuit ride test"
+        >
+          {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+          <span className="hidden lg:inline">{isPlaying ? 'Pause' : 'Ride'}</span>
         </button>
         <div className="hidden items-center gap-1.5 rounded-lg border border-stone-700 bg-stone-900/80 px-2 py-1 text-[11px] font-mono md:flex">
           <Gauge className="h-3.5 w-3.5 text-amber-300" />
@@ -790,8 +1006,8 @@ export function CoasterStudioClient() {
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <main className="relative order-1 h-[47dvh] shrink-0 overflow-hidden bg-[#9db7c9] lg:order-2 lg:h-auto lg:flex-1">
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        <main className="absolute inset-0 overflow-hidden bg-[#9db7c9]">
           <div ref={mountRef} className="absolute inset-0" />
           {sceneError && (
             <div className="absolute inset-0 z-20 flex items-center justify-center bg-stone-950/92 p-6 text-center">
@@ -881,7 +1097,7 @@ export function CoasterStudioClient() {
             </div>
           </div>
 
-          <div className="pointer-events-none absolute bottom-2.5 left-2.5 flex flex-wrap gap-1.5">
+          <div className="pointer-events-none absolute bottom-[58px] left-2.5 hidden flex-wrap gap-1.5 sm:flex">
             {[
               ['Length', `${fmt(stats.length, 0)} m`],
               ['Peak', `${fmt(stats.maxHeight, 1)} m`],
@@ -897,7 +1113,7 @@ export function CoasterStudioClient() {
             ))}
           </div>
 
-          <div className="pointer-events-none absolute bottom-2.5 right-2.5 flex items-center gap-2 rounded-lg border border-stone-900/25 bg-stone-950/70 px-2 py-1 text-[10px] font-bold text-stone-300 backdrop-blur">
+          <div className="pointer-events-none absolute bottom-[58px] right-2.5 hidden items-center gap-2 rounded-lg border border-stone-900/25 bg-stone-950/70 px-2 py-1 text-[10px] font-bold text-stone-300 backdrop-blur md:flex">
             {project.closed ? (
               <>
                 <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" /> Circuit closed
@@ -909,6 +1125,64 @@ export function CoasterStudioClient() {
             )}
           </div>
 
+          <div className="pointer-events-auto absolute left-1/2 top-2 z-20 hidden -translate-x-1/2 items-center gap-1 rounded-xl border border-stone-900/40 bg-stone-950/80 p-1 backdrop-blur lg:flex">
+            {['Station', 'Add track', 'Shape', 'Close', 'Ride'].map((step, index) => (
+              <button
+                key={step}
+                type="button"
+                onClick={() => {
+                  if (index === 0) {
+                    const station = project.points.findIndex((point) => point.kind === 'station');
+                    if (station >= 0) {
+                      selectedIdRef.current = project.points[station].id;
+                      setSelectedId(project.points[station].id);
+                      setContextOpen(true);
+                      sceneRef.current?.setSelected(station);
+                    }
+                  } else if (index === 1) {
+                    addElement('straight');
+                  } else if (index === 3) {
+                    applyProject({ ...project, closed: !project.closed }, true, selectedId);
+                  } else if (index === 4) {
+                    void startRide();
+                  }
+                }}
+                className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[9px] font-black uppercase tracking-wider transition ${
+                  workflowStep === index
+                    ? 'bg-amber-400/15 text-amber-200'
+                    : 'text-stone-500 hover:text-stone-200'
+                }`}
+              >
+                <span className={`flex h-4 w-4 items-center justify-center rounded-full border text-[8px] ${
+                  workflowStep >= index ? 'border-amber-400/70 bg-amber-400/15 text-amber-200' : 'border-stone-700'
+                }`}>
+                  {index + 1}
+                </span>
+                {step}
+                {index < 4 && <span className="text-stone-700">›</span>}
+              </button>
+            ))}
+          </div>
+
+          {handleReadout && (
+            <div className="pointer-events-none absolute left-1/2 top-[68px] z-30 -translate-x-1/2 rounded-lg border border-amber-300/60 bg-stone-950/90 px-3 py-1.5 text-center shadow-xl backdrop-blur">
+              <span className="text-[8px] font-black uppercase tracking-[0.18em] text-stone-400">
+                {handleReadout.kind.replaceAll('_', ' ')}
+              </span>
+              <span className="ml-2 font-mono text-sm font-black text-amber-200">
+                {fmt(handleReadout.value, 1)}
+                {handleReadout.kind === 'height' ||
+                handleReadout.kind === 'point_height' ||
+                handleReadout.kind === 'length' ||
+                handleReadout.kind === 'curve' ||
+                handleReadout.kind === 'tangent_out' ||
+                handleReadout.kind === 'tangent_in'
+                  ? ' m'
+                  : '°'}
+              </span>
+            </div>
+          )}
+
           {telemetry && (
             <div className="pointer-events-none absolute right-2.5 top-16 rounded-xl border border-stone-900/30 bg-stone-950/75 px-3 py-2 text-right backdrop-blur">
               <div className="font-mono text-lg font-black leading-none text-amber-300">{fmt(telemetry.speedKmh, 1)}</div>
@@ -916,17 +1190,390 @@ export function CoasterStudioClient() {
               <div className="mt-1 font-mono text-[10px] text-stone-300">{fmt(telemetry.gForce, 2)} G · {fmt(telemetry.lateralG, 2)} lat · {telemetry.state}</div>
             </div>
           )}
+
+          <div className="pointer-events-auto absolute bottom-[58px] left-1/2 z-30 flex max-w-[calc(100%-1rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-xl border border-stone-900/40 bg-stone-950/85 p-1 backdrop-blur [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <button type="button" onClick={() => addElement('straight')} className="flex min-h-[38px] shrink-0 items-center gap-1 rounded-lg border border-amber-300/60 bg-amber-400 px-2.5 text-[10px] font-black text-stone-950 hover:bg-amber-300">
+              <Plus className="h-4 w-4" /> Add next
+            </button>
+            <span className="mx-0.5 h-6 w-px shrink-0 bg-stone-700" />
+            {QUICK_SEGMENTS.map((entry) => (
+              <button
+                key={entry.key}
+                type="button"
+                onClick={() => addElement(entry.key)}
+                className="shrink-0 rounded-lg border border-stone-700 bg-stone-900/80 px-2 py-1.5 text-[9px] font-bold text-stone-300 transition hover:border-amber-400/60 hover:text-amber-100"
+              >
+                {entry.label}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => {
+                setTab('elements');
+                setDrawerOpen(true);
+              }}
+              className="shrink-0 rounded-lg border border-stone-700 bg-stone-900/80 px-2 py-1.5 text-[9px] font-bold text-stone-400 hover:text-stone-100"
+            >
+              All elements
+            </button>
+          </div>
+
+          {contextOpen ? (
+            <div className="pointer-events-auto absolute inset-x-1 bottom-[108px] z-30 max-h-[30dvh] overflow-y-auto rounded-2xl border border-stone-700/80 bg-stone-950/90 p-3 shadow-2xl backdrop-blur sm:inset-x-auto sm:right-2 sm:top-[118px] sm:bottom-auto sm:max-h-[calc(100%-188px)] sm:w-[min(20rem,calc(100%-1rem))]">
+              <div className="mb-2 flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-[9px] font-black uppercase tracking-[0.2em] text-amber-300">Selected track</div>
+                  <div className="mt-0.5 flex items-center gap-1.5">
+                    <span className="font-mono text-sm font-black text-stone-100">
+                      {selectedIndex >= 0 ? `SEG ${selectedIndex + 1}` : 'NO SELECTION'}
+                    </span>
+                    <span className="rounded border border-stone-700 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider text-stone-400">
+                      {selectedElementLabel}
+                    </span>
+                  </div>
+                </div>
+                <button type="button" onClick={() => setContextOpen(false)} className="rounded p-1 text-stone-500 hover:bg-stone-800 hover:text-stone-200" aria-label="Close segment controls">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {selectedPoint ? (
+                <div className="space-y-2.5">
+                  <div className="grid grid-cols-3 gap-1">
+                    {[
+                      ['Length', selectedMetrics ? `${fmt(selectedMetrics.length, 1)} m` : '—'],
+                      ['Pitch', selectedMetrics ? `${fmt(selectedMetrics.pitch, 0)}°` : '—'],
+                      ['Height', selectedMetrics ? `${fmt(selectedMetrics.height, 1)} m` : '—'],
+                    ].map(([label, value]) => (
+                      <div key={label} className="rounded-lg border border-stone-800 bg-stone-900/70 px-2 py-1.5">
+                        <div className="text-[8px] font-bold uppercase tracking-wider text-stone-500">{label}</div>
+                        <div className="font-mono text-[12px] font-black text-stone-100">{value}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {selectedMetrics ? (
+                    <>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <label>
+                          <span className="mb-0.5 block text-[8px] font-bold uppercase tracking-wider text-stone-500">Pitch °</span>
+                          <input
+                            type="number"
+                            step={1}
+                            min={-89}
+                            max={89}
+                            value={Number(selectedMetrics.pitch.toFixed(1))}
+                            onChange={(event) => {
+                              const value = clamp(Number(event.target.value), -89, 89);
+                              editSegment(pitchSegment(project.points, selectedSegmentIndex, value - selectedMetrics.pitch, project.closed));
+                            }}
+                            className={fieldClass()}
+                          />
+                        </label>
+                        <label>
+                          <span className="mb-0.5 block text-[8px] font-bold uppercase tracking-wider text-stone-500">Yaw °</span>
+                          <input
+                            type="number"
+                            step={1}
+                            value={Number(selectedMetrics.yaw.toFixed(1))}
+                            onChange={(event) => {
+                              let delta = Number(event.target.value) - selectedMetrics.yaw;
+                              while (delta > 180) delta -= 360;
+                              while (delta < -180) delta += 360;
+                              editSegment(rotateSegmentYaw(project.points, selectedSegmentIndex, delta, project.closed));
+                            }}
+                            className={fieldClass()}
+                          />
+                        </label>
+                        <label>
+                          <span className="mb-0.5 block text-[8px] font-bold uppercase tracking-wider text-stone-500">Bank °</span>
+                          <input
+                            type="number"
+                            step={1}
+                            min={-180}
+                            max={180}
+                            value={Number(selectedPoint.bank.toFixed(1))}
+                            onChange={(event) => patchSelected({ bank: clamp(Number(event.target.value), -180, 180) })}
+                            className={fieldClass()}
+                          />
+                        </label>
+                        <label>
+                          <span className="mb-0.5 block text-[8px] font-bold uppercase tracking-wider text-stone-500">Segment length m</span>
+                          <input
+                            type="number"
+                            min={0.5}
+                            max={500}
+                            step={0.5}
+                            value={Number(selectedMetrics.length.toFixed(2))}
+                            onChange={(event) => {
+                              const value = clamp(Number(event.target.value), 0.5, 500);
+                              setScaleBaseLength(value);
+                              setScalePercent(100);
+                              editSegment(setSegmentLengthBetween(project.points, selectedSegmentIndex, value, project.closed));
+                            }}
+                            className={fieldClass()}
+                          />
+                        </label>
+                        <label>
+                          <span className="mb-0.5 block text-[8px] font-bold uppercase tracking-wider text-stone-500">Height m</span>
+                          <input
+                            type="number"
+                            min={0.6}
+                            max={160}
+                            step={0.5}
+                            value={Number(selectedMetrics.height.toFixed(2))}
+                            onChange={(event) =>
+                              editSegment(
+                                moveSegmentEnd(
+                                  project.points,
+                                  selectedSegmentIndex,
+                                  { ...selectedMetrics.end, y: clamp(Number(event.target.value), 0.6, 160) },
+                                  project.closed,
+                                ),
+                              )
+                            }
+                            className={fieldClass()}
+                          />
+                        </label>
+                        <label>
+                          <span className="mb-0.5 block text-[8px] font-bold uppercase tracking-wider text-stone-500">Scale %</span>
+                          <input
+                            type="number"
+                            min={25}
+                            max={250}
+                            step={5}
+                            value={scalePercent}
+                            onChange={(event) => {
+                              const value = clamp(Number(event.target.value), 25, 250);
+                              setScalePercent(value);
+                              editSegment(
+                                setSegmentLengthBetween(
+                                  project.points,
+                                  selectedSegmentIndex,
+                                  scaleBaseLength * (value / 100),
+                                  project.closed,
+                                ),
+                              );
+                            }}
+                            className={fieldClass()}
+                          />
+                        </label>
+                      </div>
+
+                      <label className="block rounded-lg border border-stone-800 bg-stone-900/50 px-2 py-1.5">
+                        <span className="flex items-center justify-between text-[8px] font-bold uppercase tracking-wider text-stone-500">
+                          <span>Curvature bias</span>
+                          <span className="font-mono text-stone-300">{curveOffset > 0 ? '+' : ''}{curveOffset.toFixed(1)} m</span>
+                        </span>
+                        <input
+                          type="range"
+                          min={-8}
+                          max={8}
+                          step={0.5}
+                          value={curveOffset}
+                          onChange={(event) => {
+                            const value = Number(event.target.value);
+                            editSegment(curveSegment(project.points, selectedSegmentIndex, value - curveOffset, project.closed));
+                            setCurveOffset(value);
+                          }}
+                          className="mt-1 w-full accent-amber-400"
+                        />
+                      </label>
+
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            editSegment(
+                              moveSegmentEnd(
+                                project.points,
+                                selectedSegmentIndex,
+                                { ...selectedMetrics.end, x: selectedMetrics.start.x },
+                                project.closed,
+                              ),
+                            )
+                          }
+                          className={smallButton()}
+                          title="Align the segment endpoint to the start point on the X axis"
+                        >
+                          <Move3d className="h-3.5 w-3.5" /> Align X
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            editSegment(
+                              moveSegmentEnd(
+                                project.points,
+                                selectedSegmentIndex,
+                                { ...selectedMetrics.end, z: selectedMetrics.start.z },
+                                project.closed,
+                              ),
+                            )
+                          }
+                          className={smallButton()}
+                          title="Align the segment endpoint to the start point on the Z axis"
+                        >
+                          <Route className="h-3.5 w-3.5" /> Align Z
+                        </button>
+                      </div>
+
+                      <label className="block">
+                        <span className="mb-0.5 block text-[8px] font-bold uppercase tracking-wider text-stone-500">Section type</span>
+                        <select
+                          value={selectedPoint.kind}
+                          onChange={(event) => patchSelected({ kind: event.target.value as TrackPointKind })}
+                          className={fieldClass()}
+                        >
+                          {KINDS.map((kind) => (
+                            <option key={kind} value={kind}>{SECTION_LABELS[kind]}</option>
+                          ))}
+                        </select>
+                      </label>
+
+                      {selectedSpecial && (
+                        <div className="rounded-lg border border-amber-400/25 bg-amber-400/5 p-2">
+                          <div className="flex items-center justify-between text-[8px] font-bold uppercase tracking-wider text-stone-400">
+                            <span>{SECTION_LABELS[selectedSpecial]} mechanism</span>
+                            <span className="font-mono text-amber-200">{selectedSpecialStatus}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => sceneRef.current?.triggerMechanical(selectedSpecial)}
+                            className={`${secondaryButton()} mt-1.5 w-full`}
+                          >
+                            <RotateCcw className="h-4 w-4" /> Cycle mechanism
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-stone-700 bg-stone-900/30 p-3 text-[10px] leading-relaxed text-stone-400">
+                      This is the open endpoint. Add the next segment to create a new editable piece.
+                    </div>
+                  )}
+
+                  {isAdvanced && (
+                    <div className="space-y-1.5 rounded-lg border border-fuchsia-400/25 bg-fuchsia-400/5 p-2">
+                      <div className="flex items-center justify-between text-[8px] font-black uppercase tracking-wider text-fuchsia-200/80">
+                        <span>NURBS handles</span>
+                        <span className="font-mono">{tangentLength > 0 ? `${fmt(tangentLength, 1)} m` : 'auto'}</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <button type="button" onClick={resetTangents} className={smallButton()} title="Align tangent handles to the surrounding curve">
+                          <Wand2 className="h-3.5 w-3.5" /> Align
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => editSegment(insertControlPoint(project.points, selectedSegmentIndex, project.closed))}
+                          className={smallButton()}
+                          disabled={selectedSegmentIndex < 0}
+                        >
+                          <Plus className="h-3.5 w-3.5" /> Insert
+                        </button>
+                        <button type="button" onClick={smoothSelected} className={smallButton()} title="Depump the continuous curve">
+                          <Waves className="h-3.5 w-3.5" /> Depump
+                        </button>
+                      </div>
+                      <label className="block">
+                        <span className="mb-0.5 block text-[8px] font-bold uppercase tracking-wider text-stone-500">Point elevation m</span>
+                        <input
+                          type="number"
+                          min={0.6}
+                          max={160}
+                          step={0.5}
+                          value={Number(selectedPoint.position.y.toFixed(2))}
+                          onChange={(event) =>
+                            patchSelected({ position: { y: clamp(Number(event.target.value), 0.6, 160) } })
+                          }
+                          className={fieldClass()}
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="flex items-center justify-between text-[8px] font-bold uppercase tracking-wider text-stone-500">
+                          <span>Spline resolution</span>
+                          <span className="font-mono text-stone-300">{project.splineResolution ?? 14}</span>
+                        </span>
+                        <input
+                          type="range"
+                          min={6}
+                          max={32}
+                          step={2}
+                          value={project.splineResolution ?? 14}
+                          onChange={(event) =>
+                            applyProject({ ...project, splineResolution: Number(event.target.value) }, false, selectedId)
+                          }
+                          className="mt-1 w-full accent-fuchsia-400"
+                        />
+                      </label>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button type="button" onClick={() => addElement('straight')} className={primaryButton()}>
+                      <Plus className="h-4 w-4" /> Add next
+                    </button>
+                    <button type="button" onClick={selectNextSegment} disabled={selectedEndIndex < 0} className={secondaryButton()}>
+                      <Route className="h-4 w-4" /> Next seg
+                    </button>
+                    <button type="button" onClick={() => editSegment(duplicatePoint(project.points, selectedPoint.id))} className={secondaryButton()}>
+                      <Copy className="h-4 w-4" /> Duplicate
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (project.points.length <= 2) {
+                          toast('Keep at least two control points.');
+                          return;
+                        }
+                        applyProject({ ...project, points: removePoint(project.points, selectedPoint.id) }, true, null);
+                      }}
+                      className={secondaryButton()}
+                    >
+                      <Trash2 className="h-4 w-4" /> Remove
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-stone-700 bg-stone-900/30 p-4 text-center">
+                  <MousePointer2 className="mx-auto h-6 w-6 text-amber-300" />
+                  <p className="mt-2 text-xs font-bold text-stone-200">Tap the track or a station point</p>
+                  <p className="mt-1 text-[10px] leading-relaxed text-stone-500">
+                    Select a segment to reveal pitch, yaw, bank, scale and length handles in the 3D viewport.
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setContextOpen(true)}
+              className="pointer-events-auto absolute right-2 top-[118px] z-30 flex items-center gap-1.5 rounded-xl border border-amber-400/40 bg-stone-950/90 px-2.5 py-2 text-[10px] font-black uppercase tracking-wider text-amber-200 shadow-xl backdrop-blur"
+            >
+              <Ruler className="h-3.5 w-3.5" /> Segment
+            </button>
+          )}
         </main>
 
-        <aside className="order-2 flex min-h-0 flex-1 flex-col border-t border-stone-800 bg-stone-950/90 lg:order-1 lg:w-[392px] lg:flex-none lg:border-r lg:border-t-0">
-          <nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-stone-800 px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <aside
+          className={`absolute inset-x-0 bottom-0 z-40 flex flex-col border-t border-stone-700 bg-stone-950/95 shadow-[0_-16px_50px_rgba(0,0,0,0.4)] backdrop-blur transition-[max-height] duration-200 ${
+            drawerOpen ? 'max-h-[62dvh]' : 'max-h-[50px]'
+          }`}
+        >
+          <nav className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-stone-800 px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {TABS.map((entry) => {
               const Icon = entry.icon;
               return (
                 <button
                   key={entry.key}
                   type="button"
-                  onClick={() => setTab(entry.key)}
+                  onClick={() => {
+                    if (tab === entry.key && drawerOpen) {
+                      setDrawerOpen(false);
+                    } else {
+                      setTab(entry.key);
+                      setDrawerOpen(true);
+                    }
+                  }}
                   className={`flex min-h-[38px] shrink-0 items-center gap-1 rounded-lg px-2.5 text-[10px] font-black uppercase tracking-wide transition ${
                     tab === entry.key
                       ? 'bg-amber-400/15 text-amber-200 ring-1 ring-amber-400/40'
@@ -940,7 +1587,7 @@ export function CoasterStudioClient() {
             })}
           </nav>
 
-          <div className="survival-scroll min-h-0 flex-1 overflow-y-auto p-3">
+          <div className={`survival-scroll min-h-0 flex-1 overflow-y-auto p-3 ${drawerOpen ? '' : 'hidden'}`}>
             {tab === 'build' && (
               <div className="space-y-3">
                 <section className="rounded-xl border border-stone-800 bg-stone-900/40 p-3">

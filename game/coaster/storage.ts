@@ -85,6 +85,11 @@ function safePoint(raw: unknown, index: number): TrackPoint | null {
   const position = point.position as { x?: unknown; y?: unknown; z?: unknown } | undefined;
   if (!position) return null;
   const kind = POINT_KINDS.includes(point.kind as TrackPointKind) ? (point.kind as TrackPointKind) : 'track';
+  const safeVector = (raw: unknown): TrackPoint['tangentOut'] => {
+    if (!raw || typeof raw !== 'object') return undefined;
+    const vector = raw as { x?: unknown; y?: unknown; z?: unknown };
+    return { x: finite(vector.x), y: finite(vector.y), z: finite(vector.z) };
+  };
   return {
     id: typeof point.id === 'string' && point.id ? point.id : `pt_imported_${index}`,
     position: { x: finite(position.x), y: finite(position.y, 4), z: finite(position.z) },
@@ -92,6 +97,8 @@ function safePoint(raw: unknown, index: number): TrackPoint | null {
     kind,
     element: typeof point.element === 'string' ? (point.element as TrackPoint['element']) : undefined,
     targetSpeed: point.targetSpeed === undefined ? undefined : finite(point.targetSpeed),
+    tangentIn: safeVector(point.tangentIn),
+    tangentOut: safeVector(point.tangentOut),
   };
 }
 
@@ -194,6 +201,7 @@ export function sanitizeProject(raw: unknown): CoasterProject {
         : DEFAULT_MANUFACTURER_ID,
     coasterTypeId,
     editingMode: source.editingMode === 'advanced' ? 'advanced' : 'beginner',
+    splineResolution: Math.min(32, Math.max(6, Math.round(finite(source.splineResolution, 14)))),
     supports: safeSupports(source.supports),
     camera: safeCamera(source.camera),
   };
