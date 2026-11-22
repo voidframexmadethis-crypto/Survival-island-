@@ -380,6 +380,8 @@ export interface ModularVehicleData {
   hasConvertibleTop?: boolean;
   convertibleTopDown?: boolean;
   doorsOpen?: boolean;
+  /** Right-side door only, used when boarding the ferry as a passenger. */
+  passengerDoorOpen?: boolean;
   trunkOpen?: boolean;
   turboBoost?: number;
   trunkBassEnabled?: boolean;
@@ -1315,6 +1317,7 @@ export interface NearbyInteraction {
     | 'viking_villager'
     | 'dragon_egg'
     | 'dragon_sanctuary'
+    | 'ferry_pickup'
     | 'mainland_terminal';
   actionCategory?:
     | 'chop'

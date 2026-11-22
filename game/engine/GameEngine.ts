@@ -69,6 +69,7 @@ import {
   MAINLAND_CHALLENGES,
   MAINLAND_FAST_TRAVEL,
   MAINLAND_GARAGE_PACKAGES,
+  MAINLAND_LOCATION,
   MAINLAND_PROPERTIES,
   MAINLAND_UPGRADES,
   type MainlandActionResult,
@@ -80,6 +81,12 @@ import {
   type MainlandTab,
   type MainlandUpgradeId,
 } from '../systems/louisianaMainland';
+import {
+  FERRY_CALL_POS,
+  FerryPickupSystem,
+  selectFerryCar,
+} from '../systems/ferryPickup';
+import { getCausewaySurfaceY } from '../systems/islandMainlandTransit';
 import { sanitizeWorldAndEntities } from '../systems/worldSanitizer';
 import {
   getCosmeticImageTexture,
@@ -673,6 +680,10 @@ export class GameEngine {
   private readonly islandCaveSystem = new IslandCaveSystem();
   private finalIslandFeatures!: FinalIslandFeatures;
   private mainland = new LouisianaMainlandSystem();
+  private ferryPickup = new FerryPickupSystem();
+  private ferryRideActive = false;
+  private ferryArrivalTimer = 0;
+  private ferryBoardingDoorTimer = 0;
   private mainlandStuntCooldown = 0;
   private beeGate: BeeGateHandle | null = null;
   private beeGateAnchor: THREE.Group | null = null;
@@ -2018,7 +2029,11 @@ export class GameEngine {
     }
     if (this.activeVehicleId && !this.gameOver && (e.code === 'KeyE' || keyLower === 'e')) {
       e.preventDefault();
-      this.exitVehicle();
+      if (this.ferryRideActive) {
+        this.toast('Stay in the passenger seat until the ferry worker reaches the pier.', 'info');
+      } else {
+        this.exitVehicle();
+      }
       return;
     }
     if (
@@ -2100,7 +2115,11 @@ export class GameEngine {
       this.toggleCameraView();
     } else if (e.code === 'KeyV') {
       if (this.activeVehicleId) {
-        this.toggleVehicleInteriorCamera();
+        if (this.ferryRideActive) {
+          this.toast('Passenger view: watch the road from the shotgun seat.', 'info');
+        } else {
+          this.toggleVehicleInteriorCamera();
+        }
       } else {
         this.triggerDebrisKick();
       }
@@ -4729,6 +4748,11 @@ export class GameEngine {
     this.finalIslandFeatures.seedWildBees();
     this.ensureBeeGate();
     this.mainland.reset();
+    this.ferryPickup.reset();
+    this.ferryRideActive = false;
+    this.ferryArrivalTimer = 0;
+    this.ferryBoardingDoorTimer = 0;
+    if (this.world?.ferryWorkerGroup) this.world.ferryWorkerGroup.visible = false;
     this.applyMainlandOutfitVisual();
     this.lastCaveStreamX = -9999;
     this.lastCaveStreamZ = -9999;
@@ -4760,6 +4784,11 @@ export class GameEngine {
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.trunkBassPulse = 0;
     this.chestThumpPulse = 0;
+    this.ferryRideActive = false;
+    this.ferryPickup.reset();
+    this.ferryArrivalTimer = 0;
+    this.ferryBoardingDoorTimer = 0;
+    if (this.world?.ferryWorkerGroup) this.world.ferryWorkerGroup.visible = false;
     this.elevatorLiftActive = false;
     this.elevatorSummonedVehicleId = null;
     this.elevatorTargetCar = null;
@@ -7327,6 +7356,15 @@ export class GameEngine {
     }
     if (near && near.kind === 'underground_elevator') {
       this.openUndergroundElevator();
+      return;
+    }
+    if (near && near.kind === 'ferry_pickup') {
+      if (near.id === 'ferry_call') {
+        this.mainlandRequestFerryPickup();
+      } else if (near.id === 'ferry_board') {
+        this.boardFerryPassenger();
+      }
+      this.actionCooldown = 0.45;
       return;
     }
     if (near && near.kind === 'mainland_terminal') {
@@ -10533,7 +10571,9 @@ export class GameEngine {
     if (this.coldWarnCooldown > 0) this.coldWarnCooldown -= dt;
 
     if (this.activeVehicleId) {
-      this.updateActiveVehicleControl(dt);
+      // The ferry worker is driving; the player is a passenger and must not
+      // steal the controls or overwrite the worker's route.
+      if (!this.ferryRideActive) this.updateActiveVehicleControl(dt);
       return;
     }
 
@@ -12001,6 +12041,47 @@ export class GameEngine {
     const nearHouseStation = this.findNearestHouseStationInteraction();
     if (nearHouseStation) {
       return nearHouseStation;
+    }
+
+    // Island ferry pickup: the worker waits at the car door, then the player
+    // can board the passenger side for the drive to the south pier.
+    const ferryStatus = this.ferryPickup.getStatus();
+    if (ferryStatus.phase === 'waiting_for_passenger' && ferryStatus.carId) {
+      const ferryCar = this.vehicles.find((v) => v.id === ferryStatus.carId);
+      if (ferryCar) {
+        const ferryDist = Math.hypot(ferryCar.x - this.playerX, ferryCar.z - this.playerZ);
+        if (ferryDist < 5.6 && Math.abs(ferryCar.y - this.playerY) < 3.2) {
+          return {
+            id: 'ferry_board',
+            label: 'Ride Shotgun to the Ferry',
+            sublabel: `Ferry worker driving ${ferryCar.name} · passenger side`,
+            kind: 'ferry_pickup',
+            actionCategory: 'use',
+            distance: ferryDist,
+            targetX: ferryCar.x,
+            targetY: ferryCar.y + 0.9,
+            targetZ: ferryCar.z,
+          };
+        }
+      }
+    } else if (ferryStatus.phase === 'idle' && this.worldType === 'island') {
+      const callPos = this.world?.ferryCallPos;
+      if (callPos) {
+        const callDist = Math.hypot(callPos.x - this.playerX, callPos.z - this.playerZ);
+        if (callDist < 3.8 && Math.abs(callPos.y - this.playerY) < 2.4) {
+          return {
+            id: 'ferry_call',
+            label: 'Call Ferry Pickup',
+            sublabel: 'Ferry worker walks up · drives one of your cars to the landing',
+            kind: 'ferry_pickup',
+            actionCategory: 'use',
+            distance: callDist,
+            targetX: callPos.x,
+            targetY: callPos.y + 1.4,
+            targetZ: callPos.z,
+          };
+        }
+      }
     }
 
     // Louisiana mainland terminals. Each one opens the city network on the
@@ -14250,13 +14331,15 @@ export class GameEngine {
   private updateSeatedPlayerAvatar(
     car: ModularVehicleData,
     handles: ModularVehicleMeshHandles,
+    passenger = false,
   ): void {
     const h = this.localPlayerHandle;
     if (!h) return;
     handles.root.updateMatrixWorld(true);
     // Hip pivot is 0.78 m above the avatar origin and the cushion sits at
-    // y≈0.30 in chassis space, so the origin drops below the seat.
-    this._seatedDriverScratch.set(-0.44, -0.48, 0.02);
+    // y≈0.30 in chassis space, so the origin drops below the seat. The
+    // passenger seat is the mirror of the driver seat on local +X.
+    this._seatedDriverScratch.set(passenger ? 0.44 : -0.44, -0.48, 0.02);
     handles.chassisGroup.localToWorld(this._seatedDriverScratch);
     h.group.position.copy(this._seatedDriverScratch);
     h.group.rotation.set(0, car.yaw, 0);
@@ -14267,8 +14350,13 @@ export class GameEngine {
     h.legR.visible = false;
     // A backpack strapped to the torso would intersect the seat backrest.
     h.backpackGroup.visible = false;
-    h.armL.rotation.set(-1.2, 0, 0.1);
-    h.armR.rotation.set(-1.2, 0, -0.1);
+    if (passenger) {
+      h.armL.rotation.set(-0.72, 0, 0.16);
+      h.armR.rotation.set(-0.72, 0, -0.16);
+    } else {
+      h.armL.rotation.set(-1.2, 0, 0.1);
+      h.armR.rotation.set(-1.2, 0, -0.1);
+    }
     h.headGroup.rotation.x = 0;
     h.heldGunMesh.visible = false;
     h.heldToolMesh.visible = false;
@@ -14427,7 +14515,7 @@ export class GameEngine {
             // avatar must stay hidden to avoid blocking the view.
             if (this.localPlayerHandle) this.localPlayerHandle.group.visible = false;
           } else {
-            this.updateSeatedPlayerAvatar(activeV, handles);
+            this.updateSeatedPlayerAvatar(activeV, handles, this.ferryRideActive);
           }
         }
         if (this.vehicleInteriorCamera && handles) {
@@ -15378,6 +15466,197 @@ export class GameEngine {
     }
   }
 
+  /**
+   * Shared car/worker ground sampler. The causeway is a raised deck, so the
+   * ferry route must use the same structural surface as the player instead of
+   * sampling raw terrain and clipping through the bridge.
+   */
+  private sampleFerryRouteGround = (x: number, z: number): number => {
+    const terrainY = getTerrainHeight(x, z);
+    return Math.max(terrainY, this.getStructuralSurfaceY(x, z, terrainY + 2.2));
+  };
+
+  /**
+   * Runs the island ferry pickup: worker walk, passenger boarding, the drive
+   * to the south pier and the ferry crossing into Crescent City.
+   */
+  private updateFerryPickup(dt: number): void {
+    if (this.ferryPickup.phase === 'idle') return;
+    if (this.worldType !== 'island' || this.currentDimension !== 'overworld') {
+      this.ferryPickup.cancel();
+      this.ferryRideActive = false;
+      if (this.world?.ferryWorkerGroup) this.world.ferryWorkerGroup.visible = false;
+      return;
+    }
+
+    const carId = this.ferryPickup.carId;
+    const car = carId ? this.vehicles.find((v) => v.id === carId) ?? null : null;
+    if (!car) {
+      this.ferryPickup.cancel();
+      this.ferryRideActive = false;
+      if (this.world?.ferryWorkerGroup) this.world.ferryWorkerGroup.visible = false;
+      this.toast('The ferry worker lost track of your car.', 'warning');
+      return;
+    }
+
+    const result = this.ferryPickup.update(dt, car, this.sampleFerryRouteGround);
+    const status = this.ferryPickup.getStatus();
+
+    if (result.phaseChanged && status.phase === 'waiting_for_passenger') {
+      this.toast(
+        `Ferry worker is holding the driver's door of ${car.name}. Get in on the passenger side.`,
+        'discovery',
+      );
+      this.sound.playCarDoorLatch(false);
+    }
+
+    if (status.phase === 'driving') {
+      this.playerX = car.x;
+      this.playerY = car.y + 0.9;
+      this.playerZ = car.z;
+      this.playerYaw = car.yaw;
+      this.currentSpeedMps = Math.hypot(car.vx, car.vz);
+      this.grounded = true;
+      this.isSwimming = false;
+      const targetCamYaw = car.yaw - Math.PI;
+      let camDiff = targetCamYaw - this.camYaw;
+      while (camDiff > Math.PI) camDiff -= Math.PI * 2;
+      while (camDiff < -Math.PI) camDiff += Math.PI * 2;
+      this.camYaw += camDiff * (1 - Math.exp(-5.2 * dt));
+      this.camPitch = THREE.MathUtils.damp(this.camPitch, -0.15, 4, dt);
+      this.vehicleVisualPitch = THREE.MathUtils.damp(this.vehicleVisualPitch, 0, 6, dt);
+      this.vehicleVisualRoll = THREE.MathUtils.damp(this.vehicleVisualRoll, 0, 6, dt);
+      if (this.ferryBoardingDoorTimer > 0) {
+        this.ferryBoardingDoorTimer = Math.max(0, this.ferryBoardingDoorTimer - dt);
+        if (this.ferryBoardingDoorTimer <= 0) {
+          car.passengerDoorOpen = false;
+          this.sound.playCarDoorLatch(false);
+        }
+      }
+      this.nearbyInteraction = null;
+      this.markExploredAroundPlayer();
+    } else if (status.phase === 'arrived') {
+      if (this.ferryArrivalTimer <= 0) {
+        this.ferryArrivalTimer = 2.7;
+        car.vx = 0;
+        car.vz = 0;
+        car.doorsOpen = false;
+        car.passengerDoorOpen = false;
+        this.toast('The car rolls onto the island ferry. Lines cast off for Crescent City.', 'discovery');
+        this.sound.playSteamHiss();
+      } else {
+        this.ferryArrivalTimer = Math.max(0, this.ferryArrivalTimer - dt);
+        if (this.ferryArrivalTimer <= 0) {
+          this.completeFerryCrossing(car);
+          return;
+        }
+      }
+    }
+
+    this.updateFerryWorkerVisual(status, car);
+  }
+
+  private updateFerryWorkerVisual(
+    status: ReturnType<FerryPickupSystem['getStatus']>,
+    car: ModularVehicleData,
+  ): void {
+    const world = this.world;
+    if (!world) return;
+    const worker = world.ferryWorkerGroup;
+    worker.visible = status.phase !== 'idle';
+    if (!worker.visible) return;
+
+    if (status.phase === 'driving' || status.phase === 'arrived') {
+      const handles = this.vehicleMeshes.get(car.id);
+      if (handles) {
+        handles.root.updateMatrixWorld(true);
+        _vec3A.set(-0.44, -0.47, 0.02);
+        handles.chassisGroup.localToWorld(_vec3A);
+        worker.position.copy(_vec3A);
+        worker.rotation.set(0, car.yaw, 0);
+        worker.scale.setScalar(0.92);
+        world.ferryWorkerLegL.visible = false;
+        world.ferryWorkerLegR.visible = false;
+        world.ferryWorkerArmL.rotation.set(-1.18, 0, 0.1);
+        world.ferryWorkerArmR.rotation.set(-1.18, 0, -0.1);
+        world.ferryWorkerHead.rotation.set(0, 0, 0);
+      }
+      return;
+    }
+
+    worker.position.set(status.workerX, status.workerY, status.workerZ);
+    worker.rotation.set(0, status.workerYaw, 0);
+    worker.scale.setScalar(1);
+    world.ferryWorkerLegL.visible = true;
+    world.ferryWorkerLegR.visible = true;
+    if (status.workerMoving) {
+      const swing = Math.sin(this.elapsed * 10.5) * 0.62;
+      world.ferryWorkerArmL.rotation.set(swing, 0, 0.08);
+      world.ferryWorkerArmR.rotation.set(-swing, 0, -0.08);
+      world.ferryWorkerLegL.rotation.set(-swing, 0, 0);
+      world.ferryWorkerLegR.rotation.set(swing, 0, 0);
+    } else {
+      world.ferryWorkerArmL.rotation.set(0, 0, 0.08);
+      world.ferryWorkerArmR.rotation.set(-0.12, 0, -0.08);
+      world.ferryWorkerLegL.rotation.set(0, 0, 0);
+      world.ferryWorkerLegR.rotation.set(0, 0, 0);
+    }
+    world.ferryWorkerHead.rotation.set(0, Math.sin(this.elapsed * 1.7) * 0.09, 0);
+  }
+
+  private completeFerryCrossing(car: ModularVehicleData): void {
+    const terminal = this.world?.crescentCity?.terminalPos;
+    this.ferryRideActive = false;
+    this.autoParkJobs.delete(car.id);
+
+    const cityX = terminal?.x ?? 72;
+    const cityZ = terminal?.z ?? 500;
+    car.x = cityX + 9.5;
+    car.z = cityZ + 2.5;
+    car.y = this.transitGroundY(car.x, car.z) + 0.14;
+    car.yaw = 0;
+    car.vx = 0;
+    car.vy = 0;
+    car.vz = 0;
+    car.doorsOpen = false;
+    car.passengerDoorOpen = false;
+    const carMesh = this.vehicleMeshes.get(car.id);
+    if (carMesh) {
+      carMesh.root.position.set(car.x, car.y, car.z);
+      carMesh.root.rotation.set(0, car.yaw, 0);
+    }
+
+    // Keep the active vehicle and the player inside it: fuel, damage, cargo,
+    // tuning, skin, inventory, time and weather all survive the crossing with
+    // no second car spawned and no exit/re-enter camera pop.
+    this.activeVehicleId = car.id;
+    this.vehicleForwardSpeed = 0;
+    this.vehicleAltitudeVel = 0;
+    this.vehicleSteerAngle = 0;
+    this.playerX = car.x;
+    this.playerY = car.y + 0.9;
+    this.playerZ = car.z;
+    this.playerYaw = car.yaw;
+    this.playerVelY = 0;
+    this.grounded = true;
+    this.isSwimming = false;
+    this.camYaw = car.yaw - Math.PI;
+    this.seatedState = null;
+    this.mainland.recordBoatTrip();
+    this.ferryPickup.completeCrossing();
+    this.ferryArrivalTimer = 0;
+    if (this.world?.ferryWorkerGroup) this.world.ferryWorkerGroup.visible = false;
+    this.markExploredAroundPlayer();
+    this.nearbyInteraction = this.findNearbyInteraction();
+    this.updateCamera();
+    this.sound.playSteamHiss();
+    this.toast(
+      `The island ferry docks in Crescent City. ${car.name}, its cargo and your gear crossed intact.`,
+      'discovery',
+    );
+    this.emitHud();
+  }
+
   private applyMainlandOutfitVisual(): void {
     if (!this.localPlayerHandle) return;
     const outfit = this.mainland.getOutfit();
@@ -15593,6 +15872,58 @@ export class GameEngine {
     return result;
   }
 
+  /** Ground height for a transit arrival, including the raised causeway deck. */
+  private transitGroundY(x: number, z: number): number {
+    const terrainY = getTerrainHeight(x, z);
+    const deckY = this.getStructuralSurfaceY(x, z, terrainY + 3.0);
+    return Math.max(terrainY, getWaterLevelAt(x, z) + 0.4, deckY);
+  }
+
+  /**
+   * Relocates the player's current car with the player instead of exiting and
+   * respawning it. This keeps fuel, damage, cargo, tuning and the active camera
+   * intact, and guarantees the world never ends up with a duplicate vehicle.
+   */
+  private carryActiveVehicleForTransit(x: number, z: number): boolean {
+    const id = this.activeVehicleId;
+    if (!id) return false;
+    const vehicle = this.vehicles.find((v) => v.id === id);
+    if (!vehicle) {
+      this.activeVehicleId = null;
+      return false;
+    }
+    const groundY = this.transitGroundY(x, z);
+    vehicle.x = x;
+    vehicle.z = z;
+    vehicle.y = groundY + 0.14;
+    vehicle.vx = 0;
+    vehicle.vy = 0;
+    vehicle.vz = 0;
+    vehicle.dimension = 'overworld';
+    vehicle.doorsOpen = false;
+    vehicle.passengerDoorOpen = false;
+    this.vehicleForwardSpeed = 0;
+    this.vehicleAltitudeVel = 0;
+    this.vehicleSteerAngle = 0;
+    this.vehicleVisualPitch = 0;
+    this.vehicleVisualRoll = 0;
+    const handles = this.vehicleMeshes.get(vehicle.id);
+    if (handles) {
+      handles.root.position.set(vehicle.x, vehicle.y, vehicle.z);
+      handles.root.rotation.y = vehicle.yaw;
+    }
+    this.playerX = x;
+    this.playerY = vehicle.y + 0.9;
+    this.playerZ = z;
+    this.playerYaw = vehicle.yaw;
+    this.playerVelY = 0;
+    this.grounded = true;
+    this.isSwimming = false;
+    this.camYaw = vehicle.yaw - Math.PI;
+    this.camPitch = THREE.MathUtils.clamp(this.camPitch, -0.35, 0.25);
+    return true;
+  }
+
   public mainlandFastTravel(pointId: string): MainlandActionResult {
     const point = MAINLAND_FAST_TRAVEL.find((p) => p.id === pointId);
     if (!point) return { ok: false, message: 'Unknown fast-travel point.' };
@@ -15601,23 +15932,36 @@ export class GameEngine {
       this.mainlandToast(result);
       return result;
     }
-    if (this.activeVehicleId) this.exitVehicle();
-    const groundY = Math.max(
-      getTerrainHeight(point.x, point.z),
-      getWaterLevelAt(point.x, point.z) + 0.4,
-    );
+    if (point.region === 'mainland' && !this.isPlayerInMainland()) {
+      const result = {
+        ok: false,
+        message: 'Take the island ferry from the Hilltop House call box to reach Crescent City.',
+      };
+      this.mainlandToast(result);
+      return result;
+    }
     this.seatedState = null;
     this.vaultTimer = 0;
-    this.playerX = point.x;
-    this.playerY = groundY + 2.2;
-    this.playerZ = point.z;
-    this.playerVelY = 0;
-    this.grounded = false;
-    this.isSwimming = false;
+    const carriedVehicle = this.carryActiveVehicleForTransit(point.x, point.z);
+    if (!carriedVehicle) {
+      const groundY = this.transitGroundY(point.x, point.z);
+      this.playerX = point.x;
+      this.playerY = groundY + 2.2;
+      this.playerZ = point.z;
+      this.playerVelY = 0;
+      this.grounded = false;
+      this.isSwimming = false;
+    }
     this.markExploredAroundPlayer();
     this.nearbyInteraction = this.findNearbyInteraction();
     this.updateCamera();
-    const result = { ok: true, message: `Fast travel: ${point.name}.` };
+    const carryNote = carriedVehicle
+      ? ' Active vehicle and its cargo carried over.'
+      : '';
+    const result = {
+      ok: true,
+      message: `Fast travel: ${point.name}. Vitals, inventory, weapons, skin, time and weather preserved.${carryNote}`,
+    };
     this.mainlandToast(result);
     return result;
   }
@@ -15631,12 +15975,116 @@ export class GameEngine {
       }
       return result;
     }
+    // From the island there is exactly one route to the mainland: call the
+    // ferry worker at the shelter, let him take a car and ride shotgun.
+    if (!this.isPlayerInMainland()) {
+      const ferry = this.mainlandRequestFerryPickup();
+      if (!ferry.ok) this.mainlandToast(ferry);
+      return ferry;
+    }
     const result = this.mainlandFastTravel('riverfront_dock');
     if (result.ok) {
       this.mainland.recordBoatTrip();
       this.toast('Airboat returned to the Crescent City riverfront.', 'discovery');
     }
     return result;
+  }
+
+  private isPlayerInMainland(): boolean {
+    const dx = this.playerX - MAINLAND_LOCATION.centerX;
+    const dz = this.playerZ - MAINLAND_LOCATION.centerZ;
+    return dx * dx + dz * dz <= MAINLAND_LOCATION.radius * MAINLAND_LOCATION.radius;
+  }
+
+  public mainlandRequestFerryPickup(): MainlandActionResult {
+    if (this.worldType !== 'island' || this.currentDimension !== 'overworld') {
+      return { ok: false, message: 'The island ferry only runs from the island landing.' };
+    }
+    if (this.mode !== 'playing' || this.gameOver) {
+      return { ok: false, message: 'The ferry worker is not taking calls right now.' };
+    }
+    if (this.ferryPickup.phase !== 'idle') {
+      return { ok: false, message: this.ferryPickup.getStatus().label };
+    }
+    if (this.activeVehicleId) {
+      return {
+        ok: false,
+        message: 'Step out of the car and use the ferry call box beside the Hilltop House.',
+      };
+    }
+    const callDx = this.playerX - FERRY_CALL_POS.x;
+    const callDz = this.playerZ - FERRY_CALL_POS.z;
+    if (callDx * callDx + callDz * callDz > 5.5 * 5.5) {
+      return {
+        ok: false,
+        message: 'Use the blue ferry call box beside the Hilltop House garage.',
+      };
+    }
+    const car = selectFerryCar(this.vehicles);
+    if (!car) {
+      return {
+        ok: false,
+        message: 'Park one of your cars beside the shelter before calling the ferry.',
+      };
+    }
+    const result = this.ferryPickup.request(car);
+    if (!result.ok) {
+      this.mainlandToast(result);
+      return result;
+    }
+    const worker = this.world?.ferryWorkerGroup;
+    if (worker) {
+      const status = this.ferryPickup.getStatus();
+      worker.position.set(status.workerX, getTerrainHeight(status.workerX, status.workerZ), status.workerZ);
+      worker.rotation.set(0, status.workerYaw, 0);
+      worker.scale.setScalar(1);
+      worker.visible = true;
+    }
+    this.sound.playCarDoorLatch(false);
+    this.toast(result.message, 'discovery');
+    this.nearbyInteraction = this.findNearbyInteraction();
+    this.emitHud();
+    return result;
+  }
+
+  private boardFerryPassenger(): void {
+    const status = this.ferryPickup.getStatus();
+    if (status.phase !== 'waiting_for_passenger' || !status.carId) {
+      this.toast('The ferry worker is not ready for you to board yet.', 'warning');
+      return;
+    }
+    const car = this.vehicles.find((v) => v.id === status.carId);
+    if (!car) {
+      this.ferryPickup.cancel();
+      this.toast('The ferry car vanished. Call the worker again.', 'warning');
+      return;
+    }
+    const dist = Math.hypot(car.x - this.playerX, car.z - this.playerZ);
+    if (dist > 5.6 || Math.abs(car.y - this.playerY) > 3.2) {
+      this.toast('Walk up to the passenger side of the ferry car.', 'warning');
+      return;
+    }
+    this.ferryRideActive = true;
+    this.ferryArrivalTimer = 0;
+    if (!this.enterVehicle(car.id, true)) {
+      this.ferryRideActive = false;
+      return;
+    }
+    if (!this.ferryPickup.boardPassenger(car)) {
+      this.ferryRideActive = false;
+      this.exitVehicle();
+      return;
+    }
+    car.passengerDoorOpen = true;
+    this.ferryBoardingDoorTimer = 0.95;
+    this.camYaw = car.yaw - Math.PI;
+    this.sound.playCarDoorLatch(true);
+    this.toast(
+      `You slide in on the passenger side. The ferry worker pulls ${car.name} away from the shelter.`,
+      'discovery',
+    );
+    this.nearbyInteraction = null;
+    this.emitHud();
   }
 
   public mainlandEquipOutfit(id: MainlandOutfitId, applyLoadout = false): MainlandActionResult {
@@ -16011,6 +16459,10 @@ export class GameEngine {
     if (this.portalWarpCooldown > 0) {
       this.portalWarpCooldown = Math.max(0, this.portalWarpCooldown - dt);
     }
+
+    // Scripted island ferry pickup runs before player control so the worker's
+    // car owns the player position while the player is riding shotgun.
+    this.updateFerryPickup(dt);
 
     // 1. Always move the player smoothly first before world & biome updates
     const playerActive =
@@ -16893,6 +17345,12 @@ export class GameEngine {
       const landmarkFloorY = getLandmarkFloorY(x, z, footY);
       if (landmarkFloorY > bestY) {
         bestY = landmarkFloorY;
+      }
+
+      // Raised island-to-mainland causeway deck (also used by the ferry car).
+      const causewayY = getCausewaySurfaceY(x, z, footY);
+      if (causewayY > bestY) {
+        bestY = causewayY;
       }
     }
 
@@ -18500,9 +18958,17 @@ export class GameEngine {
     this.emitHud();
   }
 
-  public enterVehicle(vehicleId: string): boolean {
+  public enterVehicle(vehicleId: string, asPassenger = false): boolean {
     const v = this.vehicles.find((x) => x.id === vehicleId);
     if (!v) return false;
+    if (!asPassenger) {
+      this.ferryRideActive = false;
+      if (this.ferryPickup.phase !== 'idle') {
+        this.ferryPickup.cancel();
+        if (this.world?.ferryWorkerGroup) this.world.ferryWorkerGroup.visible = false;
+        this.toast('Ferry pickup cancelled. Call the worker again from the blue box.', 'info');
+      }
+    }
     if (this.activeVehicleId && this.activeVehicleId !== vehicleId) {
       this.exitVehicle();
     }
@@ -18543,6 +19009,14 @@ export class GameEngine {
     this.camPitch = -0.18;
     const specs = this.getVehicleSpecs(v);
     this.sound.playSteamHiss();
+    if (asPassenger) {
+      this.toast(
+        `Riding shotgun in ${v.name}. The ferry worker is driving to the island pier.`,
+        'discovery',
+      );
+      this.emitHud();
+      return true;
+    }
     const extraHint =
       v.preset === 'donk'
         ? ' · [Space/Z/Q/R] Hydraulics (Up / Down / Side-to-Side)'
@@ -20058,7 +20532,8 @@ export class GameEngine {
       }
       if (handles.doorRight) {
         const butterfly = handles.doorRight.userData.doorStyle === 'suicide_butterfly';
-        const targetR = v.doorsOpen ? 1.12 : 0;
+        const rightDoorOpen = Boolean(v.doorsOpen || v.passengerDoorOpen);
+        const targetR = rightDoorOpen ? 1.12 : 0;
         handles.doorRight.rotation.y = THREE.MathUtils.damp(
           handles.doorRight.rotation.y,
           targetR,
@@ -20067,7 +20542,7 @@ export class GameEngine {
         );
         handles.doorRight.rotation.x = THREE.MathUtils.damp(
           handles.doorRight.rotation.x,
-          v.doorsOpen && butterfly ? -0.82 : 0,
+          rightDoorOpen && butterfly ? -0.82 : 0,
           7,
           dt,
         );

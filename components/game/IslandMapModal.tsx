@@ -4,6 +4,15 @@ import React, { useEffect, useRef } from 'react';
 import { Compass, MapPin, X } from 'lucide-react';
 import { HUDStateSnapshot } from '@/game/types';
 import {
+  FERRY_CALL_POS,
+  FERRY_DOCK_CAR_STOP,
+} from '@/game/systems/ferryPickup';
+import {
+  CAUSEWAY_GATEWAY_POINT,
+  CAUSEWAY_ISLAND_POINT,
+  CAUSEWAY_PATH,
+} from '@/game/systems/islandMainlandTransit';
+import {
   AUTUMN_GROVE_POS,
   BADLANDS_MINESHAFT_POS,
   BIOME_INFO,
@@ -410,6 +419,19 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
       }
       ctx.putImageData(img, 0, 0);
 
+      // Island-to-mainland causeway: drawn above the terrain so the crossing
+      // route is immediately readable even before both endpoints are explored.
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      CAUSEWAY_PATH.forEach((point, index) => {
+        const p = toPx(point.x, point.z);
+        if (index === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      });
+      ctx.stroke();
+
       // Discovered Landmarks only
       const landmarks = [
         { label: 'Dragon Valley', pos: DRAGON_VALLEY_POS, color: '#ef4444' },
@@ -428,6 +450,10 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
         { label: 'Farmer Market', pos: FARMER_POS, color: '#4ade80' },
         { label: 'Hilltop House', pos: HILL_HOUSE_POS, color: '#fb923c' },
         { label: 'Vehicle Garage', pos: VEHICLE_GARAGE_POS, color: '#38bdf8' },
+        { label: 'Ferry Call Box', pos: FERRY_CALL_POS, color: '#38bdf8' },
+        { label: 'Island Ferry Pier', pos: FERRY_DOCK_CAR_STOP, color: '#f59e0b' },
+        { label: 'Causeway Gateway', pos: CAUSEWAY_GATEWAY_POINT, color: '#fbbf24' },
+        { label: 'Causeway Island End', pos: CAUSEWAY_ISLAND_POINT, color: '#38bdf8' },
         { label: 'Crescent City', pos: CRESCENT_CITY_POS, color: '#fbbf24' },
         { label: 'Azure Lake', pos: LAKE_CENTER, color: '#2dd4bf' },
         { label: 'Trial Chambers', pos: TRIAL_CHAMBERS_POS, color: '#ea580c' },

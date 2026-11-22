@@ -37,6 +37,7 @@ import {
   MAINLAND_FAST_TRAVEL,
   MAINLAND_FACTIONS,
   MAINLAND_GARAGE_PACKAGES,
+  MAINLAND_LOCATION,
   MAINLAND_OUTFITS,
   MAINLAND_PROPERTIES,
   MAINLAND_UPGRADES,
@@ -118,6 +119,11 @@ export function LouisianaMainlandModal({
 }: LouisianaMainlandModalProps) {
   const [tab, setTab] = useState<MainlandTab>(initialTab);
   const [snapshot, setSnapshot] = useState(() => engine.getMainlandSnapshot());
+  const playerOnMainland =
+    Math.hypot(
+      hud.playerX - MAINLAND_LOCATION.centerX,
+      hud.playerZ - MAINLAND_LOCATION.centerZ,
+    ) < MAINLAND_LOCATION.radius;
   const [message, setMessage] = useState<string | null>(null);
   const [messageOk, setMessageOk] = useState(true);
 
@@ -132,6 +138,17 @@ export function LouisianaMainlandModal({
       refresh();
     },
     [refresh],
+  );
+
+  // Transit actions leave the player in the world with the modal still open on
+  // some devices, which swallowed the first movement key. Close it only after a
+  // successful move so failures stay visible.
+  const runAndClose = useCallback(
+    (result: MainlandActionResult) => {
+      run(result);
+      if (result.ok) onClose();
+    },
+    [onClose, run],
   );
 
   const activeVehicleLabel = hud.activeVehicle?.name ?? 'No vehicle selected';
@@ -326,10 +343,7 @@ export function LouisianaMainlandModal({
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        const result = engine.mainlandBoardTransit('island');
-                        run(result);
-                      }}
+                      onClick={() => runAndClose(engine.mainlandBoardTransit('island'))}
                       className="rounded-lg border border-cyan-500/40 bg-cyan-950/50 px-3 py-2 text-xs font-bold text-cyan-200 hover:bg-cyan-500 hover:text-stone-950 transition"
                     >
                       Cross to island
@@ -678,31 +692,65 @@ export function LouisianaMainlandModal({
                   <div>
                     <div className="flex items-center gap-2 text-sm font-bold text-cyan-100">
                       <Ship className="w-4 h-4" />
-                      Riverfront Airboat
+                      Island Ferry & Riverfront Airboat
                     </div>
                     <div className="mt-1 text-[11px] text-stone-400">
-                      Shallow-draft crossing between Crescent City and the island landing.
+                      To reach the mainland, call the blue ferry box beside the Hilltop House garage. The worker walks up, takes one of your parked cars and drives you to the island pier. The airboat handles the return crossing. You can also drive or walk the coastal causeway between Island Landing and the Crescent Causeway Gateway.
                     </div>
                   </div>
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      onClick={() => run(engine.mainlandBoardTransit('island'))}
+                      onClick={() => runAndClose(engine.mainlandBoardTransit('island'))}
                       className="rounded-lg bg-cyan-500 px-3 py-2 text-xs font-bold text-stone-950 hover:bg-cyan-400 transition"
                     >
                       Cross to island
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => run(engine.mainlandBoardTransit('city'))}
-                      className="rounded-lg border border-cyan-500/40 bg-stone-950/70 px-3 py-2 text-xs font-bold text-cyan-200 hover:bg-cyan-500 hover:text-stone-950 transition"
-                    >
-                      Return to city
-                    </button>
+                    {!playerOnMainland && (
+                      <button
+                        type="button"
+                        onClick={() => runAndClose(engine.mainlandBoardTransit('city'))}
+                        className="rounded-lg border border-cyan-500/40 bg-stone-950/70 px-3 py-2 text-xs font-bold text-cyan-200 hover:bg-cyan-500 hover:text-stone-950 transition"
+                      >
+                        Call island ferry
+                      </button>
+                    )}
                   </div>
                 </div>
                 <div className="mt-2 text-[10px] text-stone-500">
-                  Airboat crossings: {snapshot.boatTrips} · unlock the Riverfront Dock or Swamp Navigator upgrade for the city route.
+                  Crossings: {snapshot.boatTrips} · the ferry call box is beside the Hilltop House garage, not inside the city terminal.
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-amber-500/30 bg-amber-950/15 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm font-bold text-amber-100">
+                      <Navigation className="w-4 h-4" />
+                      Coastal Causeway · Island ↔ Mainland
+                    </div>
+                    <div className="mt-1 max-w-2xl text-[11px] text-stone-400">
+                      A lit, drivable plate-girder causeway runs from the Crescent Causeway Gateway (64, 520) to Island Landing (22, 650). Follow the overhead signs and glowing waypoint arches. The same crossing carries your survival meters, inventory, weapons, outfit, active car, fuel, cargo, time and weather in both directions.
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => runAndClose(engine.mainlandFastTravel('island_causeway'))}
+                      className="rounded-lg border border-sky-500/40 bg-sky-950/60 px-3 py-2 text-xs font-bold text-sky-200 hover:bg-sky-500 hover:text-stone-950 transition"
+                    >
+                      Island causeway end
+                    </button>
+                    {playerOnMainland && (
+                      <button
+                        type="button"
+                        onClick={() => runAndClose(engine.mainlandFastTravel('crescent_causeway'))}
+                        className="rounded-lg border border-amber-500/40 bg-stone-950/70 px-3 py-2 text-xs font-bold text-amber-200 hover:bg-amber-500 hover:text-stone-950 transition"
+                      >
+                        Crescent gateway
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -730,7 +778,7 @@ export function LouisianaMainlandModal({
                         <button
                           type="button"
                           disabled={!unlocked}
-                          onClick={() => run(engine.mainlandFastTravel(point.id))}
+                          onClick={() => runAndClose(engine.mainlandFastTravel(point.id))}
                           className={`flex items-center gap-1 rounded-lg px-3 py-2 text-xs font-bold transition ${
                             unlocked
                               ? 'bg-stone-800 text-stone-100 hover:bg-amber-500 hover:text-stone-950'

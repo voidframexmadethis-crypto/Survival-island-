@@ -4309,6 +4309,94 @@ export function createFarmerNpcModel(): {
 }
 
 /**
+ * Ferry deckhand who walks up to the shelter, takes a player's car and drives
+ * it to the island pier. Limbs are separate pivots so the engine can animate
+ * a real walk cycle and then tuck the legs into the driver's seat.
+ */
+export function createFerryWorkerNpcModel(): {
+  group: THREE.Group;
+  head: THREE.Group;
+  armL: THREE.Group;
+  armR: THREE.Group;
+  legL: THREE.Group;
+  legR: THREE.Group;
+} {
+  const group = new THREE.Group();
+  group.name = 'ferry-worker-npc';
+  const shirtMat = new THREE.MeshStandardMaterial({ color: 0x1e3a5f, roughness: 0.86 });
+  const vestMat = new THREE.MeshStandardMaterial({ color: 0xd9f99d, roughness: 0.72 });
+  const stripeMat = new THREE.MeshStandardMaterial({
+    color: 0xf8fafc,
+    roughness: 0.42,
+    emissive: 0x94a3b8,
+    emissiveIntensity: 0.12,
+  });
+  const trouserMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.92 });
+  const bootMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.95 });
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0x8d5524, roughness: 0.74 });
+  const capMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8 });
+  const gloveMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.9 });
+
+  const makeLeg = (side: -1 | 1): THREE.Group => {
+    const leg = new THREE.Group();
+    leg.position.set(side * 0.15, 0.96, 0);
+    const trouser = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.09, 0.8, 8), trouserMat);
+    trouser.position.y = -0.4;
+    trouser.castShadow = true;
+    const boot = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.2, 0.28), bootMat);
+    boot.position.set(0, -0.84, 0.05);
+    boot.castShadow = true;
+    leg.add(trouser, boot);
+    group.add(leg);
+    return leg;
+  };
+  const legL = makeLeg(-1);
+  const legR = makeLeg(1);
+
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.64, 0.32), shirtMat);
+  torso.position.y = 1.28;
+  torso.castShadow = true;
+  const vest = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.54, 0.36), vestMat);
+  vest.position.y = 1.33;
+  vest.castShadow = true;
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.075, 0.38), stripeMat);
+  stripe.position.y = 1.2;
+  group.add(torso, vest, stripe);
+
+  const makeArm = (side: -1 | 1): THREE.Group => {
+    const arm = new THREE.Group();
+    arm.position.set(side * 0.36, 1.53, 0);
+    const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.07, 0.55, 7), shirtMat);
+    sleeve.position.y = -0.26;
+    sleeve.castShadow = true;
+    const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.078, 0.078, 0.1, 7), stripeMat);
+    cuff.position.y = -0.51;
+    const glove = new THREE.Mesh(new THREE.SphereGeometry(0.08, 7, 6), gloveMat);
+    glove.position.y = -0.59;
+    arm.add(sleeve, cuff, glove);
+    group.add(arm);
+    return arm;
+  };
+  const armL = makeArm(-1);
+  const armR = makeArm(1);
+
+  const head = new THREE.Group();
+  head.position.set(0, 1.78, 0);
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 0.12, 7), skinMat);
+  neck.position.y = -0.15;
+  const face = new THREE.Mesh(new THREE.SphereGeometry(0.21, 12, 10), skinMat);
+  face.castShadow = true;
+  const brim = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.05, 0.26), capMat);
+  brim.position.set(0, 0.12, 0.14);
+  const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.21, 0.16, 12), capMat);
+  crown.position.y = 0.2;
+  head.add(neck, face, brim, crown);
+  group.add(head);
+
+  return { group, head, armL, armR, legL, legR };
+}
+
+/**
  * Creates a staged 3D growing crop plant mesh (stage 0=seedling, 1=leafy, 2=ripe produce).
  */
 export function createCropPlantMesh(

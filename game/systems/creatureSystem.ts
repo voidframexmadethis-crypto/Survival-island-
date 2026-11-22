@@ -2569,6 +2569,11 @@ export class CreatureManager {
       if (distSqP > 7744 && !c.mounted && !c.tamed) {
         this.setRigShadow(c, false);
         c.rig.shadowDisc.visible = false;
+        // Fully sleep distant ambient animals instead of keeping their meshes
+        // and matrix updates alive across the island/mainland crossing.
+        if (distSqP > 19600 && !c.isBoss && c.rig.root.visible) {
+          c.rig.root.visible = false;
+        }
         continue;
       }
 

@@ -4,6 +4,8 @@ import { ResourceNodeKind, ResourceNodeState } from '../types';
 import { FrameBudgetQueue } from '../systems/frameBudgetQueue';
 import { WorldChunk, WorldChunkManager } from './worldChunkSystem';
 import { buildLouisianaMainland, type LouisianaMainlandHandles } from './louisianaMainland';
+import { buildIslandFerryDock } from './ferryDock';
+import { buildTransitCauseway } from './transitCauseway';
 import {
   CaveTerrainOpening,
   filterTerrainIndexForCaveOpenings,
@@ -121,6 +123,7 @@ import {
   createCave,
   createCaveCeilingClusterMesh,
   createFarmerNpcModel,
+  createFerryWorkerNpcModel,
   createHilltopHouse,
 } from './models';
 import {
@@ -193,6 +196,15 @@ export interface WorldHandles {
   farmerNpcGroup: THREE.Group;
   farmerHead: THREE.Group;
   farmerArmR: THREE.Group;
+  ferryWorkerGroup: THREE.Group;
+  ferryWorkerHead: THREE.Group;
+  ferryWorkerArmL: THREE.Group;
+  ferryWorkerArmR: THREE.Group;
+  ferryWorkerLegL: THREE.Group;
+  ferryWorkerLegR: THREE.Group;
+  ferryCallPos: THREE.Vector3;
+  ferryDockPos: THREE.Vector3;
+  ferryBoatPos: THREE.Vector3;
   soilPlots: { x: number; y: number; z: number }[];
   houseStations: HouseStationTarget[];
   tvScreenMat: THREE.MeshStandardMaterial;
@@ -6820,6 +6832,34 @@ gl_Position = projectionMatrix * mvPosition;`,
   }
   staticMergeTargets.push({ group: crescentCity.group });
 
+  // Island ferry pier and the shelter-side call box. The pier is the scripted
+  // destination for the worker's car run; the call box starts the pickup.
+  const islandFerry = buildIslandFerryDock();
+  overworldGroup.add(islandFerry.dockGroup, islandFerry.callGroup);
+  for (let i = 0; i < islandFerry.colliders.length; i++) {
+    colliders.push(islandFerry.colliders[i]);
+  }
+  staticMergeTargets.push({ group: islandFerry.dockGroup });
+  staticMergeTargets.push({ group: islandFerry.callGroup });
+
+  // Drivable island-to-mainland causeway. It is also the final leg of the
+  // ferry worker's route, so the bridge deck and vehicle ground support stay
+  // locked to the same sampled surface.
+  const transitCauseway = buildTransitCauseway();
+  overworldGroup.add(transitCauseway.group);
+  staticMergeTargets.push({ group: transitCauseway.group });
+
+  const ferryWorker = createFerryWorkerNpcModel();
+  const ferryWorkerStartX = islandFerry.callPos.x + 6;
+  const ferryWorkerStartZ = islandFerry.callPos.z - 18;
+  ferryWorker.group.position.set(
+    ferryWorkerStartX,
+    getTerrainHeight(ferryWorkerStartX, ferryWorkerStartZ),
+    ferryWorkerStartZ,
+  );
+  ferryWorker.group.visible = false;
+  overworldGroup.add(ferryWorker.group);
+
   for (let i = 0; i < staticMergeTargets.length; i++) {
     const target = staticMergeTargets[i];
     mergeStaticGroupMeshes(target.group, target.protectedObjs);
@@ -6857,6 +6897,7 @@ gl_Position = projectionMatrix * mvPosition;`,
     lakeMesh,
     cloudsGroup,
     farmerNpcGroup,
+    ferryWorker.group,
     waterfallFoam,
     seabirdInstanced,
     ...waterfallStreams,
@@ -7319,6 +7360,15 @@ gl_Position = projectionMatrix * mvPosition;`,
     farmerNpcGroup,
     farmerHead,
     farmerArmR,
+    ferryWorkerGroup: ferryWorker.group,
+    ferryWorkerHead: ferryWorker.head,
+    ferryWorkerArmL: ferryWorker.armL,
+    ferryWorkerArmR: ferryWorker.armR,
+    ferryWorkerLegL: ferryWorker.legL,
+    ferryWorkerLegR: ferryWorker.legR,
+    ferryCallPos: islandFerry.callPos,
+    ferryDockPos: islandFerry.carStopPos,
+    ferryBoatPos: islandFerry.boatPos,
     soilPlots,
     houseStations: hillHouse.stations,
     tvScreenMat: hillHouse.tvScreenMat,

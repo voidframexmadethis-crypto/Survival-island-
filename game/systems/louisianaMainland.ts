@@ -590,6 +590,17 @@ export const MAINLAND_FACTIONS: readonly MainlandFaction[] = [
 
 export const MAINLAND_FAST_TRAVEL: readonly MainlandFastTravelPoint[] = [
   {
+    id: 'crescent_causeway',
+    name: 'Crescent Causeway Gateway',
+    subtitle: 'Coastal causeway · island landing ahead',
+    region: 'mainland',
+    teleportKey: 'crescent causeway',
+    x: 64,
+    z: 520,
+    unlockedByDefault: true,
+    accent: '#fbbf24',
+  },
+  {
     id: 'crescent_terminal',
     name: 'Crescent City Terminal',
     subtitle: 'Streetcar stop · jobs board',
@@ -643,6 +654,17 @@ export const MAINLAND_FAST_TRAVEL: readonly MainlandFastTravelPoint[] = [
     z: 468,
     unlockedByDefault: false,
     accent: '#a78bfa',
+  },
+  {
+    id: 'island_causeway',
+    name: 'Island Causeway Landing',
+    subtitle: 'Bridge foot · ferry pier below',
+    region: 'island',
+    teleportKey: 'island causeway',
+    x: 22,
+    z: 650,
+    unlockedByDefault: true,
+    accent: '#38bdf8',
   },
   {
     id: 'island_landing',
@@ -830,9 +852,9 @@ export class LouisianaMainlandSystem {
     const points = (save.unlockedPoints || []).filter((id) =>
       MAINLAND_FAST_TRAVEL.some((p) => p.id === id),
     );
-    this.unlockedPoints = points.includes('crescent_terminal')
-      ? points
-      : ['crescent_terminal', ...points];
+    // Migrate older saves: newly added default transit points are always open.
+    const defaultPoints = MAINLAND_FAST_TRAVEL.filter((p) => p.unlockedByDefault).map((p) => p.id);
+    this.unlockedPoints = Array.from(new Set([...defaultPoints, ...points]));
     this.activeOutfit = OUTFIT_BY_ID.has(save.activeOutfit)
       ? save.activeOutfit
       : 'bayou_runner';
