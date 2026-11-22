@@ -6333,9 +6333,9 @@ export function buildIslandWorld(
     }
   };
 
-  const grassTarget = 52000;
-  const floretTarget = 6500;
-  const lupineTarget = 1800;
+  const grassTarget = 72000;
+  const floretTarget = 8800;
+  const lupineTarget = 2500;
   const pebbleCount = 180;
   const pebbleGeo = registerGeometry(new THREE.DodecahedronGeometry(0.14, 0));
 
@@ -6345,6 +6345,21 @@ export function buildIslandWorld(
   let flPlaced = 0;
   let luPlaced = 0;
   let pPlaced = 0;
+
+  const distanceToSegment2D = (
+    px: number,
+    pz: number,
+    ax: number,
+    az: number,
+    bx: number,
+    bz: number,
+  ): number => {
+    const dx = bx - ax;
+    const dz = bz - az;
+    const lenSq = dx * dx + dz * dz;
+    const t = lenSq === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / lenSq));
+    return Math.hypot(px - (ax + t * dx), pz - (az + t * dz));
+  };
 
   const isClearOfStructures = (px: number, pz: number): boolean => {
     if (Math.hypot(px - SNOWY_WOODLAND_POS.x, pz - SNOWY_WOODLAND_POS.z) < 14) return false;
@@ -6360,25 +6375,79 @@ export function buildIslandWorld(
     if (Math.hypot(px - JUNGLE_TEMPLE_POS.x, pz - JUNGLE_TEMPLE_POS.z) < 7.5) return false;
     if (Math.hypot(px - WHEATFIELD_POS.x, pz - WHEATFIELD_POS.z) < 9.0) return false;
     if (Math.hypot(px - FARMER_POS.x, pz - FARMER_POS.z) < 8.5) return false;
-    if (Math.hypot(px - HILL_HOUSE_POS.x, pz - HILL_HOUSE_POS.z) < 16.5) return false;
+
+    // The shelter is now surrounded by lawn. Only the actual footprint of the
+    // house, porch, entry step, studio wing and access ramp stay clear, instead
+    // of a large empty exclusion circle around the whole hilltop.
     if (
-      px >= HILL_HOUSE_POS.x + 3 &&
-      px <= HILL_HOUSE_POS.x + 23 &&
-      Math.abs(pz - HILL_HOUSE_POS.z) < 5.5
+      px >= HILL_HOUSE_POS.x - 5.8 &&
+      px <= HILL_HOUSE_POS.x + 7.4 &&
+      pz >= HILL_HOUSE_POS.z - 4.9 &&
+      pz <= HILL_HOUSE_POS.z + 9.4
     ) {
       return false;
     }
-    if (Math.hypot(px - VEHICLE_GARAGE_POS.x, pz - VEHICLE_GARAGE_POS.z) < 19.5) return false;
     if (
-      px >= VEHICLE_GARAGE_POS.x - 18 &&
-      px <= VEHICLE_GARAGE_POS.x + 28 &&
-      pz >= VEHICLE_GARAGE_POS.z - 6 &&
-      pz <= VEHICLE_GARAGE_POS.z + 24
+      px >= HILL_HOUSE_POS.x + 3 &&
+      px <= HILL_HOUSE_POS.x + 23 &&
+      Math.abs(pz - HILL_HOUSE_POS.z) < 2.25
+    ) {
+      return false;
+    }
+
+    // Garage pad and its three real driveway lanes. The old rectangular
+    // exclusion erased an entire hillside of grass around the cars.
+    if (
+      px >= VEHICLE_GARAGE_POS.x - 15.2 &&
+      px <= VEHICLE_GARAGE_POS.x + 15.2 &&
+      pz >= VEHICLE_GARAGE_POS.z - 7.0 &&
+      pz <= VEHICLE_GARAGE_POS.z + 7.6
+    ) {
+      return false;
+    }
+    if (
+      distanceToSegment2D(
+        px,
+        pz,
+        VEHICLE_GARAGE_POS.x + 2,
+        VEHICLE_GARAGE_POS.z + 6.5,
+        -4,
+        174,
+      ) < 2.3 ||
+      distanceToSegment2D(
+        px,
+        pz,
+        VEHICLE_GARAGE_POS.x - 6,
+        VEHICLE_GARAGE_POS.z + 6.5,
+        -78,
+        184,
+      ) < 2.1 ||
+      distanceToSegment2D(
+        px,
+        pz,
+        VEHICLE_GARAGE_POS.x + 10.5,
+        VEHICLE_GARAGE_POS.z + 1.5,
+        -6,
+        138,
+      ) < 2.0
     ) {
       return false;
     }
     return true;
   };
+
+  const isSparseCoverBiome = (biome: string): boolean =>
+    biome === 'desert' ||
+    biome === 'badlands' ||
+    biome === 'eroded_badlands' ||
+    biome === 'wooded_badlands' ||
+    biome === 'snowy_plains' ||
+    biome === 'snowy_slopes' ||
+    biome === 'ice_spikes' ||
+    biome === 'stony_shore' ||
+    biome === 'jagged_peaks' ||
+    biome === 'frozen_peaks' ||
+    biome === 'stony_peaks';
 
   // Biome -> grass species. Beaches grow leaning dune grass, savannas tall dry
   // bunch grass, highlands short alpine turf, and the rest lush meadow turf.
@@ -6392,22 +6461,52 @@ export function buildIslandWorld(
       biome === 'old_growth_pine_taiga' ||
       biome === 'old_growth_spruce_taiga' ||
       biome === 'snowy_taiga' ||
-      biome === 'grove' ||
       biome === 'snowy_plains' ||
+      biome === 'snowy_slopes' ||
+      biome === 'ice_spikes' ||
+      biome === 'grove' ||
       biome === 'mountain' ||
+      biome === 'jagged_peaks' ||
+      biome === 'frozen_peaks' ||
+      biome === 'stony_peaks' ||
       biome === 'windswept_hills' ||
       biome === 'windswept_gravelly_hills'
     ) {
       return 'alpine';
     }
+    if (
+      biome === 'desert' ||
+      biome === 'badlands' ||
+      biome === 'eroded_badlands' ||
+      biome === 'wooded_badlands' ||
+      biome === 'stony_shore'
+    ) {
+      return 'dune';
+    }
     return 'lush';
   };
 
   const grassTintForBiome = (biome: string, variant: GrassVariant, coastal: boolean): number => {
-    if (variant === 'dune') return coastal ? 0x9d9a70 : 0xa8a37c;
+    if (variant === 'dune') {
+      if (biome === 'desert') return 0xbcae72;
+      if (biome === 'badlands' || biome === 'eroded_badlands' || biome === 'wooded_badlands') {
+        return 0xad9758;
+      }
+      return coastal ? 0x9d9a70 : 0xa8a37c;
+    }
     if (variant === 'tall') return biome === 'windswept_savanna' ? 0xa9a06c : 0xbaa972;
     if (variant === 'alpine') {
-      if (biome === 'snowy_plains' || biome === 'grove') return 0xaab7ae;
+      if (
+        biome === 'snowy_plains' ||
+        biome === 'snowy_slopes' ||
+        biome === 'ice_spikes' ||
+        biome === 'jagged_peaks' ||
+        biome === 'frozen_peaks' ||
+        biome === 'stony_peaks' ||
+        biome === 'grove'
+      ) {
+        return 0xaab7ae;
+      }
       if (biome === 'snowy_taiga') return 0x8fa38f;
       if (biome === 'mountain') return 0x778a6e;
       return 0x6f8468;
@@ -6425,13 +6524,15 @@ export function buildIslandWorld(
     return 0x7d9a5a;
   };
 
-  // Sample meadow & forest patches with lush natural clustering (fast CPU gen + seamless grass carpet)
-  for (let i = 0; i < 32000 && gPlaced < grassTarget; i++) {
+  // Sample every land biome with natural clustering. The near ring is denser
+  // than the outer island so the ground around the player and shelter reads as
+  // one continuous carpet instead of isolated green islands.
+  for (let i = 0; i < 50000 && gPlaced < grassTarget; i++) {
     const a = rand() * Math.PI * 2;
     const rad =
-      i < 9500
-        ? 8 + Math.sqrt(rand()) * 275
-        : 16 + Math.sqrt(rand()) * 715;
+      i < 16500
+        ? 7 + Math.sqrt(rand()) * 305
+        : 15 + Math.sqrt(rand()) * 730;
     const ax = Math.cos(a) * rad;
     const az = Math.sin(a) * rad;
     const ay = getTerrainHeight(ax, az);
@@ -6480,7 +6581,11 @@ export function buildIslandWorld(
       biome === 'grove' ||
       biome === 'mountain' ||
       isCoastalGrassEdge;
-    if (!isVegetatedBiome) continue;
+    const isSparseCover = isSparseCoverBiome(biome);
+    if (!isVegetatedBiome && !isSparseCover) continue;
+    // Desert, badlands and snowfields carry connected but deliberately sparse
+    // dry/alpine tufts, so no biome reads as an abrupt bald patch.
+    if (isSparseCover && rand() > (biome === 'desert' ? 0.34 : 0.24)) continue;
     // Rocky highlands and snowfields carry only sparse alpine turf.
     if ((biome === 'mountain' || biome === 'grove') && rand() > 0.5) continue;
 
@@ -6495,7 +6600,7 @@ export function buildIslandWorld(
       borderVariants.push(neighborVariantB);
     }
 
-    const clumpCount = isMeadowLike ? 4 : baseVariant === 'dune' ? 2 : 3;
+    const clumpCount = isSparseCover ? 1 : isMeadowLike ? 4 : baseVariant === 'dune' ? 2 : 3;
     for (let c = 0; c < clumpCount && gPlaced < grassTarget; c++) {
       const ca = rand() * Math.PI * 2;
       const cr = c === 0 ? 0 : (baseVariant === 'tall' ? 0.52 : 0.38) + rand() * 1.5;
@@ -6581,6 +6686,78 @@ export function buildIslandWorld(
         luPlaced++;
       }
     }
+  }
+
+  // The shelter sits inside its own dense lawn ring. This fills the hilltop with
+  // the same grass species as the surrounding meadow and extends right up to the
+  // foundation, porch and garage pad, so the buildings grow out of the terrain
+  // instead of sitting on a bare exclusion zone.
+  const shelterLawnRings = [
+    { x: HILL_HOUSE_POS.x, z: HILL_HOUSE_POS.z, inner: 7.2, outer: 23, count: 2300 },
+    {
+      x: VEHICLE_GARAGE_POS.x,
+      z: VEHICLE_GARAGE_POS.z,
+      inner: 13.4,
+      outer: 29,
+      count: 980,
+    },
+  ] as const;
+  for (const ring of shelterLawnRings) {
+    let placed = 0;
+    for (let i = 0; i < ring.count * 4 && placed < ring.count; i++) {
+      const angle = rand() * Math.PI * 2;
+      const radius = ring.inner + Math.sqrt(rand()) * (ring.outer - ring.inner);
+      const px = ring.x + Math.cos(angle) * radius;
+      const pz = ring.z + Math.sin(angle) * radius;
+      if (!isClearOfStructures(px, pz)) continue;
+      const py = getTerrainHeight(px, pz);
+      if (py < 0.5) continue;
+      const variant: GrassVariant = 'lush';
+      dummy.position.set(px, py - 0.025, pz);
+      dummy.rotation.set(
+        (rand() - 0.5) * 0.2,
+        rand() * Math.PI * 2,
+        (rand() - 0.5) * 0.2,
+      );
+      const sc = 0.82 + rand() * 0.62;
+      dummy.scale.set(sc * 1.18, sc * (0.86 + rand() * 0.42), sc * 1.18);
+      dummy.updateMatrix();
+      const lawnTint = new THREE.Color(0x94a75f);
+      lawnTint.offsetHSL(
+        (rand() - 0.5) * 0.025,
+        0.03,
+        (rand() - 0.5) * 0.075,
+      );
+      pushGrass(variant, px, pz, dummy.matrix, lawnTint);
+      gPlaced++;
+      placed++;
+    }
+  }
+
+  // A curved wildflower ribbon around the porch and lawn edge.
+  let shelterFlowers = 0;
+  for (let i = 0; i < 2400 && shelterFlowers < 260; i++) {
+    const angle = rand() * Math.PI * 2;
+    const radius = 6.8 + Math.sqrt(rand()) * 12.5;
+    const fx = HILL_HOUSE_POS.x + Math.cos(angle) * radius;
+    const fz = HILL_HOUSE_POS.z + Math.sin(angle) * radius;
+    if (!isClearOfStructures(fx, fz)) continue;
+    const fy = getTerrainHeight(fx, fz);
+    if (fy < 0.6) continue;
+    dummy.position.set(fx, fy - 0.01, fz);
+    dummy.rotation.set(
+      (rand() - 0.5) * 0.2,
+      rand() * Math.PI * 2,
+      (rand() - 0.5) * 0.2,
+    );
+    const fsc = 0.86 + rand() * 0.5;
+    dummy.scale.set(fsc, fsc * (0.9 + rand() * 0.35), fsc);
+    dummy.updateMatrix();
+    const flowerTint = new THREE.Color(
+      i % 7 === 0 ? 0x93c5fd : i % 3 === 0 ? 0xfacc15 : 0xfefcf5,
+    );
+    pushToChunk(floretBuckets, fx, fz, dummy.matrix, flowerTint);
+    shelterFlowers++;
   }
 
   interface ChunkedInstancedEntry {
