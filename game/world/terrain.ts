@@ -80,6 +80,18 @@ export const VIKING_VILLAGE_POS = { x: 560, z: -260 };
 export const RESORT_CORNER_POS = { x: -480, z: 410 };
 export const RUINED_CASTLE_POS = { x: -360, z: -520 };
 
+// Louisiana mainland / Crescent City district on the island's southeast plain.
+// The city sits on a deliberately flat shelf so roads, parking decks, bayou
+// docks and vehicle ramps line up with the rendered terrain without carving.
+export const CRESCENT_CITY_POS = { x: 72, z: 430 };
+export const CRESCENT_CITY_TERMINAL_POS = { x: 72, z: 500 };
+export const CRESCENT_CITY_GARAGE_POS = { x: 34, z: 390 };
+export const CRESCENT_CITY_SAFEHOUSE_POS = { x: 120, z: 390 };
+export const CRESCENT_CITY_DOCKS_POS = { x: -40, z: 500 };
+export const CRESCENT_CITY_VAULT_POS = { x: 120, z: 468 };
+export const CRESCENT_CITY_PARKING_POS = { x: 34, z: 390 };
+export const CRESCENT_CITY_HIGHWAY_POS = { x: 178, z: 430 };
+
 export const WORLD_RADIUS = 880;
 export const PLAYABLE_MAX_RADIUS = 820;
 

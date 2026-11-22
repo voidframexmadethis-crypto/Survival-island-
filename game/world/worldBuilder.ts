@@ -3,6 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ResourceNodeKind, ResourceNodeState } from '../types';
 import { FrameBudgetQueue } from '../systems/frameBudgetQueue';
 import { WorldChunk, WorldChunkManager } from './worldChunkSystem';
+import { buildLouisianaMainland, type LouisianaMainlandHandles } from './louisianaMainland';
 import {
   CaveTerrainOpening,
   filterTerrainIndexForCaveOpenings,
@@ -207,6 +208,7 @@ export interface WorldHandles {
   eyeblossomGlowMat: THREE.MeshStandardMaterial;
   saturnRocket: SaturnVRocketHandles;
   undergroundElevator: UndergroundElevatorHandles;
+  crescentCity: LouisianaMainlandHandles;
   overworldGroup: THREE.Group;
   worldChunks: WorldChunk[];
   foliageChunks: WorldChunk[];
@@ -6808,6 +6810,16 @@ gl_Position = projectionMatrix * mvPosition;`,
     }
   };
 
+  // Louisiana mainland: Crescent City district. Built as static batching so the
+  // city adds a handful of draw calls, then merged with the same static-geometry
+  // pass as every other island landmark.
+  const crescentCity = buildLouisianaMainland();
+  overworldGroup.add(crescentCity.group);
+  for (let i = 0; i < crescentCity.colliders.length; i++) {
+    colliders.push(crescentCity.colliders[i]);
+  }
+  staticMergeTargets.push({ group: crescentCity.group });
+
   for (let i = 0; i < staticMergeTargets.length; i++) {
     const target = staticMergeTargets[i];
     mergeStaticGroupMeshes(target.group, target.protectedObjs);
@@ -7322,6 +7334,7 @@ gl_Position = projectionMatrix * mvPosition;`,
     eyeblossomGlowMat,
     saturnRocket: saturnBuilt,
     undergroundElevator,
+    crescentCity,
     overworldGroup,
     worldChunks: worldChunkManager.chunks,
     foliageChunks: worldChunkManager.foliageChunks,

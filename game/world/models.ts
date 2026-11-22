@@ -5748,6 +5748,23 @@ export function applyBackpackSkinToPlayerHandle(
   }
 }
 
+export function applyAvatarOutfit(
+  handle: RemotePlayerMeshHandle,
+  jacketHex: string,
+  pantsHex: string,
+): void {
+  const apply = (obj: THREE.Object3D) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (const material of materials) {
+      if (!(material instanceof THREE.MeshStandardMaterial)) continue;
+      if (material.userData.avatarOutfit === 'jacket') material.color.set(jacketHex);
+      else if (material.userData.avatarOutfit === 'pants') material.color.set(pantsHex);
+    }
+  };
+  handle.bodyGroup.traverse(apply);
+}
+
 export function createRemotePlayerMesh(
   name: string,
   accentHex = 0x38bdf8,
@@ -5759,6 +5776,8 @@ export function createRemotePlayerMesh(
 
   const jacketMat = new THREE.MeshStandardMaterial({ color: accentHex, roughness: 0.72 });
   const pantsMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.86 });
+  jacketMat.userData.avatarOutfit = 'jacket';
+  pantsMat.userData.avatarOutfit = 'pants';
   const bootMat = new THREE.MeshStandardMaterial({ color: 0x292524, roughness: 0.9 });
   const skinMat = new THREE.MeshStandardMaterial({ color: 0xd99b6c, roughness: 0.7 });
   const visorMat = new THREE.MeshStandardMaterial({

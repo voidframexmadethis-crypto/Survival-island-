@@ -1196,6 +1196,7 @@ export interface GameSaveData {
   clearedStructureIds?: string[];
   caveProgress?: import('./systems/caveSystem').CaveCompactSave;
   finalIsland?: import('./systems/finalIslandFeatures').FinalIslandSaveState;
+  mainland?: import('./systems/louisianaMainland').MainlandSaveState;
   dragonValleySave?: import('./systems/dragonValleySystem').DragonValleySaveData;
   vikingVillageSave?: import('./systems/vikingVillageSystem').VikingVillageSaveData;
   navigatorCompanion?: NavigatorCompanionSaveData;
@@ -1250,7 +1251,8 @@ export type ActiveModal =
   | 'underground_elevator'
   | 'car_radio'
   | 'navigator_companion'
-  | 'viking_village';
+  | 'viking_village'
+  | 'mainland';
 
 export interface NearbyInteraction {
   id: string;
@@ -1312,7 +1314,8 @@ export interface NearbyInteraction {
     | 'cave_entrance'
     | 'viking_villager'
     | 'dragon_egg'
-    | 'dragon_sanctuary';
+    | 'dragon_sanctuary'
+    | 'mainland_terminal';
   actionCategory?:
     | 'chop'
     | 'mine'
@@ -1529,6 +1532,7 @@ export interface HUDStateSnapshot {
   spaceState?: import('./systems/multiverseSpace').SpaceHudSnapshot;
   caveSummary?: import('./systems/caveSystem').CaveSummarySnapshot;
   finalIsland?: import('./systems/finalIslandFeatures').FinalIslandHudState;
+  mainland?: import('./systems/louisianaMainland').MainlandHudState;
   dragonEggs?: string[];
   vikingVillageProgress?: {
     completedQuestIds: string[];

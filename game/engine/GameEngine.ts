@@ -64,6 +64,22 @@ import {
   FlightPlayerState,
   ISLAND_TELEPORT_DESTINATIONS,
 } from '../systems/flightAndTeleportSystem';
+import {
+  LouisianaMainlandSystem,
+  MAINLAND_CHALLENGES,
+  MAINLAND_FAST_TRAVEL,
+  MAINLAND_GARAGE_PACKAGES,
+  MAINLAND_PROPERTIES,
+  MAINLAND_UPGRADES,
+  type MainlandActionResult,
+  type MainlandBuildId,
+  type MainlandFactionId,
+  type MainlandHudState,
+  type MainlandOutfitId,
+  type MainlandPropertyId,
+  type MainlandTab,
+  type MainlandUpgradeId,
+} from '../systems/louisianaMainland';
 import { sanitizeWorldAndEntities } from '../systems/worldSanitizer';
 import {
   getCosmeticImageTexture,
@@ -244,6 +260,7 @@ import { StructureEntityKind } from '../world/structureEntityModels';
 import {
   HouseStationTarget,
   RemotePlayerMeshHandle,
+  applyAvatarOutfit,
   applyBackpackSkinToPlayerHandle,
   createCampStructureModel,
   createCarcassMesh,
@@ -537,6 +554,7 @@ export interface EngineCallbacks {
       | 'navigator_companion'
       | 'dragon_sanctuary'
       | 'viking_village'
+      | 'mainland'
     >,
     structureId?: string,
   ) => void;
@@ -654,6 +672,8 @@ export class GameEngine {
   public readonly worldPerfManager = new WorldPerformanceManager();
   private readonly islandCaveSystem = new IslandCaveSystem();
   private finalIslandFeatures!: FinalIslandFeatures;
+  private mainland = new LouisianaMainlandSystem();
+  private mainlandStuntCooldown = 0;
   private beeGate: BeeGateHandle | null = null;
   private beeGateAnchor: THREE.Group | null = null;
   private beeReturnGate: BeeGateHandle | null = null;
@@ -4708,6 +4728,8 @@ export class GameEngine {
     this.syncFinalIslandCaves();
     this.finalIslandFeatures.seedWildBees();
     this.ensureBeeGate();
+    this.mainland.reset();
+    this.applyMainlandOutfitVisual();
     this.lastCaveStreamX = -9999;
     this.lastCaveStreamZ = -9999;
     this.dragons = DRAGON_VALLEY_SYSTEM.resetToStarter();
@@ -4916,6 +4938,8 @@ export class GameEngine {
     this.finalIslandFeatures.hydrate(save.finalIsland);
     this.finalIslandFeatures.seedWildBees();
     this.ensureBeeGate();
+    this.mainland.hydrate(save.mainland);
+    this.applyMainlandOutfitVisual();
     this.lastCaveStreamX = -9999;
     this.lastCaveStreamZ = -9999;
     this.dragons = DRAGON_VALLEY_SYSTEM.importSave(save.dragonValleySave);
@@ -5893,6 +5917,7 @@ export class GameEngine {
       caveProgress:
         this.worldType === 'island' ? caveSystem.exportCompactState() : undefined,
       finalIsland: this.finalIslandFeatures.serialize(),
+      mainland: this.mainland.serialize(),
       dragonValleySave: DRAGON_VALLEY_SYSTEM.exportSave(this.dragons),
       vikingVillageSave: vikingVillage.exportSave(),
       navigatorCompanion: this.navigatorCompanion?.exportState(),
@@ -7302,6 +7327,23 @@ export class GameEngine {
     }
     if (near && near.kind === 'underground_elevator') {
       this.openUndergroundElevator();
+      return;
+    }
+    if (near && near.kind === 'mainland_terminal') {
+      const rawTab = near.id.startsWith('mainland_') ? near.id.slice('mainland_'.length) : 'district';
+      const tab = (
+        rawTab === 'garage' ||
+        rawTab === 'heat' ||
+        rawTab === 'safehouse' ||
+        rawTab === 'market' ||
+        rawTab === 'transit' ||
+        rawTab === 'outfitter' ||
+        rawTab === 'challenges'
+          ? rawTab
+          : 'district'
+      ) as MainlandTab;
+      this.openMainland(tab);
+      this.actionCooldown = 0.4;
       return;
     }
     if (near && near.kind === 'island_ufo') {
@@ -11961,6 +12003,89 @@ export class GameEngine {
       return nearHouseStation;
     }
 
+    // Louisiana mainland terminals. Each one opens the city network on the
+    // matching tab, so the physical district and the UI stay in sync.
+    const city = this.world?.crescentCity;
+    if (city && this.worldType === 'island') {
+      const mk = (
+        id: string,
+        label: string,
+        sublabel: string,
+        pos: THREE.Vector3,
+        d: number,
+      ): NearbyInteraction => ({
+        id,
+        label,
+        sublabel,
+        kind: 'mainland_terminal',
+        actionCategory: 'use',
+        distance: d,
+        targetX: pos.x,
+        targetY: pos.y,
+        targetZ: pos.z,
+      });
+      let d = Math.hypot(city.terminalPos.x - this.playerX, city.terminalPos.z - this.playerZ);
+      if (d < 6.4) {
+        return mk(
+          'mainland_terminal',
+          'Use Crescent City Terminal',
+          'Jobs · fast travel · street heat · property market',
+          city.terminalPos,
+          d,
+        );
+      }
+      d = Math.hypot(city.garagePos.x - this.playerX, city.garagePos.z - this.playerZ);
+      if (d < 6.6) {
+        return mk(
+          'mainland_garage',
+          'Enter Bayou Customs Garage',
+          'Lowriders · DONKs · SLABs · hydraulics & subwoofer builds',
+          city.garagePos,
+          d,
+        );
+      }
+      d = Math.hypot(city.safehousePos.x - this.playerX, city.safehousePos.z - this.playerZ);
+      if (d < 5.8) {
+        return mk(
+          'mainland_safehouse',
+          'Enter Magazine Street Safehouse',
+          'Stash locker · weapon workbench · lose police heat',
+          city.safehousePos,
+          d,
+        );
+      }
+      d = Math.hypot(city.docksPos.x - this.playerX, city.docksPos.z - this.playerZ);
+      if (d < 6.2) {
+        return mk(
+          'mainland_transit',
+          'Use Riverfront Airboat Dock',
+          'Cross to the island · smuggler market · bayou transit',
+          city.docksPos,
+          d,
+        );
+      }
+      d = Math.hypot(city.vaultPos.x - this.playerX, city.vaultPos.z - this.playerZ);
+      if (d < 5.8) {
+        return mk(
+          'mainland_safehouse',
+          'Enter Flood Tunnel Vault',
+          'Secret bunker · high-tier loot · escape tunnel',
+          city.vaultPos,
+          d,
+        );
+      }
+      d = Math.hypot(city.parkingPos.x - this.playerX, city.parkingPos.z - this.playerZ);
+      if (d < 6.4) {
+        return mk(
+          'mainland_district',
+          'Use Rooftop Parking Garage',
+          'Stunt ramps · vehicle meets · rooftop view',
+          city.parkingPos,
+          d,
+        );
+      }
+    }
+
     const equippedId = this.getEquippedItemId();
     const equippedDef = equippedId ? ITEMS[equippedId] : null;
 
@@ -14841,6 +14966,14 @@ export class GameEngine {
       }
     }
 
+    // Feed island progress into the mainland challenge board without adding
+    // any work to the render loop (HUD emission is already throttled).
+    this.mainland.setCrossWorldProgress(
+      bossesDefeatedCount,
+      this.structures.length,
+      Math.max(0, Math.floor((this.dayCount - 1) / 7)),
+    );
+
     this.callbacks.onHudUpdate({
       vitals: { ...this.vitals },
       dayCount: this.dayCount,
@@ -14899,6 +15032,7 @@ export class GameEngine {
       selectedPortalDimension: this.selectedPortalDimension,
       visitedDimensions: this.cachedVisitedDimensions,
       finalIsland: this.finalIslandFeatures.getHudSnapshot(),
+      mainland: this.mainland.getHudSnapshot(this.dayCount),
       unlockedGildedPaint: this.unlockedGildedPaint,
       crystalArmorHp: this.crystalArmorHp,
       activePortals: this.activePortals.map((p) => ({ ...p })),
@@ -15200,6 +15334,347 @@ export class GameEngine {
     if (this.currentDimension === target) return;
     this.beeGateCooldown = 3;
     this.switchDimension(target);
+  }
+
+  // ---- Louisiana mainland / Crescent City ---------------------------------
+
+  private updateMainland(dt: number): void {
+    let speedKmh = 0;
+    let driftMps = 0;
+    let driving = false;
+    let activeV: ModularVehicleData | null = null;
+    if (this.activeVehicleId) {
+      for (let i = 0; i < this.vehicles.length; i++) {
+        const v = this.vehicles[i];
+        if (v.id !== this.activeVehicleId) continue;
+        driving = true;
+        activeV = v;
+        speedKmh = Math.hypot(v.vx, v.vz) * 3.6;
+        // Lateral velocity relative to the car's heading is the real slip angle
+        // already produced by the vehicle solver; score that instead of faking drift.
+        driftMps = Math.abs(v.vx * Math.cos(v.yaw) + v.vz * Math.sin(v.yaw));
+        break;
+      }
+    }
+    this.mainland.update(dt, this.playerX, this.playerZ, speedKmh, driftMps, driving, this.dayCount);
+
+    if (this.mainlandStuntCooldown > 0) {
+      this.mainlandStuntCooldown = Math.max(0, this.mainlandStuntCooldown - dt);
+    }
+    const ramps = this.world?.crescentCity?.stuntRamps;
+    if (activeV && ramps && this.mainlandStuntCooldown <= 0 && speedKmh > 38) {
+      for (let i = 0; i < ramps.length; i++) {
+        const ramp = ramps[i];
+        const dx = activeV.x - ramp.x;
+        const dz = activeV.z - ramp.z;
+        if (Math.abs(dx) > ramp.width * 0.62 || Math.abs(dz) > ramp.depth * 0.62) continue;
+        activeV.vy = Math.max(activeV.vy, Math.min(10.5, speedKmh * 0.17));
+        this.mainlandStuntCooldown = 2.8;
+        this.sound.playArmorDeflect();
+        this.spawnParticles(activeV.x, activeV.y + 0.8, activeV.z, 0xfbbf24, 12);
+        this.toast(`Stunt jump! ${ramp.label} · ${Math.round(speedKmh)} km/h`, 'discovery');
+        break;
+      }
+    }
+  }
+
+  private applyMainlandOutfitVisual(): void {
+    if (!this.localPlayerHandle) return;
+    const outfit = this.mainland.getOutfit();
+    applyAvatarOutfit(this.localPlayerHandle, outfit.jacketHex, outfit.pantsHex);
+  }
+
+  private applyMainlandHotbar(items: readonly ItemId[]): void {
+    for (let slot = 0; slot < 9; slot++) {
+      const itemId = items[slot];
+      if (itemId && this.getItemCount(itemId) > 0) {
+        this.assignHotbarSlot(slot, itemId);
+      } else {
+        this.assignHotbarSlot(slot, null);
+      }
+    }
+    this.selectHotbarSlot(0);
+  }
+
+  public getMainlandSnapshot(): MainlandHudState {
+    return this.mainland.getHudSnapshot(this.dayCount);
+  }
+
+  private mainlandToast(result: MainlandActionResult): void {
+    this.toast(result.message, result.ok ? 'discovery' : 'warning');
+    if (result.ok) this.sound.playCraftSuccess();
+    this.emitHud();
+  }
+
+  public mainlandStartHeatRun(level: number): MainlandActionResult {
+    const result = this.mainland.startPursuit(level);
+    this.mainlandToast(result);
+    return result;
+  }
+
+  public mainlandAttemptTakedown(): MainlandActionResult {
+    const speed = this.currentSpeedMps * 3.6;
+    const result = this.mainland.attemptTakedown(speed);
+    if (result.ok) {
+      this.sound.playArmorDeflect();
+      this.spawnParticles(this.playerX, this.playerY + 1, this.playerZ, 0xfacc15, 10);
+    }
+    this.mainlandToast(result);
+    return result;
+  }
+
+  public mainlandAttemptEscape(): MainlandActionResult {
+    const result = this.mainland.attemptEscape();
+    this.mainlandToast(result);
+    return result;
+  }
+
+  public mainlandPurchaseProperty(id: MainlandPropertyId): MainlandActionResult {
+    const property = MAINLAND_PROPERTIES.find((p) => p.id === id);
+    if (!property) return { ok: false, message: 'Unknown property.' };
+    if (this.mainland.ownsProperty(id)) {
+      const result = this.mainland.setActiveSafehouse(id);
+      this.mainlandToast(result);
+      return result;
+    }
+    if (this.coins < property.price) {
+      const result = {
+        ok: false,
+        message: `Need ${property.price} coins for ${property.name} (you have ${this.coins}).`,
+      };
+      this.mainlandToast(result);
+      return result;
+    }
+    const result = this.mainland.purchaseProperty(id);
+    if (result.ok) this.coins -= property.price;
+    this.mainlandToast(result);
+    return result;
+  }
+
+  public mainlandSetActiveSafehouse(id: MainlandPropertyId): MainlandActionResult {
+    const result = this.mainland.setActiveSafehouse(id);
+    this.mainlandToast(result);
+    return result;
+  }
+
+  public mainlandClaimIncome(): MainlandActionResult {
+    const result = this.mainland.claimIncome(this.dayCount);
+    if (result.ok) this.coins += result.amount;
+    this.mainlandToast({ ok: result.ok, message: result.message });
+    return { ok: result.ok, message: result.message };
+  }
+
+  public mainlandBuyUpgrade(id: MainlandUpgradeId): MainlandActionResult {
+    const upgrade = MAINLAND_UPGRADES.find((u) => u.id === id);
+    if (!upgrade) return { ok: false, message: 'Unknown upgrade.' };
+    if (this.mainland.hasUpgrade(id)) {
+      const result = { ok: false, message: `${upgrade.name} is already installed.` };
+      this.mainlandToast(result);
+      return result;
+    }
+    if (this.coins < upgrade.price) {
+      const result = {
+        ok: false,
+        message: `Need ${upgrade.price} coins for ${upgrade.name} (you have ${this.coins}).`,
+      };
+      this.mainlandToast(result);
+      return result;
+    }
+    const result = this.mainland.buyUpgrade(id);
+    if (result.ok) {
+      this.coins -= upgrade.price;
+      if (id === 'kevlar_liners') {
+        this.vitals.maxHealth = Math.max(this.vitals.maxHealth, 120);
+        this.vitals.health = Math.min(this.vitals.maxHealth, this.vitals.health + 20);
+      }
+      if (id === 'armory_bench') {
+        this.addItem('ammo', 30, false);
+      }
+    }
+    this.mainlandToast(result);
+    return result;
+  }
+
+  private findMainlandTuneVehicle(): ModularVehicleData | null {
+    if (this.activeVehicleId) {
+      const active = this.vehicles.find((v) => v.id === this.activeVehicleId);
+      if (active && active.preset !== 'steam_boat') return active;
+    }
+    const garage = this.world?.crescentCity?.garagePos;
+    if (!garage) return null;
+    let best: ModularVehicleData | null = null;
+    let bestDistSq = 34 * 34;
+    for (let i = 0; i < this.vehicles.length; i++) {
+      const v = this.vehicles[i];
+      if (v.preset === 'steam_boat') continue;
+      const dx = v.x - garage.x;
+      const dz = v.z - garage.z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        best = v;
+      }
+    }
+    return best;
+  }
+
+  public mainlandApplyGaragePackage(id: MainlandBuildId): MainlandActionResult {
+    const pkg = MAINLAND_GARAGE_PACKAGES.find((p) => p.id === id);
+    if (!pkg) return { ok: false, message: 'Unknown garage package.' };
+    const owned = this.mainland.ownedPackages.includes(id);
+    if (!owned && this.coins < pkg.price) {
+      const result = {
+        ok: false,
+        message: `Need ${pkg.price} coins for ${pkg.name} (you have ${this.coins}).`,
+      };
+      this.mainlandToast(result);
+      return result;
+    }
+    const vehicle = this.findMainlandTuneVehicle();
+    if (!vehicle && id !== 'stock') {
+      const result = {
+        ok: false,
+        message: 'Park a car at Bayou Customs or enter a vehicle before tuning.',
+      };
+      this.mainlandToast(result);
+      return result;
+    }
+
+    const result = this.mainland.buyGaragePackage(id);
+    if (!result.ok) {
+      this.mainlandToast(result);
+      return result;
+    }
+    if (!owned) this.coins -= pkg.price;
+
+    if (vehicle) {
+      vehicle.trunkBassEnabled = pkg.trunkBassEnabled ?? false;
+      vehicle.hasAirbagSuspension = pkg.airbagSuspension ?? false;
+      if (id === 'stock') {
+        vehicle.hydraulicHop = false;
+        vehicle.hasAirbagSuspension = false;
+        vehicle.trunkBassEnabled = false;
+        vehicle.turboBoost = 1;
+        vehicle.underglowEnabled = false;
+        vehicle.suspensionOffset = -0.06;
+        vehicle.wheelScale = 1;
+      }
+      this.customizeVehicle(vehicle.id, {
+        paintColor: pkg.paintColor ?? vehicle.paintColor,
+        rimColor: pkg.rimColor ?? vehicle.rimColor,
+        suspensionOffset: pkg.suspensionOffset ?? vehicle.suspensionOffset,
+        wheelScale: pkg.wheelScale ?? vehicle.wheelScale,
+        hydraulicHop: pkg.hydraulicHop ?? false,
+        turboBoost: pkg.turboBoost ?? 1,
+        underglowColor: pkg.underglowColor,
+        underglowEnabled: pkg.underglowEnabled,
+      });
+      this.toast(`${pkg.name} applied to ${vehicle.name}.`, 'craft');
+    }
+    this.mainlandToast(result);
+    return result;
+  }
+
+  public mainlandClaimSafehouseSupplies(): MainlandActionResult {
+    const result = this.mainland.claimSafehouseSupplies(this.dayCount);
+    if (result.ok) {
+      this.addItem('ammo', 30, false);
+      this.addItem('roasted_meat', 2, false);
+      this.addItem('filtered_water_bottle', 2, false);
+    }
+    this.mainlandToast(result);
+    return result;
+  }
+
+  public mainlandRunFactionJob(id: MainlandFactionId): MainlandActionResult {
+    const result = this.mainland.runFactionJob(id);
+    if (result.ok) this.coins += 45;
+    this.mainlandToast(result);
+    return result;
+  }
+
+  public mainlandFastTravel(pointId: string): MainlandActionResult {
+    const point = MAINLAND_FAST_TRAVEL.find((p) => p.id === pointId);
+    if (!point) return { ok: false, message: 'Unknown fast-travel point.' };
+    if (!this.mainland.isPointUnlocked(point.id)) {
+      const result = { ok: false, message: 'Fast-travel point locked. Buy the property or map.' };
+      this.mainlandToast(result);
+      return result;
+    }
+    if (this.activeVehicleId) this.exitVehicle();
+    const groundY = Math.max(
+      getTerrainHeight(point.x, point.z),
+      getWaterLevelAt(point.x, point.z) + 0.4,
+    );
+    this.seatedState = null;
+    this.vaultTimer = 0;
+    this.playerX = point.x;
+    this.playerY = groundY + 2.2;
+    this.playerZ = point.z;
+    this.playerVelY = 0;
+    this.grounded = false;
+    this.isSwimming = false;
+    this.markExploredAroundPlayer();
+    this.nearbyInteraction = this.findNearbyInteraction();
+    this.updateCamera();
+    const result = { ok: true, message: `Fast travel: ${point.name}.` };
+    this.mainlandToast(result);
+    return result;
+  }
+
+  public mainlandBoardTransit(destination: 'island' | 'city'): MainlandActionResult {
+    if (destination === 'island') {
+      const result = this.mainlandFastTravel('island_landing');
+      if (result.ok) {
+        this.mainland.recordBoatTrip();
+        this.toast('Airboat crossing complete — island landing reached.', 'discovery');
+      }
+      return result;
+    }
+    const result = this.mainlandFastTravel('riverfront_dock');
+    if (result.ok) {
+      this.mainland.recordBoatTrip();
+      this.toast('Airboat returned to the Crescent City riverfront.', 'discovery');
+    }
+    return result;
+  }
+
+  public mainlandEquipOutfit(id: MainlandOutfitId, applyLoadout = false): MainlandActionResult {
+    const result = this.mainland.setOutfit(id);
+    if (result.ok) {
+      this.applyMainlandOutfitVisual();
+      if (applyLoadout) {
+        const outfit = this.mainland.getOutfit();
+        this.applyMainlandHotbar(outfit.hotbar);
+      }
+    }
+    this.mainlandToast(result);
+    return result;
+  }
+
+  public mainlandClaimChallenge(id: string): MainlandActionResult {
+    const challenge = MAINLAND_CHALLENGES.find((c) => c.id === id);
+    if (!challenge) return { ok: false, message: 'Unknown challenge.' };
+    const result = this.mainland.claimChallenge(id);
+    if (result.ok) this.coins += challenge.rewardCoins;
+    this.mainlandToast(result);
+    return result;
+  }
+
+  public mainlandLootVault(): MainlandActionResult {
+    const result = this.mainland.claimVaultLoot(this.dayCount);
+    if (result.ok) {
+      this.addItem('ammo', 40, false);
+      this.addItem('diamond_crystal', 2, false);
+      this.addItem('emerald', 3, false);
+      this.toast('Vault cache looted: munitions, emeralds and a diamond crystal.', 'discovery');
+    }
+    this.mainlandToast(result);
+    return result;
+  }
+
+  public openMainland(tab: MainlandTab = 'district'): void {
+    this.callbacks.onOpenStation('mainland', `mainland_${tab}`);
   }
 
   private updateFinalIslandFeatures(dt: number): void {
@@ -15574,6 +16049,7 @@ export class GameEngine {
       this.updateCaveStreaming(dt);
     }
     this.updateFinalIslandFeatures(dt);
+    this.updateMainland(dt);
     if (this.mode === 'playing' || this.remotePlayers.size > 0 || this.p2p?.connected) {
       this.updateMultiplayer(dt);
     }

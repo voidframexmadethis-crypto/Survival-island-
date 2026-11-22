@@ -10,6 +10,7 @@ import {
   CAVE_POS,
   CHERRY_GROVE_POS,
   CORAL_REEF_POS,
+  CRESCENT_CITY_POS,
   DEAD_OAK_POS,
   DESERT_PYRAMID_POS,
   DESERT_VILLAGE_POS,
@@ -142,6 +143,7 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
             const dAutumn = Math.hypot(wx - AUTUMN_GROVE_POS.x, wz - AUTUMN_GROVE_POS.z);
             const dSwamp = Math.hypot(wx - SWAMP_POS.x, wz - SWAMP_POS.z);
             const dWheat = Math.hypot(wx - WHEATFIELD_POS.x, wz - WHEATFIELD_POS.z);
+            const dCrescent = Math.hypot(wx - CRESCENT_CITY_POS.x, wz - CRESCENT_CITY_POS.z);
             const inHouse =
               Math.abs(wx - HILL_HOUSE_POS.x) < 5.6 &&
               Math.abs(wz - HILL_HOUSE_POS.z) < 4.6;
@@ -153,6 +155,11 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
               r = 165;
               g = 96;
               b = 58;
+            } else if (dCrescent < 112) {
+              // Crescent City concrete grid.
+              r = 71;
+              g = 72;
+              b = 68;
             } else if (inGarage) {
               r = 100;
               g = 116;
@@ -421,6 +428,7 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
         { label: 'Farmer Market', pos: FARMER_POS, color: '#4ade80' },
         { label: 'Hilltop House', pos: HILL_HOUSE_POS, color: '#fb923c' },
         { label: 'Vehicle Garage', pos: VEHICLE_GARAGE_POS, color: '#38bdf8' },
+        { label: 'Crescent City', pos: CRESCENT_CITY_POS, color: '#fbbf24' },
         { label: 'Azure Lake', pos: LAKE_CENTER, color: '#2dd4bf' },
         { label: 'Trial Chambers', pos: TRIAL_CHAMBERS_POS, color: '#ea580c' },
         { label: 'Woodland Mansion', pos: WOODLAND_MANSION_POS, color: '#78350f' },

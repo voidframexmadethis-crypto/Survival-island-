@@ -141,6 +141,8 @@ import { ExchangeModal } from './ExchangeModal';
 import { PayhipMarketplaceModal } from './PayhipMarketplaceModal';
 import { BlankPhoneMarketplaceModal } from './BlankPhoneMarketplaceModal';
 import { NavigatorCompanionModal } from './NavigatorCompanionModal';
+import { LouisianaMainlandModal } from './LouisianaMainlandModal';
+import type { MainlandTab } from '@/game/systems/louisianaMainland';
 import {
   CustomPhoneMarketplaceState,
   VaultPayhipState,
@@ -161,6 +163,22 @@ import { SkinCatalogItem } from '@/game/data/exchangeCatalog';
 import { EcosystemSimulationData } from '@/game/systems/livingEcosystemSystem';
 import { DragonCompanion } from '@/game/systems/dragonValleySystem';
 import { UI_LAYOUT, getSafeHudLayoutMetrics } from '@/game/systems/caveSystem';
+
+function mainlandTabFromId(id?: string): MainlandTab {
+  const raw = id?.startsWith('mainland_') ? id.slice('mainland_'.length) : 'district';
+  if (
+    raw === 'garage' ||
+    raw === 'heat' ||
+    raw === 'safehouse' ||
+    raw === 'market' ||
+    raw === 'transit' ||
+    raw === 'outfitter' ||
+    raw === 'challenges'
+  ) {
+    return raw;
+  }
+  return 'district';
+}
 
 function formatTimePhase(t: number): string {
   if (t < 0.2 || t >= 0.84) return 'Night';
@@ -184,6 +202,7 @@ export function SurvivalGameClient() {
 
   const [screen, setScreen] = useState<'menu' | 'playing'>('menu');
   const [engineReady, setEngineReady] = useState(false);
+  const [engineInstance, setEngineInstance] = useState<GameEngine | null>(null);
   const launchPendingRef = useRef(false);
   const [currentSlotId, setCurrentSlotId] = useState<string>('slot_1');
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
@@ -644,6 +663,12 @@ export function SurvivalGameClient() {
         },
         onToast: pushToast,
         onOpenStation: (station, structureId) => {
+          if (station === 'mainland') {
+            setActiveStationStructureId(structureId);
+            setActiveModal('mainland');
+            engine?.setMode('paused');
+            return;
+          }
           if (station === 'underground_elevator') {
             // Strictly clears any car menu and opens ONLY the elevator computer
             setActiveStationStructureId(structureId);
@@ -702,6 +727,7 @@ export function SurvivalGameClient() {
     if (!engine) return;
     const bootedEngine = engine;
     engineRef.current = bootedEngine;
+    setEngineInstance(bootedEngine);
     clearErrId = window.requestAnimationFrame(() => {
       setWebglError(null);
       setEngineReady(true);
@@ -730,6 +756,7 @@ export function SurvivalGameClient() {
       if (clearErrId) window.cancelAnimationFrame(clearErrId);
       engine?.dispose();
       engineRef.current = null;
+      setEngineInstance(null);
       mountEl.innerHTML = '';
     };
   }, [pushToast, webglRetryNonce]);
@@ -861,6 +888,10 @@ export function SurvivalGameClient() {
           engineRef.current?.toggleMicMute();
         } else if (e.code === 'KeyN') {
           setActiveModal('map');
+          engineRef.current?.setMode('paused');
+        } else if (e.code === 'KeyY') {
+          setActiveStationStructureId('mainland_district');
+          setActiveModal('mainland');
           engineRef.current?.setMode('paused');
         } else if (e.code === 'KeyJ') {
           setActiveModal('missions');
@@ -1822,6 +1853,46 @@ export function SurvivalGameClient() {
                         </button>
                       )}
                     </div>
+                  )}
+
+                  {hud.mainland && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveStationStructureId('mainland_district');
+                        setActiveModal('mainland');
+                        engineRef.current?.setMode('paused');
+                      }}
+                      className="pointer-events-auto w-full text-left rounded border border-amber-500/45 bg-gradient-to-r from-stone-950 to-amber-950/50 px-2 py-1 text-[10px] space-y-0.5 hover:border-amber-400/80 transition"
+                      title="Open Crescent City network (Y)"
+                    >
+                      <div className="flex items-center justify-between gap-1 font-bold uppercase tracking-wide text-amber-200">
+                        <span className="flex items-center gap-1">
+                          <Navigation className="w-3 h-3 text-amber-300" />
+                          Crescent City
+                        </span>
+                        <span className="flex items-center gap-0.5">
+                          {[0, 1, 2, 3, 4].map((i) => (
+                            <span
+                              key={i}
+                              className={`h-1.5 w-1.5 rounded-full ${
+                                i < hud.mainland!.heat
+                                  ? 'bg-amber-400 shadow-[0_0_5px_rgba(251,191,36,0.7)]'
+                                  : 'bg-stone-700'
+                              }`}
+                            />
+                          ))}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-1 text-stone-300">
+                        <span className="truncate">{hud.mainland.cityTier}</span>
+                        <span className="font-mono-tabular text-[9px] text-amber-300/90">
+                          {hud.mainland.pursuitActive
+                            ? `PURSUIT ${hud.mainland.pursuitUnits}`
+                            : `${hud.mainland.ownedProperties.length}/4 PROP`}
+                        </span>
+                      </div>
+                    </button>
                   )}
 
                   {/* Optional Collapsible Extra Telemetry */}
@@ -3939,6 +4010,16 @@ export function SurvivalGameClient() {
         />
       )}
 
+      {activeModal === 'mainland' && hud && engineInstance && (
+        <LouisianaMainlandModal
+          engine={engineInstance}
+          hud={hud}
+          initialTab={mainlandTabFromId(activeStationStructureId)}
+          onClose={closeModal}
+          onOpenIslandFeature={(modal) => openModal(modal)}
+        />
+      )}
+
       {activeModal === 'navigator_companion' &&
         hud?.navigatorCompanion &&
         !hud.navigatorCompanion.gone && (
@@ -4548,6 +4629,17 @@ export function SurvivalGameClient() {
               >
                 <Car className="w-5 h-5 text-amber-400 shrink-0" />
                 <span>Vehicle Garage</span>
+              </button>
+              <button
+                onClick={() => {
+                  setActiveStationStructureId('mainland_district');
+                  setActiveModal('mainland');
+                  engineRef.current?.setMode('paused');
+                }}
+                className="p-3.5 rounded-xl bg-amber-950/80 hover:bg-amber-500 hover:text-stone-950 border border-amber-500/40 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <Navigation className="w-5 h-5 text-amber-300 shrink-0" />
+                <span>Crescent City</span>
               </button>
               {hud?.worldType !== 'flat' && (
                 <button
