@@ -83,6 +83,16 @@ export function CarRadioModal({
   });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const quarterPanelRef = useRef<HTMLDivElement | null>(null);
+  const autoCloseTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (autoCloseTimerRef.current !== null) {
+        window.clearTimeout(autoCloseTimerRef.current);
+        autoCloseTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     CAR_RADIO_TRUNK_SYSTEM.configureForCar(car);
@@ -149,8 +159,18 @@ export function CarRadioModal({
       fileInputRef.current?.click();
       return;
     }
+    const wasPlaying = CABIN_BASS_AND_FIRST_PERSON.stereoPlaying;
     const playing = CABIN_BASS_AND_FIRST_PERSON.togglePlay(car);
     setIsPlaying(playing);
+    // Starting the stereo should put the player back in the driver's seat
+    // instead of leaving the game paused behind the radio screen.
+    if (playing && !wasPlaying) {
+      if (autoCloseTimerRef.current !== null) {
+        window.clearTimeout(autoCloseTimerRef.current);
+        autoCloseTimerRef.current = null;
+      }
+      onClose();
+    }
   };
 
   const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -168,6 +188,17 @@ export function CarRadioModal({
     setCustomTrackName(label);
     setIsPlaying(true);
     e.target.value = '';
+    // Let the first buffer start, then return to gameplay with the track
+    // playing. File-decode failures keep the modal open so the error is shown.
+    autoCloseTimerRef.current = window.setTimeout(() => {
+      autoCloseTimerRef.current = null;
+      if (
+        CABIN_BASS_AND_FIRST_PERSON.stereoPlaying &&
+        !CABIN_BASS_AND_FIRST_PERSON.customTrackError
+      ) {
+        onClose();
+      }
+    }, 800);
   };
 
   const handleVolumeChange = (nextVol: number) => {

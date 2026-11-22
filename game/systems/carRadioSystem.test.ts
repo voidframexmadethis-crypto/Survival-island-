@@ -287,7 +287,7 @@ test('setupCarAudio routes through HRTF PannerNode with 100Hz bass, 48Hz sub fil
     assert.ok(Math.abs(handles.sub.gain.value - 5 * 1.5) < 1e-6);
     assert.equal(handles.analyser.fftSize, 2048);
     assert.equal(handles.analyser.smoothingTimeConstant, 0.78);
-    assert.ok(Math.abs(handles.subwoofer.subGain.gain.value - Math.min(1, 0.34 * 1.5)) < 1e-6);
+    assert.ok(Math.abs(handles.subwoofer.subGain.gain.value - Math.min(1, 0.42 * 1.5)) < 1e-6);
 
     assert.equal(handles.panner.panningModel, 'HRTF');
     assert.equal(handles.panner.distanceModel, 'inverse');

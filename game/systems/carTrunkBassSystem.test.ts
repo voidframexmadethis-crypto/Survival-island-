@@ -7,6 +7,7 @@ interface MockParam {
   setTargetAtTime: (value: number, start: number, constant: number) => void;
   setValueAtTime: (value: number, start: number) => void;
   exponentialRampToValueAtTime: (value: number, end: number) => void;
+  cancelScheduledValues: (start: number) => void;
 }
 
 function makeParam(value = 0): MockParam {
@@ -21,6 +22,7 @@ function makeParam(value = 0): MockParam {
     exponentialRampToValueAtTime(next) {
       this.value = next;
     },
+    cancelScheduledValues() {},
   };
 }
 
@@ -149,14 +151,14 @@ function makeMockGraph() {
   return { ctx, filters, compressors, analysers, gains, sources, connections };
 }
 
-test('averageSubBassBins isolates the 20-140 Hz analyser window', () => {
+test('averageSubBassBins isolates the 40-170 Hz analyser window', () => {
   const bins = new Uint8Array(64);
   bins[0] = 255;
   bins[1] = 128;
   bins[2] = 64;
   bins[3] = 0;
   bins[7] = 255;
-  assert.ok(Math.abs(averageSubBassBins(bins) - (128 + 64) / (6 * 255)) < 1e-6);
+  assert.ok(Math.abs(averageSubBassBins(bins) - (128 + 64) / (3 * 255)) < 1e-6);
 });
 
 test('attachGraph builds the 58 Hz trunk DSP without a second media source', () => {
@@ -190,8 +192,11 @@ test('attachGraph builds the 58 Hz trunk DSP without a second media source', () 
   assert.equal(cabin.type, 'lowpass');
   assert.equal(graph.compressors[0].threshold.value, -14);
   assert.equal(graph.compressors[0].ratio.value, 8);
-  assert.equal(graph.analysers[0].fftSize, 2048);
+  assert.equal(graph.analysers[0].fftSize, 1024);
   assert.equal(graph.analysers[0].smoothingTimeConstant, 0.65);
+  // A single looping rattle voice is created up front, not per hit.
+  assert.equal(graph.sources.length, 1);
+  assert.equal(graph.sources[0].started, true);
 
   // The existing radio source bus feeds only the new DSP, and the DSP returns
   // into the existing cabin chain instead of opening another destination.
@@ -215,24 +220,24 @@ test('step converts sub-bass hits into rattle bursts and respects proximity', ()
 
   system.step(true, 0, true);
   assert.equal(system.bassEnergy, 1);
+  assert.equal(system.rattleBursts, 1);
   assert.equal(graph.sources.length, 1);
 
   // Outside the 14 m near field, a hit must not rattle the trunk.
   graph.ctx.currentTime = 2;
   system.step(false, 20, true);
-  assert.equal(graph.sources.length, 1);
+  assert.equal(system.rattleBursts, 1);
 
-  // Once inside again, the next hit after the 55 ms cap triggers.
+  // Once inside again, the next hit after the 55 ms cap retriggers the same voice.
   graph.ctx.currentTime = 2.1;
   system.step(true, 0, true);
-  assert.equal(graph.sources.length, 2);
-  assert.equal(graph.sources[1].started, true);
-  assert.equal(graph.sources[1].stopped, true);
+  assert.equal(system.rattleBursts, 2);
+  assert.equal(graph.sources.length, 1);
 
   // Radio off decays energy and does not create more rattle.
   graph.ctx.currentTime = 3;
   system.step(true, 0, false);
   assert.ok(system.bassEnergy > 0 && system.bassEnergy < 1);
-  assert.equal(graph.sources.length, 2);
+  assert.equal(system.rattleBursts, 2);
   system.dispose();
 });

@@ -20356,17 +20356,10 @@ export class GameEngine {
     CABIN_BASS_AND_FIRST_PERSON.setBassBoost(
       Boolean(activeV && this.isOldSchoolVehicle(activeV) && activeV.trunkBassEnabled),
     );
-    const radioCarForSample = activeV ?? radioSourceV;
-    const radioSample =
-      radioCarForSample && this.isOldSchoolVehicle(radioCarForSample)
-        ? CABIN_BASS_AND_FIRST_PERSON.sampleBassAndChestThump(
-            this.toRadioCarDescriptor(radioCarForSample),
-          )
-        : { bassLevel: 0, chestThump: 0, trunkPump: 0 };
-
     // The dedicated trunk stage has its own 58 Hz shelf and post-compressor
     // analyser. It shares the radio context/source and feeds the slab body
-    // flex, rattle, and cabin pressure shake.
+    // flex, rattle, and cabin pressure shake. Using its single FFT here also
+    // avoids a second full analyser pass on the 60 Hz gameplay loop.
     const trunkBass = CABIN_BASS_AND_FIRST_PERSON.trunkBassSystem;
     let liveTrunkEnergy = 0;
     let liveTrunkPressure = 0;
@@ -20396,12 +20389,10 @@ export class GameEngine {
     }
 
     const effectiveRadioTrunk =
-      radioSpatialVolume > 0.01
-        ? Math.max(radioSample.trunkPump * radioSpatialVolume, liveTrunkEnergy)
-        : 0;
+      radioSpatialVolume > 0.01 ? liveTrunkEnergy : 0;
     this.trunkBassPulse = effectiveRadioTrunk;
     this.trunkBassPressure = liveTrunkPressure;
-    this.chestThumpPulse = activeV ? radioSample.chestThump : 0;
+    this.chestThumpPulse = activeV ? liveTrunkEnergy * 0.7 : 0;
 
     // Solve 4-corner hydraulic & airbag/coil-over spring-damper physics for active vehicle
     const activeHasHyd = this.vehicleHasHydraulics(activeV);
