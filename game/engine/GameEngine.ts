@@ -302,6 +302,7 @@ import {
 } from '../systems/performanceMonitor';
 import { WorldPerformanceManager } from '../systems/worldPerformanceManager';
 import { RealisticRainSystem } from '../world/realisticRainSystem';
+import { createMuzzleFlashTexture, createMuzzleSmokeTexture } from '../world/muzzleFx';
 import {
   AUTUMN_GROVE_POS,
   BIOME_INFO,
@@ -870,10 +871,10 @@ export class GameEngine {
     collected: boolean;
     mesh?: THREE.Group;
   }[] = [
-    { id: 'dv_egg_ember', species: 'Ember', x: DRAGON_VALLEY_POS.x - 8, z: DRAGON_VALLEY_POS.z + 19, collected: false },
-    { id: 'dv_egg_frost', species: 'Frost', x: DRAGON_VALLEY_POS.x + 13, z: DRAGON_VALLEY_POS.z + 14, collected: false },
-    { id: 'dv_egg_storm', species: 'Storm', x: DRAGON_VALLEY_POS.x + 18, z: DRAGON_VALLEY_POS.z + 3, collected: false },
-    { id: 'dv_egg_shadow', species: 'Shadow', x: DRAGON_VALLEY_POS.x + 10, z: DRAGON_VALLEY_POS.z - 18, collected: false },
+    { id: 'dv_egg_ember', species: 'Ember', x: DRAGON_VALLEY_POS.x + 26, z: DRAGON_VALLEY_POS.z + 6, collected: false },
+    { id: 'dv_egg_frost', species: 'Frost', x: DRAGON_VALLEY_POS.x + 20, z: DRAGON_VALLEY_POS.z - 18, collected: false },
+    { id: 'dv_egg_storm', species: 'Storm', x: DRAGON_VALLEY_POS.x - 30, z: DRAGON_VALLEY_POS.z + 14, collected: false },
+    { id: 'dv_egg_shadow', species: 'Shadow', x: DRAGON_VALLEY_POS.x + 34, z: DRAGON_VALLEY_POS.z + 2, collected: false },
   ];
   private dragonPlayerRef: DragonPlayerRef = { mountedDragonId: null };
   private dragonFlight: DragonFlightSystem = {
@@ -891,6 +892,8 @@ export class GameEngine {
   private hillHouseDoorOpen = false;
   private hillHouseDoorAngle = 0;
   private dragonGrowthDay = 1;
+  private dragonRoarCooldown = 5;
+  private dragonWingbeatCooldown = 2.5;
 
   // Multiverse & Portal Vortex Handles
   private activeDimensionWorld: DimensionWorldHandle | null = null;
@@ -1230,6 +1233,23 @@ export class GameEngine {
   });
   private muzzleFlashPool: { mesh: THREE.Mesh; life: number }[] = [];
   private muzzleFlashIdx = 0;
+  private muzzleFlashTex: THREE.CanvasTexture | null = null;
+  private muzzleSmokeTex: THREE.CanvasTexture | null = null;
+  private muzzleGlowPool: {
+    sprite: THREE.Sprite;
+    life: number;
+    maxLife: number;
+    baseScale: number;
+  }[] = [];
+  private muzzleGlowIdx = 0;
+  private muzzleSmokePool: {
+    sprite: THREE.Sprite;
+    life: number;
+    maxLife: number;
+    vel: THREE.Vector3;
+    baseScale: number;
+  }[] = [];
+  private muzzleSmokeIdx = 0;
   private debrisGeo = new THREE.DodecahedronGeometry(0.12, 0);
   private debrisMat = new THREE.MeshStandardMaterial({
     color: 0x78716c,
@@ -1705,6 +1725,7 @@ export class GameEngine {
     // Ultra-realistic GPU-driven Volumetric Rain Streaks + Ground Splash Ripples (0 CPU loop, 2 draw calls)
     this.rainSystem = new RealisticRainSystem();
     this.scene.add(this.rainSystem.group);
+    this.rainSystem.prewarm(this.renderer, this.camera);
 
     this.creatures = new CreatureManager(this.scene);
     this.structureManager = new StructureManager(this.scene);
@@ -1773,6 +1794,56 @@ export class GameEngine {
       mesh.userData.ignoreLightingPass = true;
       this.scene.add(mesh);
       this.muzzleFlashPool.push({ mesh, life: 0 });
+    }
+
+    // Camera-facing muzzle flare + drifting powder smoke. Sprites give a soft
+    // photographic bloom that a low-poly octahedron cannot.
+    this.muzzleFlashTex = createMuzzleFlashTexture();
+    this.muzzleSmokeTex = createMuzzleSmokeTexture();
+    for (let i = 0; i < 6; i++) {
+      const material = new THREE.SpriteMaterial({
+        map: this.muzzleFlashTex ?? undefined,
+        color: 0xffe6a8,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        depthTest: true,
+      });
+      const sprite = new THREE.Sprite(material);
+      sprite.visible = false;
+      sprite.userData.ignoreLightingPass = true;
+      this.scene.add(sprite);
+      this.muzzleGlowPool.push({ sprite, life: 0, maxLife: 0.07, baseScale: 0.6 });
+    }
+    for (let i = 0; i < 16; i++) {
+      const material = new THREE.SpriteMaterial({
+        map: this.muzzleSmokeTex ?? undefined,
+        color: 0xc8c8c8,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        depthTest: true,
+      });
+      const sprite = new THREE.Sprite(material);
+      sprite.visible = false;
+      sprite.userData.ignoreLightingPass = true;
+      this.scene.add(sprite);
+      this.muzzleSmokePool.push({
+        sprite,
+        life: 0,
+        maxLife: 1,
+        vel: new THREE.Vector3(),
+        baseScale: 0.2,
+      });
+    }
+    if (this.muzzleGlowPool.length > 0 && this.muzzleSmokePool.length > 0) {
+      const prewarmFx = new THREE.Group();
+      prewarmFx.add(
+        new THREE.Sprite(this.muzzleGlowPool[0].sprite.material),
+        new THREE.Sprite(this.muzzleSmokePool[0].sprite.material),
+      );
+      this.renderer.compile(prewarmFx, this.camera);
     }
     for (let i = 0; i < 12; i++) {
       const mesh = new THREE.Mesh(this.p2pTracerGeo, this.p2pTracerMat);
@@ -7309,9 +7380,13 @@ export class GameEngine {
     this.emitHud();
   }
 
-  private updateDragonValleyWorld(): void {
+  private updateDragonValleyWorld(dt: number): void {
     const world = this.world;
     if (!world) return;
+    this.dragonRoarCooldown -= dt;
+    this.dragonWingbeatCooldown -= dt;
+    let nearestFlyer: (typeof world.dragonValleyFlyers)[number] | null = null;
+    let nearestFlyerDist = Infinity;
     const active =
       this.worldType === 'island' &&
       this.currentDimension === 'overworld' &&
@@ -7336,6 +7411,34 @@ export class GameEngine {
       const flap = Math.sin(this.elapsed * 6.4 + flyer.phase) * 0.62;
       flyer.wingL.rotation.z = flap;
       flyer.wingR.rotation.z = -flap;
+      const flyerDist = Math.hypot(this.playerX - x, this.playerZ - z);
+      if (flyerDist < nearestFlyerDist) {
+        nearestFlyerDist = flyerDist;
+        nearestFlyer = flyer;
+      }
+    }
+
+    // Distance-aware, stereo-panned dragon voice. Roars carry across the valley;
+    // close passes add the heavy leathery wing whoosh.
+    if (nearestFlyer) {
+      const dx = nearestFlyer.group.position.x - this.playerX;
+      const dz = nearestFlyer.group.position.z - this.playerZ;
+      const rightX = Math.cos(this.camYaw);
+      const rightZ = -Math.sin(this.camYaw);
+      const pan = Math.max(
+        -0.85,
+        Math.min(0.85, (dx * rightX + dz * rightZ) / 42),
+      );
+      if (nearestFlyerDist < 150 && this.dragonRoarCooldown <= 0) {
+        this.dragonRoarCooldown = 7 + Math.random() * 8;
+        const volume = THREE.MathUtils.clamp(1 - nearestFlyerDist / 175, 0.1, 0.88);
+        this.sound.playDragonRoar(volume, nearestFlyer.variant, pan);
+      }
+      if (nearestFlyerDist < 48 && this.dragonWingbeatCooldown <= 0) {
+        this.dragonWingbeatCooldown = 1.5 + Math.random() * 1.3;
+        const volume = THREE.MathUtils.clamp(1 - nearestFlyerDist / 62, 0.12, 0.75);
+        this.sound.playDragonWingbeat(volume, pan);
+      }
     }
     const beacon = world.dragonValleyBeacon;
     beacon.group.visible = active;
@@ -8944,7 +9047,7 @@ export class GameEngine {
     }
 
     this.weaponMagazines.set(weaponId, magAmmo - 1);
-    this.sound.playGunshot(spec.soundProfile);
+    this.sound.playGunshot(spec.soundProfile, weaponId);
     if (this.currentDimension === 'overworld') {
       this.creatures.alertGunshot(
         this.playerX,
@@ -8988,6 +9091,63 @@ export class GameEngine {
       mf.mesh.visible = true;
       mf.life = 0.055;
     }
+
+    const isShotgunBlast = spec.pelletCount > 1;
+    const isLongGun =
+      spec.soundProfile === 'sniper' ||
+      spec.soundProfile === 'rifle' ||
+      spec.soundProfile === 'musket' ||
+      spec.soundProfile === 'lmg';
+    const flashColor =
+      spec.soundProfile === 'plasma'
+        ? 0x8ee8ff
+        : isShotgunBlast || spec.soundProfile === 'musket'
+          ? 0xffab4d
+          : isLongGun
+            ? 0xfff0c2
+            : 0xffe08a;
+    const flashSize =
+      (isShotgunBlast ? 1.35 : isLongGun ? 1.05 : 0.72) *
+      (0.9 + Math.random() * 0.24);
+    if (this.muzzleGlowPool.length > 0) {
+      const glow = this.muzzleGlowPool[this.muzzleGlowIdx % this.muzzleGlowPool.length];
+      this.muzzleGlowIdx += 1;
+      glow.sprite.position.set(sx, sy, sz);
+      glow.sprite.material.color.setHex(flashColor);
+      glow.sprite.material.rotation = Math.random() * Math.PI * 2;
+      glow.sprite.material.opacity = 0.95;
+      glow.sprite.scale.setScalar(flashSize);
+      glow.sprite.visible = true;
+      glow.baseScale = flashSize;
+      glow.maxLife = 0.055 + Math.random() * 0.03;
+      glow.life = glow.maxLife;
+    }
+    if (this.muzzleSmokePool.length > 0 && this.effectiveParticleScale > 0.05) {
+      const puffs = (isShotgunBlast ? 5 : spec.soundProfile === 'smg' ? 2 : 3) *
+        Math.max(0.5, this.effectiveParticleScale);
+      const puffCount = Math.round(puffs);
+      for (let i = 0; i < puffCount; i++) {
+        const puff = this.muzzleSmokePool[this.muzzleSmokeIdx % this.muzzleSmokePool.length];
+        this.muzzleSmokeIdx += 1;
+        puff.sprite.position.set(
+          sx + _vec3A.x * (0.04 + Math.random() * 0.18),
+          sy + Math.random() * 0.06,
+          sz + _vec3A.z * (0.04 + Math.random() * 0.18),
+        );
+        puff.vel.set(
+          _vec3A.x * (0.6 + Math.random() * 1.4) + _vec3B.x * (Math.random() - 0.5) * 0.8,
+          0.22 + Math.random() * 0.55 + _vec3A.y * 0.6,
+          _vec3A.z * (0.6 + Math.random() * 1.4) + _vec3B.z * (Math.random() - 0.5) * 0.8,
+        );
+        puff.sprite.material.color.setHex(i === 0 ? 0xd9d4cc : 0xb9b6b0);
+        puff.sprite.material.opacity = 0.42;
+        puff.baseScale = 0.16 + Math.random() * 0.14 + (isShotgunBlast ? 0.1 : 0);
+        puff.sprite.scale.setScalar(puff.baseScale);
+        puff.sprite.visible = true;
+        puff.maxLife = 0.75 + Math.random() * 0.75;
+        puff.life = puff.maxLife;
+      }
+    }
     if (this.shellCasingPool.length > 0 && this.effectiveParticleScale > 0) {
       const sc = this.shellCasingPool[this.shellCasingIdx % this.shellCasingPool.length];
       this.shellCasingIdx += 1;
@@ -9009,13 +9169,19 @@ export class GameEngine {
       sc.mesh.visible = true;
     }
 
-    this.spawnParticles(sx, sy, sz, 0xffd700, spec.pelletCount > 1 ? 12 : 8);
     this.spawnParticles(
-      sx + _vec3A.x * 0.1,
-      sy + 0.04,
-      sz + _vec3A.z * 0.1,
-      0xd4d4d8,
-      3,
+      sx,
+      sy,
+      sz,
+      spec.soundProfile === 'plasma' ? 0x67e8f9 : 0xffbe3d,
+      spec.pelletCount > 1 ? 16 : 10,
+    );
+    this.spawnParticles(
+      sx + _vec3A.x * 0.08,
+      sy + 0.035,
+      sz + _vec3A.z * 0.08,
+      0xfff3c4,
+      4,
     );
 
     const bulletLife = Math.max(0.8, spec.range / Math.max(40, spec.muzzleSpeed));
@@ -14503,6 +14669,33 @@ export class GameEngine {
       mf.life -= dt;
       if (mf.life <= 0) mf.mesh.visible = false;
     }
+    for (const glow of this.muzzleGlowPool) {
+      if (glow.life <= 0) continue;
+      glow.life -= dt;
+      if (glow.life <= 0) {
+        glow.sprite.visible = false;
+        glow.sprite.material.opacity = 0;
+        continue;
+      }
+      const t = Math.max(0, glow.life / Math.max(0.001, glow.maxLife));
+      glow.sprite.material.opacity = t * 0.95;
+      glow.sprite.scale.setScalar(glow.baseScale * (0.75 + (1 - t) * 0.75));
+    }
+    for (const puff of this.muzzleSmokePool) {
+      if (puff.life <= 0) continue;
+      puff.life -= dt;
+      if (puff.life <= 0) {
+        puff.sprite.visible = false;
+        puff.sprite.material.opacity = 0;
+        continue;
+      }
+      const t = puff.life / Math.max(0.001, puff.maxLife);
+      puff.vel.multiplyScalar(1 - Math.min(0.9, dt * 3.4));
+      puff.vel.y += 0.55 * dt;
+      puff.sprite.position.addScaledVector(puff.vel, dt);
+      puff.sprite.scale.setScalar(puff.baseScale * (1 + (1 - t) * 2.8));
+      puff.sprite.material.opacity = Math.pow(t, 1.5) * 0.45;
+    }
     for (const tr of this.p2pTracerPool) {
       if (tr.life <= 0) continue;
       tr.life -= dt;
@@ -16947,7 +17140,7 @@ export class GameEngine {
             this.updateKineticNetwork(dt);
             this.updateHillHouseDoor(dt);
             this.syncDragonDailyGrowth();
-            this.updateDragonValleyWorld();
+            this.updateDragonValleyWorld(dt);
             this.coasterRuntime?.update(dt, this.playerX, this.playerZ);
           }
           this.updateVehicles(dt);
@@ -24023,6 +24216,14 @@ export class GameEngine {
     this.shellCasingMat.dispose();
     this.muzzleFlashGeo.dispose();
     this.muzzleFlashMat.dispose();
+    for (const glow of this.muzzleGlowPool) glow.sprite.material.dispose();
+    for (const puff of this.muzzleSmokePool) puff.sprite.material.dispose();
+    this.muzzleGlowPool = [];
+    this.muzzleSmokePool = [];
+    this.muzzleFlashTex?.dispose();
+    this.muzzleFlashTex = null;
+    this.muzzleSmokeTex?.dispose();
+    this.muzzleSmokeTex = null;
     this.debrisGeo.dispose();
     this.debrisMat.dispose();
     this.p2pTracerGeo.dispose();
@@ -24035,10 +24236,13 @@ export class GameEngine {
     this.scene.traverse((obj) => {
       if (obj instanceof THREE.Mesh || obj instanceof THREE.Points) {
         obj.geometry?.dispose();
+        const disposeMaterial = (m: THREE.Material) => {
+          if (!m.userData?.sharedDragon) m.dispose();
+        };
         if (Array.isArray(obj.material)) {
-          obj.material.forEach((m) => m.dispose());
-        } else {
-          obj.material?.dispose();
+          obj.material.forEach(disposeMaterial);
+        } else if (obj.material) {
+          disposeMaterial(obj.material);
         }
       }
     });

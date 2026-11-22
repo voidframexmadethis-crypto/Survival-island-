@@ -74,6 +74,10 @@ export class VolumetricTerrainEngine {
   private breachCheckCooldown = 0;
   private puddleUpdateCooldown = 0;
   private coastalErosionCooldown = 0;
+  // Post-rain dry-out sweeps the wet grid in chunks so clearing weather never
+  // triggers one long 80k-cell loop in a single frame.
+  private wetDryCursor = 0;
+  private wetDryEmptyChunks = 0;
   public cratersCarved = 0;
   public totalErodedVolume = 0;
   public activePuddleCount = 0;
@@ -434,23 +438,37 @@ export class VolumetricTerrainEngine {
     const avalanches: AvalancheEvent[] = [];
 
     // 1. Dry/fade wetness slowly when clear (skip completely when nothing is wet)
-    if (!isRaining && this.hasWetnessOrPuddles && Math.random() < dt * 1.4) {
-      let stillWet = false;
-      for (let i = 0; i < terrainWetnessGrid.length; i += 2) {
+    // The grid is ~83k even cells; scan an eighth per pass instead of all of it.
+    if (!isRaining && this.hasWetnessOrPuddles && Math.random() < Math.min(0.55, dt * 3.5)) {
+      const total = terrainWetnessGrid.length;
+      const chunkSpan = Math.max(2, Math.ceil(total / 8 / 2) * 2);
+      const start = this.wetDryCursor % total;
+      const end = Math.min(total, start + chunkSpan);
+      let sawWet = false;
+      for (let i = start; i < end; i += 2) {
         if (terrainWetnessGrid[i] > 0.005) {
-          const nw = Math.max(0, terrainWetnessGrid[i] - 0.018);
+          const nw = Math.max(0, terrainWetnessGrid[i] - 0.055);
           terrainWetnessGrid[i] = nw;
-          if (nw > 0.005) stillWet = true;
+          if (nw > 0.005) sawWet = true;
         }
         if (terrainPuddleGrid[i] > 0.005) {
-          const np = Math.max(0, terrainPuddleGrid[i] - 0.022);
+          const np = Math.max(0, terrainPuddleGrid[i] - 0.07);
           terrainPuddleGrid[i] = np;
-          if (np > 0.005) stillWet = true;
+          if (np > 0.005) sawWet = true;
           this.puddleScanDirty = true;
         }
       }
-      if (!stillWet) {
-        this.hasWetnessOrPuddles = false;
+      this.wetDryCursor = end >= total ? 0 : end;
+      if (sawWet) {
+        this.wetDryEmptyChunks = 0;
+      } else {
+        this.wetDryEmptyChunks += 1;
+        // Eight dry chunks in a row means the whole sweep was visited.
+        if (this.wetDryEmptyChunks >= 8) {
+          this.hasWetnessOrPuddles = false;
+          this.wetDryEmptyChunks = 0;
+          this.puddleScanDirty = true;
+        }
       }
     }
 

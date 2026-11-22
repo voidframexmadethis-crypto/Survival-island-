@@ -2,6 +2,37 @@ import { CreatureSpecies, WeatherType } from '../types';
 import type { EngineAudioConfig } from '../systems/vehicleProfiles';
 
 /**
+ * Per-firearm character. Pitch shapes the crack, weight the low-end punch,
+ * bright the muzzle blast, tail the outdoor decay and mech the action sound.
+ * Keys are item ids so every gun the player owns has its own voice.
+ */
+const GUN_VOICES: Record<
+  string,
+  { pitch: number; weight: number; bright: number; tail: number; mech?: 'slide' | 'pump' | 'bolt' | 'revolver' }
+> = {
+  gun: { pitch: 1.02, weight: 1.0, bright: 1.0, tail: 1.0, mech: 'slide' },
+  pirate_musket: { pitch: 0.74, weight: 1.45, bright: 0.62, tail: 1.38 },
+  glock_19: { pitch: 1.12, weight: 0.92, bright: 1.16, tail: 0.94, mech: 'slide' },
+  colt_m1911: { pitch: 0.98, weight: 1.05, bright: 0.98, tail: 1.04, mech: 'slide' },
+  desert_eagle: { pitch: 0.82, weight: 1.3, bright: 0.9, tail: 1.2, mech: 'slide' },
+  magnum_44: { pitch: 0.88, weight: 1.22, bright: 1.0, tail: 1.28, mech: 'revolver' },
+  remington_870: { pitch: 0.7, weight: 1.5, bright: 0.8, tail: 1.32, mech: 'pump' },
+  mossberg_590: { pitch: 0.66, weight: 1.56, bright: 0.76, tail: 1.34, mech: 'pump' },
+  sawed_off: { pitch: 0.6, weight: 1.64, bright: 0.7, tail: 1.12, mech: 'pump' },
+  mp5: { pitch: 1.18, weight: 0.85, bright: 1.12, tail: 0.86 },
+  uzi: { pitch: 1.26, weight: 0.8, bright: 1.24, tail: 0.8 },
+  vector: { pitch: 1.08, weight: 0.95, bright: 1.0, tail: 0.9 },
+  ak_47: { pitch: 0.86, weight: 1.2, bright: 0.96, tail: 1.12 },
+  m4a1: { pitch: 1.0, weight: 1.05, bright: 1.14, tail: 1.0 },
+  scar_h: { pitch: 0.92, weight: 1.15, bright: 1.02, tail: 1.1 },
+  fn_fal: { pitch: 0.88, weight: 1.2, bright: 1.0, tail: 1.14 },
+  barrett_50: { pitch: 0.62, weight: 1.72, bright: 0.86, tail: 1.58, mech: 'bolt' },
+  remington_700: { pitch: 0.78, weight: 1.36, bright: 1.05, tail: 1.38, mech: 'bolt' },
+  m249_saw: { pitch: 0.9, weight: 1.28, bright: 0.98, tail: 1.18 },
+  alien_plasma_gun: { pitch: 1, weight: 1, bright: 1, tail: 1 },
+};
+
+/**
  * 100% Procedural Web Audio API Sound Engine (Zero external MP3/WAV 404s).
  * Safely unlocks on iPhone Safari first user gesture.
  */
@@ -576,6 +607,7 @@ export class SoundEngine {
 
   public playGunshot(
     profile: 'pistol' | 'shotgun' | 'smg' | 'rifle' | 'sniper' | 'lmg' | 'musket' | 'plasma' = 'pistol',
+    weaponId?: string,
   ): void {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     if (profile === 'plasma') {
@@ -583,18 +615,23 @@ export class SoundEngine {
       return;
     }
     const now = this.ctx.currentTime;
+    const voice = weaponId ? GUN_VOICES[weaponId] : undefined;
+    const pitch = voice?.pitch ?? 1;
+    const weight = voice?.weight ?? 1;
+    const bright = voice?.bright ?? 1;
+    const tail = voice?.tail ?? 1;
 
     const isHeavy = profile === 'shotgun' || profile === 'sniper' || profile === 'musket';
     const isRapid = profile === 'smg';
-    const noiseDur = isHeavy ? 0.34 : isRapid ? 0.16 : 0.24;
+    const noiseDur = (isHeavy ? 0.34 : isRapid ? 0.16 : 0.24) * tail;
     const noiseSource = this.createNoiseSource('white');
     if (noiseSource) {
       const filter = this.ctx.createBiquadFilter();
       filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(isHeavy ? 2600 : isRapid ? 4200 : 3400, now);
-      filter.frequency.exponentialRampToValueAtTime(isHeavy ? 240 : 420, now + noiseDur * 0.9);
+      filter.frequency.setValueAtTime((isHeavy ? 2600 : isRapid ? 4200 : 3400) * bright * pitch, now);
+      filter.frequency.exponentialRampToValueAtTime((isHeavy ? 240 : 420) * bright, now + noiseDur * 0.9);
       const noiseGain = this.ctx.createGain();
-      noiseGain.gain.setValueAtTime(isHeavy ? 0.65 : isRapid ? 0.42 : 0.55, now);
+      noiseGain.gain.setValueAtTime((isHeavy ? 0.65 : isRapid ? 0.42 : 0.55) * Math.sqrt(weight), now);
       noiseGain.gain.exponentialRampToValueAtTime(0.001, now + noiseDur);
       noiseSource.connect(filter);
       filter.connect(noiseGain);
@@ -605,9 +642,9 @@ export class SoundEngine {
     const crackOsc = this.ctx.createOscillator();
     const crackGain = this.ctx.createGain();
     crackOsc.type = 'sawtooth';
-    crackOsc.frequency.setValueAtTime(isHeavy ? 520 : isRapid ? 960 : 780, now);
-    crackOsc.frequency.exponentialRampToValueAtTime(isHeavy ? 52 : 95, now + 0.09);
-    crackGain.gain.setValueAtTime(isHeavy ? 0.42 : 0.34, now);
+    crackOsc.frequency.setValueAtTime((isHeavy ? 520 : isRapid ? 960 : 780) * pitch, now);
+    crackOsc.frequency.exponentialRampToValueAtTime((isHeavy ? 52 : 95) * pitch, now + 0.09);
+    crackGain.gain.setValueAtTime((isHeavy ? 0.42 : 0.34) * Math.sqrt(weight), now);
     crackGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
     crackOsc.connect(crackGain);
     crackGain.connect(this.masterGain);
@@ -617,14 +654,237 @@ export class SoundEngine {
     const subOsc = this.ctx.createOscillator();
     const subGain = this.ctx.createGain();
     subOsc.type = 'sine';
-    subOsc.frequency.setValueAtTime(isHeavy ? 115 : 145, now);
-    subOsc.frequency.exponentialRampToValueAtTime(isHeavy ? 26 : 36, now + (isHeavy ? 0.3 : 0.22));
-    subGain.gain.setValueAtTime(isHeavy ? 0.52 : 0.38, now);
-    subGain.gain.exponentialRampToValueAtTime(0.001, now + (isHeavy ? 0.32 : 0.23));
+    subOsc.frequency.setValueAtTime((isHeavy ? 115 : 145) / pitch, now);
+    subOsc.frequency.exponentialRampToValueAtTime((isHeavy ? 26 : 36) / pitch, now + (isHeavy ? 0.3 : 0.22) * tail);
+    subGain.gain.setValueAtTime((isHeavy ? 0.52 : 0.38) * weight, now);
+    subGain.gain.exponentialRampToValueAtTime(0.001, now + (isHeavy ? 0.32 : 0.23) * tail);
     subOsc.connect(subGain);
     subGain.connect(this.masterGain);
     subOsc.start(now);
-    subOsc.stop(now + 0.34);
+    subOsc.stop(now + 0.36 * tail);
+
+    // Outdoor slap-back tail, tuned per weapon so rifles roll and SMGs snap.
+    const slap = this.createNoiseSource('brown');
+    if (slap) {
+      const slapFilter = this.ctx.createBiquadFilter();
+      slapFilter.type = 'lowpass';
+      slapFilter.frequency.value = 520 * bright;
+      const slapGain = this.ctx.createGain();
+      slapGain.gain.setValueAtTime(0.0001, now);
+      slapGain.gain.setValueAtTime(0.0001, now + 0.09);
+      slapGain.gain.exponentialRampToValueAtTime(0.16 * weight, now + 0.14);
+      slapGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.42 * tail);
+      slap.connect(slapFilter);
+      slapFilter.connect(slapGain);
+      slapGain.connect(this.masterGain);
+      slap.start(now + 0.095, Math.random() * 2.0, 0.5 * tail);
+    }
+
+    if (voice?.mech) this.playGunActionClick(now, voice.mech, weight);
+  }
+
+  /** Pump, bolt, cylinder or slide mechanics after the shot. */
+  private playGunActionClick(
+    now: number,
+    kind: 'slide' | 'pump' | 'bolt' | 'revolver',
+    weight: number,
+  ): void {
+    if (!this.ctx || !this.masterGain) return;
+    const delay = kind === 'pump' ? 0.34 : kind === 'bolt' ? 0.44 : kind === 'revolver' ? 0.17 : 0.055;
+    const gain = (kind === 'pump' ? 0.16 : kind === 'bolt' ? 0.14 : 0.09) * Math.max(0.7, weight);
+
+    const noise = this.createNoiseSource('white');
+    if (noise) {
+      const hp = this.ctx.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = kind === 'pump' ? 1300 : 1900;
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.0001, now + delay);
+      g.gain.exponentialRampToValueAtTime(gain, now + delay + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + delay + 0.07);
+      noise.connect(hp);
+      hp.connect(g);
+      g.connect(this.masterGain);
+      noise.start(now + delay, Math.random() * 1.5, 0.09);
+    }
+
+    const metal = this.ctx.createOscillator();
+    const metalGain = this.ctx.createGain();
+    metal.type = 'triangle';
+    metal.frequency.setValueAtTime(kind === 'bolt' ? 2350 : 2950, now + delay);
+    metal.frequency.exponentialRampToValueAtTime(kind === 'pump' ? 900 : 1500, now + delay + 0.06);
+    metalGain.gain.setValueAtTime(0.0001, now + delay);
+    metalGain.gain.exponentialRampToValueAtTime(gain * 0.55, now + delay + 0.005);
+    metalGain.gain.exponentialRampToValueAtTime(0.0001, now + delay + 0.075);
+    metal.connect(metalGain);
+    metalGain.connect(this.masterGain);
+    metal.start(now + delay);
+    metal.stop(now + delay + 0.09);
+  }
+
+  private roarShaperCurve: Float32Array<ArrayBuffer> | null = null;
+
+  private getRoarShaperCurve(): Float32Array<ArrayBuffer> {
+    if (this.roarShaperCurve) return this.roarShaperCurve;
+    const size = 1024;
+    const curve = new Float32Array(new ArrayBuffer(size * 4));
+    for (let i = 0; i < size; i++) {
+      const x = (i / (size - 1)) * 2 - 1;
+      // Asymmetric soft clip adds throat grit without turning into a buzz.
+      curve[i] = Math.tanh(x * 3.4) * (0.78 + 0.22 * Math.sin(x * 9.1));
+    }
+    this.roarShaperCurve = curve;
+    return curve;
+  }
+
+  private connectToOutput(node: AudioNode, pan: number): void {
+    if (!this.ctx || !this.masterGain) return;
+    const clamped = Math.max(-1, Math.min(1, pan));
+    if (Math.abs(clamped) < 0.02) {
+      node.connect(this.masterGain);
+      return;
+    }
+    const panner = this.ctx.createStereoPanner();
+    panner.pan.value = clamped;
+    node.connect(panner);
+    panner.connect(this.masterGain);
+  }
+
+  /**
+   * Layered dragon roar: chest sub, distorted throat growl, breath rasp through
+   * moving formant filters and a long tail. Each variant has its own register.
+   */
+  public playDragonRoar(
+    volume = 0.8,
+    variant: 'ember' | 'storm' | 'shadow' = 'ember',
+    pan = 0,
+  ): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const level = Math.max(0.03, Math.min(1, volume));
+    const register = variant === 'storm' ? 1.16 : variant === 'shadow' ? 0.84 : 1;
+    const now = this.ctx.currentTime;
+    const duration = 1.9 + level * 0.7;
+
+    const output = this.ctx.createGain();
+    output.gain.setValueAtTime(0.0001, now);
+    output.gain.exponentialRampToValueAtTime(0.32 * level, now + 0.16);
+    output.gain.exponentialRampToValueAtTime(0.24 * level, now + duration * 0.42);
+    output.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    this.connectToOutput(output, pan);
+
+    const shaper = this.ctx.createWaveShaper();
+    shaper.curve = this.getRoarShaperCurve();
+    shaper.oversample = '2x';
+
+    // Throat formant makes it an animal vocal tract rather than a synth sweep.
+    const formant = this.ctx.createBiquadFilter();
+    formant.type = 'bandpass';
+    formant.frequency.setValueAtTime(430 * register, now);
+    formant.frequency.exponentialRampToValueAtTime(610 * register, now + 0.42);
+    formant.frequency.exponentialRampToValueAtTime(300 * register, now + duration);
+    formant.Q.value = 4.6;
+    shaper.connect(formant);
+    formant.connect(output);
+
+    const growl = this.ctx.createOscillator();
+    growl.type = 'sawtooth';
+    growl.frequency.setValueAtTime(74 * register, now);
+    growl.frequency.exponentialRampToValueAtTime(52 * register, now + 0.34);
+    growl.frequency.exponentialRampToValueAtTime(33 * register, now + duration);
+    growl.connect(shaper);
+
+    const rasp = this.ctx.createOscillator();
+    rasp.type = 'sawtooth';
+    rasp.detune.value = 11;
+    rasp.frequency.setValueAtTime(101 * register, now);
+    rasp.frequency.exponentialRampToValueAtTime(69 * register, now + 0.6);
+    rasp.frequency.exponentialRampToValueAtTime(41 * register, now + duration);
+    rasp.connect(shaper);
+
+    const vibrato = this.ctx.createOscillator();
+    const vibratoGain = this.ctx.createGain();
+    vibrato.type = 'sine';
+    vibrato.frequency.value = 5.6 + level * 1.8;
+    vibratoGain.gain.value = 6.5;
+    vibrato.connect(vibratoGain);
+    vibratoGain.connect(growl.frequency);
+    vibratoGain.connect(rasp.frequency);
+
+    const sub = this.ctx.createOscillator();
+    const subGain = this.ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(46 * register, now);
+    sub.frequency.exponentialRampToValueAtTime(24 * register, now + duration);
+    subGain.gain.setValueAtTime(0.0001, now);
+    subGain.gain.exponentialRampToValueAtTime(0.5 * level, now + 0.18);
+    subGain.gain.exponentialRampToValueAtTime(0.0001, now + duration * 0.9);
+    sub.connect(subGain);
+    subGain.connect(output);
+
+    // Nostril / lung rasp.
+    const noise = this.createNoiseSource('brown');
+    if (noise) {
+      const breath = this.ctx.createBiquadFilter();
+      breath.type = 'bandpass';
+      breath.frequency.setValueAtTime(280 * register, now);
+      breath.frequency.exponentialRampToValueAtTime(900 * register, now + 0.3);
+      breath.frequency.exponentialRampToValueAtTime(220 * register, now + duration);
+      breath.Q.value = 0.9;
+      const breathGain = this.ctx.createGain();
+      breathGain.gain.setValueAtTime(0.0001, now);
+      breathGain.gain.exponentialRampToValueAtTime(0.2 * level, now + 0.22);
+      breathGain.gain.exponentialRampToValueAtTime(0.0001, now + duration * 0.85);
+      noise.connect(breath);
+      breath.connect(breathGain);
+      breathGain.connect(output);
+      noise.start(now, Math.random() * 2.0, duration + 0.05);
+    }
+
+    growl.start(now);
+    rasp.start(now);
+    vibrato.start(now);
+    sub.start(now);
+    growl.stop(now + duration + 0.02);
+    rasp.stop(now + duration + 0.02);
+    vibrato.stop(now + duration + 0.02);
+    sub.stop(now + duration + 0.02);
+  }
+
+  /** Heavy leathery wing beat whoosh with a low body thump. */
+  public playDragonWingbeat(volume = 0.6, pan = 0): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const level = Math.max(0.03, Math.min(1, volume));
+    const now = this.ctx.currentTime;
+    const output = this.ctx.createGain();
+    output.gain.setValueAtTime(0.0001, now);
+    output.gain.exponentialRampToValueAtTime(0.22 * level, now + 0.06);
+    output.gain.exponentialRampToValueAtTime(0.0001, now + 0.62);
+    this.connectToOutput(output, pan);
+
+    const noise = this.createNoiseSource('white');
+    if (noise) {
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(950, now);
+      filter.frequency.exponentialRampToValueAtTime(170, now + 0.5);
+      filter.Q.value = 0.7;
+      noise.connect(filter);
+      filter.connect(output);
+      noise.start(now, Math.random() * 1.5, 0.66);
+    }
+
+    const thump = this.ctx.createOscillator();
+    const thumpGain = this.ctx.createGain();
+    thump.type = 'sine';
+    thump.frequency.setValueAtTime(62, now);
+    thump.frequency.exponentialRampToValueAtTime(30, now + 0.34);
+    thumpGain.gain.setValueAtTime(0.0001, now);
+    thumpGain.gain.exponentialRampToValueAtTime(0.4 * level, now + 0.03);
+    thumpGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.36);
+    thump.connect(thumpGain);
+    thumpGain.connect(output);
+    thump.start(now);
+    thump.stop(now + 0.38);
   }
 
   public playAttack(weaponType: 'melee' | 'bow' | 'whip' | 'cast' | 'gun'): void {

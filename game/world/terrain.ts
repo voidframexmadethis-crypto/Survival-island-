@@ -82,11 +82,14 @@ export const FROZEN_OCEAN_ICEBERG_POS = { x: -175, z: -755 };
 export const BURIED_TREASURE_POS = { x: 72, z: 702 };
 
 // Grand Finale Pack Expanded Outer Biomes (740m Grand Island Expansion)
-// Dragon Valley sits on a towering cliff roughly 60 blocks north of the
-// premade hill house so the beacon is obvious from the shelter porch.
-export const DRAGON_VALLEY_POS = { x: -78, z: 190 };
-export const DRAGON_VALLEY_ABANDONED_POS = { x: -95, z: 205 };
-export const DRAGON_VALLEY_BIOME_RADIUS = 45;
+// Dragon Valley sits on a towering cliff exactly 50 blocks northwest of the
+// premade hill house (dx -35, dz 35.71). This bearing keeps the flat pad clear
+// of the garage apron/driveways and just clear of the Sunflower Village, while
+// the summit beacon stays visible from the shelter.
+export const DRAGON_VALLEY_POS = { x: -113, z: 163.707 };
+export const DRAGON_VALLEY_ABANDONED_POS = { x: -138, z: 168.707 };
+// Stop the red biome tint before it reaches the hill house or Sunflower Village.
+export const DRAGON_VALLEY_BIOME_RADIUS = 38;
 export const VIKING_VILLAGE_POS = { x: 560, z: -260 };
 export const RESORT_CORNER_POS = { x: -480, z: 410 };
 export const RUINED_CASTLE_POS = { x: -360, z: -520 };

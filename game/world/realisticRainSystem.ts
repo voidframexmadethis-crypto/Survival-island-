@@ -224,6 +224,23 @@ export class RealisticRainSystem {
     this.group.userData.ignoreLightingPass = true;
   }
 
+  /**
+   * Compiles both rain shaders during world load. Without this, the first
+   * shower of the session pays a multi-millisecond shader compile hitch.
+   */
+  public prewarm(renderer: THREE.WebGLRenderer, camera: THREE.Camera): void {
+    const wasVisible = this.group.visible;
+    const prevStreaks = this.streakGeo.instanceCount;
+    const prevSplashes = this.splashGeo.instanceCount;
+    this.group.visible = true;
+    this.streakGeo.instanceCount = 8;
+    this.splashGeo.instanceCount = 4;
+    renderer.compile(this.group, camera);
+    this.streakGeo.instanceCount = prevStreaks;
+    this.splashGeo.instanceCount = prevSplashes;
+    this.group.visible = wasVisible;
+  }
+
   public update(params: {
     visible: boolean;
     elapsed: number;
@@ -251,7 +268,10 @@ export class RealisticRainSystem {
     );
 
     const su = this.streakMat.uniforms;
-    su.uTime.value = params.elapsed;
+    // Keep shader time small so multi-hour sessions never lose float precision
+    // in the wrapping mod() and start popping streaks.
+    const stableTime = params.elapsed % 3600;
+    su.uTime.value = stableTime;
     su.uCenter.value.set(params.centerX, Math.max(0, params.centerY - 6.5), params.centerZ);
     su.uFallSpeed.value = params.isStorm ? 32.0 : 23.0;
     su.uWindX.value = params.isStorm
@@ -264,7 +284,7 @@ export class RealisticRainSystem {
     this.splashMesh.visible = params.showSplashes;
     if (params.showSplashes) {
       const pu = this.splashMat.uniforms;
-      pu.uTime.value = params.elapsed;
+      pu.uTime.value = stableTime;
       pu.uCenter.value.set(params.centerX, 0, params.centerZ);
       pu.uGroundY.value = params.groundY;
       pu.uOpacity.value = params.isStorm ? 0.42 : 0.28;

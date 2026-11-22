@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { createRealisticDragon, type DragonVariant } from './dragonModels';
 import { ResourceNodeKind, ResourceNodeState } from '../types';
 import { FrameBudgetQueue } from '../systems/frameBudgetQueue';
 import { WorldChunk, WorldChunkManager } from './worldChunkSystem';
@@ -195,6 +196,7 @@ export interface DragonValleyFlyerHandle {
   speed: number;
   phase: number;
   visibilityRange: number;
+  variant: DragonVariant;
 }
 
 export interface DragonValleyBeaconHandle {
@@ -5143,8 +5145,6 @@ export function buildIslandWorld(
   {
     const obsidianMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.55, metalness: 0.25 });
     const magmaGlowMat = new THREE.MeshStandardMaterial({ color: 0xf97316, emissive: 0xea580c, emissiveIntensity: 1.4, roughness: 0.3 });
-    const dragonScaleMat = new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.42, metalness: 0.28 });
-    const dragonWingMat = new THREE.MeshStandardMaterial({ color: 0x450a0a, roughness: 0.65, side: THREE.DoubleSide });
     const goldMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.82, roughness: 0.22 });
     const spectralGhostMat = new THREE.MeshStandardMaterial({
       color: 0x38bdf8,
@@ -5163,8 +5163,6 @@ export function buildIslandWorld(
     disposableMats.push(
       obsidianMat,
       magmaGlowMat,
-      dragonScaleMat,
-      dragonWingMat,
       goldMat,
       spectralGhostMat,
       gothicStoneMat,
@@ -5179,6 +5177,10 @@ export function buildIslandWorld(
     const dvGroup = new THREE.Group();
     const dvY = getTerrainHeight(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z);
     dvGroup.position.set(DRAGON_VALLEY_POS.x, dvY, DRAGON_VALLEY_POS.z);
+    // The obsidian cliff and its roosts were authored on the southwest side of
+    // the valley. Rotate the set north so the 50-block move cannot crowd the
+    // Sunflower Village to the southwest.
+    dvGroup.rotation.y = Math.PI * 0.5;
     const lavaPool = new THREE.Mesh(new THREE.CylinderGeometry(11, 12, 0.3, 18), magmaGlowMat);
     lavaPool.position.y = 0.16;
     dvGroup.add(lavaPool);
@@ -5191,32 +5193,21 @@ export function buildIslandWorld(
       spire.rotation.z = (i % 2 === 0 ? 1 : -1) * 0.12;
       dvGroup.add(spire);
     }
-    // Perched Procedural Winged Dragon Mount on central obsidian plinth
+    // Heroic perched dragon on the central obsidian plinth. Layered PBR scale
+    // relief, veined membranes, slit pupils and swept horns replace the old
+    // capsule-and-box silhouette.
     const dragonPlinth = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 5.4, 2.4, 7), obsidianMat);
     dragonPlinth.position.y = 1.2;
-    dvGroup.add(dragonPlinth);
-    const dragonBody = new THREE.Mesh(new THREE.CapsuleGeometry(1.5, 4.2, 6, 10), dragonScaleMat);
-    dragonBody.rotation.x = Math.PI * 0.44;
-    dragonBody.position.set(0, 4.0, 0);
-    const dragonNeck = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.95, 3.2, 8), dragonScaleMat);
-    dragonNeck.position.set(0, 6.2, 2.2);
-    dragonNeck.rotation.x = 0.45;
-    const dragonHead = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.1, 2.2), dragonScaleMat);
-    dragonHead.position.set(0, 7.6, 3.2);
-    const dragonEyeL = new THREE.Mesh(new THREE.SphereGeometry(0.18, 6, 6), magmaGlowMat);
-    dragonEyeL.position.set(-0.52, 7.75, 4.1);
-    const dragonEyeR = dragonEyeL.clone();
-    dragonEyeR.position.x = 0.52;
-    const wingL = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.14, 3.4), dragonWingMat);
-    wingL.position.set(-4.0, 5.2, -0.3);
-    wingL.rotation.z = 0.34;
-    const wingR = wingL.clone();
-    wingR.position.x = 4.0;
-    wingR.rotation.z = -0.34;
-    const dragonTail = new THREE.Mesh(new THREE.ConeGeometry(0.7, 5.2, 6), dragonScaleMat);
-    dragonTail.rotation.x = -Math.PI * 0.42;
-    dragonTail.position.set(0, 3.2, -4.5);
-    dvGroup.add(dragonBody, dragonNeck, dragonHead, dragonEyeL, dragonEyeR, wingL, wingR, dragonTail);
+    const plinthDragon = createRealisticDragon({
+      variant: 'ember',
+      quality: 'hero',
+      heroic: true,
+      folded: false,
+    });
+    plinthDragon.group.position.set(0, 2.38, 0);
+    plinthDragon.group.rotation.y = -0.22;
+    plinthDragon.group.scale.setScalar(1.36);
+    dvGroup.add(dragonPlinth, plinthDragon.group);
 
     // The valley's signature landmark: a sheer dragon cliff with broad roosting
     // shelves. The beacon sits on its summit and is visible from the hill house.
@@ -5249,65 +5240,45 @@ export function buildIslandWorld(
 
     // Wild dragons continuously circle the valley. They stay unmerged so the
     // engine can animate wing beats and cull them beyond the draw distance.
-    const stormScaleMat = new THREE.MeshStandardMaterial({
-      color: 0x6366f1,
-      roughness: 0.58,
-      metalness: 0.16,
-    });
-    const shadowScaleMat = new THREE.MeshStandardMaterial({
-      color: 0x7e22ce,
-      roughness: 0.62,
-      metalness: 0.12,
-    });
-    disposableMats.push(stormScaleMat, shadowScaleMat);
-
     const addRoostDragon = (
       x: number,
       y: number,
       z: number,
       scale: number,
-      scaleMat: THREE.Material,
+      variant: DragonVariant,
       rotY: number,
     ) => {
       const roost = new THREE.Group();
       roost.position.set(x, y, z);
       roost.rotation.y = rotY;
       roost.scale.setScalar(scale);
-      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.55, 2.4, 4, 8), scaleMat);
-      body.rotation.x = Math.PI * 0.5;
-      body.position.y = 0.9;
-      const head = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.62, 1.25), scaleMat);
-      head.position.set(0, 1.5, 1.7);
-      const tail = new THREE.Mesh(new THREE.ConeGeometry(0.4, 2.8, 6), scaleMat);
-      tail.rotation.x = -Math.PI * 0.5;
-      tail.position.set(0, 0.55, -2.1);
-      const foldedL = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.1, 1.5), dragonWingMat);
-      foldedL.position.set(-1.15, 1.1, -0.15);
-      foldedL.rotation.z = -0.62;
-      foldedL.rotation.y = 0.3;
-      const foldedR = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.1, 1.5), dragonWingMat);
-      foldedR.position.set(1.15, 1.1, -0.15);
-      foldedR.rotation.z = 0.62;
-      foldedR.rotation.y = -0.3;
-      roost.add(body, head, tail, foldedL, foldedR);
+      const dragon = createRealisticDragon({
+        variant,
+        quality: scale < 0.45 ? 'low' : scale > 1.2 ? 'hero' : 'standard',
+        folded: true,
+      });
+      // Feet rest on the ledge instead of hovering above it.
+      dragon.group.position.y = 0.06;
+      roost.add(dragon.group);
       dvGroup.add(roost);
     };
 
     // A full roost: rock-sized hatchling through huge adults on every shelf.
-    addRoostDragon(9.5, 0.35, 8.5, 0.18, shadowScaleMat, 0.5);
-    addRoostDragon(6.5, 0.45, 11.5, 0.3, dragonScaleMat, -0.7);
-    addRoostDragon(11.5, 0.6, 6.5, 0.44, stormScaleMat, 1.2);
-    addRoostDragon(-10.5, 0.55, 8.5, 0.62, dragonScaleMat, 2.1);
-    addRoostDragon(-12.0, 10.05, -5.0, 0.8, stormScaleMat, -0.4);
-    addRoostDragon(-29.0, 10.05, -4.0, 1.02, shadowScaleMat, 0.9);
-    addRoostDragon(-15.0, 23.95, -8.0, 1.24, dragonScaleMat, 0.2);
-    addRoostDragon(-25.5, 23.95, -8.0, 1.46, stormScaleMat, -0.65);
-    addRoostDragon(-20.0, 34.65, -8.0, 1.62, shadowScaleMat, 0.0);
-    addRoostDragon(-24.0, 34.65, -5.0, 1.82, dragonScaleMat, 0.85);
+    addRoostDragon(9.5, 0.35, 8.5, 0.18, 'shadow', 0.5);
+    addRoostDragon(6.5, 0.45, 11.5, 0.3, 'ember', -0.7);
+    addRoostDragon(11.5, 0.6, 6.5, 0.44, 'storm', 1.2);
+    addRoostDragon(-10.5, 0.55, 8.5, 0.62, 'ember', 2.1);
+    addRoostDragon(-12.0, 10.05, -5.0, 0.8, 'storm', -0.4);
+    addRoostDragon(-29.0, 10.05, -4.0, 1.02, 'shadow', 0.9);
+    addRoostDragon(-15.0, 23.95, -8.0, 1.24, 'ember', 0.2);
+    addRoostDragon(-25.5, 23.95, -8.0, 1.46, 'storm', -0.65);
+    addRoostDragon(-20.0, 34.65, -8.0, 1.62, 'shadow', 0.0);
+    addRoostDragon(-24.0, 34.65, -5.0, 1.82, 'ember', 0.85);
 
     // Huge island-findable beacon planted on the cliff summit.
     const beaconGroup = new THREE.Group();
-    beaconGroup.position.set(DRAGON_VALLEY_POS.x - 20, dvY + 35, DRAGON_VALLEY_POS.z - 8);
+    // Matches the rotated cliff summit: local (-20, -8) becomes (-8, +20).
+    beaconGroup.position.set(DRAGON_VALLEY_POS.x - 8, dvY + 35, DRAGON_VALLEY_POS.z + 20);
     const beaconBase = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 6.0, 2.2, 9), obsidianMat);
     beaconBase.position.y = 0.4;
     const beaconBeamMat = new THREE.MeshBasicMaterial({
@@ -5367,27 +5338,14 @@ export function buildIslandWorld(
       speed: number,
       phase: number,
       scale: number,
-      scaleMat: THREE.Material,
+      variant: DragonVariant,
     ) => {
-      const group = new THREE.Group();
-      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.72, 2.7, 4, 8), scaleMat);
-      body.rotation.x = Math.PI * 0.5;
-      const head = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.72, 1.5), scaleMat);
-      head.position.set(0, 0.25, 2.15);
-      const tail = new THREE.Mesh(new THREE.ConeGeometry(0.42, 3.0, 6), scaleMat);
-      tail.rotation.x = -Math.PI * 0.5;
-      tail.position.z = -2.6;
-      const wingL = new THREE.Group();
-      wingL.position.set(-0.18, 0.18, 0);
-      const wingLMesh = new THREE.Mesh(new THREE.BoxGeometry(4.3, 0.1, 1.7), dragonWingMat);
-      wingLMesh.position.x = -2.15;
-      wingL.add(wingLMesh);
-      const wingR = new THREE.Group();
-      wingR.position.set(0.18, 0.18, 0);
-      const wingRMesh = new THREE.Mesh(new THREE.BoxGeometry(4.3, 0.1, 1.7), dragonWingMat);
-      wingRMesh.position.x = 2.15;
-      wingR.add(wingRMesh);
-      group.add(body, head, tail, wingL, wingR);
+      const dragon = createRealisticDragon({
+        variant,
+        quality: scale > 1.3 ? 'hero' : 'standard',
+        folded: false,
+      });
+      const { group, wingL, wingR } = dragon;
       group.scale.setScalar(scale);
       group.position.set(
         centerX + Math.cos(phase) * radius,
@@ -5413,18 +5371,19 @@ export function buildIslandWorld(
         speed,
         phase,
         visibilityRange,
+        variant,
       });
     };
-    addValleyFlyer(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 340, 25, 15, 0.22, 0.3, 1.0, dragonScaleMat);
-    addValleyFlyer(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 340, 33, 21, 0.17, 2.5, 1.35, stormScaleMat);
-    addValleyFlyer(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 340, 20, 11, 0.28, 4.4, 0.85, shadowScaleMat);
+    addValleyFlyer(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 340, 25, 15, 0.22, 0.3, 1.0, 'ember');
+    addValleyFlyer(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 340, 33, 21, 0.17, 2.5, 1.35, 'storm');
+    addValleyFlyer(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 340, 20, 11, 0.28, 4.4, 0.85, 'shadow');
 
     // Island-wide patrols keep dragons visible over the shelter, homestead and
     // central island, not just inside Dragon Valley.
-    addValleyFlyer(HILL_HOUSE_POS.x, HILL_HOUSE_POS.z, 280, 72, 30, 0.11, 1.1, 1.15, stormScaleMat);
-    addValleyFlyer(HILL_HOUSE_POS.x, HILL_HOUSE_POS.z, 280, 48, 22, 0.16, 4.0, 0.8, shadowScaleMat);
-    addValleyFlyer(0, 0, 360, 180, 56, 0.055, 3.2, 1.55, dragonScaleMat);
-    addValleyFlyer(HOMESTEAD_POS.x, HOMESTEAD_POS.z, 260, 58, 26, 0.13, 5.2, 1.0, dragonScaleMat);
+    addValleyFlyer(HILL_HOUSE_POS.x, HILL_HOUSE_POS.z, 280, 72, 30, 0.11, 1.1, 1.15, 'storm');
+    addValleyFlyer(HILL_HOUSE_POS.x, HILL_HOUSE_POS.z, 280, 48, 22, 0.16, 4.0, 0.8, 'shadow');
+    addValleyFlyer(0, 0, 360, 180, 56, 0.055, 3.2, 1.55, 'ember');
+    addValleyFlyer(HOMESTEAD_POS.x, HOMESTEAD_POS.z, 260, 58, 26, 0.13, 5.2, 1.0, 'ember');
 
     // Abandoned adult dragon curled around its old hoard at the valley edge.
     abandonedDragonGroup = new THREE.Group();
@@ -5437,41 +5396,31 @@ export function buildIslandWorld(
     abandonedDragonGroup.rotation.y = -0.8;
     const hoardPile = new THREE.Mesh(new THREE.CylinderGeometry(2.5, 2.9, 0.28, 12), goldMat);
     hoardPile.position.y = 0.14;
-    const abandonedBody = new THREE.Mesh(
-      new THREE.CapsuleGeometry(1.1, 3.6, 5, 10),
-      stormScaleMat,
-    );
-    abandonedBody.rotation.x = Math.PI * 0.5;
-    abandonedBody.position.y = 1.05;
-    const abandonedHead = new THREE.Mesh(new THREE.BoxGeometry(1.25, 1.0, 1.9), stormScaleMat);
-    abandonedHead.position.set(0, 1.55, 2.9);
-    abandonedHead.rotation.z = 0.22;
-    const abandonedTail = new THREE.Mesh(new THREE.ConeGeometry(0.62, 4.2, 6), stormScaleMat);
-    abandonedTail.rotation.x = -Math.PI * 0.5;
-    abandonedTail.position.set(0.8, 0.55, -2.9);
-    const abandonedWingL = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.12, 2.5), dragonWingMat);
-    abandonedWingL.position.set(-2.4, 0.7, -0.4);
-    abandonedWingL.rotation.z = -0.32;
-    const abandonedWingR = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.12, 2.5), dragonWingMat);
-    abandonedWingR.position.set(2.4, 0.7, -0.4);
-    abandonedWingR.rotation.z = 0.32;
+    const abandonedDragon = createRealisticDragon({
+      variant: 'storm',
+      quality: 'hero',
+      folded: true,
+      heroic: true,
+    });
+    abandonedDragon.group.position.set(0, 0.04, 0);
+    abandonedDragon.group.rotation.y = 0.26;
+    abandonedDragon.group.scale.setScalar(1.16);
     const oldSaddleMat = new THREE.MeshStandardMaterial({ color: 0x57534e, roughness: 0.92 });
-    const oldSaddle = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.2, 1.3), oldSaddleMat);
-    oldSaddle.position.set(0, 1.62, 0.2);
-    const saddleStrap = new THREE.Mesh(new THREE.TorusGeometry(1.18, 0.07, 6, 14), oldSaddleMat);
+    const oldSaddle = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.18, 1.15), oldSaddleMat);
+    oldSaddle.position.set(0, 2.44, 0.15);
+    oldSaddle.rotation.x = -0.06;
+    const saddleStrap = new THREE.Mesh(new THREE.TorusGeometry(1.02, 0.06, 6, 14), oldSaddleMat);
     saddleStrap.rotation.y = Math.PI * 0.5;
-    saddleStrap.position.set(0, 1.12, 0.2);
+    saddleStrap.position.set(0, 1.94, 0.2);
+    saddleStrap.scale.set(1, 1, 0.72);
     abandonedDragonGroup.add(
       hoardPile,
-      abandonedBody,
-      abandonedHead,
-      abandonedTail,
-      abandonedWingL,
-      abandonedWingR,
+      abandonedDragon.group,
       oldSaddle,
       saddleStrap,
     );
     disposableMats.push(oldSaddleMat);
+    staticMergeTargets.push({ group: abandonedDragonGroup });
     overworldGroup.add(abandonedDragonGroup);
 
     // 2. VIKING VILLAGE (560, -260) — Nordic Longhouse, Shield Racks, Rune Stones & Moored Viking Longship
@@ -7660,10 +7609,14 @@ gl_Position = projectionMatrix * mvPosition;`,
     overworldGroup.traverse((obj) => {
       if (obj instanceof THREE.Mesh || obj instanceof THREE.InstancedMesh) {
         obj.geometry?.dispose();
+        // Dragon scale/membrane materials are cached across world rebuilds.
+        const disposeMaterial = (m: THREE.Material) => {
+          if (!m.userData?.sharedDragon) m.dispose();
+        };
         if (Array.isArray(obj.material)) {
-          obj.material.forEach((m) => m.dispose());
-        } else {
-          obj.material?.dispose();
+          obj.material.forEach(disposeMaterial);
+        } else if (obj.material) {
+          disposeMaterial(obj.material);
         }
       }
     });

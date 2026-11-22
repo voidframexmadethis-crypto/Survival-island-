@@ -221,7 +221,7 @@ export function VikingVillageModal({
               <div className="rounded-xl bg-stone-950/60 border border-stone-800 p-3.5 flex items-center gap-2.5 text-xs text-stone-300">
                 <Compass className="w-4 h-4 text-amber-400 shrink-0" />
                 <span>
-                  Dragon Valley rises beneath the golden beacon at X {DRAGON_VALLEY_POS.x}, Z {DRAGON_VALLEY_POS.z}, about 60 blocks north of the hill house. Gather wild elemental eggs there or trade with Freya for Storm &amp; Shadow eggs.
+                  Dragon Valley rises beneath the golden beacon at X {DRAGON_VALLEY_POS.x}, Z {DRAGON_VALLEY_POS.z}, exactly 50 blocks northwest of the hill house. Gather wild elemental eggs there or trade with Freya for Storm &amp; Shadow eggs.
                 </span>
               </div>
             </div>
