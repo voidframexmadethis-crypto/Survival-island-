@@ -1251,6 +1251,25 @@ function buildCustomStreetShowCar(
   valveBlock.position.set(0, 0.26, rearZ + 0.46);
   handles.chassisGroup.add(valveBlock);
 
+  // Six-pump hydraulic rack visible inside the trunk for the dancer builds.
+  [-0.64, -0.38, -0.13, 0.13, 0.38, 0.64].forEach((px) => {
+    const pump = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.045, 0.058, 0.28, 10),
+      tankMat,
+    );
+    pump.position.set(px, 0.3, rearStartZ - 0.56);
+    const pumpMotor = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.052, 0.052, 0.1, 10),
+      new THREE.MeshStandardMaterial({
+        color: 0xb91c1c,
+        metalness: 0.75,
+        roughness: 0.24,
+      }),
+    );
+    pumpMotor.position.set(px, 0.47, rearStartZ - 0.56);
+    handles.chassisGroup.add(pump, pumpMotor);
+  });
+
   // Sculpted contoured beveled hood with crown
   const hood = new THREE.Mesh(
     createContouredPanelGeo(1.86, 0.1, Math.max(1.35, frontBodyLen - 0.04), 0.055, 0.035),
@@ -3202,6 +3221,208 @@ function buildModulePart(
   return part;
 }
 
+function buildSpecialtyGarageCar(
+  vehicle: ModularVehicleData,
+  handles: ModularVehicleMeshHandles,
+): void {
+  const preset = vehicle.preset;
+  const isMiniTruck = preset === 'mini_truck';
+  const isElCamino = preset === 'el_camino';
+  const isVan = preset === 'van_90s';
+  const isTownCar = preset === 'town_car';
+  const paintColor = vehicle.paintColor || (isElCamino ? '#b91c1c' : isTownCar ? '#050505' : '#0f766e');
+  const paintMat = createAutomotivePaintMaterial(paintColor);
+  const chromeMat = createChromeMaterial(vehicle.rimColor || '#f8fafc');
+  const darkTrimMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.68, metalness: 0.28 });
+  const leatherMat = createAutomotiveLeatherMaterial(isTownCar ? 0x090909 : 0x20140d);
+  const carpetMat = createAutomotiveCarpetMaterial(isTownCar ? 0x090909 : 0x17110c);
+  const glassMat = createAutomotiveGlassMaterial(0.34);
+  const headlightMat = new THREE.MeshStandardMaterial({ color: 0xfef9c3, emissive: 0xfef08a, emissiveIntensity: 1.45, roughness: 0.15 });
+  const taillightMat = new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0xdc2626, emissiveIntensity: 1.4, roughness: 0.18 });
+
+  const wheelScale = vehicle.wheelScale ?? (isElCamino ? 1.26 : isVan ? 1.08 : isMiniTruck ? 0.82 : 0.88);
+  const suspension = vehicle.suspensionOffset ?? (isVan ? 0.08 : -0.2);
+  const bodyRideY = Math.max(0.26, 0.38 + suspension);
+  handles.chassisGroup.position.y = bodyRideY;
+  const baseWheelY = 0.37 * wheelScale;
+
+  const bodyLen = isVan ? 5.45 : isTownCar ? 5.4 : isElCamino ? 5.15 : 4.5;
+  const bodyWidth = isVan ? 2.02 : isTownCar ? 1.96 : isElCamino ? 1.92 : 1.78;
+  const bodyHeight = isVan ? 0.76 : isElCamino ? 0.61 : isMiniTruck ? 0.54 : 0.63;
+  const hoodLen = isVan ? 0.82 : isTownCar ? 1.34 : isElCamino ? 1.22 : 1.02;
+  const cabLen = isVan ? 3.9 : isTownCar ? 2.3 : isElCamino ? 1.74 : 1.54;
+  const cabCenter = isVan ? -0.5 : isTownCar ? -0.16 : isElCamino ? 0.18 : 0.06;
+  const bedLen = bodyLen - hoodLen - cabLen - 0.2;
+  const bedCenter = -bodyLen * 0.5 + bedLen * 0.5;
+  const frontZ = bodyLen * 0.5;
+  const rearZ = -bodyLen * 0.5;
+  const roofY = isVan ? 2.08 : isTownCar ? 1.62 : isElCamino ? 1.48 : 1.36;
+
+  const addBox = (
+    w: number,
+    h: number,
+    d: number,
+    x: number,
+    y: number,
+    z: number,
+    material: THREE.Material,
+    parent: THREE.Object3D = handles.chassisGroup,
+  ) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    parent.add(mesh);
+    return mesh;
+  };
+
+  // Full-length frame, floor and sculpted lower body.
+  addBox(bodyWidth - 0.2, 0.13, bodyLen - 0.1, 0, 0.12, 0, darkTrimMat);
+  addBox(bodyWidth - 0.12, bodyHeight, bodyLen, 0, 0.24 + bodyHeight * 0.5, 0, paintMat);
+  addBox(bodyWidth - 0.18, 0.06, bodyLen - 0.55, 0, 0.28, 0, carpetMat);
+
+  // Hood, nose, grille, bumpers and lights.
+  addBox(bodyWidth * 0.96, 0.13, hoodLen, 0, 0.78, frontZ - hoodLen * 0.5 - 0.06, paintMat);
+  addBox(bodyWidth * 0.9, 0.24, 0.11, 0, 0.52, frontZ + 0.015, isTownCar ? chromeMat : darkTrimMat);
+  addBox(bodyWidth * 0.7, 0.09, 0.16, 0, 0.34, frontZ + 0.08, chromeMat);
+  addBox(bodyWidth + 0.03, 0.13, 0.18, 0, 0.33, frontZ + 0.12, chromeMat);
+  addBox(bodyWidth + 0.03, 0.13, 0.18, 0, 0.33, rearZ - 0.11, chromeMat);
+  [-0.62, 0.62].forEach((x) => {
+    addBox(0.3, 0.17, 0.05, x * (bodyWidth / 1.9), 0.57, frontZ + 0.06, headlightMat);
+    addBox(0.34, 0.18, 0.05, x * (bodyWidth / 1.9), 0.56, rearZ - 0.07, taillightMat);
+  });
+
+  if (isVan || isTownCar) {
+    // Long roof and passenger cabin.
+    addBox(bodyWidth * 0.93, isVan ? 1.3 : 0.62, cabLen, 0, isVan ? 1.36 : 1.22, cabCenter, paintMat);
+    addBox(bodyWidth * 0.86, 0.1, cabLen * 0.96, 0, roofY, cabCenter, paintMat);
+    const windowY = isVan ? 1.58 : 1.24;
+    const windowH = isVan ? 0.48 : 0.34;
+    [-1, 1].forEach((side) => {
+      addBox(0.025, windowH, cabLen * 0.82, side * (bodyWidth * 0.47), windowY, cabCenter, glassMat);
+    });
+    addBox(bodyWidth * 0.78, windowH, 0.03, 0, windowY, cabCenter + cabLen * 0.51, glassMat);
+    addBox(bodyWidth * 0.78, windowH, 0.03, 0, windowY, cabCenter - cabLen * 0.51, glassMat);
+    if (isVan) {
+      // 1990s extended bubble van: tall rear barn doors, roof vent and running boards.
+      addBox(bodyWidth * 0.96, 1.44, 0.06, 0, 1.28, rearZ - 0.015, paintMat);
+      addBox(0.035, 1.22, 0.05, 0, 1.17, rearZ - 0.06, darkTrimMat);
+      addBox(0.6, 0.09, 0.74, 0, roofY + 0.1, -0.6, darkTrimMat);
+      [-1, 1].forEach((side) => addBox(0.3, 0.06, 2.6, side * bodyWidth * 0.46, 0.28, -0.4, darkTrimMat));
+    } else {
+      // Black-on-black Town Car: long trunk, chrome beltline and opera windows.
+      addBox(bodyWidth * 0.97, 0.12, 1.42, 0, 0.79, rearZ + 0.82, paintMat);
+      [-1, 1].forEach((side) => {
+        addBox(0.035, 0.035, bodyLen * 0.72, side * bodyWidth * 0.49, 0.83, 0.2, chromeMat);
+      });
+      const trunkHinge = new THREE.Group();
+      trunkHinge.position.set(0, 0.85, rearZ + 1.48);
+      addBox(bodyWidth * 0.9, 0.08, 1.34, 0, 0, -0.67, paintMat, trunkHinge);
+      handles.chassisGroup.add(trunkHinge);
+      handles.trunkLid = trunkHinge;
+    }
+  } else {
+    // Mini truck / El Camino cab and open pickup bed.
+    addBox(bodyWidth * 0.94, 0.9, cabLen, 0, 0.95, cabCenter, paintMat);
+    addBox(bodyWidth * 0.86, 0.09, cabLen * 0.9, 0, isElCamino ? 1.48 : 1.36, cabCenter, paintMat);
+    [-1, 1].forEach((side) => {
+      addBox(0.025, 0.37, cabLen * 0.76, side * bodyWidth * 0.47, 1.15, cabCenter, glassMat);
+    });
+    addBox(bodyWidth * 0.76, 0.38, 0.03, 0, 1.15, cabCenter + cabLen * 0.51, glassMat);
+    addBox(bodyWidth - 0.08, 0.05, Math.max(0.8, bedLen - 0.1), 0, 0.61, bedCenter, carpetMat);
+    [-1, 1].forEach((side) => {
+      addBox(0.09, 0.42, bedLen, side * (bodyWidth * 0.5 - 0.045), 0.82, bedCenter, paintMat);
+      addBox(0.12, 0.06, bedLen, side * (bodyWidth * 0.5 - 0.045), 1.04, bedCenter, chromeMat);
+    });
+    addBox(bodyWidth, 0.46, 0.08, 0, 0.82, rearZ + 0.04, paintMat);
+    addBox(bodyWidth, 0.06, 0.11, 0, 1.06, rearZ + 0.04, chromeMat);
+  }
+
+  // Four opening doors (left-hand-drive cabin, driver on the left).
+  ([-1, 1] as const).forEach((side) => {
+    const door = new THREE.Group();
+    door.position.set(side * bodyWidth * 0.49, 0.5, cabCenter + cabLen * 0.18);
+    addBox(0.055, 0.62, cabLen * (isVan ? 0.42 : 0.48), 0, 0.28, -cabLen * 0.2, paintMat, door);
+    addBox(0.025, 0.3, cabLen * 0.3, 0, 0.53, -cabLen * 0.18, glassMat, door);
+    addBox(0.065, 0.045, 0.18, 0, 0.36, -cabLen * 0.05, chromeMat, door);
+    handles.chassisGroup.add(door);
+    if (side < 0) handles.doorLeft = door;
+    else handles.doorRight = door;
+  });
+
+  // Detailed left-hand-drive interior, dash, gauges and seats.
+  addBox(bodyWidth * 0.86, 0.22, 0.3, 0, 0.83, cabCenter + cabLen * 0.34, darkTrimMat);
+  addBox(0.4, 0.11, 0.04, -0.42, 0.94, cabCenter + cabLen * 0.24, chromeMat);
+  addBox(0.3, 0.1, 0.035, 0.03, 0.9, cabCenter + cabLen * 0.3, darkTrimMat);
+  const seat = (x: number, z: number, rear = false) => {
+    addBox(rear ? 1.05 : 0.5, 0.13, 0.54, x, 0.55, z, leatherMat);
+    addBox(rear ? 1.05 : 0.5, 0.46, 0.11, x, 0.77, z - 0.28, leatherMat);
+  };
+  seat(-0.42, -0.02);
+  seat(0.42, -0.02);
+  if (isTownCar) seat(0, -1.2, true);
+  const steering = new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.026, 8, 20), chromeMat);
+  steering.position.set(-0.42, 1.02, cabCenter + cabLen * 0.22);
+  steering.rotation.x = -0.42;
+  handles.chassisGroup.add(steering);
+  const column = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.34, 10), darkTrimMat);
+  column.position.set(-0.42, 0.91, cabCenter + cabLen * 0.32);
+  column.rotation.x = Math.PI * 0.36;
+  handles.chassisGroup.add(column);
+
+  // Visible chrome hydraulic pump rack, tanks, batteries and valve block.
+  const pumpRack = new THREE.Group();
+  pumpRack.position.set(0, 0.32, isVan ? -1.4 : isTownCar ? -1.36 : bedCenter);
+  handles.chassisGroup.add(pumpRack);
+  [-0.45, -0.15, 0.15, 0.45].forEach((x) => {
+    const pump = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.085, 0.32, 12), chromeMat);
+    pump.position.set(x, 0.06, 0);
+    const motor = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.13, 12), new THREE.MeshStandardMaterial({ color: 0xb45309, metalness: 0.72, roughness: 0.25 }));
+    motor.position.set(x, 0.25, 0);
+    pumpRack.add(pump, motor);
+  });
+  const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.78, 14), chromeMat);
+  tank.rotation.z = Math.PI / 2;
+  tank.position.set(0, -0.03, 0.2);
+  pumpRack.add(tank);
+  const valve = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.11, 0.18), new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.7, roughness: 0.24 }));
+  valve.position.set(0, 0.02, 0.42);
+  pumpRack.add(valve);
+
+  // Four independent hydraulic wheels.
+  const wheelStyle = isElCamino ? 'donk_30' : isVan ? 'spinner_13' : 'wire_whitewall';
+  const wheelbase = isVan ? 1.72 : isTownCar ? 1.68 : isElCamino ? 1.52 : 1.28;
+  const track = bodyWidth * 0.5 - 0.03;
+  const wheelCoords: Array<{ corner: 'fl' | 'fr' | 'rl' | 'rr'; x: number; z: number; side: -1 | 1; isFront: boolean }> = [
+    { corner: 'fl', x: -track, z: wheelbase, side: -1, isFront: true },
+    { corner: 'fr', x: track, z: wheelbase, side: 1, isFront: true },
+    { corner: 'rl', x: -track, z: -wheelbase, side: -1, isFront: false },
+    { corner: 'rr', x: track, z: -wheelbase, side: 1, isFront: false },
+  ];
+  for (const wc of wheelCoords) {
+    const cornerRoot = new THREE.Group();
+    cornerRoot.position.set(wc.x, baseWheelY, wc.z);
+    const { steerPivot, spinGroup, spinnerHub } = buildCustomWheel(
+      wheelStyle,
+      wc.side,
+      vehicle.rimColor || '#f8fafc',
+      wheelScale,
+      chromeMat,
+      undefined,
+      isElCamino ? 'orange' : isTownCar ? 'lime' : 'red',
+    );
+    cornerRoot.add(steerPivot);
+    handles.root.add(cornerRoot);
+    handles.wheels.push(spinGroup);
+    if (spinnerHub) {
+      handles.spinners = handles.spinners ?? [];
+      handles.spinners.push(spinnerHub);
+    }
+    if (wc.isFront) handles.steerWheels.push(steerPivot);
+    handles.wheelCorners.push({ obj: cornerRoot, corner: wc.corner, baseY: baseWheelY });
+  }
+}
+
 export function createModularVehicleMesh(
   vehicle: ModularVehicleData,
 ): ModularVehicleMeshHandles {
@@ -3226,6 +3447,13 @@ export function createModularVehicleMesh(
     vehicle.preset === 'chevy_2000_sub'
   ) {
     buildChevyTahoeShowSuv(vehicle, handles);
+  } else if (
+    vehicle.preset === 'mini_truck' ||
+    vehicle.preset === 'el_camino' ||
+    vehicle.preset === 'van_90s' ||
+    vehicle.preset === 'town_car'
+  ) {
+    buildSpecialtyGarageCar(vehicle, handles);
   } else if (
     vehicle.preset === 'lowrider' ||
     vehicle.preset === 'donk' ||

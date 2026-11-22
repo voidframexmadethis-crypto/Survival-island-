@@ -377,6 +377,9 @@ export interface ModularVehicleData {
   hasAirbagSuspension?: boolean;
   airbagSpeed?: number; // 0.25 (slow long hiss) .. 2.0 (fast sharp hiss + bounce)
   airbagLockLevel?: number; // 0.4 .. 1.4 adjustable lock-up height
+  /** Display-only garage builds are animated but cannot be driven; they can be pushed. */
+  displayOnly?: boolean;
+  hydraulicBounceBoost?: number; // >1 gives extra vertical travel on tall coil-over builds
   hasConvertibleTop?: boolean;
   convertibleTopDown?: boolean;
   doorsOpen?: boolean;

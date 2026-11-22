@@ -14,9 +14,15 @@ export const THREE_WHEEL_PARKED_POSE = {
   airbagWheelLift: 0.42,
 } as const;
 
-/** Only the '64 Impala lowrider and the Cadillac Coupe DeVille hold this stance. */
+/** Full cylinder cars can hold a three-wheel stance; long-travel airbag vans cannot. */
 export function isThreeWheelHydraulicVehicle(preset?: string | null): boolean {
-  return preset === 'lowrider' || preset === 'cadillac_coupe_deville';
+  return (
+    preset === 'lowrider' ||
+    preset === 'cadillac_coupe_deville' ||
+    preset === 'mini_truck' ||
+    preset === 'el_camino' ||
+    preset === 'town_car'
+  );
 }
 
 /**

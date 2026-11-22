@@ -6,11 +6,15 @@ import {
   isThreeWheelHydraulicVehicle,
 } from './classicHydraulics';
 
-test('three-wheel hydraulics are limited to the Impala lowrider and Cadillac Coupe DeVille', () => {
+test('three-wheel hydraulics cover full-cylinder lowriders but not DONKs or airbag vans', () => {
   assert.equal(isThreeWheelHydraulicVehicle('lowrider'), true);
   assert.equal(isThreeWheelHydraulicVehicle('cadillac_coupe_deville'), true);
+  assert.equal(isThreeWheelHydraulicVehicle('town_car'), true);
+  assert.equal(isThreeWheelHydraulicVehicle('mini_truck'), true);
+  assert.equal(isThreeWheelHydraulicVehicle('el_camino'), true);
   assert.equal(isThreeWheelHydraulicVehicle('donk'), false);
   assert.equal(isThreeWheelHydraulicVehicle('chevy_tahoe'), false);
+  assert.equal(isThreeWheelHydraulicVehicle('van_90s'), false);
   assert.equal(isThreeWheelHydraulicVehicle(undefined), false);
 });
 

@@ -8287,7 +8287,12 @@ export class GameEngine {
         return;
       }
       if (near.kind === 'modular_vehicle') {
-        this.enterVehicle(near.id);
+        const targetVehicle = this.vehicles.find((v) => v.id === near.id);
+        if (targetVehicle?.displayOnly) {
+          this.pushDisplayVehicle(targetVehicle.id);
+        } else {
+          this.enterVehicle(near.id);
+        }
         this.actionCooldown = 0.45;
         return;
       }
@@ -13456,8 +13461,10 @@ export class GameEngine {
           const specs = this.getVehicleSpecs(v);
           best = {
             id: v.id,
-            label: `Pilot ${v.name}`,
-            sublabel: `${specs.craftClass} · Fuel ${Math.round(v.fuel)}% · HP ${Math.round(v.hp)}/${v.maxHp}`,
+            label: v.displayOnly ? `Push ${v.name}` : `Pilot ${v.name}`,
+            sublabel: v.displayOnly
+              ? 'Hydraulic dance display · Push to move · Not drivable'
+              : `${specs.craftClass} · Fuel ${Math.round(v.fuel)}% · HP ${Math.round(v.hp)}/${v.maxHp}`,
             kind: 'modular_vehicle',
             actionCategory: 'use',
             distance: d,
@@ -19791,6 +19798,14 @@ export class GameEngine {
   public enterVehicle(vehicleId: string, asPassenger = false): boolean {
     const v = this.vehicles.find((x) => x.id === vehicleId);
     if (!v) return false;
+    if (v.displayOnly) {
+      this.sound.playCarDoorLatch(false);
+      this.toast(
+        `${v.name} is a hydraulic dance display car — it has no driver controls. Push it to move it.`,
+        'info',
+      );
+      return false;
+    }
     if (!asPassenger) {
       this.ferryRideActive = false;
       if (this.ferryPickup.phase !== 'idle') {
@@ -19878,7 +19893,10 @@ export class GameEngine {
         v.preset === 'donk' ||
         v.preset === 'cadillac_coupe_deville' ||
         v.preset === 'chevy_tahoe' ||
-        v.preset === 'chevy_2000_sub',
+        v.preset === 'chevy_2000_sub' ||
+        v.preset === 'mini_truck' ||
+        v.preset === 'el_camino' ||
+        v.preset === 'town_car',
     };
   }
 
@@ -19910,7 +19928,11 @@ export class GameEngine {
           v.preset === 'donk' ||
           v.preset === 'cadillac_coupe_deville' ||
           v.preset === 'chevy_tahoe' ||
-          v.preset === 'chevy_2000_sub'),
+          v.preset === 'chevy_2000_sub' ||
+          v.preset === 'mini_truck' ||
+          v.preset === 'el_camino' ||
+          v.preset === 'van_90s' ||
+          v.preset === 'town_car'),
     );
   }
 
@@ -20074,6 +20096,27 @@ export class GameEngine {
     this.emitHud();
   }
 
+  private pushDisplayVehicle(vehicleId: string): void {
+    const vehicle = this.vehicles.find((v) => v.id === vehicleId);
+    if (!vehicle) return;
+    const dx = vehicle.x - this.playerX;
+    const dz = vehicle.z - this.playerZ;
+    const distance = Math.hypot(dx, dz);
+    if (distance < 0.001) return;
+    const push = 0.38;
+    vehicle.x += (dx / distance) * push;
+    vehicle.z += (dz / distance) * push;
+    vehicle.y = getTerrainHeight(vehicle.x, vehicle.z) + 0.14;
+    vehicle.vx = 0;
+    vehicle.vz = 0;
+    const mesh = this.vehicleMeshes.get(vehicle.id);
+    if (mesh) {
+      mesh.root.position.set(vehicle.x, vehicle.y, vehicle.z);
+    }
+    this.sound.playSteamHiss();
+    this.toast(`${vehicle.name} rolls forward on its hydraulics.`, 'info');
+  }
+
   public triggerHydraulicAction(
     action:
       | 'front_hop'
@@ -20103,7 +20146,10 @@ export class GameEngine {
     if (isAirbag) {
       const speed = THREE.MathUtils.clamp(av.airbagSpeed ?? 1.0, 0.25, 2.0);
       const lock = THREE.MathUtils.clamp(av.airbagLockLevel ?? 1.0, 0.4, 1.4);
-      const impulse = (3.4 + speed * 4.4) * lock;
+      const impulse =
+        (3.4 + speed * 4.4) *
+        lock *
+        THREE.MathUtils.clamp(av.hydraulicBounceBoost ?? 1, 1, 2.2);
       const floorY = Math.max(
         getTerrainHeight(av.x, av.z),
         this.getStructuralSurfaceY(av.x, av.z, av.y + 0.8),
@@ -20117,7 +20163,9 @@ export class GameEngine {
         this.hydVel.rl = Math.min(this.hydVel.rl, -1.8 * lock);
         this.hydVel.rr = Math.min(this.hydVel.rr, -1.8 * lock);
         if (nearGround && speed >= 0.85) {
-          const hopVy = THREE.MathUtils.clamp(3.6 + speed * 3.1 * lock, 4.0, 9.4);
+          const hopVy =
+            THREE.MathUtils.clamp(3.6 + speed * 3.1 * lock, 4.0, 9.4) *
+            Math.min(1.45, Math.max(1, av.hydraulicBounceBoost ?? 1));
           av.vy = av.y <= floorY + 0.35 ? hopVy : Math.min(9.6, Math.max(av.vy + 3.2, hopVy));
         }
         this.hydraulicBounceTimer = 0.52;
@@ -20233,10 +20281,11 @@ export class GameEngine {
 
     // Lowrider & custom hydraulic builds: the body bounces while the rear tires
     // stay planted, so the car never launches all four wheels off the ground.
+    const bounceBoost = THREE.MathUtils.clamp(av.hydraulicBounceBoost ?? 1, 1, 2.2);
     if (action === 'front_hop' || action === 'coil_bounce') {
       this.hydraulicMode = 'front_hop';
-      this.hydVel.fl = 15.5;
-      this.hydVel.fr = 15.5;
+      this.hydVel.fl = 15.5 * bounceBoost;
+      this.hydVel.fr = 15.5 * bounceBoost;
       this.hydVel.rl = Math.min(this.hydVel.rl, -2.4);
       this.hydVel.rr = Math.min(this.hydVel.rr, -2.4);
       // The front axle lifts while the rear tires keep their contact patch.
@@ -20245,8 +20294,8 @@ export class GameEngine {
       this.spawnParticles(av.x, av.y + 0.35, av.z, 0xfbbf24, 9);
     } else if (action === 'rear_hop' || action === 'rear_lock') {
       this.hydraulicMode = 'rear_hop';
-      this.hydVel.rl = 15.5;
-      this.hydVel.rr = 15.5;
+      this.hydVel.rl = 15.5 * bounceBoost;
+      this.hydVel.rr = 15.5 * bounceBoost;
       this.hydVel.fl = Math.min(this.hydVel.fl, -2.4);
       this.hydVel.fr = Math.min(this.hydVel.fr, -2.4);
       // The body squats on the rear axle; those tires never leave the road.
@@ -20270,10 +20319,10 @@ export class GameEngine {
     } else if (action === 'lock_up' || action === 'front_lock') {
       this.hydraulicMode = this.hydraulicMode === 'lock_up' ? 'level' : 'lock_up';
       if (this.hydraulicMode === 'lock_up') {
-        this.hydVel.fl += 4.6;
-        this.hydVel.fr += 4.6;
-        this.hydVel.rl += 4.6;
-        this.hydVel.rr += 4.6;
+        this.hydVel.fl += 4.6 * bounceBoost;
+        this.hydVel.fr += 4.6 * bounceBoost;
+        this.hydVel.rl += 4.6 * bounceBoost;
+        this.hydVel.rr += 4.6 * bounceBoost;
       }
       this.sound.playHydraulicHop('lock');
     } else if (action === 'three_wheel') {
@@ -21308,7 +21357,12 @@ export class GameEngine {
         this.vehicleRattleCache.set(v.id, rattleShake);
       }
 
-      const danceState = this.vehicleDanceStates.get(v.id);
+      let danceState = this.vehicleDanceStates.get(v.id);
+      if (!danceState && v.hydraulicsDanceEnabled) {
+        danceState = createGarageDanceState();
+        danceState.enabled = true;
+        this.vehicleDanceStates.set(v.id, danceState);
+      }
       if (danceState && (danceState.enabled || v.hydraulicsDanceEnabled)) {
         danceState.enabled = Boolean(v.hydraulicsDanceEnabled);
         stepGarageHydraulicsDance(
@@ -21319,6 +21373,7 @@ export class GameEngine {
           danceState,
           dt,
           baseBodyY,
+          v.hydraulicBounceBoost ?? 1,
         );
         for (const wc of handles.wheelCorners) {
           wc.obj.position.y = wc.baseY;
@@ -21326,7 +21381,14 @@ export class GameEngine {
       } else if (isActive && activeHasHyd) {
         const { fl, fr, rl, rr } = this.hydCorners;
         const rawHeave = (fl + fr + rl + rr) * 0.25;
-        const heaveCap = activeIsDonk ? 0.34 : activeV?.preset === 'lowrider' ? 0.56 : 0.5;
+        const bounceBoost = THREE.MathUtils.clamp(
+          activeV?.hydraulicBounceBoost ?? 1,
+          1,
+          2.2,
+        );
+        const heaveCap =
+          (activeIsDonk ? 0.34 : activeV?.preset === 'lowrider' ? 0.56 : 0.5) *
+          bounceBoost;
         const avgHeave = THREE.MathUtils.clamp(rawHeave, -0.12, heaveCap);
         const hydPitch =
           ((rl + rr) - (fl + fr)) * (activeIsDonk ? 0.12 : activeV?.preset === 'lowrider' ? 0.17 : 0.21);
@@ -23801,12 +23863,32 @@ export class GameEngine {
       0,
     );
     spawned.name = car.name;
+    spawned.carId = car.id;
     spawned.paintColor = car.paintColor;
     spawned.rimColor = car.rimColor;
     spawned.underglowColor = car.underglowColor;
     spawned.turboBoost = car.turboBoost;
+    spawned.horsepower = car.horsepower;
+    spawned.topSpeedMph = car.topSpeedMph;
+    spawned.zeroToSixtySec = Number.parseFloat(car.zeroToSixty) || spawned.zeroToSixtySec;
+    spawned.engineLabel = car.engine;
+    spawned.displayOnly = Boolean(car.displayOnly);
+    spawned.hydraulicsDanceEnabled = Boolean(car.hydraulicsDance);
+    spawned.hydraulicBounceBoost = car.hydraulicBounceBoost ?? 1;
+    if (car.suspensionOffset !== undefined) spawned.suspensionOffset = car.suspensionOffset;
+    if (car.wheelScale !== undefined) spawned.wheelScale = car.wheelScale;
+    if (car.airbagSuspension !== undefined) {
+      spawned.hasAirbagSuspension = car.airbagSuspension;
+    }
+    if (car.airbagSpeed !== undefined) spawned.airbagSpeed = car.airbagSpeed;
+    if (car.airbagLockLevel !== undefined) spawned.airbagLockLevel = car.airbagLockLevel;
     if (car.livery) {
       spawned.livery = { ...car.livery };
+    }
+    if (spawned.displayOnly || spawned.hydraulicsDanceEnabled) {
+      const dance = createGarageDanceState();
+      dance.enabled = spawned.hydraulicsDanceEnabled;
+      this.vehicleDanceStates.set(spawned.id, dance);
     }
     if (vehiclePreset === 'sports_car') {
       spawned.suspensionOffset = -0.12;

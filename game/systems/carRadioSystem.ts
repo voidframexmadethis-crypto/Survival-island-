@@ -31,7 +31,10 @@ export function isOldSchoolVehicleDescriptor(car: RadioCarDescriptor = {}): bool
     preset === 'donk' ||
     preset === 'cadillac_coupe_deville' ||
     preset === 'chevy_tahoe' ||
-    preset === 'chevy_2000_sub'
+    preset === 'chevy_2000_sub' ||
+    preset === 'mini_truck' ||
+    preset === 'el_camino' ||
+    preset === 'town_car'
   ) {
     return true;
   }
@@ -77,7 +80,7 @@ export const AUDIO_PROFILES: Record<CarType, CarAudioProfile> = {
 export function resolveCarAudioType(car: RadioCarDescriptor = {}): CarType {
   const preset = (car.preset || '').toLowerCase();
   const tag = `${car.class || ''} ${car.style || ''} ${car.name || ''}`.toLowerCase();
-  if (preset === 'donk' || tag.includes('donk')) {
+  if (preset === 'donk' || preset === 'el_camino' || tag.includes('donk')) {
     return 'donk';
   }
   if (

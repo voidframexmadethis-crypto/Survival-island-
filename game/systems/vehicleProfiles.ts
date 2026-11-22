@@ -1398,6 +1398,74 @@ export const VEHICLE_PROFILES: Record<string, VehicleProfile> = {
   },
 };
 
+// Five specialty cars added to the underground show garage. They reuse the
+// proven show-car handling bases while keeping unique dimensions, paints and
+// hydraulic behavior for the spawned vehicle and the terminal preview.
+Object.assign(VEHICLE_PROFILES, {
+  'mini-truck': {
+    ...VEHICLE_PROFILES.slab,
+    id: 'mini-truck',
+    archetype: 'slab',
+    paintColor: '#0f766e',
+    rimColor: '#f8fafc',
+    horsepower: 260,
+    topSpeedMph: 105,
+    wheelRadius: 0.32,
+    wheelWidth: 0.2,
+    wheelBaseZ: 1.28,
+    trackWidthX: 1.72,
+  },
+  'el-camino-donk': {
+    ...VEHICLE_PROFILES.donk,
+    id: 'el-camino-donk',
+    archetype: 'donk',
+    paintColor: '#b91c1c',
+    rimColor: '#f8fafc',
+    horsepower: 560,
+    topSpeedMph: 138,
+    wheelRadius: 0.58,
+    wheelBaseZ: 1.52,
+    trackWidthX: 1.94,
+  },
+  'impala-ss-dancer': {
+    ...VEHICLE_PROFILES.lowrider,
+    id: 'impala-ss-dancer',
+    archetype: 'lowrider',
+    paintColor: '#1c0b12',
+    rimColor: '#f8fafc',
+    horsepower: 410,
+    topSpeedMph: 125,
+    wheelRadius: 0.4,
+    wheelBaseZ: 1.48,
+    trackWidthX: 1.9,
+  },
+  'van-90s': {
+    ...VEHICLE_PROFILES['chevy-tahoe-subwoofer'],
+    id: 'van-90s',
+    archetype: 'chevy_tahoe',
+    paintColor: '#d6d3d1',
+    rimColor: '#cbd5e1',
+    horsepower: 235,
+    topSpeedMph: 96,
+    wheelRadius: 0.43,
+    wheelWidth: 0.28,
+    wheelBaseZ: 1.72,
+    trackWidthX: 1.92,
+  },
+  'lincoln-town-car': {
+    ...VEHICLE_PROFILES.lowrider,
+    id: 'lincoln-town-car',
+    archetype: 'lowrider',
+    paintColor: '#050505',
+    rimColor: '#e2e8f0',
+    horsepower: 285,
+    topSpeedMph: 130,
+    wheelRadius: 0.38,
+    wheelBaseZ: 1.68,
+    trackWidthX: 1.92,
+  },
+});
+
 export function resolveVehicleArchetype(rawNameOrId: string): VehicleVisualArchetype {
   const s = rawNameOrId.toLowerCase();
   if (s.includes('tahoe') || s.includes('subwoofer') || s.includes('savage life') || s.includes('chevy_2000_sub')) {
@@ -1424,8 +1492,10 @@ export function resolveVehicleArchetype(rawNameOrId: string): VehicleVisualArche
   if (s.includes('koenigsegg') || s.includes('gemera')) return 'koenigsegg_gemera';
   if (s.includes('delage') || s.includes('d12')) return 'delage_d12';
   if (s.includes('mclaren') || s.includes('supercar')) return 'mclaren';
-  if (s.includes('donk')) return 'donk';
-  if (s.includes('slab')) return 'slab';
+  if (s.includes('donk') || s.includes('el camino') || s.includes('el_camino')) return 'donk';
+  if (s.includes('slab') || s.includes('mini truck') || s.includes('mini_truck')) return 'slab';
+  if (s.includes('town car') || s.includes('town_car') || s.includes('lincoln')) return 'lowrider';
+  if (s.includes('van') || s.includes('bubble van')) return 'chevy_tahoe';
   if (s.includes('lowrider') || s.includes('impala')) return 'lowrider';
   return 'generic_car';
 }

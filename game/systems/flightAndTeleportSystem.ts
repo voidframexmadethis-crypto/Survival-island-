@@ -54,6 +54,7 @@ import {
   SWAMP_HUT_POS,
   SWAMP_POS,
   TAIGA_VILLAGE_POS,
+  UNDERGROUND_ELEVATOR_KIOSK_POS,
   VEHICLE_GARAGE_POS,
   VIKING_VILLAGE_POS,
   WATERFALL_POS,
@@ -171,6 +172,14 @@ export const ISLAND_TELEPORT_DESTINATIONS: Record<string, TeleportDestination> =
     z: WATERPARK_SITE.z - 42,
   },
   garage: { x: VEHICLE_GARAGE_POS.x, z: VEHICLE_GARAGE_POS.z },
+  'underground garage': {
+    x: UNDERGROUND_ELEVATOR_KIOSK_POS.x,
+    z: UNDERGROUND_ELEVATOR_KIOSK_POS.z,
+  },
+  'car vault': {
+    x: UNDERGROUND_ELEVATOR_KIOSK_POS.x,
+    z: UNDERGROUND_ELEVATOR_KIOSK_POS.z,
+  },
   farmer: { x: FARMER_POS.x, z: FARMER_POS.z },
   wheatfield: { x: WHEATFIELD_POS.x, z: WHEATFIELD_POS.z },
   lake: { x: LAKE_CENTER.x, y: 6, z: LAKE_CENTER.z },

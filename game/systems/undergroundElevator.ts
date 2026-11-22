@@ -1,3 +1,5 @@
+import type { VehiclePresetKey } from './modularVehicle';
+
 export type ElevatorLiftState =
   | 'IDLE'
   | 'PREVIEWING'
@@ -24,6 +26,7 @@ export interface GarageVehicleSpec {
   modelType: 'cadillac' | 'chevy_tahoe' | 'lowrider' | 'donk' | 'slab' | 'sports';
   supportsHydraulics: boolean;
   hasSubwooferWall?: boolean;
+  displayOnly?: boolean;
   livery?: GarageVehicleLivery;
 }
 
@@ -56,6 +59,42 @@ export const GARAGE_VEHICLES: GarageVehicleSpec[] = [
       accentColor: '#ff2a55',
       bodyColor: '#111318',
     },
+  },
+  {
+    id: 'mini-truck',
+    name: 'Custom Mini Truck Lowrider',
+    aliases: ['mini truck', 'minitruck', 'mini truck lowrider', 'custom mini truck'],
+    modelType: 'slab',
+    supportsHydraulics: true,
+  },
+  {
+    id: 'el-camino-donk',
+    name: 'Red DONK El Camino',
+    aliases: ['el camino', 'elcamino', 'red el camino', 'el camino donk', 'red donk'],
+    modelType: 'donk',
+    supportsHydraulics: true,
+  },
+  {
+    id: 'impala-ss-dancer',
+    name: '1967 Impala SS Dancer Lowrider',
+    aliases: ['1967 impala', '67 impala', 'impala ss', 'dancer lowrider', 'dancing impala'],
+    modelType: 'lowrider',
+    supportsHydraulics: true,
+    displayOnly: true,
+  },
+  {
+    id: 'van-90s',
+    name: '1990s Extended Bubble Van',
+    aliases: ['90s van', '1990s van', 'bubble van', 'extended van', 'custom van'],
+    modelType: 'chevy_tahoe',
+    supportsHydraulics: true,
+  },
+  {
+    id: 'lincoln-town-car',
+    name: 'Lincoln Town Car (Black on Black)',
+    aliases: ['lincoln', 'town car', 'lincoln town car', 'black town car', 'black lincoln'],
+    modelType: 'lowrider',
+    supportsHydraulics: true,
   },
 ];
 
@@ -109,6 +148,7 @@ export function stepGarageHydraulicsDance(
   dance: GarageDanceState,
   dt: number,
   baseBodyY = 0,
+  bounceBoost = 1,
 ): void {
   if (!dance.enabled) {
     // Cleanly reset transforms and skip work when dance mode is off
@@ -119,9 +159,10 @@ export function stepGarageHydraulicsDance(
   }
 
   dance.phase += dt * 7.5;
-  const hop = Math.abs(Math.sin(dance.phase)) * 0.18;
-  const tilt = Math.sin(dance.phase * 0.5) * 0.11;
-  const pitch = Math.cos(dance.phase) * 0.08;
+  const boost = Math.max(0.5, Math.min(2.4, bounceBoost));
+  const hop = Math.abs(Math.sin(dance.phase)) * 0.18 * boost;
+  const tilt = Math.sin(dance.phase * 0.5) * 0.11 * Math.min(1.35, boost);
+  const pitch = Math.cos(dance.phase) * 0.08 * Math.min(1.35, boost);
 
   rig.bodyGroup.position.y = baseBodyY + hop;
   rig.bodyGroup.rotation.z = tilt;
@@ -157,10 +198,18 @@ export interface ExoticElevatorCar {
   engine: string;
   turboBoost: number;
   tagline: string;
-  preset?: 'sports_car' | 'chevy_tahoe' | 'cadillac_coupe_deville';
+  preset?: VehiclePresetKey;
   aliases?: string[];
   supportsHydraulics?: boolean;
   hasSubwooferWall?: boolean;
+  displayOnly?: boolean;
+  suspensionOffset?: number;
+  wheelScale?: number;
+  airbagSuspension?: boolean;
+  airbagSpeed?: number;
+  airbagLockLevel?: number;
+  hydraulicsDance?: boolean;
+  hydraulicBounceBoost?: number;
   livery?: GarageVehicleLivery;
 }
 
@@ -224,6 +273,134 @@ export const ELEVATOR_EXOTIC_LIFT = {
       supportsHydraulics: true,
       tagline:
         'Pearl-white convertible Coupe DeVille on 13" chrome spinners with power droptop and full airbag + coil-over hydraulics.',
+    },
+    {
+      id: 'mini-truck',
+      name: 'Custom Mini Truck Lowrider',
+      rarity: 'Teal Mini Truck Show Build',
+      class: 'Show & Hydraulics',
+      paintColor: '#0f766e',
+      accentColor: '#f8fafc',
+      rimColor: '#f8fafc',
+      underglowColor: '#2dd4bf',
+      horsepower: 260,
+      zeroToSixty: '7.2s',
+      topSpeedMph: 105,
+      engine: '2.2L Built Four · Four-Corner Hydraulic Pumps',
+      turboBoost: 1.08,
+      preset: 'mini_truck',
+      aliases: ['mini truck', 'minitruck', 'mini truck lowrider', 'custom mini truck'],
+      supportsHydraulics: true,
+      suspensionOffset: -0.24,
+      wheelScale: 0.82,
+      airbagSpeed: 1.15,
+      airbagLockLevel: 1.0,
+      hydraulicBounceBoost: 1.1,
+      tagline:
+        'Teal custom mini truck laid out on whitewalls with an open bed, visible chrome pump rack, four-corner hops, tilts and side-to-side dance.',
+    },
+    {
+      id: 'el-camino-donk',
+      name: 'Red DONK El Camino',
+      rarity: 'Red DONK Pickup',
+      class: 'Show & Hydraulics',
+      paintColor: '#b91c1c',
+      accentColor: '#f8fafc',
+      rimColor: '#f8fafc',
+      underglowColor: '#ef4444',
+      horsepower: 560,
+      zeroToSixty: '4.2s',
+      topSpeedMph: 138,
+      engine: '6.2L LS V8 · DONK-Spec Hydraulics',
+      turboBoost: 1.24,
+      preset: 'el_camino',
+      aliases: ['el camino', 'elcamino', 'red el camino', 'el camino donk', 'red donk'],
+      supportsHydraulics: true,
+      suspensionOffset: -0.2,
+      wheelScale: 1.26,
+      airbagSpeed: 1.45,
+      airbagLockLevel: 1.12,
+      hydraulicBounceBoost: 1.2,
+      tagline:
+        'Candy-red El Camino DONK on oversized chrome, open pickup bed, front/rear hops, both-side tilt and full four-corner hydraulic bounce.',
+    },
+    {
+      id: 'impala-ss-dancer',
+      name: '1967 Impala SS Dancer Lowrider',
+      rarity: 'Hydraulic Dance Display Car',
+      class: 'Show & Hydraulics',
+      paintColor: '#1c0b12',
+      accentColor: '#f8fafc',
+      rimColor: '#f8fafc',
+      underglowColor: '#a855f7',
+      horsepower: 410,
+      zeroToSixty: '6.0s',
+      topSpeedMph: 125,
+      engine: '327 cu in V8 · Six-Pump Dancer Hydraulic Rack',
+      turboBoost: 1.0,
+      preset: 'lowrider',
+      aliases: ['1967 impala', '67 impala', 'impala ss', 'dancer lowrider', 'dancing impala'],
+      supportsHydraulics: true,
+      displayOnly: true,
+      hydraulicsDance: true,
+      suspensionOffset: -0.18,
+      wheelScale: 0.9,
+      airbagSpeed: 1.65,
+      airbagLockLevel: 1.25,
+      hydraulicBounceBoost: 1.25,
+      tagline:
+        'Black-cherry 1967 Impala SS dancer with six visible pumps, front/rear/side hops and continuous body dance. Display only — push it to move it.',
+    },
+    {
+      id: 'van-90s',
+      name: '1990s Extended Bubble Van',
+      rarity: 'Extended Custom Van',
+      class: 'Show & Hydraulics',
+      paintColor: '#d6d3d1',
+      accentColor: '#334155',
+      rimColor: '#cbd5e1',
+      underglowColor: '#38bdf8',
+      horsepower: 235,
+      zeroToSixty: '9.0s',
+      topSpeedMph: 96,
+      engine: '5.7L V8 · Long-Travel Airbag & Coil-Over Bounce',
+      turboBoost: 1.06,
+      preset: 'van_90s',
+      aliases: ['90s van', '1990s van', 'bubble van', 'extended van', 'custom van'],
+      supportsHydraulics: true,
+      suspensionOffset: 0.08,
+      wheelScale: 1.08,
+      airbagSuspension: true,
+      airbagSpeed: 1.7,
+      airbagLockLevel: 1.4,
+      hydraulicBounceBoost: 1.85,
+      tagline:
+        'Extended 1990s bubble van with long-travel airbags, a huge vertical bounce, four-corner lift/drop and no rear subwoofer wall — just open cargo and hydraulic hardware.',
+    },
+    {
+      id: 'lincoln-town-car',
+      name: 'Lincoln Town Car (Black on Black)',
+      rarity: 'Black-on-Black Hydraulic Sedan',
+      class: 'Show & Hydraulics',
+      paintColor: '#050505',
+      accentColor: '#d4d4d8',
+      rimColor: '#e2e8f0',
+      underglowColor: '#71717a',
+      horsepower: 285,
+      zeroToSixty: '7.4s',
+      topSpeedMph: 130,
+      engine: '4.6L V8 · Four-Pump Cylinder Hydraulics (No Ball-Joint Lock-Up)',
+      turboBoost: 1.12,
+      preset: 'town_car',
+      aliases: ['lincoln', 'town car', 'lincoln town car', 'black town car', 'black lincoln'],
+      supportsHydraulics: true,
+      suspensionOffset: -0.18,
+      wheelScale: 0.88,
+      airbagSpeed: 1.3,
+      airbagLockLevel: 1.0,
+      hydraulicBounceBoost: 1.18,
+      tagline:
+        'Black-on-black left-hand-drive Town Car with chrome trim, four-pump cylinder hydraulics, up/down, left/right tilt, both-side dance and a three-wheel stance — no high-lock ball joints.',
     },
     {
       id: 'mclaren_720s_lbw',

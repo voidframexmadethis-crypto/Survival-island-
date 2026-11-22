@@ -268,6 +268,10 @@ export type VehiclePresetKey =
   | 'cadillac_coupe_deville'
   | 'chevy_tahoe'
   | 'chevy_2000_sub'
+  | 'mini_truck'
+  | 'el_camino'
+  | 'van_90s'
+  | 'town_car'
   | 'steam_boat'
   | 'gyro_airship';
 
@@ -356,7 +360,11 @@ export function buildPresetModules(preset: VehiclePresetKey): VehicleModulePlace
     preset === 'slab' ||
     preset === 'cadillac_coupe_deville' ||
     preset === 'chevy_tahoe' ||
-    preset === 'chevy_2000_sub'
+    preset === 'chevy_2000_sub' ||
+    preset === 'mini_truck' ||
+    preset === 'el_camino' ||
+    preset === 'van_90s' ||
+    preset === 'town_car'
   ) {
     return [
       mk('chassis_frame', 0, 0, 0, 1),
@@ -445,6 +453,10 @@ export function createVehicleFromPreset(
     cadillac_coupe_deville: 'Cadillac Coupe DeVille (13" Spinners)',
     chevy_tahoe: 'Chevy Tahoe (40" Slammed Forgiatos)',
     chevy_2000_sub: '2000 Chevy Open-Back Sub Wall',
+    mini_truck: 'Custom Mini Truck Lowrider',
+    el_camino: 'Red DONK El Camino',
+    van_90s: '1990s Extended Bubble Van',
+    town_car: 'Lincoln Town Car (Black on Black)',
     steam_boat: 'Pontoon Valley Explorer Boat',
     gyro_airship: 'Island Gyro Rotor Airship',
   };
@@ -458,6 +470,10 @@ export function createVehicleFromPreset(
     cadillac_coupe_deville: '#f8fafc',
     chevy_tahoe: '#111318',
     chevy_2000_sub: '#1d4ed8',
+    mini_truck: '#0f766e',
+    el_camino: '#b91c1c',
+    van_90s: '#d6d3d1',
+    town_car: '#050505',
     steam_boat: '#0284c7',
     gyro_airship: '#eab308',
   };
@@ -471,6 +487,10 @@ export function createVehicleFromPreset(
     cadillac_coupe_deville: '#f8fafc',
     chevy_tahoe: '#f8fafc',
     chevy_2000_sub: '#e2e8f0',
+    mini_truck: '#f8fafc',
+    el_camino: '#f8fafc',
+    van_90s: '#cbd5e1',
+    town_car: '#e2e8f0',
     steam_boat: '#d97706',
     gyro_airship: '#e2e8f0',
   };
@@ -484,6 +504,10 @@ export function createVehicleFromPreset(
     cadillac_coupe_deville: -0.14,
     chevy_tahoe: -0.3,
     chevy_2000_sub: -0.3,
+    mini_truck: -0.24,
+    el_camino: -0.2,
+    van_90s: 0.08,
+    town_car: -0.18,
     steam_boat: 0,
     gyro_airship: 0.05,
   };
@@ -497,6 +521,10 @@ export function createVehicleFromPreset(
     cadillac_coupe_deville: 0.8,
     chevy_tahoe: 1.42,
     chevy_2000_sub: 1.38,
+    mini_truck: 0.82,
+    el_camino: 1.26,
+    van_90s: 1.08,
+    town_car: 0.88,
     steam_boat: 1.0,
     gyro_airship: 0.9,
   };
@@ -504,6 +532,10 @@ export function createVehicleFromPreset(
   const isTahoe = preset === 'chevy_tahoe';
   const isChevySub = preset === 'chevy_2000_sub';
   const hasLedRims = isTahoe || isChevySub;
+  const isSpecialtyHydraulic =
+    preset === 'mini_truck' ||
+    preset === 'el_camino' ||
+    preset === 'town_car';
   return {
     id,
     name: names[preset],
@@ -512,10 +544,19 @@ export function createVehicleFromPreset(
     rimColor: rimColors[preset],
     suspensionOffset: suspensionByPreset[preset],
     wheelScale: wheelScaleByPreset[preset],
-    hydraulicHop: preset === 'lowrider' || preset === 'donk' || isDeville || isTahoe || isChevySub,
-    hasAirbagSuspension: isDeville || isTahoe || isChevySub,
-    airbagSpeed: 1.0,
-    airbagLockLevel: 1.0,
+    hydraulicHop:
+      preset === 'lowrider' ||
+      preset === 'donk' ||
+      isDeville ||
+      isTahoe ||
+      isChevySub ||
+      isSpecialtyHydraulic ||
+      preset === 'van_90s',
+    hasAirbagSuspension:
+      isDeville || isTahoe || isChevySub || preset === 'van_90s',
+    airbagSpeed: preset === 'van_90s' ? 1.35 : 1.0,
+    airbagLockLevel: preset === 'van_90s' ? 1.18 : 1.0,
+    hydraulicBounceBoost: preset === 'van_90s' ? 1.85 : preset === 'el_camino' ? 1.2 : 1.0,
     hasConvertibleTop: isDeville,
     convertibleTopDown: false,
     doorsOpen: false,
@@ -551,7 +592,15 @@ export function createVehicleFromPreset(
                     ? 1.18
                     : preset === 'lowrider'
                       ? 1.15
-                      : 1.0,
+                      : preset === 'el_camino'
+                        ? 1.24
+                        : preset === 'mini_truck'
+                          ? 1.1
+                          : preset === 'van_90s'
+                            ? 1.08
+                            : preset === 'town_car'
+                              ? 1.12
+                              : 1.0,
     x,
     y,
     z,

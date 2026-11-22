@@ -301,6 +301,11 @@ export function UndergroundElevatorModal({
               <div className="mt-2.5 text-[11px] font-mono text-cyan-300/90">
                 ENGINE: {selectedCar.engine} · WORKING OPENING DOORS & FULL INTERIOR
               </div>
+              {selectedCar.displayOnly && (
+                <div className="mt-1.5 text-[10px] font-black uppercase tracking-wider text-fuchsia-300">
+                  Display only · hydraulic dance runs automatically · walk up and press E to push it
+                </div>
+              )}
             </div>
 
             {/* Primary CTA: Bring Car to Surface */}
@@ -314,7 +319,7 @@ export function UndergroundElevatorModal({
             </button>
           </div>
 
-          {/* Right 5 cols: Search + Filter + 15-Car Vault Roster */}
+          {/* Right 5 cols: Search + Filter + Vault Roster */}
           <div className="lg:col-span-5 flex flex-col gap-2.5 min-h-0">
             <div className="relative">
               <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -419,6 +424,11 @@ export function UndergroundElevatorModal({
                     {isOnSurface && (
                       <span className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-400/50 text-[9px] font-black text-emerald-300 uppercase shrink-0">
                         Surface
+                      </span>
+                    )}
+                    {car.displayOnly && (
+                      <span className="px-2 py-0.5 rounded bg-fuchsia-500/20 border border-fuchsia-400/50 text-[9px] font-black text-fuchsia-200 uppercase shrink-0">
+                        Dance
                       </span>
                     )}
                   </button>
