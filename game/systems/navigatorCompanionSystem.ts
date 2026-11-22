@@ -4,7 +4,9 @@ import type {
   ItemId,
   ModularVehicleData,
   NavigatorCompanionHudState,
+  NavigatorCompanionSaveData,
   NavigatorDeparturePhase,
+  NavigatorRelationship,
   NavigatorTask,
   PlayerGender,
   ResourceNodeState,
@@ -13,8 +15,33 @@ import {
   ShipNavigatorNpcHandle,
   buildShipNavigatorNpcModel,
 } from '@/game/world/pirateCinematicRig';
+import { OCEAN_LEVEL, SHIPWRECK_POS } from '@/game/world/terrain';
 import type { ActiveCreature } from './creatureSystem';
 import type { ModularVehicleMeshHandles } from '@/game/world/engineeringModels';
+
+// The large plank stays at the sunken pirate ship so the navigator can sit on it
+// permanently after leaving the player's party.
+export const NAVIGATOR_FAREWELL_BOARD_POS = {
+  x: SHIPWRECK_POS.x + 9.5,
+  z: SHIPWRECK_POS.z + 4.5,
+};
+const BOARD_SURFACE_Y = OCEAN_LEVEL + 0.25;
+const BOARD_SIT_ROOT_Y = BOARD_SURFACE_Y - 0.72;
+const WATER_DEPARTURE_DISTANCE = 5.2;
+const WATER_DEPARTURE_HOLD = 0.9;
+
+const DEPARTURE_PHASES: NavigatorDeparturePhase[] = [
+  'active',
+  'swim_to_wood',
+  'climb_wood',
+  'sitting_wood',
+  'heartbroken_notice',
+  'returning_to_shore',
+  'dropping_gun',
+  'walking_into_ocean',
+  'fading_away',
+  'gone',
+];
 
 export interface NavigatorCompanionContext {
   dt: number;
@@ -24,6 +51,7 @@ export interface NavigatorCompanionContext {
   playerZ: number;
   activePlayerVehicleId: string | null;
   playerIsFlying: boolean;
+  playerSwimming: boolean;
   shelterPos: { x: number; z: number };
   shipwreckPos: { x: number; z: number };
   getTerrainHeight: (x: number, z: number) => number;
@@ -62,8 +90,10 @@ function isTreeNode(node: ResourceNodeState): boolean {
 
 export class NavigatorCompanionController {
   public readonly group = new THREE.Group();
+  public readonly departureBoardGroup = new THREE.Group();
   public readonly droppedGunGroup = new THREE.Group();
   private droppedGunRing: THREE.Mesh;
+  private readonly departureBoard = new THREE.Group();
   private girlRig: ShipNavigatorNpcHandle;
   private boyRig: ShipNavigatorNpcHandle;
   private gender: PlayerGender = 'girl';
@@ -95,14 +125,21 @@ export class NavigatorCompanionController {
 
   // Fly-away abandonment & shipwreck farewell sequence
   private departurePhase: NavigatorDeparturePhase = 'active';
+  private relationship: NavigatorRelationship = 'companion';
   private phaseTimer = 0;
   private flyAwayTimer = 0;
+  private waterDepartureTimer = 0;
   private speechLine: string | null = null;
   private speechTimer = 0;
   private hasDroppedGun = false;
   private droppedGunPos: { x: number; y: number; z: number } | null = null;
   private shoreDropPos: { x: number; z: number } = { x: -8, z: 706 };
   private oceanWalkSplashTimer = 0;
+  private waterSplashTimer = 0;
+  private climbStart = { x: 0, y: 0, z: 0 };
+  private cinematicRequested = false;
+  private cinematicSeen = false;
+  private farewellFocus: { x: number; z: number } | null = null;
   private cachedTreeTarget: ResourceNodeState | null = null;
   private cachedCreatureTarget: ActiveCreature | null = null;
   private targetScanTimer = 0;
@@ -113,6 +150,8 @@ export class NavigatorCompanionController {
     this.boyRig = buildShipNavigatorNpcModel('boy');
     this.group.add(this.girlRig.root, this.boyRig.root);
     this.setGender('girl');
+
+    this.buildDepartureBoard();
 
     // Build 3D dropped survival rifle mesh for when the Navigator leaves her/his gun on the island floor
     const gunWoodMat = new THREE.MeshStandardMaterial({ color: 0x5c3a21, roughness: 0.78 });
@@ -157,6 +196,44 @@ export class NavigatorCompanionController {
     this.droppedGunGroup.visible = false;
   }
 
+  private buildDepartureBoard(): void {
+    // Reuses the weathered hull/deck palette from the pirate ship debris.
+    const plankMat = new THREE.MeshStandardMaterial({ color: 0x5b3a23, roughness: 0.88, metalness: 0.02 });
+    const edgeMat = new THREE.MeshStandardMaterial({ color: 0x3f2818, roughness: 0.92, metalness: 0.01 });
+    const ropeMat = new THREE.MeshStandardMaterial({ color: 0x9c8259, roughness: 0.94 });
+    for (let i = -1; i <= 1; i++) {
+      const plank = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.18, 0.58), i === 0 ? edgeMat : plankMat);
+      plank.position.set(0, 0, i * 0.62);
+      plank.rotation.y = (i % 2) * 0.025;
+      plank.castShadow = true;
+      plank.receiveShadow = true;
+      this.departureBoard.add(plank);
+    }
+    for (const x of [-1.28, 1.28]) {
+      const brace = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.14, 2.05), edgeMat);
+      brace.position.set(x, 0.13, 0);
+      brace.rotation.y = x > 0 ? -0.04 : 0.04;
+      this.departureBoard.add(brace);
+    }
+    const rope = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.035, 5, 10), ropeMat);
+    rope.rotation.x = Math.PI / 2;
+    rope.position.set(1.45, 0.12, 0.55);
+    this.departureBoard.add(rope);
+    const spar = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 2.8, 6), plankMat);
+    spar.rotation.z = Math.PI / 2;
+    spar.rotation.y = 0.14;
+    spar.position.set(-0.9, 0.06, -0.98);
+    this.departureBoard.add(spar);
+
+    this.departureBoard.position.set(
+      NAVIGATOR_FAREWELL_BOARD_POS.x,
+      OCEAN_LEVEL + 0.16,
+      NAVIGATOR_FAREWELL_BOARD_POS.z,
+    );
+    this.departureBoard.rotation.y = 0.34;
+    this.departureBoardGroup.add(this.departureBoard);
+  }
+
   public get activeRig(): ShipNavigatorNpcHandle {
     return this.gender === 'boy' ? this.boyRig : this.girlRig;
   }
@@ -196,18 +273,30 @@ export class NavigatorCompanionController {
     this.swingTimer = 0;
     this.equippedTool = 'gun';
     this.departurePhase = 'active';
+    this.relationship = 'companion';
     this.phaseTimer = 0;
     this.flyAwayTimer = 0;
+    this.waterDepartureTimer = 0;
     this.speechLine = null;
     this.speechTimer = 0;
     this.hasDroppedGun = false;
     this.droppedGunPos = null;
     this.oceanWalkSplashTimer = 0;
+    this.waterSplashTimer = 0;
+    this.cinematicRequested = false;
+    this.cinematicSeen = false;
+    this.farewellFocus = null;
     this.droppedGunGroup.visible = false;
+    this.departureBoardGroup.visible = true;
+    this.departureBoard.position.set(
+      NAVIGATOR_FAREWELL_BOARD_POS.x,
+      OCEAN_LEVEL + 0.16,
+      NAVIGATOR_FAREWELL_BOARD_POS.z,
+    );
     this.group.scale.set(1, 1, 1);
+    this.group.rotation.set(0, this.yaw, 0);
     this.statusText = 'Ready on the beach with backpack, axe & survival rifle';
     this.group.position.set(this.x, this.y, this.z);
-    this.group.rotation.y = this.yaw;
     this.syncEquippedToolVisual();
   }
 
@@ -217,6 +306,108 @@ export class NavigatorCompanionController {
 
   public isDeparting(): boolean {
     return this.departurePhase !== 'active' && this.departurePhase !== 'gone';
+  }
+
+  public isDeparted(): boolean {
+    return this.relationship === 'departed' || this.departurePhase !== 'active';
+  }
+
+  public isCompanionActive(): boolean {
+    return this.relationship === 'companion' && this.departurePhase === 'active';
+  }
+
+  public isSittingAtWreck(): boolean {
+    return this.departurePhase === 'sitting_wood';
+  }
+
+  public getDepartureBoardPosition(): { x: number; y: number; z: number } {
+    return {
+      x: NAVIGATOR_FAREWELL_BOARD_POS.x,
+      y: BOARD_SURFACE_Y,
+      z: NAVIGATOR_FAREWELL_BOARD_POS.z,
+    };
+  }
+
+  public consumeFarewellCinematicRequest(): boolean {
+    if (this.departurePhase !== 'sitting_wood' || this.cinematicSeen || !this.cinematicRequested) {
+      return false;
+    }
+    this.cinematicRequested = false;
+    return true;
+  }
+
+  public markFarewellCinematicSeen(): void {
+    this.cinematicSeen = true;
+    this.cinematicRequested = false;
+    this.statusText = 'Sitting on the driftwood by the sunken pirate ship.';
+  }
+
+  public setFarewellFocus(x: number | null, z: number | null): void {
+    this.farewellFocus = x === null || z === null ? null : { x, z };
+  }
+
+  public exportState(): NavigatorCompanionSaveData {
+    return {
+      gender: this.gender,
+      x: this.x,
+      y: this.y,
+      z: this.z,
+      yaw: this.yaw,
+      task: this.task,
+      departurePhase: this.departurePhase,
+      relationship: this.isDeparted() ? 'departed' : this.relationship,
+      cinematicSeen: this.cinematicSeen,
+      droppedGunPos: this.droppedGunPos ? { ...this.droppedGunPos } : null,
+    };
+  }
+
+  public restoreState(save: NavigatorCompanionSaveData): void {
+    this.setGender(save.gender === 'boy' ? 'boy' : 'girl');
+    this.x = Number.isFinite(save.x) ? save.x : this.x;
+    this.y = Number.isFinite(save.y) ? save.y : this.y;
+    this.z = Number.isFinite(save.z) ? save.z : this.z;
+    this.yaw = Number.isFinite(save.yaw) ? save.yaw : this.yaw;
+    this.task = save.task ?? 'follow';
+    this.departurePhase = DEPARTURE_PHASES.includes(save.departurePhase)
+      ? save.departurePhase
+      : 'active';
+    this.relationship =
+      save.relationship === 'departed' || this.departurePhase !== 'active'
+        ? 'departed'
+        : 'companion';
+    this.cinematicSeen = Boolean(save.cinematicSeen);
+    this.cinematicRequested = this.departurePhase === 'sitting_wood' && !this.cinematicSeen;
+    this.phaseTimer = 0;
+    this.waterDepartureTimer = 0;
+    this.flyAwayTimer = 0;
+    this.speechLine = null;
+    this.speechTimer = 0;
+    this.farewellFocus = null;
+    this.hasDroppedGun = Boolean(save.droppedGunPos);
+    this.droppedGunPos = save.droppedGunPos ? { ...save.droppedGunPos } : null;
+    this.climbStart = { x: this.x, y: this.y, z: this.z };
+    this.droppedGunGroup.visible = Boolean(this.droppedGunPos);
+    if (this.droppedGunPos) {
+      this.droppedGunGroup.position.set(
+        this.droppedGunPos.x,
+        this.droppedGunPos.y + 0.04,
+        this.droppedGunPos.z,
+      );
+    }
+    this.departureBoardGroup.visible = true;
+    this.group.scale.set(1, 1, 1);
+    this.group.visible = this.departurePhase !== 'gone';
+    this.statusText = this.isSittingAtWreck()
+      ? 'Sitting on the driftwood by the sunken pirate ship.'
+      : this.departurePhase === 'active'
+        ? 'Following beside you with survival gear ready'
+        : 'Still finding her way after the ferry left.';
+    this.group.position.set(this.x, this.y, this.z);
+    this.group.rotation.set(0, this.yaw, 0);
+    if (this.isSittingAtWreck()) {
+      this.applySittingPose(0);
+    }
+    this.syncEquippedToolVisual();
   }
 
   public getDroppedGunPos(): { x: number; y: number; z: number } | null {
@@ -307,10 +498,15 @@ export class NavigatorCompanionController {
   }
 
   private syncEquippedToolVisual(): void {
+    const onFerryFarewell =
+      this.departurePhase === 'swim_to_wood' ||
+      this.departurePhase === 'climb_wood' ||
+      this.departurePhase === 'sitting_wood';
     for (const rig of [this.girlRig, this.boyRig]) {
-      rig.gunMesh.visible = !this.hasDroppedGun && this.equippedTool === 'gun';
-      rig.axeMesh.visible = this.departurePhase === 'active' && this.equippedTool === 'axe';
+      rig.gunMesh.visible = !onFerryFarewell && !this.hasDroppedGun && this.equippedTool === 'gun';
+      rig.axeMesh.visible = !onFerryFarewell && this.departurePhase === 'active' && this.equippedTool === 'axe';
       rig.mapMesh.visible =
+        !onFerryFarewell &&
         this.departurePhase === 'active' &&
         (this.equippedTool === 'map' || this.task === 'lead_shelter');
     }
@@ -340,6 +536,99 @@ export class NavigatorCompanionController {
       this.yaw = Math.atan2(dx, dz);
     }
     return dist;
+  }
+
+  private moveSwimmingToward(
+    tx: number,
+    tz: number,
+    speed: number,
+    dt: number,
+    getTerrainHeight: (x: number, z: number) => number,
+    oceanLevel: number,
+  ): { dist: number; inWater: boolean } {
+    const dx = tx - this.x;
+    const dz = tz - this.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist > 0.05) {
+      const step = Math.min(dist, speed * dt);
+      const nx = this.x + (dx / dist) * step;
+      const nz = this.z + (dz / dist) * step;
+      const groundY = getTerrainHeight(nx, nz);
+      this.x = nx;
+      this.z = nz;
+      this.y = groundY < oceanLevel - 0.12 ? oceanLevel - 0.48 : groundY;
+      this.yaw = Math.atan2(dx, dz);
+    }
+    return { dist, inWater: this.y < oceanLevel - 0.2 };
+  }
+
+  private animateSwimming(elapsed: number): void {
+    const rig = this.activeRig;
+    const stroke = Math.sin(elapsed * 6.4);
+    this.group.rotation.set(0.32, this.yaw, 0);
+    rig.leftArm.rotation.set(-1.55 + stroke * 0.9, 0, -0.25);
+    rig.rightArm.rotation.set(-1.55 - stroke * 0.9, 0, 0.25);
+    rig.leftLeg.rotation.x = -stroke * 0.42;
+    rig.rightLeg.rotation.x = stroke * 0.42;
+    rig.head.rotation.set(-0.34, 0, 0);
+  }
+
+  private animateClimbing(progress: number, elapsed: number): void {
+    const rig = this.activeRig;
+    const reach = Math.sin(progress * Math.PI);
+    const stroke = Math.sin(elapsed * 7.2) * 0.35;
+    this.group.rotation.set(0.12 * (1 - progress), this.yaw, 0);
+    rig.leftArm.rotation.set(-2.2 - reach * 0.45 + stroke, 0, -0.18);
+    rig.rightArm.rotation.set(-2.2 - reach * 0.45 - stroke, 0, 0.18);
+    rig.leftLeg.rotation.x = -0.8 - reach * 0.5;
+    rig.rightLeg.rotation.x = -0.55 - reach * 0.35;
+    rig.head.rotation.set(-0.1, 0, 0);
+  }
+
+  private applySittingPose(elapsed: number): void {
+    const rig = this.activeRig;
+    const focus = this.farewellFocus;
+    const lookX = focus ? focus.x : this.x + Math.sin(this.yaw) * 8;
+    const lookZ = focus ? focus.z : this.z + Math.cos(this.yaw) * 8;
+    this.yaw = Math.atan2(lookX - this.x, lookZ - this.z);
+    this.x = NAVIGATOR_FAREWELL_BOARD_POS.x;
+    this.z = NAVIGATOR_FAREWELL_BOARD_POS.z;
+    const bob = Math.sin(elapsed * 0.9) * 0.045;
+    this.y = BOARD_SIT_ROOT_Y + bob;
+    this.group.position.set(this.x, this.y, this.z);
+    this.group.rotation.set(0, this.yaw, Math.sin(elapsed * 0.55) * 0.012);
+    const breath = Math.sin(elapsed * 1.35) * 0.025;
+    rig.leftLeg.rotation.set(-1.52, 0, -0.1);
+    rig.rightLeg.rotation.set(-1.48, 0, 0.1);
+    rig.leftArm.rotation.set(-0.3 + breath, 0, -0.06);
+    rig.rightArm.rotation.set(-0.3 - breath, 0, 0.06);
+    rig.head.rotation.set(focus ? -0.04 : 0.14, Math.sin(elapsed * 0.7) * 0.08, 0);
+  }
+
+  private updateFarewellBoard(elapsed: number): void {
+    const bob = Math.sin(elapsed * 0.9) * 0.055;
+    this.departureBoardGroup.position.y = bob;
+    this.departureBoard.rotation.z = Math.sin(elapsed * 0.7 + 0.6) * 0.015;
+  }
+
+  private beginWaterDeparture(ctx: NavigatorCompanionContext): void {
+    if (this.departurePhase !== 'active') return;
+    this.departurePhase = 'swim_to_wood';
+    this.relationship = 'departed';
+    this.task = 'stay';
+    this.phaseTimer = 0;
+    this.waterDepartureTimer = 0;
+    this.cinematicRequested = false;
+    this.equippedTool = 'gun';
+    this.syncEquippedToolVisual();
+    this.speechLine = "Oh... you're leaving me here?";
+    this.speechTimer = 5.2;
+    this.statusText = 'Watching you swim away, then turning toward the old shipwreck.';
+    ctx.onToast(
+      `${this.getName()}: "Oh... I thought we were staying together."`,
+      'warning',
+    );
+    ctx.onSpawnParticles(this.x, ctx.oceanLevel + 0.12, this.z, 0xe0f2fe, 10);
   }
 
   private animateLocomotion(moving: boolean, running: boolean, elapsed: number): void {
@@ -411,6 +700,73 @@ export class NavigatorCompanionController {
     const { dt, elapsed } = ctx;
     this.phaseTimer += dt;
     const rig = this.activeRig;
+
+    if (this.departurePhase === 'swim_to_wood') {
+      const dx = NAVIGATOR_FAREWELL_BOARD_POS.x - this.x;
+      const dz = NAVIGATOR_FAREWELL_BOARD_POS.z - this.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > 2.1) {
+        this.moveSwimmingToward(
+          NAVIGATOR_FAREWELL_BOARD_POS.x,
+          NAVIGATOR_FAREWELL_BOARD_POS.z,
+          5.2,
+          dt,
+          ctx.getTerrainHeight,
+          ctx.oceanLevel,
+        );
+        this.y = Math.min(this.y, ctx.oceanLevel - 0.5) + Math.sin(elapsed * 3.6) * 0.08;
+        this.group.position.set(this.x, this.y, this.z);
+        this.group.rotation.set(0.32, this.yaw, 0);
+        this.animateSwimming(elapsed);
+        this.statusText = `Swimming back to the driftwood by the sunken ship (${Math.round(dist)}m)...`;
+      } else {
+        this.departurePhase = 'climb_wood';
+        this.phaseTimer = 0;
+        this.climbStart = { x: this.x, y: this.y, z: this.z };
+        this.statusText = 'Climbing onto the floating plank.';
+      }
+      this.waterSplashTimer -= dt;
+      if (this.waterSplashTimer <= 0 && dist > 2.1) {
+        this.waterSplashTimer = 0.65;
+        ctx.onSpawnParticles(this.x, ctx.oceanLevel + 0.1, this.z, 0xe0f2fe, 4);
+      }
+      return;
+    }
+
+    if (this.departurePhase === 'climb_wood') {
+      const t = Math.min(1, this.phaseTimer / 1.8);
+      const ease = 1 - Math.pow(1 - t, 3);
+      this.x = THREE.MathUtils.lerp(this.climbStart.x, NAVIGATOR_FAREWELL_BOARD_POS.x, ease);
+      this.z = THREE.MathUtils.lerp(this.climbStart.z, NAVIGATOR_FAREWELL_BOARD_POS.z, ease);
+      this.y = THREE.MathUtils.lerp(this.climbStart.y, BOARD_SIT_ROOT_Y, ease) + Math.sin(t * Math.PI) * 0.55;
+      this.yaw = Math.atan2(
+        NAVIGATOR_FAREWELL_BOARD_POS.x - this.climbStart.x,
+        NAVIGATOR_FAREWELL_BOARD_POS.z - this.climbStart.z,
+      );
+      this.group.position.set(this.x, this.y, this.z);
+      this.animateClimbing(t, elapsed);
+      this.statusText = 'Pulling herself up onto the floating driftwood.';
+      if (t >= 1) {
+        this.departurePhase = 'sitting_wood';
+        this.phaseTimer = 0;
+        this.cinematicRequested = !this.cinematicSeen;
+        this.statusText = 'Sitting on the driftwood, looking back toward the ferry route.';
+        this.speechLine = null;
+        this.speechTimer = 0;
+      }
+      return;
+    }
+
+    if (this.departurePhase === 'sitting_wood') {
+      this.applySittingPose(elapsed);
+      this.statusText = this.cinematicSeen
+        ? 'Sitting on the driftwood by the sunken pirate ship.'
+        : 'Watching the water where the ferry passed.';
+      if (!this.cinematicSeen && this.phaseTimer >= 1.3) {
+        this.cinematicRequested = true;
+      }
+      return;
+    }
 
     if (this.departurePhase === 'heartbroken_notice') {
       this.yaw = Math.atan2(ctx.playerX - this.x, ctx.playerZ - this.z);
@@ -583,6 +939,8 @@ export class NavigatorCompanionController {
       this.droppedGunRing.scale.set(pulse, pulse, 1);
     }
 
+    this.updateFarewellBoard(elapsed);
+
     if (this.departurePhase === 'gone') {
       this.group.visible = false;
       return;
@@ -622,6 +980,66 @@ export class NavigatorCompanionController {
       }
     } else {
       this.flyAwayTimer = Math.max(0, this.flyAwayTimer - dt * 1.5);
+    }
+
+    // The ferry has already dropped both of them in the surf. If the player
+    // deliberately swims away near the wreck, she gives up following and
+    // turns back toward the floating plank at the sunken pirate ship.
+    if (
+      ctx.playerSwimming &&
+      !ctx.playerIsFlying &&
+      !this.drivingVehicleId &&
+      !ctx.activePlayerVehicleId
+    ) {
+      const wreckDistance = Math.hypot(
+        ctx.shipwreckPos.x - this.x,
+        ctx.shipwreckPos.z - this.z,
+      );
+      if (wreckDistance < 115 && distToPlayer > WATER_DEPARTURE_DISTANCE) {
+        this.waterDepartureTimer += dt;
+        if (this.waterDepartureTimer >= WATER_DEPARTURE_HOLD) {
+          this.beginWaterDeparture(ctx);
+          this.updateDepartureSequence(ctx);
+          return;
+        }
+      } else {
+        this.waterDepartureTimer = Math.max(0, this.waterDepartureTimer - dt * 2.5);
+      }
+
+      if (distToPlayer > 2.6) {
+        const step = this.moveSwimmingToward(
+          ctx.playerX,
+          ctx.playerZ,
+          distToPlayer > 11 ? 5.6 : 3.7,
+          dt,
+          ctx.getTerrainHeight,
+          ctx.oceanLevel,
+        );
+        this.group.position.set(this.x, this.y, this.z);
+        this.group.rotation.set(step.inWater ? 0.32 : 0, this.yaw, 0);
+        if (step.inWater) {
+          this.animateSwimming(elapsed);
+          this.waterSplashTimer -= dt;
+          if (this.waterSplashTimer <= 0) {
+            this.waterSplashTimer = 0.8;
+            ctx.onSpawnParticles(this.x, ctx.oceanLevel + 0.08, this.z, 0xe0f2fe, 3);
+          }
+          this.statusText = 'Following you through the water...';
+        } else {
+          this.animateLocomotion(true, distToPlayer > 9, elapsed);
+          this.statusText = 'Following you toward the surf...';
+        }
+      } else {
+        this.y = ctx.oceanLevel - 0.5 + Math.sin(elapsed * 2.8) * 0.07;
+        this.group.position.set(this.x, this.y, this.z);
+        this.group.rotation.set(0.32, this.yaw, 0);
+        this.animateSwimming(elapsed);
+        this.statusText = 'Swimming beside you in the waves.';
+      }
+      this.group.position.set(this.x, this.y, this.z);
+      return;
+    } else {
+      this.waterDepartureTimer = Math.max(0, this.waterDepartureTimer - dt * 2);
     }
 
     // If player drives the vehicle the companion was driving, companion steps out safely
@@ -1014,9 +1432,12 @@ export class NavigatorCompanionController {
       treesChopped: this.treesChopped,
       animalsHunted: this.animalsHunted,
       departurePhase: this.departurePhase,
+      relationship: this.isDeparted() ? 'departed' : this.relationship,
       speechLine: this.speechLine,
       droppedGunPos: this.droppedGunPos ? { ...this.droppedGunPos } : null,
       gone: this.departurePhase === 'gone',
+      departed: this.isDeparted(),
+      sittingAtWreck: this.isSittingAtWreck(),
     };
   }
 }

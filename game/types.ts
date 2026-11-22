@@ -655,12 +655,31 @@ export type NavigatorTask =
 
 export type NavigatorDeparturePhase =
   | 'active'
+  | 'swim_to_wood'
+  | 'climb_wood'
+  | 'sitting_wood'
   | 'heartbroken_notice'
   | 'returning_to_shore'
   | 'dropping_gun'
   | 'walking_into_ocean'
   | 'fading_away'
   | 'gone';
+
+export type NavigatorRelationship = 'companion' | 'departed';
+
+/** Persisted separately from survival progress so a departed navigator never respawns. */
+export interface NavigatorCompanionSaveData {
+  gender: PlayerGender;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  task: NavigatorTask;
+  departurePhase: NavigatorDeparturePhase;
+  relationship: NavigatorRelationship;
+  cinematicSeen: boolean;
+  droppedGunPos?: { x: number; y: number; z: number } | null;
+}
 
 export interface NavigatorCompanionHudState {
   gender: PlayerGender;
@@ -676,9 +695,12 @@ export interface NavigatorCompanionHudState {
   treesChopped: number;
   animalsHunted: number;
   departurePhase: NavigatorDeparturePhase;
+  relationship: NavigatorRelationship;
   speechLine: string | null;
   droppedGunPos: { x: number; y: number; z: number } | null;
   gone: boolean;
+  departed: boolean;
+  sittingAtWreck: boolean;
 }
 
 export function resolveAllowedGameMode(
@@ -1176,6 +1198,7 @@ export interface GameSaveData {
   finalIsland?: import('./systems/finalIslandFeatures').FinalIslandSaveState;
   dragonValleySave?: import('./systems/dragonValleySystem').DragonValleySaveData;
   vikingVillageSave?: import('./systems/vikingVillageSystem').VikingVillageSaveData;
+  navigatorCompanion?: NavigatorCompanionSaveData;
 }
 
 export interface CarcassSaveData {

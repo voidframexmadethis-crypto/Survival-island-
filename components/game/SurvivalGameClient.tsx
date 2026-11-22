@@ -1689,9 +1689,14 @@ export function SurvivalGameClient() {
                       </span>
                     </span>
                     <span className="text-[9px] uppercase font-bold text-amber-300 shrink-0">
-                      {hud.navigatorCompanion.departurePhase !== 'active'
-                        ? 'Returning to Shipwreck'
-                        : `${hud.navigatorCompanion.task.replace('_', ' ')} · ${hud.navigatorCompanion.distanceToPlayer}m`}
+                      {hud.navigatorCompanion.sittingAtWreck
+                        ? 'Departed · Driftwood'
+                        : hud.navigatorCompanion.departurePhase === 'swim_to_wood' ||
+                            hud.navigatorCompanion.departurePhase === 'climb_wood'
+                          ? 'Leaving the Ferry'
+                          : hud.navigatorCompanion.departurePhase !== 'active'
+                            ? 'Returning to Shipwreck'
+                            : `${hud.navigatorCompanion.task.replace('_', ' ')} · ${hud.navigatorCompanion.distanceToPlayer}m`}
                     </span>
                   </button>
                 )}

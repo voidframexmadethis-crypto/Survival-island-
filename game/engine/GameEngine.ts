@@ -261,6 +261,7 @@ import {
 } from '../world/models';
 import { PirateCinematicRig } from '../world/pirateCinematicRig';
 import { NavigatorCompanionController } from '../systems/navigatorCompanionSystem';
+import { sampleNavigatorFarewell } from '../systems/navigatorFarewellCinematic';
 import {
   createGamePerformanceMonitor,
   GamePerformanceRecorder,
@@ -884,6 +885,8 @@ export class GameEngine {
   private lastCinematicHudSubtitle = '';
   private lastCinematicHudCrewShout = '';
   private cinematicCameraInitialized = false;
+  private navigatorFarewellCinematic = false;
+  private navigatorFarewellShot = -1;
   private readonly _cinematicPosTarget = new THREE.Vector3();
   private readonly _cinematicLookTarget = new THREE.Vector3();
   private readonly _cinematicLookCurrent = new THREE.Vector3();
@@ -1643,7 +1646,9 @@ export class GameEngine {
       getTerrainHeight(navX, navZ),
     );
     this.navigatorCompanion.group.visible = false;
+    this.navigatorCompanion.departureBoardGroup.visible = false;
     this.scene.add(this.navigatorCompanion.group);
+    this.scene.add(this.navigatorCompanion.departureBoardGroup);
     this.scene.add(this.navigatorCompanion.droppedGunGroup);
 
     // Ultra-realistic GPU-driven Volumetric Rain Streaks + Ground Splash Ripples (0 CPU loop, 2 draw calls)
@@ -3307,13 +3312,101 @@ export class GameEngine {
     this.emitHud();
   }
 
+  private startNavigatorFarewellCinematic(): void {
+    if (
+      this.navigatorFarewellCinematic ||
+      !this.navigatorCompanion?.isSittingAtWreck() ||
+      this.worldType !== 'island'
+    ) {
+      return;
+    }
+    this.navigatorFarewellCinematic = true;
+    this.navigatorFarewellShot = -1;
+    this.cinematicActive = true;
+    this.cinematicCameraInitialized = false;
+    this.cinematicTimer = 0;
+    const navigatorName = this.navigatorCompanion.getName().split(' ')[0];
+    this.cinematicSubtitle = `The ferry cuts past the old shipwreck. ${navigatorName} sits alone on the drifting plank, watching you go.`;
+    this.cinematicCrewShout = '';
+    this.lastCinematicHudSubtitle = this.cinematicSubtitle;
+    this.lastCinematicHudCrewShout = '';
+    this.navigatorCompanion.markFarewellCinematicSeen();
+    // Positioned on the first cinematic frame so the galleon never flashes at
+    // its old intro coordinates for a single rendered frame.
+    this.shipModel.visible = false;
+    this.shipModel.scale.setScalar(0.65);
+    this.emitHud();
+  }
+
+  private updateNavigatorFarewellCinematic(dt: number): void {
+    const board = this.navigatorCompanion.getDepartureBoardPosition();
+    const navigatorName = this.navigatorCompanion.getName().split(' ')[0];
+    const frame = sampleNavigatorFarewell(
+      this.cinematicTimer,
+      board.x,
+      board.z,
+      OCEAN_LEVEL,
+      navigatorName,
+    );
+    if (frame.finished) {
+      this.finishNavigatorFarewellCinematic();
+      return;
+    }
+
+    this.navigatorCompanion.setFarewellFocus(frame.ferryX, frame.ferryZ);
+    this.shipModel.position.set(frame.ferryX, frame.ferryY, frame.ferryZ);
+    this.shipModel.rotation.set(0, frame.ferryYaw, frame.ferryRoll);
+    this.shipModel.scale.setScalar(frame.ferryScale);
+    this.shipModel.visible = true;
+
+    this.cinematicSubtitle = frame.subtitle;
+    this.cinematicCrewShout = frame.speaker;
+
+    this._cinematicPosTarget.set(frame.cameraX, frame.cameraY, frame.cameraZ);
+    this._cinematicLookTarget.set(frame.lookX, frame.lookY, frame.lookZ);
+    if (!this.cinematicCameraInitialized || frame.shot !== this.navigatorFarewellShot) {
+      this.camera.position.copy(this._cinematicPosTarget);
+      this._cinematicLookCurrent.copy(this._cinematicLookTarget);
+      this.cinematicCameraInitialized = true;
+      this.navigatorFarewellShot = frame.shot;
+    } else {
+      this.camera.position.lerp(this._cinematicPosTarget, 1 - Math.exp(-6.5 * dt));
+      this._cinematicLookCurrent.lerp(this._cinematicLookTarget, 1 - Math.exp(-6.0 * dt));
+    }
+    this.camera.lookAt(this._cinematicLookCurrent);
+  }
+
+  private finishNavigatorFarewellCinematic(): void {
+    this.navigatorFarewellCinematic = false;
+    this.navigatorFarewellShot = -1;
+    this.cinematicActive = false;
+    this.cinematicCameraInitialized = false;
+    this.cinematicSubtitle = '';
+    this.cinematicCrewShout = '';
+    this.lastCinematicHudSubtitle = '';
+    this.lastCinematicHudCrewShout = '';
+    this.shipModel.visible = false;
+    this.shipModel.scale.setScalar(1);
+    this.shipModel.rotation.set(0, Math.PI * 0.82, 0);
+    this.navigatorCompanion?.setFarewellFocus(null, null);
+    this.snapPlayerCamera();
+    this.applyPlayingCullImmediate();
+    this.emitHud();
+  }
+
   public skipCinematic(): void {
     if (!this.cinematicActive) return;
+    if (this.navigatorFarewellCinematic) {
+      this.finishNavigatorFarewellCinematic();
+      return;
+    }
     this.finishCinematic();
   }
 
   private finishCinematic(): void {
     this.cinematicActive = false;
+    this.navigatorFarewellCinematic = false;
+    this.navigatorFarewellShot = -1;
     this.cinematicCameraInitialized = false;
     this.cinematicSubtitle = '';
     this.cinematicCrewShout = '';
@@ -4160,7 +4253,12 @@ export class GameEngine {
         PLAYER_SPAWN.z,
         getTerrainHeight(navX, navZ),
       );
+      this.navigatorCompanion.setFarewellFocus(null, null);
     }
+    this.navigatorFarewellCinematic = false;
+    this.navigatorFarewellShot = -1;
+    this.shipModel.scale.setScalar(1);
+    this.shipModel.rotation.set(0, Math.PI * 0.82, 0);
     const nextWorldType: WorldType = options?.worldType === 'flat' ? 'flat' : 'island';
     const nextSurfaceStyle: FlatSurfaceStyle =
       options?.flatSurfaceStyle === 'concrete_plaza' ? 'concrete_plaza' : 'turf_grid';
@@ -4719,15 +4817,24 @@ export class GameEngine {
     this.playerGender = save.player.gender === 'girl' ? 'girl' : 'boy';
     this.pirateCinematic?.setPlayerGender(this.playerGender);
     if (this.navigatorCompanion && loadedWorldType === 'island') {
-      this.navigatorCompanion.setGenderForPlayer(this.playerGender);
-      const navX = this.playerX + 3.6;
-      const navZ = this.playerZ - 3.2;
-      this.navigatorCompanion.resetAtSpawn(
-        this.playerX,
-        this.playerZ,
-        getTerrainHeight(navX, navZ),
-      );
+      if (save.navigatorCompanion) {
+        // A departed navigator must never be respawned beside the player.
+        this.navigatorCompanion.restoreState(save.navigatorCompanion);
+      } else {
+        this.navigatorCompanion.setGenderForPlayer(this.playerGender);
+        const navX = this.playerX + 3.6;
+        const navZ = this.playerZ - 3.2;
+        this.navigatorCompanion.resetAtSpawn(
+          this.playerX,
+          this.playerZ,
+          getTerrainHeight(navX, navZ),
+        );
+      }
     }
+    this.navigatorFarewellCinematic = false;
+    this.navigatorFarewellShot = -1;
+    this.shipModel.visible = false;
+    if (this.shipModel) this.shipModel.scale.setScalar(1);
     this.camYaw = this.playerYaw - Math.PI;
     this.camPitch = save.player.pitch ?? -0.05;
     this.snapPlayerCamera();
@@ -5788,6 +5895,7 @@ export class GameEngine {
       finalIsland: this.finalIslandFeatures.serialize(),
       dragonValleySave: DRAGON_VALLEY_SYSTEM.exportSave(this.dragons),
       vikingVillageSave: vikingVillage.exportSave(),
+      navigatorCompanion: this.navigatorCompanion?.exportState(),
     };
   }
 
@@ -9856,6 +9964,9 @@ export class GameEngine {
 
   private updateWeatherAndAtmosphere(dt: number): void {
     const isFlat = this.worldType === 'flat';
+    // The farewell is an intimate, clear-water scene; do not inherit the storm
+    // lighting and rain that the pirate intro deliberately forces.
+    const stormCinematic = this.cinematicActive && !this.navigatorFarewellCinematic;
 
     // Rain progressively soaks exposed surfaces; the surface shaders darken and
     // sharpen their specular response while it dries out afterwards.
@@ -9924,10 +10035,10 @@ export class GameEngine {
     if (this.lightningFlash > 0) {
       this.lightningFlash = Math.max(0, this.lightningFlash - dt * 4.5);
     }
-    if (!isFlat && (this.weather === 'storm' || this.cinematicActive)) {
+    if (!isFlat && (this.weather === 'storm' || stormCinematic)) {
       this.nextLightningTimer -= dt;
       if (this.nextLightningTimer <= 0) {
-        this.nextLightningTimer = this.cinematicActive
+        this.nextLightningTimer = stormCinematic
           ? 2.4 + Math.random() * 1.8
           : 7 + Math.random() * 10;
         this.lightningFlash = 1.0;
@@ -10214,8 +10325,8 @@ export class GameEngine {
       this.effectiveParticleScale > 0.05 &&
       (this.weather === 'rain' ||
         this.weather === 'storm' ||
-        this.cinematicActive);
-    const rainCenter = this.cinematicActive
+        stormCinematic);
+    const rainCenter = stormCinematic
       ? this.shipModel.position
       : this.camera.position;
     const rainGroundY = this.cinematicActive
@@ -10228,7 +10339,7 @@ export class GameEngine {
       centerY: rainCenter.y,
       centerZ: rainCenter.z,
       groundY: rainGroundY,
-      isStorm: this.weather === 'storm' || this.cinematicActive,
+      isStorm: this.weather === 'storm' || stormCinematic,
       isNight: sunElev < 0.05,
       densityScale: Math.min(1, this.effectiveParticleScale),
       showSplashes: !this.cinematicActive,
@@ -10252,6 +10363,10 @@ export class GameEngine {
     // Advance smoothly from t=0 on first frame so frame-0 renders cleanly without skipping
     if (this.cinematicCameraInitialized) {
       this.cinematicTimer += dt;
+    }
+    if (this.navigatorFarewellCinematic) {
+      this.updateNavigatorFarewellCinematic(dt);
+      return;
     }
     const t = this.cinematicTimer;
 
@@ -15753,10 +15868,12 @@ export class GameEngine {
 
     // Autonomous Ship Navigator Companion AI on Survival Island
     if (this.navigatorCompanion) {
+      const navigatorWorldVisible =
+        this.worldType === 'island' && this.currentDimension === 'overworld';
       const showNavOnIsland =
-        !this.cinematicActive &&
-        this.worldType === 'island' &&
-        this.currentDimension === 'overworld';
+        (!this.cinematicActive || this.navigatorFarewellCinematic) &&
+        navigatorWorldVisible;
+      this.navigatorCompanion.departureBoardGroup.visible = navigatorWorldVisible;
       this.navigatorCompanion.group.visible =
         showNavOnIsland && !this.navigatorCompanion.isGone();
       this.navigatorCompanion.droppedGunGroup.visible =
@@ -15770,6 +15887,7 @@ export class GameEngine {
           playerZ: this.playerZ,
           activePlayerVehicleId: this.activeVehicleId,
           playerIsFlying: this.flightAndTeleport.flying || this.dragonFlight.flying,
+          playerSwimming: this.isSwimming,
           shelterPos: HILL_HOUSE_POS,
           shipwreckPos: SHIPWRECK_POS,
           getTerrainHeight,
@@ -15802,6 +15920,12 @@ export class GameEngine {
             this.spawnParticles(x, y, z, color, count),
           onPlaySplash: () => this.sound.playOceanSplash(),
         });
+        if (
+          !this.navigatorFarewellCinematic &&
+          this.navigatorCompanion.consumeFarewellCinematicRequest()
+        ) {
+          this.startNavigatorFarewellCinematic();
+        }
       }
     }
 
