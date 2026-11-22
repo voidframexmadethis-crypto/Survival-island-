@@ -11,41 +11,16 @@ export interface RadioCarDescriptor {
 
 export type DrivingCameraMode = 'CHASE' | 'FIRST_PERSON';
 
-export interface BuiltInRadioStation {
-  id: string;
-  name: string;
-  genre: string;
-  bpm: number;
-  bassFreqs: number[];
-  leadFreqs: number[];
+/**
+ * Master gain for the cabin stereo. Real car systems are loud: full volume is
+ * intentionally hotter than unity so the sub-bass hits hard, and the limiter
+ * downstream keeps it from clipping. At 0 the output is silent.
+ */
+export function stereoOutputGain(volume: number, spatial = 1): number {
+  const v = THREE.MathUtils.clamp(volume, 0, 1);
+  const s = THREE.MathUtils.clamp(spatial, 0, 1);
+  return Math.pow(v, 1.22) * 2.6 * s;
 }
-
-export const BUILT_IN_RADIO_STATIONS: BuiltInRadioStation[] = [
-  {
-    id: 'slab_808',
-    name: 'H-Town Candy SLAB 808',
-    genre: 'Chopped & Screwed Trunk Bass',
-    bpm: 78,
-    bassFreqs: [46.2, 41.2, 49.0, 38.9],
-    leadFreqs: [220, 261.63, 293.66, 329.63],
-  },
-  {
-    id: 'west_coast_bounce',
-    name: '64 Lowrider Cruise FM',
-    genre: 'Classic West Coast G-Funk',
-    bpm: 94,
-    bassFreqs: [55.0, 49.0, 65.41, 43.65],
-    leadFreqs: [392, 440, 493.88, 587.33],
-  },
-  {
-    id: 'exotic_synth',
-    name: 'Midnight Hypercar Horizon',
-    genre: 'Clean Turbo Synthwave',
-    bpm: 118,
-    bassFreqs: [65.41, 73.42, 58.27, 82.41],
-    leadFreqs: [523.25, 659.25, 783.99, 880.0],
-  },
-];
 
 export function isOldSchoolVehicleDescriptor(car: RadioCarDescriptor = {}): boolean {
   const preset = (car.preset || '').toLowerCase();
@@ -144,42 +119,53 @@ export function addCarSubwoofer(
   // Protect the subwoofer from infrasonic frequencies.
   const subsonic = ctx.createBiquadFilter();
   subsonic.type = 'highpass';
-  subsonic.frequency.value = 28;
+  subsonic.frequency.value = 26;
 
-  // Dedicated subwoofer crossover.
+  // Dedicated subwoofer crossover (wide enough to energise a real trunk).
   const crossover = ctx.createBiquadFilter();
   crossover.type = 'lowpass';
-  crossover.frequency.value = 90;
-  crossover.Q.value = 0.707;
+  crossover.frequency.value = 120;
+  crossover.Q.value = 0.9;
 
-  // Gentle amplifier-style harmonic saturation.
+  // Cabin/trunk resonance: a car body naturally peaks around 60-80 Hz, which is
+  // what makes the sheet metal and trim buzz instead of just thumping.
+  const resonance = ctx.createBiquadFilter();
+  resonance.type = 'peaking';
+  resonance.frequency.value = 72;
+  resonance.Q.value = 1.1;
+  resonance.gain.value = 7;
+
+  // Amplifier-style harmonic saturation. Pushing harder adds the gritty upper
+  // harmonics you hear when a real system is loud enough to rattle panels.
   const saturation = ctx.createWaveShaper();
-  const curve = new Float32Array(256);
-  const norm = Math.tanh(1.6);
+  const curve = new Float32Array(512);
+  const drive = 2.6;
+  const norm = Math.tanh(drive);
 
   for (let i = 0; i < curve.length; i++) {
-    const x = i / 127.5 - 1;
-    curve[i] = Math.tanh(x * 1.6) / norm;
+    const x = (i / (curve.length - 1)) * 2 - 1;
+    curve[i] = Math.tanh(x * drive) / norm;
   }
 
   saturation.curve = curve;
-  saturation.oversample = '2x';
+  saturation.oversample = '4x';
 
   // Control peaks before the subwoofer output.
   const limiter = ctx.createDynamicsCompressor();
-  limiter.threshold.value = -18;
-  limiter.knee.value = 18;
-  limiter.ratio.value = 4;
-  limiter.attack.value = 0.005;
-  limiter.release.value = 0.18;
+  limiter.threshold.value = -10;
+  limiter.knee.value = 12;
+  limiter.ratio.value = 5;
+  limiter.attack.value = 0.004;
+  limiter.release.value = 0.16;
 
   const subGain = ctx.createGain();
-  subGain.gain.value = Math.min(0.65, 0.2 * profile.low);
+  subGain.gain.value = Math.min(1, 0.34 * profile.low);
 
   // Parallel branch: original stereo remains untouched.
   sourceBus.connect(subsonic);
   subsonic.connect(crossover);
-  crossover.connect(saturation);
+  crossover.connect(resonance);
+  resonance.connect(saturation);
   saturation.connect(limiter);
   limiter.connect(subGain);
   subGain.connect(carPanner);
@@ -195,6 +181,7 @@ export function addCarSubwoofer(
       try {
         subsonic.disconnect();
         crossover.disconnect();
+        resonance.disconnect();
         saturation.disconnect();
         limiter.disconnect();
         subGain.disconnect();
@@ -357,6 +344,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
   subFilter: null as BiquadFilterNode | null,
   compressor: null as DynamicsCompressorNode | null,
   masterGain: null as GainNode | null,
+  limiter: null as DynamicsCompressorNode | null,
   carPanner: null as PannerNode | null,
   subwoofer: null as CarSubwooferHandles | null,
   freqData: null as Uint8Array<ArrayBuffer> | null,
@@ -365,16 +353,13 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
   lastThumpMs: 0,
   activeCarType: 'classic' as CarType,
 
-  // Built-in stereo loop state (routes directly through bassFilter -> subFilter -> analyser -> compressor)
+  // Stereo playback state (user-supplied audio only; nothing is generated).
   stereoPlaying: false,
   userPaused: false,
   spatialAttenuation: 1,
   stereoVolume: 0.78,
-  activeStationId: 'slab_808',
   customTrackName: null as string | null,
   customAudioEl: null as HTMLAudioElement | null,
-  synthTimer: null as number | null,
-  synthStep: 0,
 
   isOldSchoolCar(car: RadioCarDescriptor = {}): boolean {
     return isOldSchoolVehicleDescriptor(car);
@@ -414,22 +399,34 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
         new ArrayBuffer(this.analyser.frequencyBinCount),
       );
 
-      // Compressor prevents clipping when bass hits hard
+      // Light glue compression keeps the mix dense without squashing the sub.
       this.compressor = this.audioCtx.createDynamicsCompressor();
-      this.compressor.threshold.value = -14;
-      this.compressor.knee.value = 18;
-      this.compressor.ratio.value = 6;
+      this.compressor.threshold.value = -8;
+      this.compressor.knee.value = 10;
+      this.compressor.ratio.value = 3;
+      this.compressor.attack.value = 0.004;
+      this.compressor.release.value = 0.22;
 
       this.masterGain = this.audioCtx.createGain();
-      const synthSpatial = this.customAudioEl && this.customTrackName ? 1 : this.spatialAttenuation;
-      this.masterGain.gain.value = this.stereoVolume * 0.8 * synthSpatial;
+      this.masterGain.gain.value = stereoOutputGain(
+        this.stereoVolume,
+        this.spatialAttenuation,
+      );
+
+      // Hard safety limiter so a loud cabin mix never clips the output device.
+      this.limiter = this.audioCtx.createDynamicsCompressor();
+      this.limiter.threshold.value = -2.5;
+      this.limiter.knee.value = 0;
+      this.limiter.ratio.value = 14;
+      this.limiter.attack.value = 0.002;
+      this.limiter.release.value = 0.12;
 
       this.carPanner = this.audioCtx.createPanner();
       this.carPanner.panningModel = 'HRTF';
       this.carPanner.distanceModel = 'inverse';
-      this.carPanner.refDistance = 2;
-      this.carPanner.maxDistance = 55;
-      this.carPanner.rolloffFactor = 1.4;
+      this.carPanner.refDistance = 4;
+      this.carPanner.maxDistance = 90;
+      this.carPanner.rolloffFactor = 0.9;
 
       this.sourceBus.connect(this.bassFilter);
       this.bassFilter.connect(this.subFilter);
@@ -437,7 +434,8 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       this.analyser.connect(this.compressor);
       this.compressor.connect(this.carPanner);
       this.carPanner.connect(this.masterGain);
-      this.masterGain.connect(this.audioCtx.destination);
+      this.masterGain.connect(this.limiter);
+      this.limiter.connect(this.audioCtx.destination);
 
       this.subwoofer?.destroy();
       this.subwoofer = addCarSubwoofer(this.sourceBus, this.carPanner, profile);
@@ -475,6 +473,43 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     return this.cameraMode;
   },
 
+  bassBoost: false,
+
+  /**
+   * "808 Sub" toggle: boosts the shelf/sub stages for the old-school trunk-bass
+   * cars. Even off, the player's track still has a real subwoofer — this only
+   * controls the extra trunk-rattling headroom.
+   */
+  setBassBoost(enabled: boolean): void {
+    const next = Boolean(enabled);
+    if (next === this.bassBoost) return;
+    this.bassBoost = next;
+    if (!this.audioCtx) return;
+    const profile = AUDIO_PROFILES[this.activeCarType];
+    const t = this.audioCtx.currentTime;
+    if (this.bassFilter) {
+      this.bassFilter.gain.setTargetAtTime(
+        6 * profile.bass * (next ? 1.35 : 1),
+        t,
+        0.05,
+      );
+    }
+    if (this.subFilter) {
+      this.subFilter.gain.setTargetAtTime(
+        5 * profile.low * (next ? 1.2 : 1),
+        t,
+        0.05,
+      );
+    }
+    if (this.subwoofer) {
+      this.subwoofer.subGain.gain.setTargetAtTime(
+        Math.min(1, 0.34 * profile.low) * (next ? 1 : 0.62),
+        t,
+        0.05,
+      );
+    }
+  },
+
   // Updates radio profile per vehicle using AUDIO_PROFILES (100Hz lowshelf + 48Hz sub peaking)
   applyVehicleRadioProfile(car: RadioCarDescriptor): {
     oldSchool: boolean;
@@ -486,10 +521,11 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     const carType = resolveCarAudioType(car);
     const profile = AUDIO_PROFILES[carType];
     this.activeCarType = carType;
+    const boost = this.bassBoost ? 1 : 0;
     if (this.bassFilter && this.audioCtx) {
       this.bassFilter.frequency.value = 100;
       this.bassFilter.gain.setTargetAtTime(
-        6 * profile.bass,
+        6 * profile.bass * (boost ? 1.35 : 1),
         this.audioCtx.currentTime,
         0.03,
       );
@@ -498,14 +534,14 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       this.subFilter.frequency.value = 48;
       this.subFilter.Q.value = 0.8;
       this.subFilter.gain.setTargetAtTime(
-        5 * profile.low,
+        5 * profile.low * (boost ? 1.2 : 1),
         this.audioCtx.currentTime,
         0.03,
       );
     }
     if (this.subwoofer && this.audioCtx) {
       this.subwoofer.subGain.gain.setTargetAtTime(
-        Math.min(0.65, 0.2 * profile.low),
+        Math.min(1, 0.34 * profile.low) * (boost ? 1 : 0.62),
         this.audioCtx.currentTime,
         0.03,
       );
@@ -521,16 +557,12 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
   setVolume(vol: number): void {
     this.stereoVolume = Math.max(0, Math.min(1, vol));
     if (this.masterGain && this.audioCtx) {
-      const synthSpatial =
-        this.customAudioEl && this.customTrackName ? 1 : this.spatialAttenuation;
+      const spatial = this.customAudioEl && this.customTrackName ? 1 : this.spatialAttenuation;
       this.masterGain.gain.setTargetAtTime(
-        this.stereoVolume * 0.8 * synthSpatial,
+        stereoOutputGain(this.stereoVolume, spatial),
         this.audioCtx.currentTime,
         0.02,
       );
-    }
-    if (this.customAudioEl && !(this.customAudioEl.src && this.customTrackName)) {
-      this.customAudioEl.volume = this.stereoVolume;
     }
   },
 
@@ -538,27 +570,13 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     const clamped = THREE.MathUtils.clamp(factor, 0, 1);
     this.spatialAttenuation = clamped;
     if (this.masterGain && this.audioCtx) {
-      const synthSpatial =
-        this.customAudioEl && this.customTrackName ? 1 : clamped;
+      const spatial = this.customAudioEl && this.customTrackName ? 1 : clamped;
       this.masterGain.gain.setTargetAtTime(
-        this.stereoVolume * 0.8 * synthSpatial,
+        stereoOutputGain(this.stereoVolume, spatial),
         this.audioCtx.currentTime,
         0.03,
       );
     }
-  },
-
-  startStation(stationId: string, car?: RadioCarDescriptor): void {
-    this.ensureAudioGraph();
-    this.stopAudioElementOnly();
-    this.activeStationId = stationId;
-    this.customTrackName = null;
-    this.userPaused = false;
-    if (car) {
-      this.applyVehicleRadioProfile(car);
-    }
-    this.stereoPlaying = true;
-    this.startSynthLoop();
   },
 
   customTrackError: null as string | null,
@@ -569,7 +587,6 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     onError?: (msg: string) => void,
   ): string {
     this.ensureAudioGraph();
-    this.stopSynthLoop();
     this.customTrackError = null;
 
     const url = URL.createObjectURL(file);
@@ -601,7 +618,9 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     };
 
     audioEl.src = url;
-    audioEl.volume = this.stereoVolume;
+    // The Web Audio graph owns loudness; keep the element at unity so the two
+    // volume stages do not multiply into a quiet, muddy result.
+    audioEl.volume = 1;
     audioEl.load();
     this.attachAudioElement(audioEl);
     if (car) {
@@ -616,6 +635,10 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     return this.customTrackName;
   },
 
+  hasTrack(): boolean {
+    return Boolean(this.customAudioEl && this.customTrackName);
+  },
+
   togglePlay(car?: RadioCarDescriptor): boolean {
     if (this.stereoPlaying) {
       this.pause();
@@ -626,11 +649,12 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     if (car) {
       this.applyVehicleRadioProfile(car);
     }
-    if (this.customAudioEl && this.customTrackName) {
+    // Only the player's own uploaded audio plays. There is deliberately no
+    // generated/placeholder music to fall back to.
+    if (this.hasTrack() && this.customAudioEl) {
       this.stereoPlaying = true;
+      this.customAudioEl.volume = 1;
       this.customAudioEl.play().catch(() => {});
-    } else {
-      this.startStation(this.activeStationId, car);
     }
     return this.stereoPlaying;
   },
@@ -638,7 +662,6 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
   pause(): void {
     this.userPaused = true;
     this.stereoPlaying = false;
-    this.stopSynthLoop();
     if (this.customAudioEl) {
       this.customAudioEl.pause();
     }
@@ -647,107 +670,12 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
   stopAll(): void {
     this.userPaused = true;
     this.stereoPlaying = false;
-    this.stopSynthLoop();
     this.stopAudioElementOnly();
   },
 
   stopAudioElementOnly(): void {
     if (this.customAudioEl) {
       this.customAudioEl.pause();
-    }
-  },
-
-  stopSynthLoop(): void {
-    if (this.synthTimer !== null && typeof window !== 'undefined') {
-      window.clearInterval(this.synthTimer);
-      this.synthTimer = null;
-    }
-  },
-
-  startSynthLoop(): void {
-    this.stopSynthLoop();
-    if (typeof window === 'undefined') return;
-    const station =
-      BUILT_IN_RADIO_STATIONS.find((s) => s.id === this.activeStationId) ||
-      BUILT_IN_RADIO_STATIONS[0];
-    const stepMs = Math.round((60 / station.bpm / 2) * 1000);
-    this.triggerSynthStep(station);
-    this.synthTimer = window.setInterval(() => {
-      if (!this.stereoPlaying) return;
-      const activeStation =
-        BUILT_IN_RADIO_STATIONS.find((s) => s.id === this.activeStationId) ||
-        BUILT_IN_RADIO_STATIONS[0];
-      this.triggerSynthStep(activeStation);
-    }, stepMs);
-  },
-
-  triggerSynthStep(station: BuiltInRadioStation): void {
-    if (!this.audioCtx || !this.sourceBus || this.audioCtx.state !== 'running') {
-      return;
-    }
-    try {
-      const now = this.audioCtx.currentTime;
-      const step = this.synthStep % 8;
-      this.synthStep += 1;
-
-      // Punchy 808 sub-bass kick on groove steps
-      if (step === 0 || step === 3 || step === 4 || step === 6) {
-        const subFreq = station.bassFreqs[step % station.bassFreqs.length];
-        const osc = this.audioCtx.createOscillator();
-        const g = this.audioCtx.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(subFreq * 1.65, now);
-        osc.frequency.exponentialRampToValueAtTime(subFreq, now + 0.085);
-        g.gain.setValueAtTime(step === 0 || step === 4 ? 0.55 : 0.42, now);
-        g.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
-        osc.connect(g);
-        g.connect(this.sourceBus);
-        osc.start(now);
-        osc.stop(now + 0.36);
-      }
-
-      // Snare / clap on 2 and 6
-      if (step === 2 || step === 6) {
-        const dur = 0.09;
-        const buf = this.audioCtx.createBuffer(
-          1,
-          Math.floor(this.audioCtx.sampleRate * dur),
-          this.audioCtx.sampleRate,
-        );
-        const data = buf.getChannelData(0);
-        for (let i = 0; i < data.length; i++) {
-          data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (data.length * 0.25));
-        }
-        const src = this.audioCtx.createBufferSource();
-        src.buffer = buf;
-        const hp = this.audioCtx.createBiquadFilter();
-        hp.type = 'highpass';
-        hp.frequency.value = 1100;
-        const sg = this.audioCtx.createGain();
-        sg.gain.setValueAtTime(0.16, now);
-        sg.gain.exponentialRampToValueAtTime(0.001, now + dur);
-        src.connect(hp);
-        hp.connect(sg);
-        sg.connect(this.sourceBus);
-        src.start(now);
-      }
-
-      // Melodic synth chord note
-      if (step % 2 === 0) {
-        const leadFreq = station.leadFreqs[(step / 2) % station.leadFreqs.length];
-        const leadOsc = this.audioCtx.createOscillator();
-        const lg = this.audioCtx.createGain();
-        leadOsc.type = 'triangle';
-        leadOsc.frequency.setValueAtTime(leadFreq, now);
-        lg.gain.setValueAtTime(0.075, now);
-        lg.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
-        leadOsc.connect(lg);
-        lg.connect(this.sourceBus);
-        leadOsc.start(now);
-        leadOsc.stop(now + 0.26);
-      }
-    } catch {
-      // Ignore Web Audio scheduling edge cases
     }
   },
 
@@ -770,17 +698,17 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
 
     this.analyser.getByteFrequencyData(this.freqData);
 
-    // Low-frequency sub-bass bins (0..7)
+    // Low-frequency sub-bass bins (0..9 ≈ 0-215 Hz for a 2048-point FFT)
     let sum = 0;
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 10; i++) {
       sum += this.freqData[i] || 0;
     }
-    const rawIntensity = sum / (8 * 255);
-    const quarterFlex = rawIntensity * profile.shake;
+    const rawIntensity = sum / (10 * 255);
+    const quarterFlex = Math.min(1, rawIntensity * profile.shake * 1.35);
 
     if (!this.isOldSchoolCar(car)) {
       return {
-        bassLevel: Math.min(1, rawIntensity * 0.45),
+        bassLevel: Math.min(1, rawIntensity * 0.5),
         chestThump: 0,
         trunkPump: 0,
         quarterFlex,
@@ -788,13 +716,13 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       };
     }
 
-    const bassLevel = Math.max(0, Math.min(1, (rawIntensity - 0.18) / 0.72));
+    const bassLevel = Math.max(0, Math.min(1, (rawIntensity - 0.12) / 0.66));
 
     // Sharp chest thump on heavy low-end hits
     let chestThump = 0;
-    if (bassLevel > 0.42 && nowMs - this.lastThumpMs > 110) {
+    if (bassLevel > 0.38 && nowMs - this.lastThumpMs > 110) {
       this.lastThumpMs = nowMs;
-      chestThump = Math.min(1, (bassLevel - 0.42) * 1.85);
+      chestThump = Math.min(1, (bassLevel - 0.38) * 1.9);
 
       // Subtle mobile haptic thud in first-person old-school driving
       if (
@@ -950,7 +878,11 @@ export function updateCarAudioPosition(
   const distance = player.position.distanceTo(car.position);
   const inside = distance < 3;
 
-  audio.volume = THREE.MathUtils.clamp(1 - distance / 35, 0, 1);
+  // The Web Audio graph (and HRTF panner) applies the distance attenuation, so
+  // the media element itself stays at unity. Writing a second, multiplied
+  // attenuation here is what previously made the stereo quiet and thin.
+  audio.volume = 1;
+  const volume = THREE.MathUtils.clamp(1 - distance / 50, 0, 1);
 
   if (inside && audio.paused) {
     if (listener?.context?.state === 'suspended') {
@@ -959,7 +891,7 @@ export function updateCarAudioPosition(
     audio.play().catch(() => {});
   }
 
-  return { inside, distance, volume: audio.volume };
+  return { inside, distance, volume };
 }
 
 const _carPos3D = new THREE.Vector3();

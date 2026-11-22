@@ -240,18 +240,22 @@ export class RealisticOcean {
 
           waterColor *= (0.44 + 0.56 * uDaylight) + ndl * 0.30 * uDaylight;
 
-          // Reflected sky + golden-hour horizon reflection
-          vec3 reflSky = mix(uSkyColor * 0.90, uFogColor * 1.15, 0.46);
+          // Reflected sky: darker zenith tint at steep angles, hazier horizon at
+          // grazing angles (a cheap but convincing stand-in for an env probe).
+          vec3 R = reflect(-V, N);
+          float reflUp = clamp(R.y, 0.0, 1.0);
+          vec3 reflSky = mix(uFogColor, uSkyColor, pow(reflUp, 0.55));
           waterColor = mix(
             waterColor,
             reflSky,
-            clamp(fresnel * (0.48 + 0.45 * uReflectionStrength), 0.0, 0.90)
+            clamp(fresnel * (0.52 + 0.42 * uReflectionStrength), 0.0, 0.90)
           );
 
-          // Blazing sunlit sparkle & molten-gold sun-path ribbon across ocean swells
-          waterColor += uSunColor * specSharp * (1.55 + 2.35 * uReflectionStrength) * (0.22 + 1.02 * uDaylight);
-          waterColor += uSunColor * specRibbon * 0.56 * uReflectionStrength * uDaylight;
-          waterColor += uSunColor * specSheen * 0.19 * uReflectionStrength * uDaylight;
+          // Restrained sun glitter: realistic highlight energy instead of the
+          // previous over-driven bloom-like ribbon.
+          waterColor += uSunColor * specSharp * (0.62 + 0.5 * uReflectionStrength) * (0.30 + 0.78 * uDaylight);
+          waterColor += uSunColor * specRibbon * 0.30 * uReflectionStrength * uDaylight;
+          waterColor += uSunColor * specSheen * 0.09 * uReflectionStrength * uDaylight;
 
           // Animated lacy shoreline surf foam where water meets sandy shore + near-field crest foam
           float shallowBand = 1.0 - smoothstep(0.02, 0.92, waterDepth);

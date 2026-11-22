@@ -4,6 +4,10 @@ import { ResourceNodeKind, ResourceNodeState } from '../types';
 import { FrameBudgetQueue } from '../systems/frameBudgetQueue';
 import { WorldChunk, WorldChunkManager } from './worldChunkSystem';
 import {
+  CaveTerrainOpening,
+  filterTerrainIndexForCaveOpenings,
+} from './caveTerrainOpenings';
+import {
   ALL_FLOWING_RIVERS,
   AUTUMN_GROVE_POS,
   BADLANDS_MINESHAFT_POS,
@@ -99,6 +103,9 @@ import {
   createLeafCanopyTexture,
   createLeafNormalTexture,
   createLeafSprayTexture,
+  createPalmBarkNormalTexture,
+  createPalmBarkTexture,
+  createPalmFrondTexture,
   createRealisticSurfaceMaterial,
   createRockNormalTexture,
   createRockRoughnessTexture,
@@ -120,6 +127,14 @@ import {
   enhanceSurfaceMaterial,
   ensureGeometryHasUv,
 } from './shaders';
+import {
+  GRASS_VARIANTS,
+  GrassVariant,
+  createGrassVariantGeometry,
+  createPalmBootGeometry,
+  createPalmFrondGeometries,
+  createPalmTrunkSegmentGeometry,
+} from './vegetation';
 
 export interface CaveCeilingCluster {
   id: string;
@@ -201,6 +216,8 @@ export interface WorldHandles {
   restoreBatchedNode: (nodeId: string) => void;
   setBatchedNodeVisible: (nodeId: string, visible: boolean) => void;
   setWorldShadowCasting: (enabled: boolean) => void;
+  /** Ultra preset: maximum texture filtering, richer PBR response and denser grass clumps. */
+  setUltraFidelity: (enabled: boolean) => void;
   cullWorldByDistance: (
     px: number,
     pz: number,
@@ -209,6 +226,8 @@ export interface WorldHandles {
     maxActivePointLights?: number,
   ) => void;
   resetTerrainIndex: () => void;
+  /** Removes/restores terrain triangles for the currently streamed cave mouths. */
+  setCaveOpenings: (openings: readonly CaveTerrainOpening[]) => void;
   dispose: () => void;
 }
 
@@ -240,6 +259,9 @@ export function buildIslandWorld(
   const leafTex = createLeafCanopyTexture(renderer);
   const leafSprayTex = createLeafSprayTexture(renderer);
   const leafNormalTex = createLeafNormalTexture(renderer);
+  const palmBarkTex = createPalmBarkTexture(renderer);
+  const palmBarkNormalTex = createPalmBarkNormalTexture(renderer);
+  const palmFrondTex = createPalmFrondTexture(renderer);
   const waterNormalTex = createWaterNormalTexture(renderer);
   const woodTex = createWoodPlankTexture(renderer);
   woodTex.userData.sharedAsset = true;
@@ -270,6 +292,10 @@ export function buildIslandWorld(
   const pos = terrainGeo.attributes.position;
   const colors = new Float32Array(pos.count * 3);
   const c = new THREE.Color();
+  // Scratch tints used to blend exposed rock and damp river/lake sediment into
+  // the biome palette instead of switching material colour at hard thresholds.
+  const cliffStone = new THREE.Color(0x6f6a62);
+  const riverMud = new THREE.Color(0x6d5a3d);
 
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
@@ -377,17 +403,17 @@ export function buildIslandWorld(
       c.setHex(0x8c7350); // worn dirt forest trail
     } else if (biome === 'grassland') {
       const soilPatch = Math.sin(x * 0.17 + z * 0.13) * Math.cos(x * 0.09 - z * 0.19);
-      c.setHex(soilPatch > 0.56 ? 0x625a34 : rand() < 0.36 ? 0x5c8b2c : 0x76a634);
+      c.setHex(soilPatch > 0.56 ? 0x665f3f : rand() < 0.36 ? 0x6f7f42 : 0x7d8c4c);
     } else if (biome === 'plains') {
       const soilPatch = Math.sin(x * 0.15 - z * 0.14) * Math.cos(x * 0.11 + z * 0.16);
-      c.setHex(soilPatch > 0.58 ? 0x5d5634 : rand() < 0.38 ? 0x568e2e : 0x6ba638);
+      c.setHex(soilPatch > 0.58 ? 0x625a3e : rand() < 0.38 ? 0x6c7d45 : 0x7a8b50);
     } else if (biome === 'sunflower_plains') {
-      c.setHex(rand() < 0.35 ? 0x669630 : 0x7cb038);
+      c.setHex(rand() < 0.35 ? 0x738348 : 0x849456);
     } else if (biome === 'meadow') {
       const soilPatch = Math.sin(x * 0.19 + z * 0.11) * Math.cos(x * 0.13 - z * 0.17);
-      c.setHex(soilPatch > 0.60 ? 0x565032 : rand() < 0.4 ? 0x458b3c : 0x5aa344);
+      c.setHex(soilPatch > 0.60 ? 0x5f5a40 : rand() < 0.4 ? 0x5f7c4b : 0x6e8b55);
     } else if (biome === 'cherry_grove') {
-      c.setHex(rand() < 0.35 ? 0xf9a8d4 : 0x6ba84f); // Lush grass dusted with fallen pink petals
+      c.setHex(rand() < 0.35 ? 0xf9a8d4 : 0x7c9c63); // Lush grass dusted with fallen pink petals
     } else if (biome === 'snowy_plains' || biome === 'grove' || biome === 'snowy_slopes') {
       c.setHex(0xe8f0f7); // Crisp snow blanket
     } else if (biome === 'ice_spikes') {
@@ -401,11 +427,11 @@ export function buildIslandWorld(
       const calciteBand = Math.abs(Math.sin((x + z) * 0.14 + y * 0.45)) > 0.84;
       c.setHex(calciteBand ? 0xebeae4 : rand() < 0.25 ? 0x78716c : 0x6b6762);
     } else if (biome === 'windswept_hills') {
-      c.setHex(slope > 0.55 ? 0x6b7280 : 0x5c7c48); // Stone cliffs & highland grass
+      c.setHex(slope > 0.55 ? 0x6b7280 : 0x6f7d55); // Stone cliffs & highland grass
     } else if (biome === 'windswept_gravelly_hills') {
       c.setHex(rand() < 0.65 ? 0x878a8f : 0x64686d); // Windswept gravel slopes
     } else if (biome === 'windswept_forest') {
-      c.setHex(slope > 0.62 ? 0x64686d : 0x3b6935); // Highland forest & cliffs
+      c.setHex(slope > 0.62 ? 0x64686d : 0x4f6b45); // Highland forest & cliffs
     } else if (biome === 'expedition') {
       c.setHex(0x7c6a46);
     } else if (biome === 'snowy_taiga') {
@@ -415,7 +441,7 @@ export function buildIslandWorld(
     } else if (biome === 'old_growth_spruce_taiga') {
       c.setHex(rand() < 0.48 ? 0x624428 : 0x374c31); // Podzol + boreal moss
     } else if (biome === 'taiga') {
-      c.setHex(0x2f5a36);
+      c.setHex(0x4a6b52);
     } else if (biome === 'dark_forest') {
       c.setHex(rand() < 0.28 ? 0x452f1c : 0x223820); // Shaded dark forest soil & leaf litter
     } else if (biome === 'pale_garden') {
@@ -437,6 +463,44 @@ export function buildIslandWorld(
       c.setHex(0x2f6b34);
     }
 
+    // Realistic surface blending: steep flank faces expose bedrock gradually,
+    // river/lake margins carry damp sediment, and broad tonal variation keeps
+    // large biome fields from reading as flat painted colour.
+    if (
+      y > 0.2 &&
+      !onGaragePadArea &&
+      !onHouseRamp &&
+      !onGarageDriveway &&
+      dWheat >= 7.8
+    ) {
+      const slopeT = Math.max(0, Math.min(1, (slope - 0.72) / 0.55));
+      const exposure = slopeT * slopeT * (3 - 2 * slopeT);
+      if (
+        exposure > 0.01 &&
+        biome !== 'badlands' &&
+        biome !== 'eroded_badlands' &&
+        biome !== 'wooded_badlands'
+      ) {
+        c.lerp(cliffStone, exposure * 0.55);
+      }
+
+      const river = getRiverSample(x, z);
+      const riverT = Math.max(0, Math.min(1, (river.dist - 4) / 10));
+      const riverBank = 1 - riverT * riverT * (3 - 2 * riverT);
+      const lakeDist = Math.hypot(x - LAKE_CENTER.x, z - LAKE_CENTER.z);
+      const lakeT = Math.max(
+        0,
+        Math.min(1, (lakeDist - LAKE_CENTER.radius - 2) / 8),
+      );
+      const lakeBank = 1 - lakeT * lakeT * (3 - 2 * lakeT);
+      const bank = Math.max(riverBank, lakeBank);
+      if (bank > 0.01) c.lerp(riverMud, bank * 0.45);
+
+      const tonal =
+        Math.sin(x * 0.021 + z * 0.017) * Math.cos(x * 0.013 - z * 0.027);
+      c.offsetHSL(0, tonal * 0.018, tonal * 0.028);
+    }
+
     const jitter = (rand() - 0.5) * 0.06;
     colors[i * 3] = Math.max(0, Math.min(1, c.r + jitter));
     colors[i * 3 + 1] = Math.max(0, Math.min(1, c.g + jitter));
@@ -450,11 +514,57 @@ export function buildIslandWorld(
   terrainGeo.computeBoundingSphere();
 
   const initialTerrainIndex = terrainGeo.getIndex()?.clone() ?? null;
+  const terrainPosition = terrainGeo.getAttribute('position');
+  let activeCaveOpenings: CaveTerrainOpening[] = [];
+  let caveOpeningSignature = '';
+
+  const applyCaveOpeningsToTerrain = (openings: readonly CaveTerrainOpening[]): void => {
+    if (!initialTerrainIndex || !terrainPosition) return;
+    const filtered = filterTerrainIndexForCaveOpenings(
+      initialTerrainIndex.array,
+      terrainPosition,
+      openings,
+    );
+    // Normals are unchanged by removing triangles from a heightfield: the kept
+    // faces have exactly the same orientation. Recomputing normals over the whole
+    // 65k-vertex terrain on every streaming change was a recurring frame hitch.
+    terrainGeo.setIndex(filtered);
+    terrainGeo.computeBoundingSphere();
+  };
+
   const resetTerrainIndex = (): void => {
+    activeCaveOpenings = [];
+    caveOpeningSignature = '';
     if (!initialTerrainIndex) return;
     terrainGeo.setIndex(initialTerrainIndex.clone());
-    terrainGeo.computeVertexNormals();
     terrainGeo.computeBoundingSphere();
+  };
+
+  const setCaveOpenings = (openings: readonly CaveTerrainOpening[]): void => {
+    const next = openings
+      .filter(
+        (opening) =>
+          Number.isFinite(opening.x) &&
+          Number.isFinite(opening.z) &&
+          Number.isFinite(opening.radius) &&
+          opening.radius > 0,
+      )
+      .map((opening) => ({
+        x: opening.x,
+        z: opening.z,
+        radius: opening.radius,
+      }));
+    const signature = next
+      .map(
+        (opening) =>
+          `${opening.x.toFixed(2)}:${opening.z.toFixed(2)}:${opening.radius.toFixed(2)}`,
+      )
+      .sort()
+      .join('|');
+    if (signature === caveOpeningSignature) return;
+    activeCaveOpenings = next;
+    caveOpeningSignature = signature;
+    applyCaveOpeningsToTerrain(activeCaveOpenings);
   };
 
   const terrainMat = enhanceSurfaceMaterial(
@@ -462,7 +572,7 @@ export function buildIslandWorld(
       new THREE.MeshStandardMaterial({
         vertexColors: true,
         roughness: 1.0,
-        metalness: 0.03,
+        metalness: 0.0,
       }),
       {
         map: groundTex,
@@ -472,7 +582,7 @@ export function buildIslandWorld(
     ),
     'terrain',
   );
-  terrainMat.normalScale.set(0.85, 0.85);
+  terrainMat.normalScale.set(1.0, 1.0);
   const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
   terrainMesh.castShadow = false;
   terrainMesh.receiveShadow = true;
@@ -1881,8 +1991,36 @@ export function buildIslandWorld(
   const resourceMeshes = new Map<string, THREE.Object3D>();
   const resourceHandles = new Map<string, ResourceVisualHandle>();
 
-  const palmTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x855a3c, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.92 }), 'wood'));
-  const palmLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x358f42, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 0.72 }), 'foliage', 0.06));
+  const palmTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0xd8c1a2, map: palmBarkTex, normalMap: palmBarkNormalTex, normalScale: new THREE.Vector2(1.35, 1.35), roughness: 0.9 }), 'wood'));
+  const palmLeafMat = registerMaterial(
+    enhanceSurfaceMaterial(
+      applySafeStandardMaps(
+        new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          roughness: 0.68,
+          vertexColors: true,
+          side: THREE.DoubleSide,
+        }),
+        {
+          map: palmFrondTex,
+          normalMap: leafNormalTex,
+        },
+      ),
+      'palm_frond',
+      0.075,
+    ),
+  );
+  palmLeafMat.normalScale.set(0.55, 0.55);
+  const palmDeadFrondMat = registerMaterial(
+    enhanceSurfaceMaterial(
+      new THREE.MeshStandardMaterial({ color: 0xa7804f, map: palmFrondTex, roughness: 0.86, side: THREE.DoubleSide }),
+      'palm_frond',
+      0.05,
+    ),
+  );
+  const palmFrondGeos = createPalmFrondGeometries().map((g) => registerGeometry(g));
+  const palmTrunkSegGeo = registerGeometry(createPalmTrunkSegmentGeometry());
+  const palmBootGeo = registerGeometry(createPalmBootGeometry());
   const jungleTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x5c3d28, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.94 }), 'wood'));
   const jungleLeafMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x227038, map: leafTex, normalMap: leafNormalTex, normalScale: new THREE.Vector2(0.8, 0.8), roughness: 0.76 }), 'foliage', 0.045));
   const banyanTrunkMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x6b4b34, map: barkTex, normalMap: barkNormalTex, normalScale: new THREE.Vector2(0.95, 0.95), roughness: 0.93 }), 'wood'));
@@ -2006,7 +2144,7 @@ export function buildIslandWorld(
   const wheatMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.86 }), 'foliage', 0.04));
   const sugarcaneMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x84cc16, roughness: 0.72 }), 'foliage', 0.045));
   const sugarcaneNodeMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.8 }));
-  const grassMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x65a30d, roughness: 0.88 }), 'foliage', 0.05));
+  const grassMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x6f7f42, roughness: 0.92 }), 'foliage', 0.05));
   const berryBushMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x15803d, map: leafTex, roughness: 0.85 }), 'foliage', 0.03));
   const berryFruitMat = registerMaterial(new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.45 }));
   const fernMat = registerMaterial(enhanceSurfaceMaterial(new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.84 }), 'foliage', 0.035));
@@ -2154,20 +2292,30 @@ export function buildIslandWorld(
       const felledPivot = new THREE.Group();
       felledPivot.position.y = 0.62;
 
+      const trunkPivot = new THREE.Group();
+      felledPivot.add(trunkPivot);
+
+      // Four progressively narrower, gently leaning segment rings make a curved
+      // palm stem from one shared tapered buffer.
       let curX = 0;
       let curY = 0;
-      for (let s = 0; s < 3; s++) {
-        const segH = 1.65;
-        const rBot = 0.27 - s * 0.04;
-        const seg = new THREE.Mesh(gCylTaper8, palmTrunkMat);
-        seg.scale.set(rBot, segH, rBot);
-        const tilt = lean * (s + 1) * 0.45;
-        seg.position.set(curX - Math.sin(tilt) * 0.3, curY + segH * 0.5, 0);
-        seg.rotation.z = tilt;
+      let radius = 0.255 * (0.94 + nodeRand() * 0.12);
+      let trunkTilt = lean * 0.35;
+      const SEGMENTS = 4;
+      const SEG_HEIGHT = 1.32;
+      for (let s = 0; s < SEGMENTS; s++) {
+        trunkTilt += lean * 0.5 + (nodeRand() - 0.5) * 0.028;
+        const segPivot = new THREE.Group();
+        segPivot.position.set(curX, curY, 0);
+        segPivot.rotation.z = trunkTilt;
+        const seg = new THREE.Mesh(palmTrunkSegGeo, palmTrunkMat);
+        seg.scale.set(radius, SEG_HEIGHT, radius);
         seg.castShadow = shadowsEnabledState;
-        felledPivot.add(seg);
-        curX -= Math.sin(tilt) * 0.55;
-        curY += segH * 0.96;
+        segPivot.add(seg);
+        trunkPivot.add(segPivot);
+        curX -= Math.sin(trunkTilt) * SEG_HEIGHT;
+        curY += Math.cos(trunkTilt) * SEG_HEIGHT;
+        radius *= 0.82;
       }
 
       const trunkCutBand = new THREE.Mesh(gCylStraight8, heartwoodCutMat);
@@ -2178,41 +2326,76 @@ export function buildIslandWorld(
 
       const crown = new THREE.Group();
       crown.position.set(curX, curY, 0);
-      for (let c = 0; c < 5; c++) {
+      trunkPivot.add(crown);
+
+      // Fibrous leaf-boot collars hide the trunk/frond join.
+      for (let b = 0; b < 3; b++) {
+        const boot = new THREE.Mesh(palmBootGeo, palmTrunkMat);
+        boot.scale.set(radius * (1.55 - b * 0.14), 0.55 + b * 0.14, radius * (1.55 - b * 0.14));
+        boot.position.y = -0.02 - b * 0.13;
+        boot.rotation.y = nodeRand() * Math.PI;
+        boot.rotation.z = (nodeRand() - 0.5) * 0.12;
+        crown.add(boot);
+      }
+
+      const coconutCount = 4 + Math.floor(nodeRand() * 3);
+      for (let c = 0; c < coconutCount; c++) {
         const coco = new THREE.Mesh(gSphere7, coconutMat);
-        coco.scale.set(0.145, 0.165, 0.145);
-        const ca = (c / 5) * Math.PI * 2 + 0.3;
-        coco.position.set(Math.cos(ca) * 0.24, -0.18 - (c % 2) * 0.08, Math.sin(ca) * 0.24);
+        coco.scale.set(0.135, 0.155, 0.135);
+        const ca = (c / coconutCount) * Math.PI * 2 + 0.3;
+        coco.position.set(
+          Math.cos(ca) * (0.2 + nodeRand() * 0.12),
+          -0.14 - (c % 2) * 0.1,
+          Math.sin(ca) * (0.2 + nodeRand() * 0.12),
+        );
         crown.add(coco);
       }
-      for (let f = 0; f < 9; f++) {
-        const a = (f / 9) * Math.PI * 2 + (nodeRand() - 0.5) * 0.12;
-        const frondGroup = new THREE.Group();
-        frondGroup.rotation.y = a;
-        const liftPitch = f % 2 === 0 ? 0.14 : -0.04;
-        const innerFrond = new THREE.Mesh(gCone5, palmLeafMat);
-        innerFrond.scale.set(0.38, 1.9, 0.18);
-        innerFrond.rotation.z = -Math.PI / 2.65 + liftPitch;
-        innerFrond.position.set(0.86, 0.18 + liftPitch * 0.5, 0);
-        innerFrond.castShadow = false;
-        const tipFrond = new THREE.Mesh(gCone5, palmLeafMat);
-        tipFrond.scale.set(0.30, 1.55, 0.14);
-        tipFrond.rotation.z = -Math.PI / 1.62 + liftPitch * 0.4;
-        tipFrond.position.set(2.05, -0.22 + liftPitch * 0.6, 0);
-        tipFrond.castShadow = false;
-        // Layered side frond leaflets for lush silhouette without extra materials
-        const sideLeafA = new THREE.Mesh(gCone5, palmLeafMat);
-        sideLeafA.scale.set(0.16, 0.85, 0.12);
-        sideLeafA.rotation.set(0.35, 0.25, -Math.PI / 2.1);
-        sideLeafA.position.set(1.25, 0.06, 0.18);
-        const sideLeafB = new THREE.Mesh(gCone5, palmLeafMat);
-        sideLeafB.scale.set(0.16, 0.85, 0.12);
-        sideLeafB.rotation.set(-0.35, -0.25, -Math.PI / 2.1);
-        sideLeafB.position.set(1.25, 0.06, -0.18);
-        frondGroup.add(innerFrond, tipFrond, sideLeafA, sideLeafB);
-        crown.add(frondGroup);
+
+      // Irregular canopy: three pitch tiers, golden-angle spacing with jitter,
+      // three shared frond shapes, and independent length/width scales.
+      const frondCount = 18 + (nodeRand() < 0.4 ? 2 : 0);
+      for (let f = 0; f < frondCount; f++) {
+        const layer = f % 5;
+        const a = f * 2.399963 + (nodeRand() - 0.5) * 0.34;
+        const pitch =
+          layer === 0
+            ? 0.54 + nodeRand() * 0.14
+            : layer === 1
+              ? 0.32 + nodeRand() * 0.12
+              : layer === 2
+                ? 0.08 + nodeRand() * 0.12
+                : layer === 3
+                  ? -0.16 + nodeRand() * 0.12
+                  : -0.44 + nodeRand() * 0.12;
+        const spread =
+          (layer === 0 ? 0.92 : layer === 1 ? 1.12 : layer === 2 ? 1.32 : layer === 3 ? 1.3 : 1.16) *
+          (0.9 + nodeRand() * 0.24);
+        const frond = new THREE.Mesh(
+          palmFrondGeos[(f + Math.floor(seed * 0.001)) % palmFrondGeos.length],
+          palmLeafMat,
+        );
+        frond.position.set(Math.cos(a) * 0.05, 0.02 + (layer === 0 ? 0.07 : 0), Math.sin(a) * 0.05);
+        frond.rotation.set((nodeRand() - 0.5) * 0.16, a, pitch + (nodeRand() - 0.5) * 0.07);
+        frond.scale.set(
+          spread * (0.94 + nodeRand() * 0.14),
+          spread * (0.9 + nodeRand() * 0.2),
+          spread * (0.94 + nodeRand() * 0.16),
+        );
+        crown.add(frond);
       }
-      felledPivot.add(crown);
+
+      // A couple of weathered, hanging dead fronds under the live canopy.
+      for (let d = 0; d < 2; d++) {
+        const dead = new THREE.Mesh(
+          palmFrondGeos[d % palmFrondGeos.length],
+          palmDeadFrondMat,
+        );
+        const da = nodeRand() * Math.PI * 2;
+        dead.position.set(Math.cos(da) * 0.06, -0.04, Math.sin(da) * 0.06);
+        dead.rotation.set(0, da, -1.02 + nodeRand() * 0.24);
+        dead.scale.setScalar(0.72 + nodeRand() * 0.18);
+        crown.add(dead);
+      }
       root.add(felledPivot);
       root.scale.setScalar(scale);
       return { root, felledPivot, stumpMesh, trunkCutBand };
@@ -5587,110 +5770,22 @@ export function buildIslandWorld(
     count++;
   }
 
-  // 10. Spatially Chunked (120m x 120m) 8-Blade Arched Grass Carpets, Meadow Wildflowers & River Pebbles
-  const grassBladeCount = 8;
-  const grassVertsPerBlade = 5;
-  const grassTrisPerBlade = 3;
-  const grassPositions = new Float32Array(grassBladeCount * grassVertsPerBlade * 3);
-  const grassNormals = new Float32Array(grassBladeCount * grassVertsPerBlade * 3);
-  const grassUvs = new Float32Array(grassBladeCount * grassVertsPerBlade * 2);
-  const grassColors = new Float32Array(grassBladeCount * grassVertsPerBlade * 3);
-  const grassIndices = new Uint16Array(grassBladeCount * grassTrisPerBlade * 3);
-
-  for (let b = 0; b < grassBladeCount; b++) {
-    const az = (b / grassBladeCount) * Math.PI * 2 + (b % 2) * 0.24;
-    const perpX = -Math.sin(az);
-    const perpZ = Math.cos(az);
-    const dirX = Math.cos(az);
-    const dirZ = Math.sin(az);
-    const baseDist = 0.03 + (b % 3) * 0.042;
-    const ox = dirX * baseDist;
-    const oz = dirZ * baseDist;
-    const baseW = 0.042 + (b % 2) * 0.01;
-    const midW = baseW * 0.58;
-    const h = 0.38 + (b % 3) * 0.11;
-    const archMid = 0.065 + (b % 2) * 0.035;
-    const archTip = 0.2 + (b % 3) * 0.06;
-
-    const vBase = b * grassVertsPerBlade;
-    const pOff = vBase * 3;
-    // 0: base left, 1: base right
-    grassPositions[pOff + 0] = ox - perpX * baseW;
-    grassPositions[pOff + 1] = 0.0;
-    grassPositions[pOff + 2] = oz - perpZ * baseW;
-    grassPositions[pOff + 3] = ox + perpX * baseW;
-    grassPositions[pOff + 4] = 0.0;
-    grassPositions[pOff + 5] = oz + perpZ * baseW;
-    // 2: mid left, 3: mid right
-    grassPositions[pOff + 6] = ox + dirX * archMid - perpX * midW;
-    grassPositions[pOff + 7] = h * 0.54;
-    grassPositions[pOff + 8] = oz + dirZ * archMid - perpZ * midW;
-    grassPositions[pOff + 9] = ox + dirX * archMid + perpX * midW;
-    grassPositions[pOff + 10] = h * 0.54;
-    grassPositions[pOff + 11] = oz + dirZ * archMid + perpZ * midW;
-    // 4: tip
-    grassPositions[pOff + 12] = ox + dirX * archTip;
-    grassPositions[pOff + 13] = h;
-    grassPositions[pOff + 14] = oz + dirZ * archTip;
-
-    // Outward-and-upward normals for rich daylight & rim wrap
-    const nLen = Math.hypot(dirX * 0.45, 0.88, dirZ * 0.45);
-    const nx = (dirX * 0.45) / nLen;
-    const ny = 0.88 / nLen;
-    const nz = (dirZ * 0.45) / nLen;
-    for (let k = 0; k < grassVertsPerBlade; k++) {
-      grassNormals[pOff + k * 3 + 0] = nx;
-      grassNormals[pOff + k * 3 + 1] = ny;
-      grassNormals[pOff + k * 3 + 2] = nz;
-    }
-
-    const uvOff = vBase * 2;
-    grassUvs[uvOff + 0] = 0;
-    grassUvs[uvOff + 1] = 0;
-    grassUvs[uvOff + 2] = 1;
-    grassUvs[uvOff + 3] = 0;
-    grassUvs[uvOff + 4] = 0.15;
-    grassUvs[uvOff + 5] = 0.55;
-    grassUvs[uvOff + 6] = 0.85;
-    grassUvs[uvOff + 7] = 0.55;
-    grassUvs[uvOff + 8] = 0.5;
-    grassUvs[uvOff + 9] = 1;
-
-    // Root AO -> mid vibrant meadow green -> sunlit chartreuse tip
-    grassColors[pOff + 0] = 0.2;
-    grassColors[pOff + 1] = 0.34;
-    grassColors[pOff + 2] = 0.12;
-    grassColors[pOff + 3] = 0.2;
-    grassColors[pOff + 4] = 0.34;
-    grassColors[pOff + 5] = 0.12;
-    grassColors[pOff + 6] = 0.58;
-    grassColors[pOff + 7] = 0.8;
-    grassColors[pOff + 8] = 0.24;
-    grassColors[pOff + 9] = 0.58;
-    grassColors[pOff + 10] = 0.8;
-    grassColors[pOff + 11] = 0.24;
-    grassColors[pOff + 12] = 0.98;
-    grassColors[pOff + 13] = 1.0;
-    grassColors[pOff + 14] = 0.48;
-
-    const iOff = b * grassTrisPerBlade * 3;
-    grassIndices[iOff + 0] = vBase + 0;
-    grassIndices[iOff + 1] = vBase + 1;
-    grassIndices[iOff + 2] = vBase + 2;
-    grassIndices[iOff + 3] = vBase + 1;
-    grassIndices[iOff + 4] = vBase + 3;
-    grassIndices[iOff + 5] = vBase + 2;
-    grassIndices[iOff + 6] = vBase + 2;
-    grassIndices[iOff + 7] = vBase + 3;
-    grassIndices[iOff + 8] = vBase + 4;
+  // 10. Spatially Chunked (64m x 64m) biome-specific grass carpets, meadow
+  // wildflowers & river pebbles. Each species has near/ultra/far geometry that
+  // shares one vertex layout, so chunks can hot-swap LOD without reallocating.
+  const grassVariantGeometries = new Map<
+    GrassVariant,
+    { near: THREE.BufferGeometry; ultra: THREE.BufferGeometry; far: THREE.BufferGeometry }
+  >();
+  for (const variant of GRASS_VARIANTS) {
+    const set = createGrassVariantGeometry(variant);
+    grassVariantGeometries.set(variant, {
+      near: registerGeometry(set.near),
+      ultra: registerGeometry(set.ultra),
+      far: registerGeometry(set.far),
+    });
   }
 
-  const grassBladeGeo = registerGeometry(new THREE.BufferGeometry());
-  grassBladeGeo.setAttribute('position', new THREE.BufferAttribute(grassPositions, 3));
-  grassBladeGeo.setAttribute('normal', new THREE.BufferAttribute(grassNormals, 3));
-  grassBladeGeo.setAttribute('uv', new THREE.BufferAttribute(grassUvs, 2));
-  grassBladeGeo.setAttribute('color', new THREE.BufferAttribute(grassColors, 3));
-  grassBladeGeo.setIndex(new THREE.BufferAttribute(grassIndices, 1));
 
   // Oxeye Daisy & Buttercup Floret Geometry (crossed slender stem + 6-petal flower crown + pollen disc)
   const buildFloretGeometry = (): THREE.BufferGeometry => {
@@ -5841,12 +5936,14 @@ export function buildIslandWorld(
     enhanceSurfaceMaterial(
       new THREE.MeshStandardMaterial({
         color: 0xffffff,
-        roughness: 0.76,
+        roughness: 0.88,
+        metalness: 0,
+        envMapIntensity: 0.7,
         side: THREE.DoubleSide,
         vertexColors: true,
       }),
-      'foliage',
-      0.06,
+      'grass',
+      0.072,
     ),
   );
   const floretMat = registerMaterial(
@@ -5881,7 +5978,21 @@ export function buildIslandWorld(
     matrices: THREE.Matrix4[];
     colors: THREE.Color[] | null;
   }
-  const grassBuckets = new Map<string, ChunkBucket>();
+  // One bucket per biome-appropriate grass species so each chunk batch draws a
+  // single shared clump buffer with its own silhouette and tint.
+  const grassBuckets = new Map<GrassVariant, Map<string, ChunkBucket>>(
+    GRASS_VARIANTS.map((variant) => [variant, new Map<string, ChunkBucket>()]),
+  );
+  const pushGrass = (
+    variant: GrassVariant,
+    wx: number,
+    wz: number,
+    mat: THREE.Matrix4,
+    col: THREE.Color,
+  ) => {
+    const bucket = grassBuckets.get(variant);
+    if (bucket) pushToChunk(bucket, wx, wz, mat, col);
+  };
   const floretBuckets = new Map<string, ChunkBucket>();
   const lupineBuckets = new Map<string, ChunkBucket>();
   const pebbleBuckets = new Map<string, ChunkBucket>();
@@ -5917,7 +6028,7 @@ export function buildIslandWorld(
     }
   };
 
-  const grassTarget = 44000;
+  const grassTarget = 52000;
   const floretTarget = 6500;
   const lupineTarget = 1800;
   const pebbleCount = 180;
@@ -5964,8 +6075,53 @@ export function buildIslandWorld(
     return true;
   };
 
+  // Biome -> grass species. Beaches grow leaning dune grass, savannas tall dry
+  // bunch grass, highlands short alpine turf, and the rest lush meadow turf.
+  const grassVariantForBiome = (biome: string, coastal: boolean): GrassVariant => {
+    if (coastal || biome === 'beach') return 'dune';
+    if (biome === 'savanna' || biome === 'savanna_plateau' || biome === 'windswept_savanna') {
+      return 'tall';
+    }
+    if (
+      biome === 'taiga' ||
+      biome === 'old_growth_pine_taiga' ||
+      biome === 'old_growth_spruce_taiga' ||
+      biome === 'snowy_taiga' ||
+      biome === 'grove' ||
+      biome === 'snowy_plains' ||
+      biome === 'mountain' ||
+      biome === 'windswept_hills' ||
+      biome === 'windswept_gravelly_hills'
+    ) {
+      return 'alpine';
+    }
+    return 'lush';
+  };
+
+  const grassTintForBiome = (biome: string, variant: GrassVariant, coastal: boolean): number => {
+    if (variant === 'dune') return coastal ? 0x9d9a70 : 0xa8a37c;
+    if (variant === 'tall') return biome === 'windswept_savanna' ? 0xa9a06c : 0xbaa972;
+    if (variant === 'alpine') {
+      if (biome === 'snowy_plains' || biome === 'grove') return 0xaab7ae;
+      if (biome === 'snowy_taiga') return 0x8fa38f;
+      if (biome === 'mountain') return 0x778a6e;
+      return 0x6f8468;
+    }
+    if (biome === 'grassland' || biome === 'meadow' || biome === 'sparse_jungle') return 0x9aa862;
+    if (biome === 'cherry_grove') return 0x86a86a;
+    if (biome === 'dark_forest') return 0x7a7350;
+    if (biome === 'pale_garden') return 0xa8b0a4;
+    if (biome === 'jungle' || biome === 'bamboo_jungle' || biome === 'swamp' || biome === 'mangrove_swamp') {
+      return 0x5b8452;
+    }
+    if (biome === 'flower_forest' || biome === 'birch_forest' || biome === 'old_growth_birch_forest') {
+      return 0x8fae6b;
+    }
+    return 0x7d9a5a;
+  };
+
   // Sample meadow & forest patches with lush natural clustering (fast CPU gen + seamless grass carpet)
-  for (let i = 0; i < 29000 && gPlaced < grassTarget; i++) {
+  for (let i = 0; i < 32000 && gPlaced < grassTarget; i++) {
     const a = rand() * Math.PI * 2;
     const rad =
       i < 9500
@@ -6010,54 +6166,67 @@ export function buildIslandWorld(
       biome === 'jungle' ||
       biome === 'bamboo_jungle' ||
       biome === 'savanna' ||
+      biome === 'savanna_plateau' ||
+      biome === 'windswept_savanna' ||
       biome === 'swamp' ||
+      biome === 'mangrove_swamp' ||
       biome === 'windswept_hills' ||
+      biome === 'windswept_forest' ||
+      biome === 'grove' ||
+      biome === 'mountain' ||
       isCoastalGrassEdge;
     if (!isVegetatedBiome) continue;
+    // Rocky highlands and snowfields carry only sparse alpine turf.
+    if ((biome === 'mountain' || biome === 'grove') && rand() > 0.5) continue;
 
-    const grassHex = isCoastalGrassEdge
-      ? 0x769f38
-      : biome === 'grassland' || biome === 'meadow' || biome === 'sparse_jungle'
-        ? 0x86ad3b
-        : biome === 'savanna'
-          ? 0xa4943a
-          : biome === 'cherry_grove'
-            ? 0x6ca848
-            : biome === 'dark_forest'
-              ? 0x6c4c28
-              : biome === 'pale_garden'
-                ? 0x9aa69d
-                : biome === 'snowy_taiga'
-                  ? 0xdce6f0
-                  : biome === 'taiga' ||
-                      biome === 'old_growth_pine_taiga' ||
-                      biome === 'old_growth_spruce_taiga'
-                    ? 0x346944
-                    : biome === 'jungle' || biome === 'bamboo_jungle' || biome === 'swamp'
-                      ? 0x327c35
-                      : biome === 'flower_forest' || biome === 'birch_forest'
-                        ? 0x63a638
-                        : 0x528f32;
+    const baseVariant = grassVariantForBiome(biome, isCoastalGrassEdge);
+    // Feather species borders: near a neighbouring biome, a share of clumps take
+    // on the neighbour's grass so the transition is interlocking, not a hard seam.
+    const neighborVariantA = grassVariantForBiome(getBiomeAt(ax + 3.5, az), false);
+    const neighborVariantB = grassVariantForBiome(getBiomeAt(ax, az - 3.5), false);
+    const borderVariants: GrassVariant[] = [];
+    if (neighborVariantA !== baseVariant) borderVariants.push(neighborVariantA);
+    if (neighborVariantB !== baseVariant && neighborVariantB !== neighborVariantA) {
+      borderVariants.push(neighborVariantB);
+    }
 
-    const clumpCount = isMeadowLike ? 3 : 2;
+    const clumpCount = isMeadowLike ? 4 : baseVariant === 'dune' ? 2 : 3;
     for (let c = 0; c < clumpCount && gPlaced < grassTarget; c++) {
       const ca = rand() * Math.PI * 2;
-      const cr = c === 0 ? 0 : 0.42 + rand() * 1.35;
+      const cr = c === 0 ? 0 : (baseVariant === 'tall' ? 0.52 : 0.38) + rand() * 1.5;
       const px = ax + Math.cos(ca) * cr;
       const pz = az + Math.sin(ca) * cr;
       const py = c === 0 ? ay : getTerrainHeight(px, pz);
       if (py < 0.4) continue;
+      const variant =
+        borderVariants.length > 0 && rand() < 0.22
+          ? borderVariants[Math.floor(rand() * borderVariants.length)]
+          : baseVariant;
       dummy.position.set(px, py - 0.03, pz);
       dummy.rotation.set((rand() - 0.5) * 0.24, rand() * Math.PI * 2, (rand() - 0.5) * 0.24);
       const sc = 0.85 + rand() * 0.92;
-      dummy.scale.set(
-        sc * 1.15,
-        sc * (biome === 'dark_forest' || biome === 'snowy_taiga' ? 0.45 : 0.82 + rand() * 0.68),
-        sc * 1.15,
-      );
+      const widthScale = variant === 'alpine' ? 1.3 : variant === 'dune' ? 1.2 : 1.15;
+      const heightScale =
+        variant === 'tall'
+          ? 1.0 + rand() * 0.5
+          : variant === 'alpine'
+            ? 0.8 + rand() * 0.3
+            : variant === 'dune'
+              ? 0.9 + rand() * 0.42
+              : 0.85 + rand() * 0.6;
+      dummy.scale.set(sc * widthScale, sc * heightScale, sc * widthScale);
       dummy.updateMatrix();
-      tintColor.setHex(grassHex).offsetHSL((rand() - 0.5) * 0.03, 0.02, (rand() - 0.5) * 0.09);
-      pushToChunk(grassBuckets, px, pz, dummy.matrix, tintColor);
+      // Local dryness noise so neighbouring clumps vary in hue instead of
+      // repeating one flat carpet colour.
+      const dryness = Math.sin(px * 0.21 + pz * 0.13) * 0.5 + 0.5;
+      tintColor
+        .setHex(grassTintForBiome(biome, variant, isCoastalGrassEdge))
+        .offsetHSL(
+          (rand() - 0.5) * 0.035,
+          0.02 + dryness * 0.05,
+          (rand() - 0.5) * 0.1 + (variant === 'dune' ? 0.045 : 0),
+        );
+      pushGrass(variant, px, pz, dummy.matrix, tintColor);
       gPlaced++;
     }
 
@@ -6115,7 +6284,44 @@ export function buildIslandWorld(
     cz: number;
   }
   const foliageChunkEntries: ChunkedInstancedEntry[] = [];
+  const grassChunkEntries: ChunkedInstancedEntry[] = [];
   const chunkedDecorEntries: ChunkedInstancedEntry[] = [];
+
+  // Distance-based grass LOD. Chunk centres inside 62m use the full (or ultra)
+  // clump, the middle ring up to 102m uses the standard clump, and the outermost
+  // visible ring swaps to a reduced blade count. Nearby turf keeps full detail.
+  const grassLodEntries: {
+    mesh: THREE.InstancedMesh;
+    cx: number;
+    cz: number;
+    variant: GrassVariant;
+  }[] = [];
+  let grassUltraActive = false;
+  let lastGrassLodX = Number.NaN;
+  let lastGrassLodZ = Number.NaN;
+  const applyGrassLod = (px: number, pz: number, force = false): void => {
+    // Refresh as the player moves, not only on chunk crossings, so a clump can
+    // never stay on distant LOD while the player walks up to it.
+    const lodDx = px - lastGrassLodX;
+    const lodDz = pz - lastGrassLodZ;
+    if (!force && lodDx * lodDx + lodDz * lodDz < 8 * 8) return;
+    lastGrassLodX = px;
+    lastGrassLodZ = pz;
+    for (let i = 0; i < grassLodEntries.length; i++) {
+      const entry = grassLodEntries[i];
+      const dx = entry.cx - px;
+      const dz = entry.cz - pz;
+      const dSq = dx * dx + dz * dz;
+      const lod = dSq < 62 * 62 ? (grassUltraActive ? 'ultra' : 'near') : dSq < 102 * 102 ? 'near' : 'far';
+      const geoSet = grassVariantGeometries.get(entry.variant);
+      if (!geoSet) continue;
+      const key = `${entry.variant}:${lod}`;
+      if (entry.mesh.userData.grassLodKey !== key) {
+        entry.mesh.geometry = geoSet[lod];
+        entry.mesh.userData.grassLodKey = key;
+      }
+    }
+  };
   const finalizeChunkedInstanced = (
     targetList: ChunkedInstancedEntry[],
     buckets: Map<string, ChunkBucket>,
@@ -6145,7 +6351,19 @@ export function buildIslandWorld(
       targetList.push({ mesh: im, cx: bucket.cx, cz: bucket.cz });
     }
   };
-  finalizeChunkedInstanced(foliageChunkEntries, grassBuckets, grassBladeGeo, ambientGrassMat, true);
+  for (const variant of GRASS_VARIANTS) {
+    const buckets = grassBuckets.get(variant);
+    const geoSet = grassVariantGeometries.get(variant);
+    if (!buckets || !geoSet) continue;
+    const start = grassChunkEntries.length;
+    finalizeChunkedInstanced(grassChunkEntries, buckets, geoSet.near, ambientGrassMat, true);
+    for (let i = start; i < grassChunkEntries.length; i++) {
+      const entry = grassChunkEntries[i];
+      entry.mesh.userData.grassLodKey = `${variant}:near`;
+      grassLodEntries.push({ mesh: entry.mesh, cx: entry.cx, cz: entry.cz, variant });
+    }
+  }
+  foliageChunkEntries.push(...grassChunkEntries);
   finalizeChunkedInstanced(foliageChunkEntries, floretBuckets, floretGeo, floretMat, true);
   finalizeChunkedInstanced(foliageChunkEntries, lupineBuckets, lupineGeo, lupineMat, true);
   finalizeChunkedInstanced(foliageChunkEntries, pebbleBuckets, pebbleGeo, smallStoneMat, true);
@@ -6760,6 +6978,7 @@ gl_Position = projectionMatrix * mvPosition;`,
     const movedSq =
       (px - lastLightCullX) * (px - lastLightCullX) +
       (pz - lastLightCullZ) * (pz - lastLightCullZ);
+    applyGrassLod(px, pz);
     if (
       !chunkChanged &&
       !Number.isNaN(lastLightCullX) &&
@@ -6936,6 +7155,110 @@ gl_Position = projectionMatrix * mvPosition;`,
     }
   };
 
+  // ---- Ultra preset fidelity ----------------------------------------------
+  // "Ultra" previously only raised resolution, shadow reach and draw distance.
+  // It now also pushes the world's materials, grass and foliage to their
+  // maximum quality: 16x anisotropic filtering (the island textures were
+  // capped at 8), stronger image-based specular response, sharper normal-map
+  // relief on foliage and bark, and 14-blade grass clumps instead of 8.
+  const ultraMaterialBaselines = new WeakMap<
+    THREE.Material,
+    { envMapIntensity: number; roughness: number; normalScale: THREE.Vector2 | null }
+  >();
+  const ultraTextureAnisotropy = new WeakMap<THREE.Texture, number>();
+  let ultraFidelityActive = false;
+  const TEXTURE_SLOTS = [
+    'map',
+    'normalMap',
+    'roughnessMap',
+    'metalnessMap',
+    'aoMap',
+    'emissiveMap',
+    'bumpMap',
+    'alphaMap',
+    'specularMap',
+    'clearcoatMap',
+    'clearcoatNormalMap',
+    'clearcoatRoughnessMap',
+  ] as const;
+
+  const setUltraFidelity = (enabled: boolean): void => {
+    if (enabled === ultraFidelityActive) return;
+    ultraFidelityActive = enabled;
+
+    // Walk the actual world instead of a registration list so terrain, cliffs,
+    // grass, reeds, trees and every landmark material is covered.
+    const seenMaterials = new Set<THREE.Material>();
+    const worldMaterials: THREE.Material[] = [];
+    overworldGroup.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      const list = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const m of list) {
+        if (m && !seenMaterials.has(m)) {
+          seenMaterials.add(m);
+          worldMaterials.push(m);
+        }
+      }
+    });
+
+    const hardwareAniso = renderer.capabilities.getMaxAnisotropy();
+    const ultraAniso = Math.min(16, hardwareAniso);
+    const touchedTextures = new Set<THREE.Texture>();
+    for (const mat of worldMaterials) {
+      const std = mat as THREE.MeshStandardMaterial;
+      if (!std.isMeshStandardMaterial) continue;
+
+      for (const slot of TEXTURE_SLOTS) {
+        const tex = (mat as unknown as Record<string, unknown>)[slot];
+        if (!(tex instanceof THREE.Texture) || touchedTextures.has(tex)) continue;
+        touchedTextures.add(tex);
+        let baseAniso = ultraTextureAnisotropy.get(tex);
+        if (baseAniso === undefined) {
+          baseAniso = tex.anisotropy;
+          ultraTextureAnisotropy.set(tex, baseAniso);
+        }
+        const next = enabled ? Math.max(baseAniso, ultraAniso) : baseAniso;
+        if (tex.anisotropy !== next) {
+          tex.anisotropy = next;
+          // Three only re-applies sampler state on upload, so flag the texture
+          // once per preset switch rather than every frame.
+          tex.needsUpdate = true;
+        }
+      }
+
+      // Water and other hand-tuned surfaces own their envMapIntensity.
+      if (mat.userData?.preserveEnvMapIntensity === true) continue;
+      let base = ultraMaterialBaselines.get(mat);
+      if (!base) {
+        base = {
+          envMapIntensity: std.envMapIntensity,
+          roughness: std.roughness,
+          normalScale: std.normalScale ? std.normalScale.clone() : null,
+        };
+        ultraMaterialBaselines.set(mat, base);
+      }
+      const isFoliage =
+        mat.userData?.surfaceMode === 'foliage' ||
+        mat.userData?.surfaceMode === 'grass' ||
+        mat.userData?.surfaceMode === 'palm_frond';
+      // Every material gets a richer IBL response; foliage is pushed further so
+      // leaves and grass blades pick up the sky and read as thin, lit surfaces.
+      std.envMapIntensity = enabled
+        ? base.envMapIntensity * (isFoliage ? 1.4 : 1.18)
+        : base.envMapIntensity;
+      if (isFoliage) {
+        std.roughness = enabled ? Math.max(0.34, base.roughness * 0.9) : base.roughness;
+      }
+      if (std.normalScale && base.normalScale) {
+        const relief = enabled ? (isFoliage ? 1.35 : 1.18) : 1;
+        std.normalScale.set(base.normalScale.x * relief, base.normalScale.y * relief);
+      }
+    }
+
+    grassUltraActive = enabled;
+    applyGrassLod(lastGrassLodX, lastGrassLodZ, true);
+  };
+
   const dispose = (): void => {
     for (let i = 0; i < worldChunkManager.chunks.length; i++) {
       const g = worldChunkManager.chunks[i].group;
@@ -7013,8 +7336,10 @@ gl_Position = projectionMatrix * mvPosition;`,
     restoreBatchedNode,
     setBatchedNodeVisible,
     setWorldShadowCasting,
+    setUltraFidelity,
     cullWorldByDistance,
     resetTerrainIndex,
+    setCaveOpenings,
     dispose,
   };
 }

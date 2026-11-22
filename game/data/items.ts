@@ -1803,6 +1803,17 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
     iconKey: 'key',
     color: '#eab308',
   },
+  car_key: {
+    id: 'car_key',
+    name: 'Classic Car Key',
+    category: 'equipment',
+    description:
+      'Brass ignition key from a hill-country classic. Spare sets are hidden on the island hillsides and mountain foothills.',
+    stackable: true,
+    maxStack: 10,
+    iconKey: 'key',
+    color: '#f59e0b',
+  },
   space_gem: {
     id: 'space_gem',
     name: 'Outer Space Gem',

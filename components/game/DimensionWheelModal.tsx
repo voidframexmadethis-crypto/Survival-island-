@@ -12,6 +12,7 @@ import {
   Snowflake,
   Mountain,
   TreePine,
+  Hexagon,
   Shield,
   Zap,
   X,
@@ -76,6 +77,8 @@ export const DimensionWheelModal: React.FC<DimensionWheelModalProps> = ({
         return <Mountain className="w-5 h-5 text-rose-500" />;
       case 'island_jungle':
         return <TreePine className="w-5 h-5 text-emerald-400" />;
+      case 'bee_dimension':
+        return <Hexagon className="w-5 h-5 text-amber-300" />;
       default:
         return <Globe className="w-5 h-5 text-emerald-400" />;
     }

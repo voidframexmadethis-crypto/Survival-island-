@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { createOutdoorEnvironmentTexture } from '../world/outdoorEnvironment';
 import { SoundEngine } from '../audio/soundEngine';
 import {
   EcosystemSimulationData,
@@ -49,12 +49,16 @@ import {
 import {
   Cave,
   CaveBoss,
-  CaveType,
   IslandCave,
   IslandCaveSystem,
   caveSystem,
   getCaveTypeLabel,
 } from '../systems/caveSystem';
+import {
+  BeeGateHandle,
+  FinalIslandDestination,
+  FinalIslandFeatures,
+} from '../systems/finalIslandFeatures';
 import {
   FlightAndTeleportSystem,
   FlightPlayerState,
@@ -103,6 +107,11 @@ import {
   VehiclePresetKey,
 } from '../systems/modularVehicle';
 import {
+  THREE_WHEEL_PARKED_POSE,
+  getThreeWheelHydraulicTargets,
+  isThreeWheelHydraulicVehicle,
+} from '../systems/classicHydraulics';
+import {
   STRUCT_GRID_XZ,
   STRUCT_GRID_Y,
   STRUCTURAL_SPECS,
@@ -117,6 +126,7 @@ import { ModSystemManager } from '../systems/modManager';
 import {
   DIMENSION_DEFINITIONS,
   getDimensionArrivalPoint,
+  getDimensionTerrainHeight,
 } from '../systems/multiverse';
 import {
   isMobileOrTouchClient,
@@ -125,9 +135,15 @@ import {
 import {
   applySafeStandardMaps,
   ensureGeometryHasUv,
+  setShaderWetness,
   updateShaderEnvironment,
 } from '../world/shaders';
 import { createSafeWebGLRenderer } from '../world/webglUtils';
+import {
+  CinematicPostFx,
+  resolveCinematicPostQuality,
+} from '../world/cinematicPostFx';
+import { FrameRateGovernor } from '../systems/frameRateGovernor';
 import {
   P2PMultiplayerManager,
   P2PPacket,
@@ -179,6 +195,7 @@ import {
   GameSaveData,
   GameSettings,
   GameStats,
+  GraphicsPreset,
   HUDStateSnapshot,
   HydraulicMode,
   InventorySlot,
@@ -414,6 +431,16 @@ const FOG_WORLD_SPAN = 1760;
 const MAX_POOLED_PARTICLES = 192;
 const ELEVATOR_TERMINAL_INTERACT_RADIUS_SQ = 3.2 * 3.2; // 3.2m radius around elevator computer terminal
 const VEHICLE_INTERACT_RADIUS_SQ = 4.0 * 4.0; // 4.0m radius for nearby vehicles
+// Spare classic-car ignition keys are scattered across hillsides and mountain
+// foothills, never on the flat summit/plateau at the top of the island.
+const HILL_CAR_KEY_SPOTS: { x: number; z: number }[] = [
+  { x: -146, z: 34 }, // western windswept hills
+  { x: -86, z: -8 }, // meadow rise above the lake
+  { x: -88, z: 128 }, // hill behind the Hilltop House & garage
+  { x: 130, z: -80 }, // Stony Peaks foothill
+  { x: 154, z: -68 }, // Stony Peaks ridge
+  { x: 142, z: 34 }, // eastern windswept forest slope
+];
 
 interface ArrowProjectile {
   mesh: THREE.Mesh;
@@ -593,6 +620,18 @@ export class GameEngine {
   private structureManager!: StructureManager;
 
   private readonly fpsController = new Permanent60FpsController();
+  // Holds 60 FPS by trimming internal render resolution instead of changing
+  // presets (no shader recompiles, no framebuffer thrash on every step).
+  private readonly frameGovernor = new FrameRateGovernor({
+    targetFps: 60,
+    minScale: 0.6,
+    maxScale: 1,
+  });
+  private basePixelRatio = 1;
+  private appliedRenderScale = 1;
+  private envSignature = '';
+  private envRefreshCooldown = 0;
+  private surfaceWetness = 0;
   private perfMonitor: GamePerformanceRecorder | null = null;
   private disposed = false;
   private rafPausedByVisibility = false;
@@ -613,6 +652,14 @@ export class GameEngine {
   private worldQueue = new FrameBudgetQueue(3.5);
   public readonly worldPerfManager = new WorldPerformanceManager();
   private readonly islandCaveSystem = new IslandCaveSystem();
+  private finalIslandFeatures!: FinalIslandFeatures;
+  private beeGate: BeeGateHandle | null = null;
+  private beeGateAnchor: THREE.Group | null = null;
+  private beeReturnGate: BeeGateHandle | null = null;
+  private beeReturnAnchor: THREE.Group | null = null;
+  private beeGateCooldown = 0;
+  private beeGateHintShown = false;
+  private readonly _beeGatePos = new THREE.Vector3();
   private activeCaveBosses = new Map<
     string,
     { boss: CaveBoss; creature: ActiveCreature }
@@ -702,6 +749,8 @@ export class GameEngine {
   private effectiveParticleScale = 1.0;
   private effectiveMaxDrawDistance = 205;
   private effectiveFogMult = 1.0;
+  private cinematicFx: CinematicPostFx | null = null;
+  private readonly _postFxSize = new THREE.Vector2();
   private shaderQualityTier = 1;
   private oceanDetailLevel = 1.0;
   private maxActivePointLights = 6;
@@ -817,13 +866,6 @@ export class GameEngine {
   private elevatorTerminalGreeted = false;
   private portalHandles = new Map<string, PortalVortexHandle>();
   private portalWarpCooldown = 0;
-  private caveEntrancePool: {
-    group: THREE.Group;
-    archMat: THREE.MeshStandardMaterial;
-    beaconMat: THREE.MeshStandardMaterial;
-    beaconMesh: THREE.Mesh;
-    caveId: string | null;
-  }[] = [];
   private caveStreamScratch: Cave[] = [];
   private caveStreamTimer = 0;
   private lastCaveStreamX = -9999;
@@ -863,6 +905,7 @@ export class GameEngine {
   private playerY = 2;
   private playerZ = PLAYER_SPAWN.z;
   private playerVelY = 0;
+  private activeCaveInteriorId: string | null = null;
   private playerYaw = Math.PI;
   private grounded = true;
   private isSwimming = false;
@@ -958,7 +1001,11 @@ export class GameEngine {
     temperatureC: 37.0,
   };
   private dayCount = 1;
-  private timeOfDay = 0.278;
+  // Start the title screen in warm golden-hour light: low sun, long shadows and
+  // warm IBL make the live 3D island backdrop read as a cinematic hero shot.
+  // Starting/loading a world sets the real gameplay time explicitly.
+  private timeOfDay = 0.71;
+  private activeGraphicsPreset: GraphicsPreset = 'medium';
   private inventory: InventorySlot[] = [];
   private backpackCompartments: BackpackCompartmentEntry[] = [];
   private hotbarItemIds: (ItemId | null)[] = [
@@ -1028,6 +1075,7 @@ export class GameEngine {
     VehicleModulePlacement[],
     ReturnType<typeof computeVehicleSpecs>
   >();
+  private vehicleRattleCache = new Map<string, number>();
   private vehicleRestCache = new Map<
     string,
     {
@@ -1343,7 +1391,7 @@ export class GameEngine {
     this.perfMonitor = createGamePerformanceMonitor(this.renderer);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.06;
+    this.renderer.toneMappingExposure = 0.95;
     // Cap DPR cleanly at <= 2 without redundant canvas reallocations
     ZeroStutterCameraController.applyRendererCaps(
       this.renderer,
@@ -1372,17 +1420,29 @@ export class GameEngine {
     this.container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
+    this.finalIslandFeatures = new FinalIslandFeatures(this.scene);
     const initialShadowMapSize = this.isTouchDevice ? 1024 : 2048;
     upgradeGraphics(this.renderer, this.scene, {
       shadowsEnabled: !this.isSoftwareGl,
-      exposure: 1.15,
+      exposure: 0.95,
       shadowMapSize: initialShadowMapSize,
     });
 
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.envTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    // Real outdoor image-based lighting: PBR materials, paint, chrome and glass
+    // reflect the actual sky instead of an indoor photo studio probe.
+    this.envTexture = createOutdoorEnvironmentTexture(this.renderer, {
+      sunDirection: new THREE.Vector3(0.36, 0.84, 0.4).normalize(),
+      sunColor: new THREE.Color(0xfff2dc),
+      zenithColor: new THREE.Color(0x134fb8),
+      horizonColor: new THREE.Color(0xb8dcf5),
+      groundColor: new THREE.Color(0x3d4733),
+      daylight: 1,
+      weatherDim: 1,
+      twilight: 0,
+    });
     this.scene.environment = this.envTexture;
-    pmrem.dispose();
+    this.scene.environmentIntensity = 0.85;
+    this.envSignature = 'init';
 
     const aspect =
       (this.container.clientWidth || 1) / (this.container.clientHeight || 1);
@@ -1429,7 +1489,7 @@ export class GameEngine {
         shadowNear: 1,
         shadowFar: 220,
         shadowRadius: 3,
-        exposure: 1.15,
+        exposure: 0.95,
         applyMeshPass: false,
       },
     );
@@ -1593,6 +1653,10 @@ export class GameEngine {
     this.creatures = new CreatureManager(this.scene);
     this.structureManager = new StructureManager(this.scene);
     registerDefaultIslandStructures(this.structureManager);
+    // Caves stay in the wild: never discover, build or keep an entrance near
+    // anything the player has placed or planted.
+    this.islandCaveSystem.isCaveSiteAllowed = (x, z) =>
+      this.isCaveSiteClearOfPlayerBuilds(x, z);
     this.ensureDragonEggNestMeshes();
     this.registerWorldPerformanceObjects();
     this.sanitizeWorld();
@@ -1680,6 +1744,9 @@ export class GameEngine {
       shadowsEnabled: !this.isSoftwareGl,
       envMapIntensity: 1.0,
     });
+    this.cinematicFx = new CinematicPostFx(this.renderer, this.scene, this.camera, {
+      samples: this.isTouchDevice ? 0 : 2,
+    });
     this.applyGraphicsProfile();
 
     if (!this.isSoftwareGl) {
@@ -1699,6 +1766,8 @@ export class GameEngine {
       this.rainSystem.group.visible = prevRainVis;
       this.skyBodies.starPoints.visible = prevStarVis;
     }
+    // Compile bloom/grade/FXAA programs during boot instead of the first gameplay frame.
+    this.cinematicFx?.render();
   }
 
   private prewarmSceneTextures(root: THREE.Object3D = this.scene): void {
@@ -1890,11 +1959,17 @@ export class GameEngine {
     const h = this.container.clientHeight || window.innerHeight;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    ZeroStutterCameraController.applyRendererCaps(
-      this.renderer,
-      this.isSoftwareGl ? 1 : this.isTouchDevice ? 1.5 : 2,
+    // Retain the governor's current render scale across resizes/orientation changes.
+    const targetDpr = Math.max(
+      0.5,
+      Math.min(2, this.basePixelRatio * this.appliedRenderScale),
     );
+    this.renderer.setPixelRatio(targetDpr);
     this.renderer.setSize(w, h);
+    if (this.cinematicFx) {
+      this.cinematicFx.setPixelRatio(targetDpr);
+      this.cinematicFx.setSize(w, h);
+    }
   };
 
   private onKeyDown = (e: KeyboardEvent): void => {
@@ -1981,6 +2056,8 @@ export class GameEngine {
       this.triggerHydraulicAction('right_tilt');
     } else if (activeHasHyd && (e.code === 'KeyX' || e.code === 'Digit5' || e.code === 'Numpad5')) {
       this.triggerHydraulicAction('lock_up');
+    } else if (activeHasHyd && e.code === 'KeyH') {
+      this.triggerHydraulicAction('three_wheel');
     } else if (
       activeVehicle &&
       (activeVehicle.hasConvertibleTop || activeVehicle.preset === 'cadillac_coupe_deville') &&
@@ -2342,15 +2419,40 @@ export class GameEngine {
     this.shadowUpdateFrame = 0;
   }
 
+  /** The title screen is a showcase: full cinematic grade regardless of gameplay preset. */
+  private applyCinematicQualityForMode(): void {
+    if (!this.cinematicFx) return;
+    const menuShowcase = this.mode === 'menu' && !this.isSoftwareGl;
+    this.cinematicFx.setQuality(
+      menuShowcase
+        ? this.isTouchDevice
+          ? 'high'
+          : 'ultra'
+        : resolveCinematicPostQuality({
+            preset: this.activeGraphicsPreset,
+            isTouch: this.isTouchDevice,
+            isSoftwareGl: this.isSoftwareGl,
+          }),
+    );
+  }
+
   public setMode(mode: 'menu' | 'playing' | 'paused'): void {
     const prevMode = this.mode;
     const wasNotPlaying = prevMode !== 'playing';
     this.mode = mode;
     if (mode !== 'playing') {
       this.clearMovementInputs();
-      this.sound.stopTrunkBass();
       if (mode === 'menu' && prevMode !== 'menu') {
         this.menuCameraSnapped = false;
+        // The live title backdrop is always staged at golden hour for a
+        // cinematic hero shot; starting or loading a world restores real time.
+        this.timeOfDay = 0.71;
+        if (!this.isSoftwareGl) {
+          this.frameGovernor.reset();
+          // Menus render a little supersampled so the hero backdrop stays crisp.
+          this.applyRenderScale(this.isTouchDevice ? 1 : 1.12);
+        }
+        this.applyCinematicQualityForMode();
         this.applyMenuCullImmediate();
         this.resetFrameTiming();
       }
@@ -2359,6 +2461,9 @@ export class GameEngine {
       this.sound.unlock();
       this.smartTv?.unlockAudio();
       if (wasNotPlaying) {
+        this.applyCinematicQualityForMode();
+        this.frameGovernor.reset();
+        this.applyRenderScale(1);
         this.ensurePlayerHasGun(false);
         if (!this.cinematicActive) {
           this.snapPlayerCamera();
@@ -2369,6 +2474,23 @@ export class GameEngine {
         this.resetFrameTiming();
         this.emitHud();
       }
+    }
+  }
+
+  /**
+   * Applies a render-resolution multiplier to both the scene and post chain.
+   * Called by the 60 FPS governor in small discrete steps, so the drawing buffer
+   * changes without touching shader programs or gameplay systems.
+   */
+  private applyRenderScale(scale: number): void {
+    if (!this.renderer) return;
+    const clamped = Math.max(0.4, Math.min(2, scale));
+    this.appliedRenderScale = clamped;
+    const target = Math.max(0.5, Math.min(2, this.basePixelRatio * clamped));
+    if (Math.abs(this.renderer.getPixelRatio() - target) < 0.01) return;
+    this.renderer.setPixelRatio(target);
+    if (this.cinematicFx) {
+      this.cinematicFx.setPixelRatio(target);
     }
   }
 
@@ -2392,6 +2514,7 @@ export class GameEngine {
       this.settings.graphicsPreset,
       this.settings.graphicsQuality,
     );
+    this.activeGraphicsPreset = preset;
 
     // Stable Hardware-Calibrated Graphics Profile (zero mid-game shader recompilations or framebuffer resizes):
     // Respects the user's chosen preset, shadows, and draw distance permanently without oscillating.
@@ -2400,34 +2523,34 @@ export class GameEngine {
       preset !== 'low' &&
       !this.isSoftwareGl;
 
+    // 2048 is the practical sweet spot: 3072 costs ~2.25x the shadow pass for
+    // almost no visible gain at gameplay camera distances.
     const shadowMapSize =
-      !this.isTouchDevice && !this.isSoftwareGl && preset !== 'low'
-        ? 2048
-        : 1024;
+      !this.isTouchDevice && !this.isSoftwareGl && preset !== 'low' ? 2048 : 1024;
     const shadowHalfExtent =
       preset === 'ultra'
         ? this.isTouchDevice
-          ? 52
-          : 80
+          ? 50
+          : 72
         : preset === 'high'
           ? this.isTouchDevice
-            ? 46
-            : 64
+            ? 44
+            : 58
           : preset === 'medium'
             ? this.isTouchDevice
-              ? 40
-              : 48
+              ? 38
+              : 44
             : 36;
     const shadowFar =
       preset === 'ultra' && !this.isTouchDevice
-        ? 260
+        ? 240
         : preset === 'high' && !this.isTouchDevice
-          ? 210
-          : 175;
+          ? 195
+          : 165;
     const shadowRadius = this.isTouchDevice
       ? 1.0
       : preset === 'ultra'
-        ? 2.5
+        ? 2.2
         : 2.0;
 
     let dpr = 1;
@@ -2438,10 +2561,12 @@ export class GameEngine {
       } else if (this.isTouchDevice) {
         // Crisp iPhone/mobile Retina clarity without 3x pixel fillrate meltdown (9x fewer fragments than 3x DPR)
         dpr = Math.min(nativeDpr, preset === 'ultra' || preset === 'high' ? 1.3 : 1.15);
-      } else if (preset === 'medium' || preset === 'high') {
-        dpr = Math.min(nativeDpr, 1.5);
+      } else if (preset === 'medium') {
+        dpr = Math.min(nativeDpr, 1.3);
+      } else if (preset === 'high') {
+        dpr = Math.min(nativeDpr, 1.45);
       } else {
-        dpr = Math.min(nativeDpr, 1.75);
+        dpr = Math.min(nativeDpr, 1.65);
       }
     }
 
@@ -2513,10 +2638,18 @@ export class GameEngine {
     this.effectiveWaterReflections = waterRefl;
 
     dpr = Math.min(dpr, 2);
-    if (Math.abs(this.renderer.getPixelRatio() - dpr) > 0.01) {
-      this.renderer.setPixelRatio(dpr);
-    }
+    this.basePixelRatio = dpr;
+    this.appliedRenderScale = 1;
+    this.frameGovernor.reset();
+    this.applyRenderScale(
+      this.mode === 'menu' && !this.isTouchDevice && !this.isSoftwareGl ? 1.12 : 1,
+    );
+    this.applyCinematicQualityForMode();
     this.renderer.shadowMap.enabled = shadowsOn;
+    this.renderer.shadowMap.type =
+      this.isTouchDevice || preset === 'medium'
+        ? THREE.PCFShadowMap
+        : THREE.PCFSoftShadowMap;
     if (this.sunLight) {
       this.sunLight.castShadow = shadowsOn;
       this.sunLight.shadow.bias = -0.00015;
@@ -2547,9 +2680,14 @@ export class GameEngine {
       this.camera.updateProjectionMatrix();
     }
 
-    this.scene.environment = waterRefl ? this.envTexture : null;
+    // Image-based lighting stays active even when the (separate) water
+    // reflection toggle is off; otherwise every PBR material loses its ambient
+    // specular response and the scene flattens out.
+    this.scene.environment = this.envTexture;
+    this.scene.environmentIntensity = 0.85;
     if (this.world) {
       this.world.setWorldShadowCasting(shadowsOn);
+      this.world.setUltraFidelity(preset === 'ultra' && !this.isSoftwareGl);
       const waterMats = [
         this.world.oceanMesh?.material,
         this.world.lakeMesh?.material,
@@ -4162,7 +4300,6 @@ export class GameEngine {
       caveSystem.caves = [];
       caveSystem.dragonUnlocked = false;
       caveSystem._rebuildIndex();
-      this.hideAllPooledCaveEntrances();
       this.syncIslandCaveTerrainAndTunnels();
       this.dragons = DRAGON_VALLEY_SYSTEM.resetToStarter();
       this.dragonPlayerRef.mountedDragonId = null;
@@ -4385,6 +4522,7 @@ export class GameEngine {
     this.pendingTreeDrops.clear();
     this.shakenTreeDropIds.clear();
     this.spawnBeachBottles();
+    this.ensureHillCarKeyPickups();
 
     // Also place a spare Harvesting Sickle & Wheat/Tomato Seeds right beside the Wheatfield gate
     this.spawnPickup(
@@ -4468,6 +4606,10 @@ export class GameEngine {
       radius: Math.max(580, getPlayableMaxRadius() * 0.85),
     });
     this.syncIslandCaveTerrainAndTunnels();
+    this.finalIslandFeatures.resetProgress();
+    this.syncFinalIslandCaves();
+    this.finalIslandFeatures.seedWildBees();
+    this.ensureBeeGate();
     this.lastCaveStreamX = -9999;
     this.lastCaveStreamZ = -9999;
     this.dragons = DRAGON_VALLEY_SYSTEM.resetToStarter();
@@ -4504,7 +4646,6 @@ export class GameEngine {
     this.elevatorLiftProgress = 0;
     this.elevatorSteamAccum = 0;
     this.autoParkJobs.clear();
-    this.sound.stopTrunkBass();
     CABIN_BASS_AND_FIRST_PERSON.setCameraMode('CHASE');
   }
 
@@ -4661,9 +4802,13 @@ export class GameEngine {
       caveSystem.caves = [];
       caveSystem.dragonUnlocked = false;
       caveSystem._rebuildIndex();
-      this.hideAllPooledCaveEntrances();
     }
     this.syncIslandCaveTerrainAndTunnels();
+    this.finalIslandFeatures.resetProgress();
+    this.syncFinalIslandCaves();
+    this.finalIslandFeatures.hydrate(save.finalIsland);
+    this.finalIslandFeatures.seedWildBees();
+    this.ensureBeeGate();
     this.lastCaveStreamX = -9999;
     this.lastCaveStreamZ = -9999;
     this.dragons = DRAGON_VALLEY_SYSTEM.importSave(save.dragonValleySave);
@@ -4896,6 +5041,7 @@ export class GameEngine {
         this.spawnPickup(p.itemId, p.quantity, p.x, p.z, p.life, p.id);
       });
     }
+    if (loadedWorldType === 'island') this.ensureHillCarKeyPickups();
     if (loadedWorldType === 'island' && save.activeCarcasses) {
       save.activeCarcasses.forEach((c) => {
         this.spawnCarcass(
@@ -5639,6 +5785,7 @@ export class GameEngine {
           : [],
       caveProgress:
         this.worldType === 'island' ? caveSystem.exportCompactState() : undefined,
+      finalIsland: this.finalIslandFeatures.serialize(),
       dragonValleySave: DRAGON_VALLEY_SYSTEM.exportSave(this.dragons),
       vikingVillageSave: vikingVillage.exportSave(),
     };
@@ -7971,6 +8118,7 @@ export class GameEngine {
       } else {
         caveSystem.dragonUnlocked = true;
       }
+      this.finalIslandFeatures.markRedDragonDefeated();
       this.coins += 250;
       this.addItem('emerald', 4, false);
       this.sound.playTotemUndying();
@@ -8796,6 +8944,25 @@ export class GameEngine {
     });
   }
 
+  private ensureHillCarKeyPickups(): void {
+    if (this.pickups.some((p) => p.itemId === 'car_key')) return;
+    if (this.getItemCount('car_key') > 0) return;
+    HILL_CAR_KEY_SPOTS.forEach((spot, idx) => {
+      const y = getTerrainHeight(spot.x, spot.z);
+      if (y <= getWaterLevelAt(spot.x, spot.z) + 0.8) return;
+      this.spawnPickup(
+        'car_key',
+        1,
+        spot.x,
+        spot.z,
+        1e9,
+        `hill_car_key_${idx}`,
+        0,
+        true,
+      );
+    });
+  }
+
   private spawnWorldPickupsFromGrants(
     cx: number,
     cz: number,
@@ -9249,6 +9416,7 @@ export class GameEngine {
         }
         this.sound.playTreeFall();
         this.stats.treesChopped += 1;
+        if (node.kind === 'bee_nest_oak') this.harvestBeeNestHoney();
         this.syncResourceVisual(node);
       } else if (isRock) {
         this.sound.playRockBreak();
@@ -9688,6 +9856,24 @@ export class GameEngine {
 
   private updateWeatherAndAtmosphere(dt: number): void {
     const isFlat = this.worldType === 'flat';
+
+    // Rain progressively soaks exposed surfaces; the surface shaders darken and
+    // sharpen their specular response while it dries out afterwards.
+    const wetTarget =
+      this.weather === 'storm'
+        ? 1
+        : this.weather === 'rain'
+          ? 0.85
+          : this.weather === 'overcast'
+            ? 0.22
+            : 0;
+    this.surfaceWetness = THREE.MathUtils.damp(
+      this.surfaceWetness,
+      wetTarget,
+      0.5,
+      dt,
+    );
+    setShaderWetness(this.surfaceWetness);
     if (this.mode === 'playing' && !this.gameOver && !this.cinematicActive) {
       // Full day-night cycle scaled by mod dayLengthMultiplier
       const dayLenMult = Math.max(0.2, this.modSystem?.tweaks.dayLengthMultiplier ?? 1);
@@ -9911,14 +10097,14 @@ export class GameEngine {
     const moonRise = THREE.MathUtils.clamp((-sunElev + 0.06) / 0.5, 0, 1);
 
     this.sunLight.intensity =
-      sunFade * 3.55 * weatherDim + this.lightningFlash * 1.9;
+      sunFade * 2.8 * weatherDim + this.lightningFlash * 1.7;
     this.sunLight.color
       .setHex(0xfff5e4)
       .lerp(_sunOrangeColor, twilight * 0.64);
 
     // Clear moonlit night lighting without making island terrain pitch-black
     this.moonLight.intensity =
-      moonRise * 0.78 * Math.max(0.55, weatherDim);
+      moonRise * 1.0 * Math.max(0.55, weatherDim);
 
     this.hemiLight.color
       .setHex(0x334155)
@@ -9929,18 +10115,20 @@ export class GameEngine {
       .lerp(_hemiGroundDayColor, daylight)
       .lerp(_hemiGroundTwilightColor, twilight * 0.42);
     this.hemiLight.intensity =
-      (0.48 + daylight * 0.96) * Math.max(0.62, weatherDim) +
-      this.lightningFlash * 0.55;
+      (0.34 + daylight * 0.46) * Math.max(0.62, weatherDim) +
+      this.lightningFlash * 0.5;
 
     this.skyFillLight.color
       .setHex(0x6089b8)
       .lerp(_skyFillDayColor, daylight);
     this.skyFillLight.intensity =
-      (0.14 + daylight * 0.36) * Math.max(0.65, weatherDim) +
-      this.lightningFlash * 0.35;
+      (0.13 + daylight * 0.22) * Math.max(0.65, weatherDim) +
+      this.lightningFlash * 0.3;
 
-    this.renderer.toneMappingExposure = 1.0 + daylight * 0.18;
-    const nvIntensity = (1 - daylight) * 0.62;
+    // Calibrated ACES exposure: natural midtones with highlight headroom instead
+    // of the previous over-bright, washed-out daylight.
+    this.renderer.toneMappingExposure = 0.86 + daylight * 0.09;
+    const nvIntensity = (1 - daylight) * 1.0;
     this.nightVisionLight.intensity = nvIntensity;
     this.nightVisionLight.visible = nvIntensity > 0.02;
 
@@ -9985,6 +10173,7 @@ export class GameEngine {
       weatherDim,
       time: this.elapsed,
     });
+    this.maybeRefreshEnvironment(dt, daylight, twilight, weatherDim);
 
     if (this.worldType === 'island') {
       // Skip updating hidden legacy oceanMesh when RealisticOcean renders
@@ -10600,7 +10789,12 @@ export class GameEngine {
       }
 
       // O(1) Spatial Hash Grid collision detection (skip Island colliders in Flat World)
-      if (!isFlat) {
+      // A streamed cave mouth clears tree/rock colliders inside its threshold so
+      // the physical opening is never blocked by an invisible prop collider.
+      const nearCaveMouth =
+        this.worldType === 'island' &&
+        this.islandCaveSystem.isNearOpening(nextX, nextZ, 3.0, this.playerY);
+      if (!isFlat && !nearCaveMouth) {
         const cx = Math.floor(nextX / 16);
         const cz = Math.floor(nextZ / 16);
         for (let ox = -1; ox <= 1; ox++) {
@@ -10643,6 +10837,18 @@ export class GameEngine {
           nextZ = st.z + (cdz / dist) * minD;
         }
       }
+      if (!isFlat && this.worldType === 'island') {
+        const cavePush = this.islandCaveSystem.constrainPlayer(
+          this.playerX,
+          this.playerZ,
+          nextX,
+          nextZ,
+          this.playerY,
+        );
+        nextX = cavePush.x;
+        nextZ = cavePush.z;
+      }
+
       // Solid structural block & pillar wall collisions (allow walking under stone arches & atop decks)
       for (const b of this.structuralBlocks) {
         if (b.kind === 'stone_arch' || b.kind === 'timber_beam') continue;
@@ -10807,6 +11013,27 @@ export class GameEngine {
       ? -999
       : this.getStructuralSurfaceY(this.playerX, this.playerZ, this.playerY);
     const newSurfaceY = Math.max(newTerrainY, newDeckY);
+    if (this.worldType === 'island' && this.currentDimension === 'overworld') {
+      const currentCave = this.islandCaveSystem.getWalkSurface(
+        this.playerX,
+        this.playerZ,
+        this.playerY,
+      );
+      if (currentCave) {
+        this.activeCaveInteriorId = currentCave.caveId;
+      } else if (
+        this.activeCaveInteriorId &&
+        this.islandCaveSystem.getCeilingForCave(
+          this.activeCaveInteriorId,
+          this.playerX,
+          this.playerZ,
+        ) === null
+      ) {
+        this.activeCaveInteriorId = null;
+      }
+    } else {
+      this.activeCaveInteriorId = null;
+    }
     const newWaterY = this.inSpacePlanet ? -999 : getWaterLevelAt(this.playerX, this.playerZ);
     this.isSwimming = !this.inSpacePlanet && !isFlat && newSurfaceY < newWaterY - 0.45;
     if (this.dragonFlight.flying) {
@@ -10852,6 +11079,26 @@ export class GameEngine {
       this.playerVelY -= 21 * gravMult * safeDt;
       this.playerY += this.playerVelY * safeDt;
       this.applyPlayerGroundCollision(newSurfaceY, safeDt, wasGrounded, true);
+
+      // Low cave ceilings are solid: jumping hits rock instead of clipping through.
+      if (
+        this.activeCaveInteriorId &&
+        this.worldType === 'island' &&
+        this.currentDimension === 'overworld'
+      ) {
+        const caveCeiling = this.islandCaveSystem.getCeilingForCave(
+          this.activeCaveInteriorId,
+          this.playerX,
+          this.playerZ,
+        );
+        if (caveCeiling !== null) {
+          const headRoom = this.isCrouching ? 1.18 : 1.72;
+          if (this.playerY + headRoom > caveCeiling) {
+            this.playerY = Math.max(newSurfaceY, caveCeiling - headRoom);
+            if (this.playerVelY > 0) this.playerVelY = 0;
+          }
+        }
+      }
     }
 
     // Smooth camera step offset when walking cleanly across steps, decks, and uneven terrain seams
@@ -13666,6 +13913,11 @@ export class GameEngine {
     const h = this.localPlayerHandle;
     if (!h) return;
     h.group.position.set(this.playerX, this.playerY, this.playerZ);
+    // Restore the standing rig after riding in a vehicle (seated pose hides legs).
+    h.legL.visible = true;
+    h.legR.visible = true;
+    h.backpackGroup.visible = true;
+    if (h.group.scale.x !== 1) h.group.scale.setScalar(1);
     h.group.visible = visible;
     if (!visible) return;
     h.group.rotation.y = this.playerYaw;
@@ -13747,6 +13999,41 @@ export class GameEngine {
     }
   }
 
+  private _seatedDriverScratch = new THREE.Vector3();
+
+  /**
+   * Seats the player's own avatar behind the wheel so the cabin is never
+   * visibly empty in the chase camera. The blocky standing proportions would
+   * clip through the floorpan, so the legs are tucked away and only the torso,
+   * head and arms resting on the wheel remain visible through the glass.
+   */
+  private updateSeatedPlayerAvatar(
+    car: ModularVehicleData,
+    handles: ModularVehicleMeshHandles,
+  ): void {
+    const h = this.localPlayerHandle;
+    if (!h) return;
+    handles.root.updateMatrixWorld(true);
+    // Hip pivot is 0.78 m above the avatar origin and the cushion sits at
+    // y≈0.30 in chassis space, so the origin drops below the seat.
+    this._seatedDriverScratch.set(-0.44, -0.48, 0.02);
+    handles.chassisGroup.localToWorld(this._seatedDriverScratch);
+    h.group.position.copy(this._seatedDriverScratch);
+    h.group.rotation.set(0, car.yaw, 0);
+    h.group.scale.setScalar(0.94);
+    h.group.visible = true;
+    h.bodyGroup.position.y = 0;
+    h.legL.visible = false;
+    h.legR.visible = false;
+    // A backpack strapped to the torso would intersect the seat backrest.
+    h.backpackGroup.visible = false;
+    h.armL.rotation.set(-1.2, 0, 0.1);
+    h.armR.rotation.set(-1.2, 0, -0.1);
+    h.headGroup.rotation.x = 0;
+    h.heldGunMesh.visible = false;
+    h.heldToolMesh.visible = false;
+  }
+
   private updateCamera(): void {
     const dt = Math.min(0.05, Math.max(0.001, this.lastSimDt || 0.016));
     const isThirdPerson = this.playerCameraRig.mode === 'third_person';
@@ -13767,7 +14054,7 @@ export class GameEngine {
           ? 56
           : 52
         : sprintFovKick;
-    if (Math.abs(this.camera.fov - targetFov) > 0.02) {
+    if (this.mode !== 'menu' && Math.abs(this.camera.fov - targetFov) > 0.02) {
       this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 14, dt);
       if (Math.abs(this.camera.fov - targetFov) <= 0.05) {
         this.camera.fov = targetFov;
@@ -13790,18 +14077,27 @@ export class GameEngine {
         );
         _vec3B.set(0, 3, 0);
       } else {
-        // Frame the tropical island bay, Azure Lake & Waterfall Cliff behind the main menu
-        const sway = Math.sin(angle * 0.45);
+        // Slow cinematic crane along the lake's south shore: the camera sweeps
+        // east/west while drifting up and down, always framing the waterfall
+        // cliff across the water for a long-lens, almost photographic shot.
+        const drift = Math.sin(angle * 0.17);
+        const rise = Math.sin(angle * 0.23 + 0.6);
         _vec3A.set(
-          LAKE_CENTER.x + 26 + sway * 18,
-          17.5 + Math.cos(angle * 0.35) * 2.5,
-          LAKE_CENTER.z + 36 + Math.cos(angle * 0.45) * 10,
+          LAKE_CENTER.x + drift * 54,
+          17.5 + rise * 3.8,
+          LAKE_CENTER.z + 55 + Math.cos(angle * 0.13) * 9,
         );
         _vec3B.set(
-          WATERFALL_POS.x - 6,
-          9.5,
-          (LAKE_CENTER.z + WATERFALL_POS.z) * 0.48,
+          WATERFALL_POS.x + drift * 14,
+          10.5 + Math.cos(angle * 0.19) * 1.4,
+          WATERFALL_POS.z + 12,
         );
+      }
+      // Telephoto menu lens (gameplay restores its own FOV smoothly).
+      const menuFov = this.worldType === 'flat' ? 60 : 54;
+      if (Math.abs(this.camera.fov - menuFov) > 0.02) {
+        this.camera.fov = menuFov;
+        this.camera.updateProjectionMatrix();
       }
       if (!this.menuCameraSnapped) {
         this.camera.position.copy(_vec3A);
@@ -13812,6 +14108,8 @@ export class GameEngine {
         this.camera.position.copy(_vec3A);
       }
       this.camera.lookAt(_vec3B);
+      // Barely-there handheld roll so the locked-off hero shot feels filmed.
+      this.camera.rotateZ(Math.sin(angle * 0.11) * 0.006);
       return;
     }
 
@@ -13882,8 +14180,16 @@ export class GameEngine {
       const activeV = this.vehicles.find((v) => v.id === this.activeVehicleId);
       if (activeV) {
         this.handsRig.root.visible = false;
-        if (this.localPlayerHandle) this.localPlayerHandle.group.visible = false;
         const handles = this.vehicleMeshes.get(activeV.id);
+        if (handles) {
+          if (this.vehicleInteriorCamera) {
+            // First-person camera sits where the driver's head is, so the
+            // avatar must stay hidden to avoid blocking the view.
+            if (this.localPlayerHandle) this.localPlayerHandle.group.visible = false;
+          } else {
+            this.updateSeatedPlayerAvatar(activeV, handles);
+          }
+        }
         if (this.vehicleInteriorCamera && handles) {
           // Real First-Person Driver Seat Interior View + old-school chest-thump bass pulse
           handles.root.updateMatrixWorld(true);
@@ -14477,6 +14783,7 @@ export class GameEngine {
       currentDimension: this.currentDimension,
       selectedPortalDimension: this.selectedPortalDimension,
       visitedDimensions: this.cachedVisitedDimensions,
+      finalIsland: this.finalIslandFeatures.getHudSnapshot(),
       unlockedGildedPaint: this.unlockedGildedPaint,
       crystalArmorHp: this.crystalArmorHp,
       activePortals: this.activePortals.map((p) => ({ ...p })),
@@ -14612,75 +14919,30 @@ export class GameEngine {
     });
   }
 
-  private hideAllPooledCaveEntrances(): void {
-    for (let i = 0; i < this.caveEntrancePool.length; i++) {
-      this.caveEntrancePool[i].group.visible = false;
-      this.caveEntrancePool[i].caveId = null;
+  private isCaveSiteClearOfPlayerBuilds(x: number, z: number): boolean {
+    const STRUCTURE_CLEARANCE_SQ = 26 * 26;
+    for (let i = 0; i < this.structures.length; i++) {
+      const st = this.structures[i];
+      if (st.dimension && st.dimension !== 'overworld') continue;
+      const dx = st.x - x;
+      const dz = st.z - z;
+      if (dx * dx + dz * dz < STRUCTURE_CLEARANCE_SQ) return false;
     }
-  }
-
-  private ensureCaveEntrancePool(): void {
-    if (this.caveEntrancePool.length > 0 || !this.scene) return;
-    const pillarGeo = new THREE.BoxGeometry(0.95, 2.8, 0.95);
-    const lintelGeo = new THREE.BoxGeometry(3.5, 0.85, 1.15);
-    const crystalGeo = new THREE.OctahedronGeometry(0.45, 0);
-
-    for (let i = 0; i < 10; i++) {
-      const group = new THREE.Group();
-      const archMat = new THREE.MeshStandardMaterial({
-        color: 0x64748b,
-        roughness: 0.9,
-        metalness: 0.08,
-      });
-      const beaconMat = new THREE.MeshStandardMaterial({
-        color: 0x38bdf8,
-        emissive: 0x0284c7,
-        emissiveIntensity: 0.9,
-        roughness: 0.25,
-      });
-
-      const leftPillar = new THREE.Mesh(pillarGeo, archMat);
-      leftPillar.position.set(-1.3, 1.35, 0);
-      const rightPillar = new THREE.Mesh(pillarGeo, archMat);
-      rightPillar.position.set(1.3, 1.35, 0);
-      const topLintel = new THREE.Mesh(lintelGeo, archMat);
-      topLintel.position.set(0, 2.95, 0);
-      const beaconMesh = new THREE.Mesh(crystalGeo, beaconMat);
-      beaconMesh.position.set(0, 3.85, 0);
-
-      group.add(leftPillar, rightPillar, topLintel, beaconMesh);
-      group.visible = false;
-      this.scene.add(group);
-      this.caveEntrancePool.push({
-        group,
-        archMat,
-        beaconMat,
-        beaconMesh,
-        caveId: null,
-      });
+    const CROP_CLEARANCE_SQ = 14 * 14;
+    for (let i = 0; i < this.plantedCrops.length; i++) {
+      const crop = this.plantedCrops[i];
+      const dx = crop.x - x;
+      const dz = crop.z - z;
+      if (dx * dx + dz * dz < CROP_CLEARANCE_SQ) return false;
     }
-  }
-
-  private getCaveColors(type: CaveType): { arch: number; beacon: number; emissive: number; scale: number } {
-    switch (type) {
-      case 'red-dragon':
-        return { arch: 0x450a0a, beacon: 0xef4444, emissive: 0xdc2626, scale: 1.45 };
-      case 'monster-boss':
-        return { arch: 0x312e81, beacon: 0xa855f7, emissive: 0x7e22ce, scale: 1.3 };
-      case 'civilization':
-        return { arch: 0x92400e, beacon: 0xfbbf24, emissive: 0xd97706, scale: 1.25 };
-      case 'crystal':
-        return { arch: 0x1e293b, beacon: 0x38bdf8, emissive: 0x0284c7, scale: 1.2 };
-      case 'lush':
-        return { arch: 0x14532d, beacon: 0x4ade80, emissive: 0x16a34a, scale: 1.15 };
-      default:
-        return { arch: 0x57534e, beacon: 0x94a3b8, emissive: 0x475569, scale: 0.95 };
-    }
+    return true;
   }
 
   private syncIslandCaveTerrainAndTunnels(): void {
     this.islandCaveSystem.dispose(this.scene);
+    this.activeCaveInteriorId = null;
     this.activeCaveBosses.clear();
+    this.world?.setCaveOpenings([]);
     this.world?.resetTerrainIndex?.();
 
     if (this.worldType !== 'island' || caveSystem.caves.length === 0) {
@@ -14688,30 +14950,20 @@ export class GameEngine {
       return;
     }
 
-    const specialCaves = caveSystem.getSpecialCaves();
-    const islandCaves: IslandCave[] = specialCaves.map((sc) => ({
+    // The canonical 5,000-cave registry is the single source of truth. The
+    // streamer only instantiates geometry/collision for nearby caves.
+    const islandCaves: IslandCave[] = caveSystem.caves.map((sc) => ({
       id: sc.id,
       type: sc.type,
       position: new THREE.Vector3(
         sc.x,
-        Math.max(OCEAN_LEVEL + 0.15, getTerrainHeight(sc.x, sc.z)),
+        Math.max(OCEAN_LEVEL + 0.15, getTerrainSurfaceHeight(sc.x, sc.z)),
         sc.z,
       ),
       discovered: sc.discovered,
       built: false,
     }));
     this.islandCaveSystem.caves = islandCaves;
-
-    if (this.world?.terrainMesh?.geometry && islandCaves.length > 0) {
-      this.islandCaveSystem.carveTerrain(
-        this.world.terrainMesh.geometry,
-        islandCaves.map((c) => ({
-          x: c.position.x,
-          z: c.position.z,
-          radius: 4.2,
-        })),
-      );
-    }
   }
 
   private registerCaveBoss(creature: ActiveCreature | null): void {
@@ -14774,6 +15026,177 @@ export class GameEngine {
     }
   }
 
+  private syncFinalIslandCaves(): void {
+    this.finalIslandFeatures.syncCaves(caveSystem.caves, getTerrainHeight);
+  }
+
+  /** Hive gate on the tallest meadow bee-nest oak (falls back to the hilltop clearing). */
+  private ensureBeeGate(): void {
+    if (this.beeGateAnchor) {
+      this.finalIslandFeatures.destroyGate(this.beeGate?.portal);
+      this.beeGateAnchor.removeFromParent();
+      this.beeGateAnchor = null;
+      this.beeGate = null;
+    }
+    if (this.worldType !== 'island' || !this.world) return;
+
+    // Fallback gate sits in the meadow south of the hilltop house, clear of the spawn point.
+    let anchorX = -14;
+    let anchorZ = 70;
+    let tallest = -Infinity;
+    for (const node of this.world.resourceNodes) {
+      if (node.kind !== 'bee_nest_oak') continue;
+      if (node.scale > tallest) {
+        tallest = node.scale;
+        anchorX = node.x;
+        anchorZ = node.z;
+      }
+    }
+
+    const anchor = new THREE.Group();
+    anchor.name = 'honey-bee-gate-anchor';
+    anchor.position.set(anchorX, getTerrainHeight(anchorX, anchorZ), anchorZ);
+    this.scene.add(anchor);
+    this.beeGateAnchor = anchor;
+    this.beeGateHintShown = false;
+    this.beeGate = this.finalIslandFeatures.createBeeDimension(anchor, (destination) =>
+      this.teleportFromBeeGate(destination),
+    );
+    // Never warp on the frame the gate is (re)built.
+    this.beeGateCooldown = 4;
+  }
+
+  private ensureBeeReturnGate(): void {
+    if (this.beeReturnGate || this.beeReturnAnchor) return;
+    const z = 16;
+    const anchor = new THREE.Group();
+    anchor.name = 'honey-bee-return-anchor';
+    anchor.position.set(0, getDimensionTerrainHeight('bee_dimension', 0, z), z);
+    this.scene.add(anchor);
+    this.beeReturnAnchor = anchor;
+    this.beeReturnGate = this.finalIslandFeatures.createBeeDimension(anchor, (destination) =>
+      this.teleportFromBeeGate(destination),
+    );
+  }
+
+  private teleportFromBeeGate(destination: FinalIslandDestination): void {
+    if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) return;
+    const target = destination === 'bee-dimension' ? 'bee_dimension' : 'overworld';
+    if (this.currentDimension === target) return;
+    this.beeGateCooldown = 3;
+    this.switchDimension(target);
+  }
+
+  private updateFinalIslandFeatures(dt: number): void {
+    this.finalIslandFeatures.update(dt);
+    if (this.beeGateCooldown > 0) {
+      this.beeGateCooldown = Math.max(0, this.beeGateCooldown - dt);
+    }
+
+    const gate = this.beeGate;
+    if (gate) {
+      gate.portal.visible =
+        this.worldType === 'island' && this.currentDimension === 'overworld';
+    }
+    const returnGate = this.beeReturnGate;
+    if (returnGate) {
+      returnGate.portal.visible = this.currentDimension === 'bee_dimension';
+    }
+
+    let gateDistanceSq = Infinity;
+    if (this.currentDimension === 'overworld' && gate) {
+      gate.portal.getWorldPosition(this._beeGatePos);
+      gateDistanceSq =
+        (this._beeGatePos.x - this.playerX) ** 2 + (this._beeGatePos.z - this.playerZ) ** 2;
+      if (
+        !this.beeGateHintShown &&
+        gateDistanceSq < 28 * 28 &&
+        this.mode === 'playing' &&
+        !this.gameOver
+      ) {
+        this.beeGateHintShown = true;
+        this.toast(
+          'Golden Hive Gate discovered! Step into the ring to enter the Bee Dimension.',
+          'discovery',
+        );
+      }
+    }
+
+    if (
+      this.beeGateCooldown > 0 ||
+      this.mode !== 'playing' ||
+      this.gameOver ||
+      this.cinematicActive
+    ) {
+      return;
+    }
+
+    if (this.currentDimension === 'overworld' && gate) {
+      if (gateDistanceSq < 3.4 * 3.4 && Math.abs(this._beeGatePos.y - this.playerY) < 8) {
+        gate.enter();
+        return;
+      }
+    }
+
+    if (this.currentDimension === 'bee_dimension' && returnGate) {
+      returnGate.portal.getWorldPosition(this._beeGatePos);
+      if (
+        Math.hypot(this._beeGatePos.x - this.playerX, this._beeGatePos.z - this.playerZ) < 3.4 &&
+        Math.abs(this._beeGatePos.y - this.playerY) < 8
+      ) {
+        returnGate.exit();
+      }
+    }
+  }
+
+  private harvestBeeNestHoney(): void {
+    if (this.worldType !== 'island') return;
+    const honey = 1 + Math.floor(Math.random() * 2);
+    this.finalIslandFeatures.collectHoney(honey);
+    this.finalIslandFeatures.collectComb(1);
+    this.toast(`Harvested ${honey} Honey & 1 Honeycomb from the bee nest!`, 'gain');
+
+    const bee = this.finalIslandFeatures.befriendNextWildBee();
+    if (bee) {
+      const rideable = this.finalIslandFeatures.attemptBeeRidingUnlock();
+      this.toast(`${bee.name} the Honey Bee is now your friend!`, 'discovery');
+      if (rideable.length > 0) {
+        this.toast('Bee riding unlocked! Your friendly bees now accept riders.', 'discovery');
+      }
+    }
+    this.emitHud();
+  }
+
+  /** Public action for the HUD: offer 5 Honey to the Hive Queen. */
+  public donateHoneyToQueen(): void {
+    if (this.currentDimension !== 'bee_dimension') {
+      this.toast('Find the Hive Queen inside the Bee Dimension first.', 'warning');
+      return;
+    }
+    if (!this.finalIslandFeatures.donateHoney(5)) {
+      this.toast('The Hive Queen needs 5 Honey for an audience.', 'warning');
+      return;
+    }
+    const earned = this.finalIslandFeatures.queenReward(
+      3,
+      'Bee Riding License',
+      this.finalIslandFeatures.claimedQueenRewards,
+    );
+    if (earned) {
+      this.finalIslandFeatures.unlockAllBeeRiding();
+      this.toast(
+        "Hive Queen's Favor! Bee Riding License earned — your friendly bees are rideable.",
+        'discovery',
+      );
+    } else {
+      this.toast(
+        `Offered 5 Honey to the Hive Queen · Reputation ${this.finalIslandFeatures.queenReputation}/3`,
+        'gain',
+      );
+    }
+    this.emitHud();
+  }
+
   private updateCaveStreaming(dt: number): void {
     if (
       this.worldType !== 'island' ||
@@ -14781,28 +15204,23 @@ export class GameEngine {
       this.inSpacePlanet ||
       caveSystem.caves.length === 0
     ) {
-      if (this.caveEntrancePool.length > 0) this.hideAllPooledCaveEntrances();
       if (this.islandCaveSystem.getActiveCount() > 0) {
         this.islandCaveSystem.dispose(this.scene);
       }
+      this.world?.setCaveOpenings([]);
       return;
     }
 
     this.updateCaveBosses(dt);
 
-    // Rotate visible cave beacon crystals gently
-    for (let i = 0; i < this.caveEntrancePool.length; i++) {
-      const slot = this.caveEntrancePool[i];
-      if (slot.group.visible) {
-        slot.beaconMesh.rotation.y += dt * 1.4;
-      }
-    }
-
     this.caveStreamTimer += dt;
     const movedSq =
       (this.playerX - this.lastCaveStreamX) ** 2 +
       (this.playerZ - this.lastCaveStreamZ) ** 2;
-    if (this.caveStreamTimer < 0.25 && movedSq < 4.0) {
+    // Geometry builds are main-thread work; a slower cadence smooths the frame
+    // time while walking through cave-dense hills without noticeably delaying
+    // the tunnel you are about to enter.
+    if (this.caveStreamTimer < 0.4 && movedSq < 6.25) {
       return;
     }
     this.caveStreamTimer = 0;
@@ -14811,8 +15229,8 @@ export class GameEngine {
 
     this._cavePlayerVec.set(this.playerX, this.playerY, this.playerZ);
     this.islandCaveSystem.update(this._cavePlayerVec, this.scene);
+    this.world?.setCaveOpenings(this.islandCaveSystem.getOpenings());
 
-    this.ensureCaveEntrancePool();
     const nearby = caveSystem.getCavesNear(
       this.playerX,
       this.playerZ,
@@ -14833,7 +15251,11 @@ export class GameEngine {
       const dist = Math.hypot(cv.x - this.playerX, cv.z - this.playerZ);
       if (dist <= 16 && !cv.discovered) {
         caveSystem.discover(cv.id);
+        const jewelFound = this.finalIslandFeatures.markDiscovered(cv.id);
         discoveredNew = true;
+        if (jewelFound && cv.type === 'crystal') {
+          this.toast('Honey Jewel recovered from the Resonant Crystal Cavern!', 'gain');
+        }
         if (cv.type === 'red-dragon') {
           this.toast(
             'Discovered RED DRAGON LAIR! Defeat the Red Dragon Boss to unlock Dragon Riding!',
@@ -14848,28 +15270,6 @@ export class GameEngine {
       } else if (cv.type === 'monster-boss' && !cv.bossDefeated && dist <= 42) {
         this.registerCaveBoss(this.creatures.spawnCaveMonsterBoss(cv.x, cv.z));
       }
-    }
-
-    for (let i = 0; i < this.caveEntrancePool.length; i++) {
-      const slot = this.caveEntrancePool[i];
-      const cv = nearby[i];
-      if (!cv) {
-        slot.group.visible = false;
-        slot.caveId = null;
-        continue;
-      }
-      const gy = Math.max(OCEAN_LEVEL + 0.15, getTerrainHeight(cv.x, cv.z));
-      slot.group.position.set(cv.x, gy - 0.15, cv.z);
-      const colors = this.getCaveColors(cv.type);
-      slot.group.scale.setScalar(colors.scale);
-      if (slot.caveId !== cv.id) {
-        slot.caveId = cv.id;
-        slot.archMat.color.setHex(colors.arch);
-        slot.beaconMat.color.setHex(colors.beacon);
-        slot.beaconMat.emissive.setHex(colors.emissive);
-        slot.group.rotation.y = ((cv.x * 0.13 + cv.z * 0.29) % (Math.PI * 2));
-      }
-      slot.group.visible = true;
     }
 
     if (discoveredNew) {
@@ -14908,6 +15308,9 @@ export class GameEngine {
       } else if (cave.type === 'crystal') {
         this.addItem('diamond_crystal', 3, false);
         this.addItem('sapphire', 2, false);
+        if (this.finalIslandFeatures.markDiscovered(cave.id)) {
+          this.toast('Honey Jewel recovered from the Resonant Crystal Cavern!', 'gain');
+        }
         this.toast('Explored Resonant Crystal Cavern! +3 Diamond Crystals & +2 Sapphires!', 'discovery');
       } else if (cave.type === 'lush') {
         this.addItem('berries', 5, false);
@@ -14959,6 +15362,12 @@ export class GameEngine {
       this.frameWatch,
       nowPerf,
     );
+    // Dynamic resolution guard: drop internal resolution a step at a time if
+    // the GPU cannot sustain 60 FPS, and restore it when headroom returns.
+    // Never let dynamic resolution soften the title screen; gameplay keeps the governor.
+    if (this.mode !== 'menu' && this.frameGovernor.noteFrame(rawFrameMs, nowPerf)) {
+      this.applyRenderScale(this.frameGovernor.scale);
+    }
     const frameTime = Math.min(clampedDt, 0.05);
     this.lastFramePerfMs = nowPerf;
 
@@ -15049,6 +15458,7 @@ export class GameEngine {
       this.modSystem?.tick(dt);
       this.updateCaveStreaming(dt);
     }
+    this.updateFinalIslandFeatures(dt);
     if (this.mode === 'playing' || this.remotePlayers.size > 0 || this.p2p?.connected) {
       this.updateMultiplayer(dt);
     }
@@ -15509,6 +15919,51 @@ export class GameEngine {
     }
   }
 
+  /**
+   * Rebuilds the outdoor PMREM probe when the sun/weather has changed enough to
+   * matter, at most once every ~12 seconds. Cheap at this cadence and keeps IBL
+   * consistent with sunlight, shade and overcast skies.
+   */
+  private maybeRefreshEnvironment(
+    dt: number,
+    daylight: number,
+    twilight: number,
+    weatherDim: number,
+  ): void {
+    if (this.isSoftwareGl || !this.renderer) return;
+    this.scene.environmentIntensity = 0.55 + daylight * 0.35;
+    this.envRefreshCooldown = Math.max(0, this.envRefreshCooldown - dt);
+    // Coarse buckets: an IBL probe shift of a few degrees is invisible, and a
+    // finer signature caused the probe to rebuild constantly mid-gameplay.
+    const sx = Math.round(this._sunDirScratch.x * 3);
+    const sy = Math.round(this._sunDirScratch.y * 3);
+    const sz = Math.round(this._sunDirScratch.z * 3);
+    const signature = `${sx}:${sy}:${sz}:${Math.round(daylight * 4)}:${Math.round(
+      twilight * 3,
+    )}:${this.weather}:${Math.round(weatherDim * 3)}`;
+    if (signature === this.envSignature || this.envRefreshCooldown > 0) return;
+
+    const next = createOutdoorEnvironmentTexture(this.renderer, {
+      sunDirection: this._sunDirScratch,
+      sunColor: this.sunLight.color,
+      zenithColor: _zenithScratchColor,
+      horizonColor: _skyColor,
+      groundColor: this.hemiLight.groundColor,
+      daylight,
+      weatherDim,
+      twilight,
+    });
+    const previous = this.envTexture;
+    this.envTexture = next;
+    this.scene.environment = next;
+    this.envSignature = signature;
+    // PMREM generation renders a cube + blur chain on the GPU. Rebuilding it
+    // every ~12s produced a periodic visible hitch; 40s is indistinguishable
+    // visually but far less frequent.
+    this.envRefreshCooldown = 40;
+    if (previous && previous !== next) previous.dispose();
+  }
+
   private getExploredCellsArray(): number[] {
     if (this.exploredCellsDirty) {
       this.cachedExploredCells = Array.from(this.exploredCells);
@@ -15581,6 +16036,13 @@ export class GameEngine {
 
   private renderScene(): void {
     this.updateCamera();
+    // Cabin/car-body shiver from the live sub-bass. Tiny on purpose: it should
+    // read as SPL, not as camera shake that fights the player's aim.
+    if (this.mode === 'playing' && this.trunkBassPulse > 0.03) {
+      const shiver = this.trunkBassPulse * 0.0035;
+      this.camera.position.y += Math.sin(this.elapsed * 63) * shiver;
+      this.camera.position.x += Math.sin(this.elapsed * 71) * shiver * 0.6;
+    }
     if (
       this.mode === 'playing' &&
       this.activeRadioCarRoot &&
@@ -15628,17 +16090,17 @@ export class GameEngine {
         const walkingMoved = distSq > 0.04;
         const cadence = this.cinematicActive
           ? this.isTouchDevice
-            ? 8
-            : 6
+            ? 6
+            : 4
           : isFastTravel
             ? this.isTouchDevice
-              ? 10
-              : 8
+              ? 6
+              : 5
             : walkingMoved
               ? this.isTouchDevice
-                ? 12
-                : 10
-              : 24;
+                ? 6
+                : 5
+              : 20;
         this.shadowUpdateFrame = (this.shadowUpdateFrame + 1) % cadence;
         if (farMoved || this.shadowUpdateFrame === 0) {
           this.renderer.shadowMap.needsUpdate = true;
@@ -15651,7 +16113,9 @@ export class GameEngine {
         }
       }
     }
-    this.renderer.render(this.scene, this.camera);
+    if (!this.cinematicFx?.render()) {
+      this.renderer.render(this.scene, this.camera);
+    }
     this.perfMonitor?.(performance.now());
   }
 
@@ -15713,13 +16177,21 @@ export class GameEngine {
     this.structuralBlocks.push(b);
   }
 
-  private getPlayerTerrainY(x: number, z: number): number {
+  private getPlayerTerrainY(x: number, z: number, footY = this.playerY): number {
     if (this.inSpacePlanet) return 0;
+    // The hive realm has its own sculpted meadow; keep feet on its visible mesh.
+    if (this.currentDimension === 'bee_dimension') {
+      return getDimensionTerrainHeight('bee_dimension', x, z);
+    }
+    if (this.worldType === 'island' && this.currentDimension === 'overworld') {
+      const caveFloor = this.islandCaveSystem.getWalkSurface(x, z, footY);
+      if (caveFloor) return caveFloor.floorY;
+    }
     return getTerrainSurfaceHeight(x, z);
   }
 
   private getPlayerGroundSurfaceY(x: number, z: number, footY: number): number {
-    const terrainY = this.getPlayerTerrainY(x, z);
+    const terrainY = this.getPlayerTerrainY(x, z, footY);
     const deckY = this.inSpacePlanet
       ? -999
       : this.getStructuralSurfaceY(x, z, footY);
@@ -16596,7 +17068,6 @@ export class GameEngine {
     this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.trunkBassPulse = 0;
-    this.sound.stopTrunkBass();
   }
 
   private setupStarterEngineeringShowcase(
@@ -17444,8 +17915,20 @@ export class GameEngine {
     this.vehicleAltitudeVel = 0;
     this.vehicleAscendHold = false;
     this.vehicleDescendHold = false;
-    this.hydraulicMode = 'level';
-    this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
+    const parkedThreeWheel = v.hydraulicStance === 'three_wheel';
+    this.hydraulicMode = parkedThreeWheel ? 'three_wheel' : 'level';
+    const parkedTargets = getThreeWheelHydraulicTargets(
+      this.isAirbagVehicle(v),
+      v.airbagLockLevel ?? 1,
+    );
+    this.hydCorners = parkedThreeWheel
+      ? {
+          fl: parkedTargets.fl,
+          fr: parkedTargets.fr,
+          rl: parkedTargets.rl * 0.9,
+          rr: parkedTargets.rr,
+        }
+      : { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.trunkBassPulse = 0;
     this.chestThumpPulse = 0;
@@ -17590,12 +18073,15 @@ export class GameEngine {
     this.touchGas = 0;
     this.touchBrake = 0;
     this.touchHandbrake = false;
+    if (v) {
+      v.hydraulicStance =
+        this.hydraulicMode === 'three_wheel' ? 'three_wheel' : undefined;
+    }
     this.hydraulicMode = 'level';
     this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.trunkBassPulse = 0;
     this.chestThumpPulse = 0;
-    this.sound.stopTrunkBass();
     try {
       if (typeof document !== 'undefined' && document.pointerLockElement) {
         document.exitPointerLock();
@@ -17693,11 +18179,15 @@ export class GameEngine {
       | 'front_lock'
       | 'rear_lock'
       | 'side_to_side'
-      | 'coil_bounce',
+      | 'coil_bounce'
+      | 'three_wheel',
   ): void {
     if (!this.activeVehicleId || this.mode !== 'playing' || this.gameOver) return;
     const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
     if (!av || !this.vehicleHasHydraulics(av)) return;
+
+    if (action === 'three_wheel' && !isThreeWheelHydraulicVehicle(av.preset)) return;
+    if (action !== 'three_wheel') av.hydraulicStance = undefined;
 
     this.sound.unlock();
     const isDonk = this.isDonkHydraulicVehicle(av);
@@ -17757,6 +18247,19 @@ export class GameEngine {
         this.sound.playAirbagHiss(speed, false);
       } else if (action === 'side_to_side') {
         this.hydraulicMode = this.hydraulicMode === 'side_to_side' ? 'level' : 'side_to_side';
+        this.sound.playAirbagHiss(speed, false);
+      } else if (action === 'three_wheel') {
+        const entering = this.hydraulicMode !== 'three_wheel';
+        this.hydraulicMode = entering ? 'three_wheel' : 'level';
+        av.hydraulicStance = entering ? 'three_wheel' : undefined;
+        if (entering) {
+          av.hydraulicsDanceEnabled = false;
+          this.hydVel.fl += impulse * 0.24;
+          this.hydVel.fr += impulse * 0.24;
+          this.hydVel.rl += impulse * 0.95;
+          this.hydVel.rr += impulse * 0.24;
+          this.toast(`${av.name}: 3-Wheel Stance Locked`, 'info');
+        }
         this.sound.playAirbagHiss(speed, false);
       } else if (action === 'lock_up') {
         this.hydraulicMode = this.hydraulicMode === 'lock_up' ? 'level' : 'lock_up';
@@ -17866,6 +18369,19 @@ export class GameEngine {
         this.hydVel.rr += 4.6;
       }
       this.sound.playHydraulicHop('lock');
+    } else if (action === 'three_wheel') {
+      const entering = this.hydraulicMode !== 'three_wheel';
+      this.hydraulicMode = entering ? 'three_wheel' : 'level';
+      av.hydraulicStance = entering ? 'three_wheel' : undefined;
+      if (entering) {
+        av.hydraulicsDanceEnabled = false;
+        this.hydVel.fl += 1.4;
+        this.hydVel.fr += 1.4;
+        this.hydVel.rl += 5.8;
+        this.hydVel.rr += 1.4;
+        this.toast(`${av.name}: 3-Wheel Stance Locked`, 'info');
+      }
+      this.sound.playHydraulicHop('tilt');
     } else {
       this.hydraulicMode = this.hydraulicMode === 'drop_down' ? 'level' : 'drop_down';
       this.sound.playHydraulicHop('tilt');
@@ -18003,7 +18519,6 @@ export class GameEngine {
     this.sound.unlock();
     av.trunkBassEnabled = !av.trunkBassEnabled;
     if (!av.trunkBassEnabled) {
-      this.sound.stopTrunkBass();
       this.trunkBassPulse = 0;
       this.chestThumpPulse = 0;
     } else {
@@ -18588,15 +19103,11 @@ export class GameEngine {
       CABIN_BASS_AND_FIRST_PERSON.setSpatialAttenuation(0);
     }
 
-    const activeIsOldSchool = this.isOldSchoolVehicle(activeV);
-    const bassActive = Boolean(
-      activeV &&
-        activeIsOldSchool &&
-        activeV.trunkBassEnabled &&
-        this.mode === 'playing' &&
-        !this.gameOver,
+    // The stereo plays only the player's uploaded audio, so every bass pulse
+    // below comes from that track's live FFT — never from generated music.
+    CABIN_BASS_AND_FIRST_PERSON.setBassBoost(
+      Boolean(activeV && this.isOldSchoolVehicle(activeV) && activeV.trunkBassEnabled),
     );
-    const synthPulse = this.sound.updateTrunkBass(bassActive, dt);
     const radioCarForSample = activeV ?? radioSourceV;
     const radioSample =
       radioCarForSample && this.isOldSchoolVehicle(radioCarForSample)
@@ -18606,11 +19117,8 @@ export class GameEngine {
         : { bassLevel: 0, chestThump: 0, trunkPump: 0 };
     const effectiveRadioTrunk =
       radioSpatialVolume > 0.01 ? radioSample.trunkPump * radioSpatialVolume : 0;
-    this.trunkBassPulse = Math.max(synthPulse, effectiveRadioTrunk);
-    this.chestThumpPulse = Math.max(
-      bassActive && synthPulse > 0.48 ? Math.min(1, (synthPulse - 0.48) * 1.8) : 0,
-      activeV ? radioSample.chestThump : 0,
-    );
+    this.trunkBassPulse = effectiveRadioTrunk;
+    this.chestThumpPulse = activeV ? radioSample.chestThump : 0;
 
     // Solve 4-corner hydraulic & airbag/coil-over spring-damper physics for active vehicle
     const activeHasHyd = this.vehicleHasHydraulics(activeV);
@@ -18642,6 +19150,13 @@ export class GameEngine {
         } else if (this.hydraulicMode === 'side_to_side') {
           tFl = tRl = (0.24 + sideWave * 0.56) * airbagLock;
           tFr = tRr = (0.24 - sideWave * 0.56) * airbagLock;
+        } else if (this.hydraulicMode === 'three_wheel') {
+          // Three planted corners, rear-left wheel held high in a classic hydraulics pose.
+          const stance = getThreeWheelHydraulicTargets(true, airbagLock);
+          tFl = stance.fl;
+          tFr = stance.fr;
+          tRl = stance.rl;
+          tRr = stance.rr;
         }
       } else if (this.hydraulicMode === 'lock_up') {
         tFl = tFr = tRl = tRr = activeIsDonk ? 0.62 : 0.78;
@@ -18657,6 +19172,12 @@ export class GameEngine {
         const high = activeIsDonk ? 0.56 : 0.96;
         tFl = tRl = high;
         tFr = tRr = low;
+      } else if (this.hydraulicMode === 'three_wheel') {
+        const stance = getThreeWheelHydraulicTargets(false);
+        tFl = stance.fl;
+        tFr = stance.fr;
+        tRl = stance.rl;
+        tRr = stance.rr;
       }
     }
 
@@ -18844,6 +19365,14 @@ export class GameEngine {
             : vIsOldSchool && !isActive && v.trunkBassEnabled
               ? 0.25 + 0.25 * Math.max(0, Math.sin(this.elapsed * 6.5))
               : 0;
+      // Cached per vehicle: building a fresh radio descriptor every frame
+      // allocated garbage for every car on the island.
+      let rattleShake = this.vehicleRattleCache.get(v.id);
+      if (rattleShake === undefined) {
+        rattleShake =
+          AUDIO_PROFILES[resolveCarAudioType(this.toRadioCarDescriptor(v))].shake;
+        this.vehicleRattleCache.set(v.id, rattleShake);
+      }
 
       const danceState = this.vehicleDanceStates.get(v.id);
       if (danceState && (danceState.enabled || v.hydraulicsDanceEnabled)) {
@@ -18874,12 +19403,32 @@ export class GameEngine {
           if (activeIsDonk) {
             // DONK keeps all 4 wheels planted while body moves up/down/side-to-side
             wc.obj.position.y = wc.baseY;
+          } else if (this.hydraulicMode === 'three_wheel') {
+            // Only the rear-left wheel leaves the ground; the other three stay planted.
+            wc.obj.position.y =
+              wc.corner === 'rl'
+                ? wc.baseY + Math.max(0, this.hydCorners.rl - 0.3) * (activeIsAirbag ? 0.55 : 0.85)
+                : wc.baseY;
           } else {
             // Lowrider, Coupe DeVille & Tahoe coil-over lift active corners cleanly
             const cornerH = this.hydCorners[wc.corner];
             const relativeLift = Math.max(0, cornerH - minCorner - 0.05);
             wc.obj.position.y = wc.baseY + relativeLift * (activeIsAirbag ? 0.55 : 0.85);
           }
+        }
+      } else if (
+        v.hydraulicStance === 'three_wheel' &&
+        isThreeWheelHydraulicVehicle(v.preset)
+      ) {
+        // Parked three-wheel stance persists while the driver is out of the car.
+        const { heave, pitch, roll, wheelLift, airbagWheelLift } =
+          THREE_WHEEL_PARKED_POSE;
+        const parkedLift = this.isAirbagVehicle(v) ? airbagWheelLift : wheelLift;
+        handles.chassisGroup.position.y = baseBodyY + heave + showBassPulse * 0.02;
+        handles.chassisGroup.rotation.x = pitch;
+        handles.chassisGroup.rotation.z = roll;
+        for (const wc of handles.wheelCorners) {
+          wc.obj.position.y = wc.corner === 'rl' ? wc.baseY + parkedLift : wc.baseY;
         }
       } else {
         handles.chassisGroup.position.y = baseBodyY + showBassPulse * 0.032;
@@ -18890,8 +19439,9 @@ export class GameEngine {
         }
       }
 
-      // Real Working Hinged Doors (All Cars)
+      // Real Working Hinged Doors (All Cars) + DONK rear-hinged butterfly lift
       if (handles.doorLeft) {
+        const butterfly = handles.doorLeft.userData.doorStyle === 'suicide_butterfly';
         const targetL = v.doorsOpen ? -1.12 : 0;
         handles.doorLeft.rotation.y = THREE.MathUtils.damp(
           handles.doorLeft.rotation.y,
@@ -18899,13 +19449,26 @@ export class GameEngine {
           8,
           dt,
         );
+        handles.doorLeft.rotation.x = THREE.MathUtils.damp(
+          handles.doorLeft.rotation.x,
+          v.doorsOpen && butterfly ? -0.82 : 0,
+          7,
+          dt,
+        );
       }
       if (handles.doorRight) {
+        const butterfly = handles.doorRight.userData.doorStyle === 'suicide_butterfly';
         const targetR = v.doorsOpen ? 1.12 : 0;
         handles.doorRight.rotation.y = THREE.MathUtils.damp(
           handles.doorRight.rotation.y,
           targetR,
           8,
+          dt,
+        );
+        handles.doorRight.rotation.x = THREE.MathUtils.damp(
+          handles.doorRight.rotation.x,
+          v.doorsOpen && butterfly ? -0.82 : 0,
+          7,
           dt,
         );
       }
@@ -18916,15 +19479,24 @@ export class GameEngine {
           handles.trunkLid.userData.baseY = handles.trunkLid.position.y;
         }
         const baseTrunkY = handles.trunkLid.userData.baseY as number;
+        // Sheet metal buzz: the lid lifts with the beat and chatters hard on the
+        // harmonics, exactly like a real trunk lid on a loud system.
+        const rattle =
+          showBassPulse > 0.02
+            ? Math.sin(this.elapsed * 57) * showBassPulse * (0.006 + 0.004 * rattleShake)
+            : 0;
         const targetTrunk =
           (v.trunkOpen ? 0.96 : 0) +
-          (showBassPulse > 0.01 ? -0.045 * showBassPulse : 0);
+          (showBassPulse > 0.01 ? -0.05 * showBassPulse : 0) +
+          rattle;
         handles.trunkLid.position.y =
-          showBassPulse > 0.01 ? baseTrunkY + showBassPulse * 0.045 : baseTrunkY;
+          showBassPulse > 0.01
+            ? baseTrunkY + showBassPulse * 0.05 + rattle * 0.6
+            : baseTrunkY;
         handles.trunkLid.rotation.x = THREE.MathUtils.damp(
           handles.trunkLid.rotation.x,
           targetTrunk,
-          10,
+          14,
           dt,
         );
       }
@@ -19021,9 +19593,9 @@ export class GameEngine {
 
       // Animate Behind-Driver Subwoofer Cones & Enclosure LED Bars
       if (handles.subwooferCones && handles.subwooferCones.length > 0) {
-        const excursion = showBassPulse * 0.068;
+        const excursion = showBassPulse * 0.085;
         const flutter =
-          showBassPulse > 0.05 ? Math.sin(this.elapsed * 52) * 0.012 * showBassPulse : 0;
+          showBassPulse > 0.05 ? Math.sin(this.elapsed * 52) * 0.016 * showBassPulse : 0;
         for (const cone of handles.subwooferCones) {
           const baseZ = (cone.userData.baseZ as number | undefined) ?? cone.position.z;
           cone.userData.baseZ = baseZ;
@@ -19031,18 +19603,38 @@ export class GameEngine {
         }
       }
       if (handles.quarterPanels && handles.quarterPanels.length > 0) {
-        const carProfile =
-          AUDIO_PROFILES[resolveCarAudioType(this.toRadioCarDescriptor(v))];
-        const shakeAmp = showBassPulse * 0.01 * carProfile.shake;
+        const shakeAmp = showBassPulse * 0.022 * rattleShake;
         const flexWave = Math.sin(this.elapsed * 52);
+        const panelBuzz = Math.sin(this.elapsed * 61) * shakeAmp * 0.6;
         for (const qp of handles.quarterPanels) {
           const baseX = (qp.userData.baseX as number | undefined) ?? qp.position.x;
+          const baseZ = (qp.userData.baseZ as number | undefined) ?? qp.position.z;
           const side = (qp.userData.flexSide as number | undefined) ?? (baseX < 0 ? -1 : 1);
           qp.userData.baseX = baseX;
-          qp.position.x =
-            showBassPulse > 0.02
-              ? baseX + side * Math.abs(flexWave) * shakeAmp + flexWave * shakeAmp * 0.35
-              : baseX;
+          qp.userData.baseZ = baseZ;
+          if (showBassPulse > 0.02) {
+            qp.position.x =
+              baseX + side * Math.abs(flexWave) * shakeAmp + flexWave * shakeAmp * 0.35;
+            qp.position.z = baseZ + panelBuzz;
+            qp.rotation.z = Math.sin(this.elapsed * 67) * 0.007 * showBassPulse * rattleShake;
+          } else {
+            qp.position.x = baseX;
+            qp.position.z = baseZ;
+            qp.rotation.z = 0;
+          }
+        }
+      }
+      // Doors buzz in their latches too, as long as they are shut.
+      for (const door of [handles.doorLeft, handles.doorRight]) {
+        if (!door) continue;
+        if (!v.doorsOpen && showBassPulse > 0.02) {
+          door.rotation.z =
+            Math.sin(this.elapsed * 59 + (door === handles.doorLeft ? 0 : 1.7)) *
+            0.005 *
+            showBassPulse *
+            rattleShake;
+        } else if (door.rotation.z !== 0) {
+          door.rotation.z = 0;
         }
       }
       if (handles.subGlowMeshes && handles.subGlowMeshes.length > 0) {
@@ -21713,6 +22305,10 @@ export class GameEngine {
       if (h) h.group.visible = portal.sourceDim === dim;
     }
 
+    if (dim === 'bee_dimension') {
+      this.ensureBeeReturnGate();
+    }
+
     const arrival = getDimensionArrivalPoint(dim);
     this.playerX = arrival.x;
     this.playerY = arrival.y;
@@ -21831,6 +22427,8 @@ export class GameEngine {
     this.worldPerfManager.dispose();
     this.perfMonitor?.dispose();
     this.perfMonitor = null;
+    this.cinematicFx?.dispose();
+    this.cinematicFx = null;
     window.removeEventListener('resize', this.onResize);
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp, true);
@@ -21871,6 +22469,13 @@ export class GameEngine {
     this.portalHandles.clear();
 
     this.islandCaveSystem.dispose(this.scene);
+    this.finalIslandFeatures.dispose();
+    this.beeGateAnchor?.removeFromParent();
+    this.beeReturnAnchor?.removeFromParent();
+    this.beeGate = null;
+    this.beeReturnGate = null;
+    this.beeGateAnchor = null;
+    this.beeReturnAnchor = null;
     this.activeCaveBosses.clear();
     this.creatures?.dispose();
     this.structureManager?.hibernateAll();

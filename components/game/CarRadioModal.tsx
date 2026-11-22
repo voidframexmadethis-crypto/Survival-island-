@@ -18,7 +18,6 @@ import {
 } from 'lucide-react';
 import {
   AUDIO_PROFILES,
-  BUILT_IN_RADIO_STATIONS,
   CABIN_BASS_AND_FIRST_PERSON,
   CAR_RADIO_TRUNK_SYSTEM,
   CarType,
@@ -67,9 +66,6 @@ export function CarRadioModal({
   const [isPlaying, setIsPlaying] = useState(
     CABIN_BASS_AND_FIRST_PERSON.stereoPlaying,
   );
-  const [activeStationId, setActiveStationId] = useState(
-    CABIN_BASS_AND_FIRST_PERSON.activeStationId,
-  );
   const [customTrackName, setCustomTrackName] = useState<string | null>(
     CABIN_BASS_AND_FIRST_PERSON.customTrackName,
   );
@@ -95,19 +91,33 @@ export function CarRadioModal({
 
   useEffect(() => {
     let rafId = 0;
+    let lastMetersMs = 0;
+    let lastMeters = { bassLevel: -1, chestThump: -1, trunkPump: -1, quarterFlex: -1 };
     const panelEl = quarterPanelRef.current;
-    const tick = () => {
+    const tick = (now: number) => {
       const sample = CABIN_BASS_AND_FIRST_PERSON.sampleBassAndChestThump(car);
-      setMeters(sample);
       const playing = CABIN_BASS_AND_FIRST_PERSON.stereoPlaying;
-      setIsPlaying(playing);
+      setIsPlaying((prev) => (prev === playing ? prev : playing));
       const activePanel = quarterPanelRef.current ?? panelEl;
       if (activePanel) {
         if (playing && sample.quarterFlex > 0.005) {
-          const movement = sample.quarterFlex;
-          activePanel.style.transform = `translateX(${Math.sin(performance.now() * 0.08) * movement}px)`;
+          activePanel.style.transform = `translateX(${Math.sin(now * 0.08) * sample.quarterFlex}px)`;
         } else {
           activePanel.style.transform = '';
+        }
+      }
+      // React only needs the meters ~15x/s. Pushing a state update every frame
+      // made the whole modal re-render at 60 Hz and stutter the game behind it.
+      if (now - lastMetersMs >= 66) {
+        lastMetersMs = now;
+        const changed =
+          Math.abs(sample.bassLevel - lastMeters.bassLevel) > 0.01 ||
+          Math.abs(sample.chestThump - lastMeters.chestThump) > 0.01 ||
+          Math.abs(sample.trunkPump - lastMeters.trunkPump) > 0.01 ||
+          Math.abs(sample.quarterFlex - lastMeters.quarterFlex) > 0.01;
+        if (changed) {
+          lastMeters = sample;
+          setMeters(sample);
         }
       }
       rafId = window.requestAnimationFrame(tick);
@@ -131,16 +141,14 @@ export function CarRadioModal({
     void PANDORA_APP_LAUNCHER.openPandoraApp(pandoraQuery);
   };
 
-  const handleSelectStation = (stationId: string) => {
-    setAudioError(null);
-    CABIN_BASS_AND_FIRST_PERSON.startStation(stationId, car);
-    setActiveStationId(stationId);
-    setCustomTrackName(null);
-    setIsPlaying(true);
-  };
-
   const handleTogglePlay = () => {
     setAudioError(null);
+    // No built-in station exists anymore: with no track loaded, Play opens the
+    // file picker so the stereo can only ever play the player's own audio.
+    if (!CABIN_BASS_AND_FIRST_PERSON.hasTrack()) {
+      fileInputRef.current?.click();
+      return;
+    }
     const playing = CABIN_BASS_AND_FIRST_PERSON.togglePlay(car);
     setIsPlaying(playing);
   };
@@ -252,7 +260,7 @@ export function CarRadioModal({
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 sm:p-5">
-          {/* Left 5 cols: Bass DSP Deck, Stations & Real-Time Trunk/Chest Meters */}
+          {/* Left 5 cols: Bass DSP Deck, Upload & Real-Time Trunk/Chest Meters */}
           <div className="lg:col-span-5 flex flex-col gap-3">
             {/* Live Playback Controls */}
             <div className="rounded-xl bg-[#0b0e17] border border-white/10 p-3.5 space-y-3">
@@ -265,13 +273,10 @@ export function CarRadioModal({
                   />
                   <div className="min-w-0">
                     <div className="text-[10px] uppercase tracking-wider text-stone-400">
-                      {customTrackName ? 'Custom Audio File' : 'Built-In Bass Deck'}
+                      {customTrackName ? 'Your Uploaded Track' : 'No Track Loaded'}
                     </div>
                     <div className="text-xs font-bold text-white truncate">
-                      {customTrackName ||
-                        BUILT_IN_RADIO_STATIONS.find((s) => s.id === activeStationId)
-                          ?.name ||
-                        'Stereo Ready'}
+                      {customTrackName || 'Load a song to bring the system to life'}
                     </div>
                   </div>
                 </div>
@@ -292,7 +297,7 @@ export function CarRadioModal({
                   ) : (
                     <>
                       <Play className="w-3.5 h-3.5" />
-                      <span>Play Audio</span>
+                      <span>{customTrackName ? 'Play Audio' : 'Load Audio'}</span>
                     </>
                   )}
                 </button>
@@ -345,41 +350,27 @@ export function CarRadioModal({
               )}
             </div>
 
-            {/* Built-in Stations */}
+            {/* Player's own audio — no generated or placeholder music */}
             <div className="rounded-xl bg-[#0b0e17] border border-white/10 p-3 space-y-2">
               <div className="text-[10px] font-bold uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
                 <Music className="w-3.5 h-3.5 text-pink-400" />
-                <span>Cruising Stations (Real Sub-Bass FFT)</span>
+                <span>Your Music · Upload Only</span>
               </div>
-              <div className="space-y-1.5">
-                {BUILT_IN_RADIO_STATIONS.map((station) => {
-                  const selected =
-                    isPlaying && !customTrackName && activeStationId === station.id;
-                  return (
-                    <button
-                      key={station.id}
-                      type="button"
-                      onClick={() => handleSelectStation(station.id)}
-                      className={`w-full text-left px-3 py-2 rounded-lg border transition flex items-center justify-between gap-2 ${
-                        selected
-                          ? 'bg-pink-500/20 border-pink-400 text-white'
-                          : 'bg-slate-900/70 border-white/10 text-stone-300 hover:border-white/25'
-                      }`}
-                    >
-                      <div className="min-w-0">
-                        <div className="text-xs font-extrabold truncate">
-                          {station.name}
-                        </div>
-                        <div className="text-[10px] text-stone-400 truncate">
-                          {station.genre} · {station.bpm} BPM
-                        </div>
-                      </div>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-white/10 shrink-0">
-                        {selected ? 'LIVE' : 'TUNE'}
-                      </span>
-                    </button>
-                  );
-                })}
+              <p className="text-[11px] text-stone-400 leading-snug">
+                Nothing is generated or looped by the game. Load your own track and it is driven
+                straight into the 100 Hz shelf, 48 Hz sub and trunk-resonance stage.
+              </p>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full px-3 py-2.5 rounded-lg bg-pink-600 hover:bg-pink-500 text-white text-xs font-extrabold flex items-center justify-center gap-2 transition"
+              >
+                <Upload className="w-4 h-4" />
+                <span>{customTrackName ? 'Replace Audio File' : 'Upload Your Audio File'}</span>
+              </button>
+              <div className="text-[10px] text-stone-500">
+                M4A · MP3 · WAV · OGG · FLAC · AAC — plays at full system loudness with a hard
+                safety limiter so the bass hits without digital clipping.
               </div>
             </div>
 

@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import {
   Box,
+  ChevronRight,
   Compass,
   Gamepad2,
   Grid,
@@ -190,86 +191,110 @@ export function WorldSelectionMenu({
   };
 
   return (
-    <div className="relative z-10 w-full min-h-[100dvh] flex flex-col justify-between p-4 sm:p-6 lg:p-8 bg-gradient-to-t from-stone-950/90 via-stone-950/35 to-stone-950/65">
-      {/* Top Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 safe-top">
-        <div className="px-3 py-1.5 rounded-lg bg-stone-950/75 border border-stone-700/80 text-xs font-semibold tracking-wider text-amber-300 uppercase shadow-md">
-          AdventureForgeGames · World Selection
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={onOpenMultiplayer}
-            className="min-h-[42px] px-3.5 rounded-lg island-wood-plank border border-sky-400/45 text-sky-200 text-xs font-semibold flex items-center gap-2 whitespace-nowrap shrink-0 transition"
-          >
-            <Users className="w-4 h-4 text-sky-300" />
-            <span>
-              Multiplayer{multiplayerRoomCode ? ` (${multiplayerRoomCode})` : ''}
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={onOpenExchange}
-            className="min-h-[42px] px-3.5 rounded-lg island-wood-plank border border-amber-500/65 text-amber-200 text-xs font-bold tracking-wide uppercase flex items-center gap-2 whitespace-nowrap shrink-0 transition"
-          >
-            <Store className="w-4 h-4 text-amber-400" />
-            <span>Survival Island Exchange</span>
-          </button>
-          <button
-            type="button"
-            onClick={onOpenMods}
-            className="min-h-[42px] px-3.5 rounded-lg island-wood-plank border border-emerald-400/50 text-emerald-200 text-xs font-semibold flex items-center gap-2 whitespace-nowrap shrink-0 transition"
-          >
-            <Box className="w-4 h-4 text-emerald-300" />
-            <span>Mods</span>
-          </button>
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            className="min-h-[42px] px-4 rounded-lg island-wood-plank border border-amber-700/60 text-stone-100 text-xs font-semibold flex items-center gap-2 whitespace-nowrap shrink-0 transition"
-          >
-            <Settings className="w-4 h-4 text-stone-200" />
-            <span>Settings</span>
-          </button>
-        </div>
-      </div>
+    <div className="menu-shell relative z-10 min-h-[100dvh] w-full overflow-x-clip bg-[linear-gradient(180deg,rgba(9,14,10,0.35)_0%,rgba(9,14,10,0.05)_38%,rgba(9,14,10,0.72)_100%)]">
+      {/* Cinematic atmosphere layered over the live 3D island backdrop */}
+      <div className="pointer-events-none fixed inset-0 z-0 bg-[radial-gradient(ellipse_at_50%_42%,transparent_30%,rgba(4,8,5,0.46)_100%)]" />
+      <div className="pointer-events-none fixed inset-x-0 top-0 z-0 h-36 bg-gradient-to-b from-stone-950/85 via-stone-950/25 to-transparent" />
+      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-0 h-60 bg-gradient-to-t from-stone-950/92 via-stone-950/45 to-transparent" />
 
-      {/* Main Content */}
-      <div className="max-w-6xl w-full mx-auto space-y-5 my-auto py-4">
-        {/* Mossy Carved-Stone Header Monument */}
-        <header className="relative island-stone-slab rounded-2xl border-2 border-stone-600/80 px-5 py-4 sm:px-7 sm:py-5 overflow-hidden">
+      <div className="relative z-10 mx-auto flex min-h-[100dvh] w-full max-w-7xl box-border flex-col gap-4 px-3 py-3 sm:gap-5 sm:px-5 sm:py-5 lg:px-8 lg:py-6">
+        {/* Top Bar */}
+        <div className="safe-top flex w-full flex-wrap items-center justify-between gap-2.5">
+          <div className="max-w-full shrink-0 rounded-lg border border-stone-700/80 bg-stone-950/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300 shadow-md sm:text-xs">
+            AdventureForgeGames
+            <span className="hidden text-stone-400 sm:inline"> · World Selection</span>
+          </div>
+          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end">
+            <button
+              type="button"
+              onClick={onOpenMultiplayer}
+              className="menu-top-action island-wood-plank flex min-h-[42px] min-w-0 items-center justify-center gap-1.5 rounded-lg border border-sky-400/45 px-2.5 text-[11px] font-semibold text-sky-200 sm:px-3.5 sm:text-xs"
+            >
+              <Users className="h-4 w-4 shrink-0 text-sky-300" />
+              <span className="min-w-0 break-words text-left">
+                Multiplayer{multiplayerRoomCode ? ` (${multiplayerRoomCode})` : ''}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={onOpenExchange}
+              className="menu-top-action island-wood-plank flex min-h-[42px] min-w-0 items-center justify-center gap-1.5 rounded-lg border border-amber-500/65 px-2.5 text-[11px] font-bold uppercase tracking-wide text-amber-200 sm:px-3.5 sm:text-xs"
+            >
+              <Store className="h-4 w-4 shrink-0 text-amber-400" />
+              <span className="min-w-0 break-words text-left">
+                <span className="sm:hidden">Exchange</span>
+                <span className="hidden sm:inline">Survival Island Exchange</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={onOpenMods}
+              className="menu-top-action island-wood-plank flex min-h-[42px] min-w-0 items-center justify-center gap-1.5 rounded-lg border border-emerald-400/50 px-2.5 text-[11px] font-semibold text-emerald-200 sm:px-3.5 sm:text-xs"
+            >
+              <Box className="h-4 w-4 shrink-0 text-emerald-300" />
+              <span className="min-w-0 break-words text-left">Mods</span>
+            </button>
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className="menu-top-action island-wood-plank flex min-h-[42px] min-w-0 items-center justify-center gap-1.5 rounded-lg border border-amber-700/60 px-2.5 text-[11px] font-semibold text-stone-100 sm:px-4 sm:text-xs"
+            >
+              <Settings className="h-4 w-4 shrink-0 text-stone-200" />
+              <span className="min-w-0 break-words text-left">Settings</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Main Content */}
+        <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 py-1 sm:gap-5">
+          {/* Mossy Carved-Stone Header Monument */}
+          <header className="island-stone-slab menu-3d-panel relative overflow-hidden rounded-3xl border border-stone-500/55 px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
           <MossAccent className="pointer-events-none absolute top-0 left-0 w-36 h-7 opacity-90" />
           <MossAccent className="pointer-events-none absolute top-0 right-0 w-36 h-7 opacity-85 -scale-x-100" />
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-1 bg-gradient-to-r from-lime-900/60 via-emerald-800/40 to-lime-900/60" />
 
-          <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            <div className="space-y-1.5">
-              <h1 className="font-display font-black tracking-wide leading-[0.98] text-balance">
-                <span className="block text-2xl sm:text-4xl lg:text-5xl island-stone-title">
+          <div className="relative z-10 flex flex-col justify-between gap-4 lg:flex-row lg:items-center lg:gap-6">
+            <div className="min-w-0 space-y-2">
+              <div className="flex flex-wrap items-center gap-2 text-[9px] font-bold uppercase tracking-[0.3em] text-emerald-300/95 sm:text-[10px]">
+                <span className="h-px w-6 bg-emerald-400/70" aria-hidden="true" />
+                <span>AdventureForgeGames Presents</span>
+              </div>
+              <h1 className="font-display font-black leading-[0.98] tracking-wide text-balance">
+                <span className="island-stone-title block text-[clamp(1.75rem,5.2vw,3.35rem)]">
                   SURVIVAL ISLAND:
                 </span>
-                <span className="block text-xl sm:text-3xl lg:text-4xl italic island-lostworld-title tracking-wider mt-0.5">
+                <span className="island-lostworld-title mt-0.5 block text-[clamp(1.45rem,4.2vw,2.85rem)] italic tracking-wider">
                   LOST WORLD
                 </span>
               </h1>
-              <p className="text-xs sm:text-sm text-stone-200 max-w-2xl leading-relaxed drop-shadow">
+              <p className="max-w-2xl text-xs leading-relaxed text-stone-200 drop-shadow sm:text-sm">
                 Explore the prehistoric island in Survival, Boss Hunt, or Creative—or launch an expansive level Flat World park built for enormous roller coasters and Music Pro.
               </p>
+              <div className="flex flex-wrap gap-1.5 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-stone-300">
+                {['Survival', 'Boss Hunt', 'Creative', 'Flat World'].map((tag) => (
+                  <span
+                    key={tag}
+                    className="rounded-full border border-stone-500/45 bg-stone-950/55 px-2.5 py-1"
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            <div className="flex w-full min-w-0 flex-col gap-2.5 lg:w-[min(21rem,36%)] lg:shrink-0">
               {latestSave && (
                 <button
                   type="button"
                   onClick={onContinueLatest}
-                  className="min-h-[52px] px-4 py-2.5 rounded-lg island-wood-plank-play border-2 border-emerald-400/90 text-stone-50 font-bold text-sm flex items-center gap-3 whitespace-nowrap shrink-0 transition cursor-pointer"
+                  className="menu-cta island-wood-plank-play flex min-h-[56px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-xl border-2 border-emerald-400/80 px-4 py-3 text-sm font-bold text-stone-50"
                 >
-                  <Play className="w-5 h-5 text-emerald-300 fill-emerald-400 shrink-0" />
-                  <span className="block text-left">
-                    <span className="block leading-tight">
+                  <Play className="h-5 w-5 shrink-0 fill-emerald-400 text-emerald-300" />
+                  <span className="block min-w-0 flex-1 text-left">
+                    <span className="block break-words leading-snug">
                       Continue: {latestSave.worldName || 'Saved World'}
                     </span>
-                    <span className="block text-[11px] font-semibold text-emerald-200/95">
+                    <span className="block break-words text-[11px] font-semibold leading-snug text-emerald-200/95">
                       {latestSave.worldType === 'flat' ? 'Flat World' : 'Island World'} ·{' '}
                       {MODE_LABELS[
                         resolveAllowedGameMode(
@@ -288,14 +313,14 @@ export function WorldSelectionMenu({
               <button
                 type="button"
                 onClick={onOpenExchange}
-                className="min-h-[52px] px-4 py-2.5 rounded-lg island-wood-plank border border-amber-500/75 text-amber-200 font-bold text-sm flex items-center gap-3 whitespace-nowrap shrink-0 transition cursor-pointer"
+                className="island-wood-plank flex min-h-[56px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-amber-500/70 px-4 py-3 text-sm font-bold text-amber-200"
               >
-                <Store className="w-5 h-5 text-amber-400 shrink-0" />
-                <span className="block text-left">
-                  <span className="block leading-tight tracking-wide uppercase">
+                <Store className="h-5 w-5 shrink-0 text-amber-400" />
+                <span className="block min-w-0 flex-1 text-left">
+                  <span className="block break-words uppercase leading-tight tracking-wide">
                     SURVIVAL ISLAND EXCHANGE
                   </span>
-                  <span className="block text-[11px] font-medium text-stone-300">
+                  <span className="block break-words text-[11px] font-medium leading-snug text-stone-300">
                     Gun Skins &amp; Tactical Backpack Skins · Cosmetic Only
                   </span>
                 </span>
@@ -304,38 +329,45 @@ export function WorldSelectionMenu({
           </div>
         </header>
 
-        {/* Main 2-Column Expedition Layout: Left Weathered Wooden Plank Stack + Right World Modes */}
-        <div className="grid grid-cols-1 lg:grid-cols-[270px_1fr] gap-5 items-start">
-          {/* Left Column: Weathered Wooden Plank Menu Stack */}
-          <nav
-            aria-label="Main Menu"
-            className="flex flex-col gap-2.5 island-stone-slab rounded-2xl border border-stone-700/90 p-3"
-          >
-            <button
-              type="button"
-              onClick={handlePrimaryPlay}
-              className="w-full min-h-[54px] px-4 py-2.5 rounded-lg island-wood-plank-play border-2 border-emerald-400/90 text-stone-50 flex items-center gap-3.5 text-left transition cursor-pointer"
+          {/* Main 2-Column Expedition Layout: Left Weathered Wooden Plank Stack + Right World Modes */}
+          <div className="grid w-full grid-cols-1 items-start gap-4 sm:gap-5 lg:grid-cols-[minmax(240px,280px)_minmax(0,1fr)]">
+            {/* Left Column: Weathered Wooden Plank Menu Stack */}
+            <nav
+              aria-label="Main Menu"
+              className="island-stone-slab menu-3d-panel flex w-full min-w-0 flex-col gap-2.5 rounded-3xl border border-stone-600/65 p-3 sm:p-3.5"
             >
-              <Play className="w-6 h-6 text-emerald-300 fill-emerald-400 shrink-0 drop-shadow" />
-              <span className="min-w-0">
-                <span className="block font-display text-lg font-black tracking-wider leading-none text-stone-50">
-                  PLAY
+              <div className="px-1.5 pb-0.5 text-[9px] font-bold uppercase tracking-[0.34em] text-stone-400">
+                Expedition Command
+              </div>
+              <button
+                type="button"
+                onClick={handlePrimaryPlay}
+                className="menu-primary-cta island-wood-plank-play group relative flex min-h-[78px] w-full min-w-0 cursor-pointer items-center gap-3.5 overflow-hidden rounded-xl border-2 border-emerald-400/80 px-3.5 py-3 text-left text-stone-50"
+              >
+                <span className="pointer-events-none absolute inset-0 z-0 opacity-70 [background:linear-gradient(100deg,transparent_18%,rgba(255,255,255,0.16)_42%,rgba(255,255,255,0.04)_54%,transparent_74%)]" />
+                <span className="relative z-10 flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-emerald-300/70 bg-emerald-950/80 shadow-[0_0_20px_rgba(74,222,128,0.35)]">
+                  <Play className="h-6 w-6 fill-emerald-400 text-emerald-300 drop-shadow" />
                 </span>
-                <span className="block text-[10px] font-semibold text-emerald-200/90 truncate mt-1">
-                  {latestSave
-                    ? `Resume ${latestSave.worldName || 'Expedition'}`
-                    : 'Choose Island or Flat World'}
+                <span className="relative z-10 min-w-0 flex-1">
+                  <span className="block font-display text-2xl font-black leading-none tracking-wider text-stone-50">
+                    PLAY
+                  </span>
+                  <span className="mt-1.5 block break-words text-[11px] font-semibold leading-snug text-emerald-200/95">
+                    {latestSave
+                      ? `Resume ${latestSave.worldName || 'Expedition'}`
+                      : 'Choose Island or Flat World'}
+                  </span>
                 </span>
-              </span>
-            </button>
+                <ChevronRight className="relative z-10 h-5 w-5 shrink-0 text-emerald-300/80 transition-transform duration-200 group-hover:translate-x-0.5" />
+              </button>
 
             <button
               type="button"
               onClick={onOpenSettings}
-              className="w-full min-h-[46px] px-4 py-2 rounded-lg island-wood-plank border border-amber-800/75 text-stone-100 flex items-center gap-3.5 text-left transition cursor-pointer"
+              className="menu-nav-row island-wood-plank flex min-h-[48px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-amber-800/70 px-4 py-2.5 text-left text-stone-100"
             >
               <Settings className="w-5 h-5 text-stone-300 shrink-0" />
-              <span className="font-display text-sm font-bold tracking-wider uppercase">
+              <span className="min-w-0 break-words font-display text-sm font-bold uppercase tracking-wider">
                 SETTINGS
               </span>
             </button>
@@ -343,10 +375,10 @@ export function WorldSelectionMenu({
             <button
               type="button"
               onClick={onOpenControls}
-              className="w-full min-h-[46px] px-4 py-2 rounded-lg island-wood-plank border border-amber-800/75 text-stone-100 flex items-center gap-3.5 text-left transition cursor-pointer"
+              className="menu-nav-row island-wood-plank flex min-h-[48px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-amber-800/70 px-4 py-2.5 text-left text-stone-100"
             >
               <Gamepad2 className="w-5 h-5 text-stone-300 shrink-0" />
-              <span className="font-display text-sm font-bold tracking-wider uppercase">
+              <span className="min-w-0 break-words font-display text-sm font-bold uppercase tracking-wider">
                 CONTROLS
               </span>
             </button>
@@ -354,10 +386,10 @@ export function WorldSelectionMenu({
             <button
               type="button"
               onClick={onOpenMap}
-              className="w-full min-h-[46px] px-4 py-2 rounded-lg island-wood-plank border border-amber-800/75 text-stone-100 flex items-center gap-3.5 text-left transition cursor-pointer"
+              className="menu-nav-row island-wood-plank flex min-h-[48px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-amber-800/70 px-4 py-2.5 text-left text-stone-100"
             >
               <MapPin className="w-5 h-5 text-stone-300 shrink-0" />
-              <span className="font-display text-sm font-bold tracking-wider uppercase">
+              <span className="min-w-0 break-words font-display text-sm font-bold uppercase tracking-wider">
                 MAP
               </span>
             </button>
@@ -365,10 +397,10 @@ export function WorldSelectionMenu({
             <button
               type="button"
               onClick={onOpenAchievements}
-              className="w-full min-h-[46px] px-4 py-2 rounded-lg island-wood-plank border border-amber-800/75 text-stone-100 flex items-center gap-3.5 text-left transition cursor-pointer"
+              className="menu-nav-row island-wood-plank flex min-h-[48px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-amber-800/70 px-4 py-2.5 text-left text-stone-100"
             >
               <Trophy className="w-5 h-5 text-amber-300 shrink-0" />
-              <span className="font-display text-sm font-bold tracking-wider uppercase">
+              <span className="min-w-0 break-words font-display text-sm font-bold uppercase tracking-wider">
                 ACHIEVEMENTS
               </span>
             </button>
@@ -376,19 +408,19 @@ export function WorldSelectionMenu({
             <button
               type="button"
               onClick={onQuit}
-              className="w-full min-h-[46px] px-4 py-2 rounded-lg island-wood-plank border border-stone-700/80 text-stone-200 flex items-center gap-3.5 text-left transition cursor-pointer"
+              className="menu-nav-row island-wood-plank flex min-h-[48px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-stone-700/75 px-4 py-2.5 text-left text-stone-200"
             >
               <LogOut className="w-5 h-5 text-stone-300 shrink-0" />
-              <span className="font-display text-sm font-bold tracking-wider uppercase">
+              <span className="min-w-0 break-words font-display text-sm font-bold uppercase tracking-wider">
                 QUIT
               </span>
             </button>
           </nav>
 
           {/* Right Column: World-Mode Carved Stone Cards, Step 2 Config & Saved Worlds */}
-          <div className="space-y-4 min-w-0">
+          <div className="flex w-full min-w-0 flex-col gap-4">
             {/* Create New World Section */}
-            <div className="relative island-stone-slab rounded-2xl border-2 border-stone-600/80 p-4 sm:p-5 space-y-4 overflow-hidden">
+            <div className="island-stone-slab menu-3d-panel relative w-full min-w-0 space-y-4 overflow-hidden rounded-3xl border border-stone-600/65 p-4 sm:p-5">
               <MossAccent className="pointer-events-none absolute top-0 right-6 w-28 h-6 opacity-80" />
 
               <div className="relative z-10 flex flex-wrap items-center justify-between gap-2">
@@ -402,7 +434,7 @@ export function WorldSelectionMenu({
                   </p>
                 </div>
                 {selectedWorldType && (
-                  <span className="text-[11px] font-semibold text-stone-100 px-3 py-1 rounded-md island-wood-plank border border-amber-700/70 whitespace-nowrap shrink-0">
+                  <span className="max-w-full break-words rounded-md border border-amber-700/70 px-3 py-1 text-left text-[11px] font-semibold text-stone-100 island-wood-plank">
                     Selected:{' '}
                     {selectedWorldType === 'flat'
                       ? 'Flat World (Creative Only)'
@@ -418,7 +450,7 @@ export function WorldSelectionMenu({
                   type="button"
                   data-world-type="island"
                   onClick={() => handleSelectWorldType('island')}
-                  className={`relative p-4 rounded-xl border-2 text-left transition flex flex-col justify-between gap-3.5 island-stone-slab overflow-hidden cursor-pointer ${
+                  className={`island-stone-slab relative flex min-w-0 cursor-pointer flex-col justify-between gap-3.5 overflow-hidden rounded-2xl border-2 p-4 text-left transition sm:p-5 ${
                     selectedWorldType === 'island'
                       ? 'border-emerald-400 shadow-[0_0_24px_rgba(52,211,153,0.38)]'
                       : 'border-stone-600/85 hover:border-emerald-400/75'
@@ -472,7 +504,7 @@ export function WorldSelectionMenu({
                   type="button"
                   data-world-type="flat"
                   onClick={() => handleSelectWorldType('flat')}
-                  className={`relative p-4 rounded-xl border-2 text-left transition flex flex-col justify-between gap-3.5 island-stone-slab overflow-hidden cursor-pointer ${
+                  className={`island-stone-slab relative flex min-w-0 cursor-pointer flex-col justify-between gap-3.5 overflow-hidden rounded-2xl border-2 p-4 text-left transition sm:p-5 ${
                     selectedWorldType === 'flat'
                       ? 'border-sky-400 shadow-[0_0_24px_rgba(56,189,248,0.38)]'
                       : 'border-stone-600/85 hover:border-sky-400/75'
@@ -551,11 +583,11 @@ export function WorldSelectionMenu({
                       />
                     </div>
 
-                    <div className="space-y-1.5 shrink-0">
+                    <div className="w-full space-y-1.5 sm:w-auto sm:shrink-0">
                       <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
                         Survivor Character
                       </div>
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid w-full grid-cols-2 gap-2">
                         <button
                           type="button"
                           onClick={() => setPlayerGender('boy')}
@@ -748,10 +780,10 @@ export function WorldSelectionMenu({
                     </div>
                   )}
 
-                  <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                    <div className="text-[11px] text-stone-300 flex items-center gap-2">
-                      <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                      <span>
+                  <div className="flex flex-col items-stretch justify-between gap-3 border-t border-stone-700/50 pt-3 sm:flex-row sm:items-center">
+                    <div className="flex min-w-0 items-start gap-2 text-[11px] leading-relaxed text-stone-300">
+                      <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+                      <span className="min-w-0 break-words">
                         Creates a separate save slot — existing Island worlds are never overwritten.
                       </span>
                     </div>
@@ -759,14 +791,14 @@ export function WorldSelectionMenu({
                       type="button"
                       data-start="true"
                       onClick={handleLaunch}
-                      className={`min-h-[48px] px-6 py-2.5 rounded-lg font-bold text-sm flex items-center gap-2 shadow-xl whitespace-nowrap shrink-0 transition cursor-pointer ${
+                      className={`menu-cta flex min-h-[48px] w-full min-w-0 cursor-pointer items-center justify-center gap-2 rounded-xl px-6 py-2.5 text-sm font-bold shadow-xl transition sm:w-auto sm:shrink-0 ${
                         selectedWorldType === 'flat'
-                          ? 'bg-sky-500 hover:bg-sky-400 text-stone-950'
+                          ? 'bg-sky-500 text-stone-950 hover:bg-sky-400'
                           : 'island-wood-plank-play border-2 border-emerald-400/90 text-stone-50'
                       }`}
                     >
-                      <Play className="w-4 h-4" />
-                      <span>
+                      <Play className="h-4 w-4 shrink-0" />
+                      <span className="min-w-0 break-words text-center">
                         {selectedWorldType === 'flat'
                           ? 'Create & Enter Flat Park'
                           : 'Create & Enter Island World'}
@@ -779,31 +811,31 @@ export function WorldSelectionMenu({
 
             {/* Saved Worlds List */}
             {saveSlots.length > 0 && (
-              <div className="island-stone-slab rounded-2xl border border-stone-600/80 p-4 space-y-2.5">
-                <div className="flex items-center justify-between gap-2">
+              <div className="island-stone-slab menu-3d-panel w-full min-w-0 space-y-2.5 rounded-3xl border border-stone-600/65 p-4 sm:p-5">
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                   <div className="text-xs font-bold uppercase tracking-wider text-stone-200">
                     Saved Worlds ({saveSlots.length}/12)
                   </div>
-                  <div className="text-[11px] text-stone-300 flex items-center gap-1">
-                    <Music className="w-3 h-3 text-amber-400" />
-                    <span>Music Pro &amp; Coasters preserved per world</span>
+                  <div className="flex min-w-0 items-center gap-1 text-[11px] text-stone-300">
+                    <Music className="h-3 w-3 shrink-0 text-amber-400" />
+                    <span className="min-w-0 break-words">Music Pro &amp; Coasters preserved per world</span>
                   </div>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-52 overflow-y-auto survival-scroll pr-1">
+                <div className="survival-scroll grid max-h-[min(22rem,44dvh)] grid-cols-1 gap-2 overflow-y-auto pr-1 md:grid-cols-2">
                   {saveSlots.map((slot) => (
                     <div
                       key={slot.slotId}
-                      className="flex items-center justify-between gap-2.5 rounded-lg bg-stone-950/75 border border-stone-700/85 px-3 py-2.5"
+                      className="flex min-w-0 flex-wrap items-center justify-between gap-2.5 rounded-xl border border-stone-700/85 bg-stone-950/75 px-3 py-2.5 sm:flex-nowrap"
                     >
                       <div className="min-w-0 space-y-1">
                         <div className="flex flex-wrap items-center gap-1.5">
                           {renderWorldBadge(slot.worldType)}
                           {renderModeBadge(slot.worldType, slot.gameMode)}
                         </div>
-                        <div className="text-xs font-bold text-stone-100 truncate">
+                        <div className="break-words text-xs font-bold text-stone-100">
                           {slot.worldName || 'Saved World'}
                         </div>
-                        <div className="text-[11px] text-stone-300 font-mono-tabular truncate">
+                        <div className="break-words font-mono-tabular text-[11px] text-stone-300">
                           Day {slot.dayCount} · {slot.structuresCount} struct
                           {(slot.coastersCount ?? 0) > 0
                             ? ` · ${slot.coastersCount} coaster${slot.coastersCount === 1 ? '' : 's'}`
@@ -836,13 +868,14 @@ export function WorldSelectionMenu({
         </div>
       </div>
 
-      {/* Footer Controls */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-stone-200 safe-bottom drop-shadow">
-        <span>
-          Desktop: WASD Move · Drag Look · C Crouch · E Act · P Place · B Craft · Space Jump
-        </span>
-        <span aria-hidden="true">·</span>
-        <span>Mobile: Virtual Thumbstick &amp; Touch Camera</span>
+        {/* Footer Controls */}
+        <div className="safe-bottom flex w-full max-w-full flex-wrap items-center gap-x-3 gap-y-1 text-[11px] leading-relaxed text-stone-300 drop-shadow sm:text-xs">
+          <span className="min-w-0 break-words">
+            Desktop: WASD Move · Drag Look · C Crouch · E Act · P Place · B Craft · Space Jump
+          </span>
+          <span aria-hidden="true" className="hidden sm:inline">·</span>
+          <span className="min-w-0 break-words">Mobile: Virtual Thumbstick &amp; Touch Camera</span>
+        </div>
       </div>
     </div>
   );

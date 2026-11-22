@@ -325,6 +325,175 @@ export function createBarkNormalTexture(renderer: THREE.WebGLRenderer): THREE.Da
   return createTangentNormalTextureFromHeights(heights, size, 3.6, 2, 3, aniso);
 }
 
+/**
+ * Palm-specific bark: horizontal leaf-scar bands, fibrous vertical grain and
+ * weathered grey-brown variation. Shared by every palm trunk segment.
+ */
+function buildPalmBarkHeightField(size: number): Float32Array {
+  const h = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const wobble = periodicFbm(u * 1.4, v, 5, 2, 617) * 0.55;
+      // Tight horizontal leaf scars with soft convex bands between them.
+      const band = Math.sin((v * 9 + wobble) * Math.PI * 2);
+      const scar = Math.pow(Math.max(0, band), 7);
+      const fiber = periodicFbm(u * 3.2, v * 0.7, 11, 3, 733);
+      const rough = periodicFbm(u, v, 7, 2, 941);
+      h[y * size + x] = Math.max(
+        0,
+        Math.min(1, 0.52 + scar * 0.30 + (fiber - 0.5) * 0.34 + (rough - 0.5) * 0.18),
+      );
+    }
+  }
+  return h;
+}
+
+let cachedPalmBarkHeights: { size: number; data: Float32Array } | null = null;
+function getPalmBarkHeightField(size = 256): Float32Array {
+  if (!cachedPalmBarkHeights || cachedPalmBarkHeights.size !== size) {
+    cachedPalmBarkHeights = { size, data: buildPalmBarkHeightField(size) };
+  }
+  return cachedPalmBarkHeights.data;
+}
+
+export function createPalmBarkTexture(renderer: THREE.WebGLRenderer): THREE.CanvasTexture {
+  const size = 256;
+  const heights = getPalmBarkHeightField(size);
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const img = ctx.createImageData(size, size);
+  const d = img.data;
+
+  for (let y = 0; y < size; y++) {
+    const v = y / size;
+    for (let x = 0; x < size; x++) {
+      const hv = heights[y * size + x];
+      const grain = fastHash2D(x, y >> 1, 1289);
+      const moss = periodicFbm(x / size, v, 6, 2, 1451);
+      const scar = Math.max(0, 1 - hv * 2.1);
+      let r = 118 + hv * 96 + (grain - 0.5) * 20;
+      let g = 104 + hv * 82 + (grain - 0.5) * 16;
+      let b = 88 + hv * 66 + (grain - 0.5) * 14;
+      // Pale, sun-bleached scar lips.
+      r += scar * 24;
+      g += scar * 20;
+      b += scar * 14;
+      if (moss > 0.68) {
+        const m = (moss - 0.68) * 2.0;
+        r = r * (1 - m * 0.3) + 112 * m * 0.3;
+        g = g * (1 - m * 0.3) + 132 * m * 0.3;
+        b = b * (1 - m * 0.3) + 88 * m * 0.3;
+      }
+      const idx = (y * size + x) * 4;
+      d[idx] = clamp255(r);
+      d[idx + 1] = clamp255(g);
+      d[idx + 2] = clamp255(b);
+      d[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 1.6);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return tex;
+}
+
+export function createPalmBarkNormalTexture(renderer: THREE.WebGLRenderer): THREE.DataTexture {
+  const size = 256;
+  const heights = getPalmBarkHeightField(size);
+  const aniso = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return createTangentNormalTextureFromHeights(heights, size, 3.1, 2, 1.6, aniso);
+}
+
+/**
+ * Sunlit palm-leaflet surface: soft green mottling, a pale central rib and fine
+ * diagonal veins. Deliberately near-neutral so per-vertex frond colour drives
+ * the hue while the texture supplies close-range fibrous detail.
+ */
+export function createPalmFrondTexture(renderer: THREE.WebGLRenderer): THREE.CanvasTexture {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const rand = makeSeededRand(5117);
+
+  ctx.fillStyle = '#ccdab4';
+  ctx.fillRect(0, 0, size, size);
+
+  // Soft mottling between sunlit and shaded tissue.
+  for (let i = 0; i < 520; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const rx = 8 + rand() * 26;
+    const ry = 3 + rand() * 9;
+    const light = rand() > 0.45;
+    ctx.fillStyle = light
+      ? `rgba(${206 + Math.floor(rand() * 26)},${218 + Math.floor(rand() * 20)},${176 + Math.floor(rand() * 24)},0.22)`
+      : `rgba(${132 + Math.floor(rand() * 26)},${154 + Math.floor(rand() * 24)},${108 + Math.floor(rand() * 20)},0.20)`;
+    ctx.beginPath();
+    ctx.ellipse(x, y, rx, ry, rand() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Fine diagonal veins fanning off the midrib (u = 0.5).
+  for (let i = 0; i < 64; i++) {
+    const y = (i / 64) * size;
+    ctx.strokeStyle = `rgba(178,196,146,${0.22 + rand() * 0.18})`;
+    ctx.lineWidth = 0.8 + rand() * 0.5;
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(size * 0.5, y);
+      ctx.quadraticCurveTo(
+        size * (0.5 + side * 0.24),
+        y + 12 + rand() * 10,
+        size * (0.5 + side * 0.5),
+        y + 26 + rand() * 16,
+      );
+      ctx.stroke();
+    }
+  }
+
+  // Pale central rib.
+  ctx.strokeStyle = 'rgba(232,242,206,0.72)';
+  ctx.lineWidth = 4.5;
+  ctx.beginPath();
+  ctx.moveTo(size * 0.5, 0);
+  ctx.lineTo(size * 0.5, size);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(146,170,112,0.55)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(size * 0.5 - 2.6, 0);
+  ctx.lineTo(size * 0.5 - 2.6, size);
+  ctx.moveTo(size * 0.5 + 2.6, 0);
+  ctx.lineTo(size * 0.5 + 2.6, size);
+  ctx.stroke();
+
+  // A few dry blemishes for realism at close range.
+  for (let i = 0; i < 26; i++) {
+    ctx.fillStyle = `rgba(150,124,78,${0.10 + rand() * 0.12})`;
+    ctx.beginPath();
+    ctx.ellipse(rand() * size, rand() * size, 2 + rand() * 6, 1 + rand() * 3, rand() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return tex;
+}
+
 export function createWaterNormalTexture(renderer: THREE.WebGLRenderer): THREE.CanvasTexture {
   const size = 256;
   const heights = new Float32Array(size * size);

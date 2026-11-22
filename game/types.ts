@@ -67,7 +67,8 @@ export type DimensionId =
   | 'alien'
   | 'island_arctic'
   | 'island_volcanic'
-  | 'island_jungle';
+  | 'island_jungle'
+  | 'bee_dimension';
 
 export interface PortalLinkState {
   id: string;
@@ -258,6 +259,7 @@ export type ItemId =
   | 'nautical_map'
   | 'navigation_sextant'
   | 'captain_key'
+  | 'car_key'
   | 'space_gem'
   | 'glock_19'
   | 'desert_eagle'
@@ -386,6 +388,8 @@ export interface ModularVehicleData {
   rimLightMode?: 'off' | 'solid' | 'blink' | 'music';
   rimLightColor?: string;
   hydraulicsDanceEnabled?: boolean;
+  /** Parked hydraulic pose that remains visible after exiting the car. */
+  hydraulicStance?: 'three_wheel';
   livery?: {
     channelName: string;
     ctaText: string;
@@ -438,7 +442,8 @@ export type HydraulicMode =
   | 'drop_down'
   | 'front_lock'
   | 'rear_lock'
-  | 'side_to_side';
+  | 'side_to_side'
+  | 'three_wheel';
 
 export interface ActiveVehicleHudState {
   id: string;
@@ -1168,6 +1173,7 @@ export interface GameSaveData {
   ecosystem?: EcosystemSimulationData;
   clearedStructureIds?: string[];
   caveProgress?: import('./systems/caveSystem').CaveCompactSave;
+  finalIsland?: import('./systems/finalIslandFeatures').FinalIslandSaveState;
   dragonValleySave?: import('./systems/dragonValleySystem').DragonValleySaveData;
   vikingVillageSave?: import('./systems/vikingVillageSystem').VikingVillageSaveData;
 }
@@ -1499,6 +1505,7 @@ export interface HUDStateSnapshot {
   portalNearHint?: string | null;
   spaceState?: import('./systems/multiverseSpace').SpaceHudSnapshot;
   caveSummary?: import('./systems/caveSystem').CaveSummarySnapshot;
+  finalIsland?: import('./systems/finalIslandFeatures').FinalIslandHudState;
   dragonEggs?: string[];
   vikingVillageProgress?: {
     completedQuestIds: string[];

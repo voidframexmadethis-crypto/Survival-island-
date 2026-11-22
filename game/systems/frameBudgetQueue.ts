@@ -281,7 +281,6 @@ export class Permanent60FpsController {
 
   private rafId: number | null = null;
   private lastNowMs = 0;
-  private lastRenderMs = 0;
   private accumulator = 0;
   private elapsedSeconds = 0;
   private running = false;
@@ -289,7 +288,6 @@ export class Permanent60FpsController {
   public resetTiming(): void {
     const now = typeof performance !== 'undefined' ? performance.now() : 0;
     this.lastNowMs = now;
-    this.lastRenderMs = now;
     this.accumulator = 0;
   }
 
@@ -299,7 +297,6 @@ export class Permanent60FpsController {
     this.running = true;
     const now = typeof performance !== 'undefined' ? performance.now() : 0;
     this.lastNowMs = now;
-    this.lastRenderMs = now;
     this.accumulator = 0;
 
     const tick = (currentMs: number) => {
@@ -308,21 +305,16 @@ export class Permanent60FpsController {
 
       if (typeof document !== 'undefined' && document.hidden) {
         this.lastNowMs = currentMs;
-        this.lastRenderMs = currentMs;
         this.accumulator = 0;
         return;
       }
 
-      // Pace render submissions to ~60 FPS (16.67ms)
-      const sinceLastRender = currentMs - this.lastRenderMs;
-      if (sinceLastRender < Permanent60FpsController.FRAME_BUDGET_MS * 0.92) {
-        return;
-      }
-
-      // Clamp frame delta to <= 0.05s so tab switches or hitches never spiral
+      // Render every display refresh. The old 15.33 ms pacing gate silently
+      // halved the frame rate on 75/90/144 Hz displays (e.g. 37-48 FPS), which
+      // was itself a major source of perceived stutter. Simulation still runs
+      // on the fixed 60 Hz step below, so gameplay timing is unchanged.
       const rawDt = Math.min((currentMs - this.lastNowMs) / 1000, 0.05);
       this.lastNowMs = currentMs;
-      this.lastRenderMs = currentMs;
 
       if (rawDt <= 0) return;
 

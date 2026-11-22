@@ -23,9 +23,6 @@ export class SoundEngine {
   private nextBirdTime = 0;
   private nextInsectTime = 0;
   private nextFireCrackleTime = 0;
-  private trunkBassTimer = 0;
-  private trunkBassStep = 0;
-  private trunkBassPulse = 0;
   private whiteNoiseBuf: AudioBuffer | null = null;
   private brownNoiseBuf: AudioBuffer | null = null;
 
@@ -1722,87 +1719,6 @@ export class SoundEngine {
     tg.connect(this.masterGain);
     thump.start(now + 0.01);
     thump.stop(now + 0.19);
-  }
-
-  public stopTrunkBass(): void {
-    this.trunkBassTimer = 0;
-    this.trunkBassStep = 0;
-    this.trunkBassPulse = 0;
-  }
-
-  public updateTrunkBass(active: boolean, dt: number): number {
-    if (!active || !this.sfxEnabled || !this.ctx || !this.masterGain) {
-      this.trunkBassTimer = 0;
-      this.trunkBassStep = 0;
-      this.trunkBassPulse *= Math.exp(-dt * 12);
-      if (this.trunkBassPulse < 0.01) this.trunkBassPulse = 0;
-      return this.trunkBassPulse;
-    }
-
-    this.trunkBassPulse *= Math.exp(-dt * 8.5);
-    this.trunkBassTimer -= dt;
-
-    if (this.trunkBassTimer <= 0) {
-      const stepDur = 0.195; // Chopped & screwed ~77 BPM Houston groove
-      this.trunkBassTimer = stepDur;
-      const step = this.trunkBassStep % 8;
-      this.trunkBassStep = (this.trunkBassStep + 1) % 8;
-
-      const now = this.ctx.currentTime;
-      const isBoom = step === 0 || step === 3 || step === 4 || step === 6;
-      if (isBoom) {
-        const subFreq = step === 3 ? 49 : step === 6 ? 41.2 : 46.2;
-        const osc = this.ctx.createOscillator();
-        const g = this.ctx.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(subFreq * 1.45, now);
-        osc.frequency.exponentialRampToValueAtTime(subFreq, now + 0.09);
-        g.gain.setValueAtTime(step === 0 || step === 4 ? 0.42 : 0.34, now);
-        g.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
-        osc.connect(g);
-        g.connect(this.masterGain);
-        osc.start(now);
-        osc.stop(now + 0.36);
-
-        // Warm trunk-rattle lowpass harmonic
-        const harm = this.ctx.createOscillator();
-        const lp = this.ctx.createBiquadFilter();
-        const hg = this.ctx.createGain();
-        harm.type = 'triangle';
-        harm.frequency.setValueAtTime(subFreq * 2, now);
-        lp.type = 'lowpass';
-        lp.frequency.value = 180;
-        hg.gain.setValueAtTime(0.14, now);
-        hg.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
-        harm.connect(lp);
-        lp.connect(hg);
-        hg.connect(this.masterGain);
-        harm.start(now);
-        harm.stop(now + 0.26);
-
-        this.trunkBassPulse = step === 3 ? 0.78 : 1.0;
-      }
-
-      if (step === 2 || step === 6) {
-        // Subtle crisp hi-hat tick
-        const dur = 0.04;
-        const src = this.createNoiseSource('white');
-        if (src) {
-          const hp = this.ctx.createBiquadFilter();
-          hp.type = 'highpass';
-          hp.frequency.value = 6200;
-          const hg = this.ctx.createGain();
-          hg.gain.setValueAtTime(0.06, now);
-          hg.gain.exponentialRampToValueAtTime(0.001, now + dur);
-          src.connect(hp);
-          hp.connect(hg);
-          hg.connect(this.masterGain);
-          src.start(now, Math.random() * 2.5, dur + 0.01);
-        }
-      }
-    }
-
-    return this.trunkBassPulse;
   }
 
   public playTotemUndying(): void {

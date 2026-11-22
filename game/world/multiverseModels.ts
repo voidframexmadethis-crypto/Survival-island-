@@ -676,6 +676,8 @@ export function buildDimensionWorld(
       c.setHex(h < -0.1 ? 0x94a3b8 : h > 5 ? 0xf8fafc : 0xe2e8f0);
     } else if (dim === 'island_volcanic') {
       c.setHex(h < -0.1 ? 0x292524 : h > 7 ? 0x7c2d12 : 0x44403c);
+    } else if (dim === 'bee_dimension') {
+      c.setHex(h < -0.1 ? 0xb45309 : h > 5.5 ? 0xfde68a : h > 2.4 ? 0xd97706 : 0x4d7c0f);
     } else {
       c.setHex(h < 0.1 ? 0xd9c28b : h > 4 ? 0x15803d : 0x3f7a2c);
     }
@@ -705,11 +707,13 @@ export function buildDimensionWorld(
     const waterColor =
       dim === 'gold'
         ? 0xfbbf24
-        : dim === 'island_arctic'
-          ? 0x0c4a6e
-          : dim === 'island_volcanic'
-            ? 0x1e293b
-            : 0x0e7490;
+        : dim === 'bee_dimension'
+          ? 0xf59e0b
+          : dim === 'island_arctic'
+            ? 0x0c4a6e
+            : dim === 'island_volcanic'
+              ? 0x1e293b
+              : 0x0e7490;
     const oceanMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(520, 520),
       new THREE.MeshStandardMaterial({
@@ -1318,6 +1322,164 @@ export function buildDimensionWorld(
       respawnTimer: 0,
       mesh: templeCache,
     });
+  }
+
+  if (dim === 'bee_dimension') {
+    // Towering honeycomb wax spires ringing the hive meadow
+    const waxMat = new THREE.MeshStandardMaterial({
+      color: 0xf59e0b,
+      emissive: 0xb45309,
+      emissiveIntensity: 0.4,
+      roughness: 0.42,
+      metalness: 0.16,
+    });
+    const combMat = new THREE.MeshStandardMaterial({
+      color: 0xfde68a,
+      emissive: 0xf59e0b,
+      emissiveIntensity: 0.55,
+      roughness: 0.3,
+    });
+    const stemMat = new THREE.MeshStandardMaterial({ color: 0x3f6212, roughness: 0.86 });
+    const petalMat = new THREE.MeshStandardMaterial({ color: 0xfbcfe8, roughness: 0.58 });
+
+    const towerMatrices: THREE.Matrix4[] = [];
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2 + rand() * 0.2;
+      const d = 26 + rand() * 58;
+      const tx = Math.cos(a) * d;
+      const tz = Math.sin(a) * d;
+      const ty = getDimensionTerrainHeight(dim, tx, tz);
+      if (ty < OCEAN_LEVEL + 0.4) continue;
+      const h = 6 + rand() * 11;
+      dimDummy.rotation.set(0, rand() * Math.PI, 0);
+      dimDummy.position.set(tx, ty + h / 2, tz);
+      dimDummy.scale.set(1 + rand() * 0.5, h / 8, 1 + rand() * 0.5);
+      dimDummy.updateMatrix();
+      towerMatrices.push(dimDummy.matrix.clone());
+      colliders.push({ x: tx, z: tz, radius: 1.1 });
+    }
+    if (towerMatrices.length > 0) {
+      const towers = new THREE.InstancedMesh(
+        new THREE.CylinderGeometry(2.4, 3.0, 8, 6),
+        waxMat,
+        towerMatrices.length,
+      );
+      towerMatrices.forEach((m, i) => towers.setMatrixAt(i, m));
+      towers.instanceMatrix.needsUpdate = true;
+      towers.computeBoundingSphere();
+      towers.receiveShadow = true;
+      root.add(towers);
+    }
+
+    // Colossal meadow flowers with glowing nectar centers
+    const stemMatrices: THREE.Matrix4[] = [];
+    const bloomMatrices: THREE.Matrix4[] = [];
+    const nectarMatrices: THREE.Matrix4[] = [];
+    for (let i = 0; i < 26; i++) {
+      const a = rand() * Math.PI * 2;
+      const d = 14 + rand() * 74;
+      const fx = Math.cos(a) * d;
+      const fz = Math.sin(a) * d;
+      const fy = getDimensionTerrainHeight(dim, fx, fz);
+      if (fy < OCEAN_LEVEL + 0.5) continue;
+      const scale = 0.85 + rand() * 0.8;
+
+      dimDummy.rotation.set(0, 0, 0);
+      dimDummy.position.set(fx, fy + 3.4 * scale, fz);
+      dimDummy.scale.set(scale, scale, scale);
+      dimDummy.updateMatrix();
+      stemMatrices.push(dimDummy.matrix.clone());
+
+      dimDummy.position.set(fx, fy + 7.0 * scale, fz);
+      dimDummy.scale.set(scale * 1.3, scale * 0.5, scale * 1.3);
+      dimDummy.updateMatrix();
+      bloomMatrices.push(dimDummy.matrix.clone());
+
+      dimDummy.position.set(fx, fy + 7.35 * scale, fz);
+      dimDummy.scale.setScalar(scale * 0.55);
+      dimDummy.updateMatrix();
+      nectarMatrices.push(dimDummy.matrix.clone());
+      colliders.push({ x: fx, z: fz, radius: 0.55 });
+    }
+    if (stemMatrices.length > 0) {
+      const stems = new THREE.InstancedMesh(
+        new THREE.CylinderGeometry(0.22, 0.34, 6.8, 6),
+        stemMat,
+        stemMatrices.length,
+      );
+      const blooms = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(2.6, 10, 8),
+        petalMat,
+        bloomMatrices.length,
+      );
+      const nectar = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(0.9, 10, 8),
+        combMat,
+        nectarMatrices.length,
+      );
+      stemMatrices.forEach((m, i) => stems.setMatrixAt(i, m));
+      bloomMatrices.forEach((m, i) => blooms.setMatrixAt(i, m));
+      nectarMatrices.forEach((m, i) => nectar.setMatrixAt(i, m));
+      stems.instanceMatrix.needsUpdate = true;
+      blooms.instanceMatrix.needsUpdate = true;
+      nectar.instanceMatrix.needsUpdate = true;
+      stems.computeBoundingSphere();
+      blooms.computeBoundingSphere();
+      nectar.computeBoundingSphere();
+      root.add(stems, blooms, nectar);
+    }
+
+    // The Hive Queen's giant comb palace on its warm hill
+    const hiveX = 0;
+    const hiveZ = -58;
+    const hiveY = getDimensionTerrainHeight(dim, hiveX, hiveZ);
+    const hive = new THREE.Group();
+    const hiveBody = new THREE.Mesh(new THREE.CylinderGeometry(9, 13.5, 18, 6), waxMat);
+    hiveBody.position.y = 9;
+    const hiveCrown = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 9.5, 7, 6), combMat);
+    hiveCrown.position.y = 21.5;
+    const hiveGate = new THREE.Mesh(
+      new THREE.CylinderGeometry(2.2, 2.2, 5.4, 6),
+      new THREE.MeshStandardMaterial({
+        color: 0x7c2d12,
+        emissive: 0xf59e0b,
+        emissiveIntensity: 0.8,
+        roughness: 0.6,
+      }),
+    );
+    hiveGate.rotation.z = Math.PI / 2;
+    hiveGate.position.set(0, 3.4, 8.2);
+    hive.add(hiveBody, hiveCrown, hiveGate);
+    hive.position.set(hiveX, hiveY, hiveZ);
+    hive.traverse((o) => {
+      if (o instanceof THREE.Mesh) o.castShadow = true;
+    });
+    root.add(hive);
+    colliders.push({ x: hiveX, z: hiveZ, radius: 13.5 });
+
+    // Drifting golden pollen motes
+    const pollenCount = 260;
+    const pp = new Float32Array(pollenCount * 3);
+    for (let i = 0; i < pollenCount; i++) {
+      const a = rand() * Math.PI * 2;
+      const d = 6 + rand() * 96;
+      pp[i * 3] = Math.cos(a) * d;
+      pp[i * 3 + 1] = 2 + rand() * 24;
+      pp[i * 3 + 2] = Math.sin(a) * d;
+    }
+    const pollenGeo = new THREE.BufferGeometry();
+    pollenGeo.setAttribute('position', new THREE.BufferAttribute(pp, 3));
+    animatedPoints = new THREE.Points(
+      pollenGeo,
+      new THREE.PointsMaterial({
+        color: 0xfde68a,
+        size: 0.42,
+        transparent: true,
+        opacity: 0.85,
+        depthWrite: false,
+      }),
+    );
+    root.add(animatedPoints);
   }
 
   // Realm Guardians (Hellfire Demons, Alien Extraterrestrials, Gold Vault Sentinels, Crystal Golems)

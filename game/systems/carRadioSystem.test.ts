@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import {
   CABIN_BASS_AND_FIRST_PERSON,
   setupCarAudio,
+  stereoOutputGain,
   updateCarAudioPosition,
   updateCarStereo3D,
 } from './carRadioSystem';
@@ -59,8 +60,9 @@ test('updateCarAudioPosition plays paused audio inside 3m and computes spatial v
 
   assert.equal(result.inside, true);
   assert.ok(Math.abs(result.distance - 1.5) < 1e-6);
-  assert.ok(Math.abs(result.volume - (1 - 1.5 / 35)) < 1e-6);
-  assert.equal(audio.volume, result.volume);
+  assert.ok(Math.abs(result.volume - (1 - 1.5 / 50)) < 1e-6);
+  // Spatial attenuation lives in the Web Audio graph; the element stays at unity.
+  assert.equal(audio.volume, 1);
   assert.equal(audio.getPlayCalls(), 1);
   assert.equal(resumed, true);
 
@@ -75,7 +77,7 @@ test('updateCarAudioPosition plays paused audio inside 3m and computes spatial v
   assert.equal(audio.getPlayCalls(), 1);
 });
 
-test('updateCarAudioPosition attenuates over 35m and clamps to [0, 1] outside cabin', async () => {
+test('updateCarAudioPosition attenuates over 50m and clamps to [0, 1] outside cabin', async () => {
   const car = new THREE.Object3D();
   car.position.set(0, 0, 0);
   const player = new THREE.Object3D();
@@ -84,7 +86,7 @@ test('updateCarAudioPosition attenuates over 35m and clamps to [0, 1] outside ca
   const audio = createMockAudioElement(true);
   audio.setReject(true);
 
-  // Mid-range: 17.5m -> volume 0.5, not inside, paused audio stays paused
+  // Mid-range: 17.5m -> 65% audible, not inside, paused audio stays paused
   player.position.set(17.5, 0, 0);
   const mid = updateCarAudioPosition(
     audio as unknown as HTMLAudioElement,
@@ -93,7 +95,7 @@ test('updateCarAudioPosition attenuates over 35m and clamps to [0, 1] outside ca
     listener,
   );
   assert.equal(mid.inside, false);
-  assert.ok(Math.abs(mid.volume - 0.5) < 1e-6);
+  assert.ok(Math.abs(mid.volume - (1 - 17.5 / 50)) < 1e-6);
   assert.equal(audio.getPlayCalls(), 0);
 
   // Beyond 35m: clamps to 0
@@ -118,6 +120,14 @@ test('updateCarAudioPosition attenuates over 35m and clamps to [0, 1] outside ca
   assert.equal(blocked.inside, true);
   assert.equal(audio.getPlayCalls(), 1);
   await new Promise((r) => setTimeout(r, 0));
+});
+
+test('stereoOutputGain is silent at zero, ramps up, and drives a loud cabin mix', () => {
+  assert.equal(stereoOutputGain(0), 0);
+  assert.ok(stereoOutputGain(0.5) < stereoOutputGain(0.75));
+  assert.ok(stereoOutputGain(1) > 2.5);
+  assert.equal(stereoOutputGain(1, 0.5), stereoOutputGain(1) * 0.5);
+  assert.equal(stereoOutputGain(2), stereoOutputGain(1));
 });
 
 test('CABIN_BASS_AND_FIRST_PERSON clamps spatialAttenuation and tracks userPaused', () => {
@@ -277,7 +287,7 @@ test('setupCarAudio routes through HRTF PannerNode with 100Hz bass, 48Hz sub fil
     assert.ok(Math.abs(handles.sub.gain.value - 5 * 1.5) < 1e-6);
     assert.equal(handles.analyser.fftSize, 2048);
     assert.equal(handles.analyser.smoothingTimeConstant, 0.78);
-    assert.ok(Math.abs(handles.subwoofer.subGain.gain.value - Math.min(0.65, 0.2 * 1.5)) < 1e-6);
+    assert.ok(Math.abs(handles.subwoofer.subGain.gain.value - Math.min(1, 0.34 * 1.5)) < 1e-6);
 
     assert.equal(handles.panner.panningModel, 'HRTF');
     assert.equal(handles.panner.distanceModel, 'inverse');

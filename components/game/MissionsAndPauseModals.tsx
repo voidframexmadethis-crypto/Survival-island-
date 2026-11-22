@@ -236,6 +236,9 @@ export function SettingsModal({
                   );
                 })}
               </div>
+              <p className="text-[10px] text-stone-500 mt-1.5">
+                Cinematic HDR post-FX — bloom, filmic color grade, sharpening &amp; vignette — scales with the preset.
+              </p>
             </div>
 
             <div className="grid grid-cols-2 gap-2.5">

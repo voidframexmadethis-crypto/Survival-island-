@@ -265,6 +265,32 @@ export const DIMENSION_DEFINITIONS: Record<DimensionId, DimensionDefinition> = {
     hasOcean: true,
     lootHighlights: ['Ancient Temple Clearing', 'Gold Bars & Tropical Fruit', 'Outpost Sanctuary'],
   },
+  bee_dimension: {
+    id: 'bee_dimension',
+    name: 'The Bee Dimension',
+    shortName: 'Hive Realm',
+    category: 'dimension',
+    subtitle: 'Golden Hive Sanctuary · 0.88g',
+    description:
+      'An amber-sky hive realm of towering wax combs, colossal flowers, drifting pollen, and a honey sea. Home of the Hive Queen.',
+    primaryColor: '#fbbf24',
+    secondaryColor: '#f59e0b',
+    primaryHex: 0xfbbf24,
+    secondaryHex: 0xf59e0b,
+    skyHex: 0xfde68a,
+    fogHex: 0xfbbf24,
+    fogDensity: 0.0028,
+    sunColorHex: 0xfff7d6,
+    sunIntensity: 2.15,
+    hemiSkyHex: 0xfef3c7,
+    hemiGroundHex: 0x78350f,
+    hemiIntensity: 1.0,
+    showStars: false,
+    gravityMult: 0.88,
+    temperatureC: 38.2,
+    hasOcean: true,
+    lootHighlights: ['Hive Queen Audience', 'Honeycombs & Honey Jewels', 'Bee Riding Lessons'],
+  },
 };
 
 export const PORTAL_DESTINATION_ORDER: DimensionId[] = [
@@ -276,6 +302,7 @@ export const PORTAL_DESTINATION_ORDER: DimensionId[] = [
   'island_arctic',
   'island_volcanic',
   'island_jungle',
+  'bee_dimension',
   'overworld',
 ];
 
@@ -376,6 +403,17 @@ export function getDimensionTerrainHeight(dim: DimensionId, x: number, z: number
   const r = Math.hypot(x, z);
   // Keep central arrival plaza clean & smooth for walking + driving vehicles
   const arrivalFlatten = Math.max(0, Math.min(1, (r - 11) / 14));
+
+  if (dim === 'bee_dimension') {
+    const coast = 104 + Math.sin(Math.atan2(z, x) * 3.2) * 7;
+    if (r > coast + 18) return -5.4;
+    const falloff = r > coast - 14 ? Math.max(0, (coast + 6 - r) / 20) : 1;
+    const meadow = Math.sin(x * 0.05) * 1.55 + Math.cos(z * 0.055) * 1.45 + Math.sin(r * 0.07) * 0.7;
+    // Gentle ring hill under the giant hive at r ~ 58
+    const hiveHill = Math.exp(-Math.pow((r - 58) / 24, 2)) * 5.5;
+    const raw = -3.4 + falloff * (5.6 + meadow + hiveHill);
+    return raw * arrivalFlatten + 1.6 * (1 - arrivalFlatten);
+  }
 
   if (dim === 'space') {
     let bestH = -26;

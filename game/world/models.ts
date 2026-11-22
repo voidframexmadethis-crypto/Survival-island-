@@ -4089,6 +4089,31 @@ export function createPickupMesh(
     );
     strap.position.set(0.28, 0.16, 0);
     group.add(shaft, maul, strap);
+  } else if (itemId === 'car_key') {
+    const brassMat = new THREE.MeshStandardMaterial({
+      color: 0xf2c14e,
+      roughness: 0.26,
+      metalness: 0.92,
+      emissive: 0x6b3f00,
+      emissiveIntensity: 0.32,
+    });
+    const shaft = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.027, 0.027, 0.46, 8),
+      brassMat,
+    );
+    shaft.rotation.z = Math.PI / 2;
+    shaft.position.set(0.07, 0.13, 0);
+    shaft.castShadow = true;
+    // Clover-style bow so the key reads clearly against grass at pickup distance.
+    const bow = new THREE.Mesh(new THREE.TorusGeometry(0.105, 0.031, 8, 18), brassMat);
+    bow.rotation.y = Math.PI / 2;
+    bow.position.set(-0.18, 0.13, 0);
+    bow.castShadow = true;
+    const toothA = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.115, 0.031), brassMat);
+    toothA.position.set(0.245, 0.075, 0);
+    const toothB = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.078, 0.031), brassMat);
+    toothB.position.set(0.165, 0.093, 0);
+    group.add(shaft, bow, toothA, toothB);
   } else {
     // Generic compact supply crate/pouch
     const pouch = new THREE.Mesh(

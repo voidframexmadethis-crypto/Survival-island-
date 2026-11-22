@@ -492,7 +492,7 @@ export function createVehicleFromPreset(
     sports_car: 0.88,
     dune_buggy: 1.22,
     lowrider: 0.86,
-    donk: 1.52,
+    donk: 1.28,
     slab: 0.92,
     cadillac_coupe_deville: 0.8,
     chevy_tahoe: 1.42,

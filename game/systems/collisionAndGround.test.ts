@@ -279,6 +279,7 @@ test('Space platforms/bridges and all dimension arrival points resolve valid sol
     'island_arctic',
     'island_volcanic',
     'island_jungle',
+    'bee_dimension',
   ] as const;
 
   for (const dim of dims) {

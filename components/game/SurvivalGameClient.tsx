@@ -29,7 +29,9 @@ import {
   Flame,
   Footprints,
   Gauge,
+  Gem,
   Globe2,
+  Hexagon,
   Hammer,
   Hand,
   Heart,
@@ -181,6 +183,8 @@ export function SurvivalGameClient() {
   const slotButtonRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const [screen, setScreen] = useState<'menu' | 'playing'>('menu');
+  const [engineReady, setEngineReady] = useState(false);
+  const launchPendingRef = useRef(false);
   const [currentSlotId, setCurrentSlotId] = useState<string>('slot_1');
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
   const [activeStationStructureId, setActiveStationStructureId] = useState<
@@ -612,8 +616,17 @@ export function SurvivalGameClient() {
     const mountEl = canvasMountRef.current;
     if (!mountEl) return;
 
-    const initialSettings = loadSettings();
     let engine: GameEngine | null = null;
+    let clearErrId = 0;
+    let cancelled = false;
+    setEngineReady(false);
+
+    // Defer the heavy synchronous island/world build by one tick so the boot
+    // screen can paint first. Previously the menu mounted over an unpainted
+    // canvas and the whole page froze while the engine was constructed.
+    const bootId = window.setTimeout(() => {
+    if (cancelled) return;
+    const initialSettings = loadSettings();
     try {
       engine = new GameEngine(mountEl, initialSettings, {
         onHudUpdate: (snapshot) => {
@@ -677,31 +690,44 @@ export function SurvivalGameClient() {
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unable to initialize WebGL 3D renderer.';
-      const rafId = window.requestAnimationFrame(() => setWebglError(msg));
-      return () => window.cancelAnimationFrame(rafId);
+      setWebglError(msg);
+      return;
     }
 
-    engineRef.current = engine;
-    const clearErrId = window.requestAnimationFrame(() => setWebglError(null));
+    if (cancelled) {
+      engine?.dispose();
+      engine = null;
+      return;
+    }
+    if (!engine) return;
+    const bootedEngine = engine;
+    engineRef.current = bootedEngine;
+    clearErrId = window.requestAnimationFrame(() => {
+      setWebglError(null);
+      setEngineReady(true);
+    });
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('autostart') === '1') {
-      engine.startNewWorldState('slot_1', true, {
+      bootedEngine.startNewWorldState('slot_1', true, {
         worldType: 'island',
         worldName: 'Survival Island',
         gameMode: 'survival',
       });
-      engine.ensurePlayerHasGun(true);
-      engine.setMode('playing');
+      bootedEngine.ensurePlayerHasGun(true);
+      bootedEngine.setMode('playing');
       window.requestAnimationFrame(() => {
         setCurrentSlotId('slot_1');
         setActiveModal(null);
         setScreen('playing');
       });
     }
+    }, 32);
 
     return () => {
-      window.cancelAnimationFrame(clearErrId);
+      cancelled = true;
+      window.clearTimeout(bootId);
+      if (clearErrId) window.cancelAnimationFrame(clearErrId);
       engine?.dispose();
       engineRef.current = null;
       mountEl.innerHTML = '';
@@ -925,27 +951,39 @@ export function SurvivalGameClient() {
     flatSurfaceStyle?: FlatSurfaceStyle;
     playerGender?: 'boy' | 'girl';
   }) => {
-    if (!engineRef.current) return;
+    if (!engineRef.current || launchPendingRef.current) return;
     engineRef.current.unlockAudio();
-    const safeMode = resolveAllowedGameMode(opts.worldType, opts.gameMode);
-    const slotId = createNewSaveSlotId(opts.worldType);
-    const playCinematic = opts.worldType === 'island';
-    engineRef.current.startNewWorldState(slotId, playCinematic, {
-      worldType: opts.worldType,
-      worldName: opts.worldName,
-      flatSurfaceStyle: opts.flatSurfaceStyle,
-      gameMode: safeMode,
-      playerGender: opts.playerGender ?? 'boy',
-    });
-    if (opts.worldType === 'island') {
-      engineRef.current.ensurePlayerHasGun(true);
-    }
-    saveGameToSlot(engineRef.current.exportSaveData(slotId));
-    refreshSaves();
-    engineRef.current.setMode('playing');
-    setCurrentSlotId(slotId);
-    setActiveModal(null);
-    setScreen('playing');
+    launchPendingRef.current = true;
+    // Show the boot screen and let it paint before the synchronous world build.
+    setEngineReady(false);
+    window.setTimeout(() => {
+      try {
+        const engine = engineRef.current;
+        if (!engine) return;
+        const safeMode = resolveAllowedGameMode(opts.worldType, opts.gameMode);
+        const slotId = createNewSaveSlotId(opts.worldType);
+        const playCinematic = opts.worldType === 'island';
+        engine.startNewWorldState(slotId, playCinematic, {
+          worldType: opts.worldType,
+          worldName: opts.worldName,
+          flatSurfaceStyle: opts.flatSurfaceStyle,
+          gameMode: safeMode,
+          playerGender: opts.playerGender ?? 'boy',
+        });
+        if (opts.worldType === 'island') {
+          engine.ensurePlayerHasGun(true);
+        }
+        saveGameToSlot(engine.exportSaveData(slotId));
+        refreshSaves();
+        engine.setMode('playing');
+        setCurrentSlotId(slotId);
+        setActiveModal(null);
+        setScreen('playing');
+      } finally {
+        launchPendingRef.current = false;
+        setEngineReady(true);
+      }
+    }, 48);
   };
 
   const handleContinueGame = (slotId?: string) => {
@@ -954,33 +992,45 @@ export function SurvivalGameClient() {
     if (!targetId) return;
     const data = loadGameFromSlot(targetId);
     if (!data) return;
+    if (launchPendingRef.current) return;
     engineRef.current.unlockAudio();
-    engineRef.current.loadFromSave(data);
-    setCurrentSlotId(targetId);
-    if (data.worldType !== 'flat') {
-      engineRef.current.ensurePlayerHasGun(false);
-    }
-    if (data.hudPreferences) {
-      const merged: GameSettings = {
-        ...settings,
-        showCompass: data.hudPreferences.showCompass,
-        compactHud: data.hudPreferences.compactHud,
-      };
-      setSettings(merged);
-      saveSettings(merged);
-      engineRef.current.updateSettings(merged);
-    }
-    engineRef.current.setMode('playing');
-    setActiveModal(null);
-    setScreen('playing');
-    pushToast({
-      id: `loaded_${Date.now()}`,
-      text:
-        data.worldType === 'flat'
-          ? `Loaded ${data.worldName || 'Flat Park World'} · Creative Park Ready`
-          : `Loaded ${data.worldName || `Day ${data.dayCount} Expedition`}`,
-      tone: 'info',
-    });
+    launchPendingRef.current = true;
+    setEngineReady(false);
+    window.setTimeout(() => {
+      try {
+        const engine = engineRef.current;
+        if (!engine) return;
+        engine.loadFromSave(data);
+        setCurrentSlotId(targetId);
+        if (data.worldType !== 'flat') {
+          engine.ensurePlayerHasGun(false);
+        }
+        if (data.hudPreferences) {
+          const merged: GameSettings = {
+            ...settings,
+            showCompass: data.hudPreferences.showCompass,
+            compactHud: data.hudPreferences.compactHud,
+          };
+          setSettings(merged);
+          saveSettings(merged);
+          engine.updateSettings(merged);
+        }
+        engine.setMode('playing');
+        setActiveModal(null);
+        setScreen('playing');
+        pushToast({
+          id: `loaded_${Date.now()}`,
+          text:
+            data.worldType === 'flat'
+              ? `Loaded ${data.worldName || 'Flat Park World'} · Creative Park Ready`
+              : `Loaded ${data.worldName || `Day ${data.dayCount} Expedition`}`,
+          tone: 'info',
+        });
+      } finally {
+        launchPendingRef.current = false;
+        setEngineReady(true);
+      }
+    }, 48);
   };
 
   const handleSaveNow = (slotId?: string) => {
@@ -1381,8 +1431,34 @@ export function SurvivalGameClient() {
         }}
       />
 
+      {/* CINEMATIC BOOT SCREEN — paints before the heavy world build starts */}
+      {!engineReady && !webglError && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center overflow-hidden bg-stone-950">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_115%,rgba(20,83,45,0.55),transparent_58%),radial-gradient(circle_at_50%_-10%,rgba(251,191,36,0.2),transparent_55%)]" />
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-black/70 to-transparent" />
+          <div className="relative z-10 w-full max-w-md px-6 text-center">
+            <div className="mx-auto mb-7 h-12 w-12 animate-spin rounded-full border-2 border-amber-400/25 border-t-amber-300" />
+            <div className="text-[10px] font-semibold uppercase tracking-[0.45em] text-amber-300/90">
+              AdventureForgeGames
+            </div>
+            <h1 className="mt-2 font-display text-3xl font-black tracking-wide text-stone-100 sm:text-4xl">
+              SURVIVAL ISLAND
+            </h1>
+            <p className="mt-1 font-display text-sm tracking-[0.32em] text-emerald-300/90">
+              LOST WORLD
+            </p>
+            <div className="mt-7 h-1.5 w-full overflow-hidden rounded-full bg-stone-800">
+              <div className="h-full w-1/3 animate-pulse rounded-full bg-gradient-to-r from-emerald-500 via-amber-300 to-emerald-500" />
+            </div>
+            <p className="mt-3 text-xs text-stone-400">
+              Shaping terrain · planting forests · lighting the island
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* MAIN MENU / WORLD SELECTION OVERLAY */}
-      {screen === 'menu' && (
+      {screen === 'menu' && engineReady && (
         <WorldSelectionMenu
           latestSave={latestSave}
           saveSlots={saveSlots}
@@ -1707,6 +1783,41 @@ export function SurvivalGameClient() {
                     value={hud.vitals.stamina}
                     barColor="bg-lime-500"
                   />
+
+                  {hud.finalIsland && (
+                    <div className="rounded border border-amber-500/45 bg-amber-950/70 px-2 py-1 text-[10px] space-y-0.5">
+                      <div className="flex items-center justify-between gap-1 font-bold uppercase tracking-wide text-amber-200">
+                        <span className="flex items-center gap-1">
+                          <Hexagon className="w-3 h-3 text-amber-300" />
+                          Apiary
+                        </span>
+                        <span
+                          className="font-mono-tabular text-[9px] text-amber-300/90"
+                          title={`${hud.finalIsland.rideableBees} rideable`}
+                        >
+                          {hud.finalIsland.friendlyBees}/{hud.finalIsland.bees} Bees
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 font-mono-tabular text-stone-200">
+                        <span title="Honey">Honey {hud.finalIsland.honey}</span>
+                        <span title="Honeycomb">Comb {hud.finalIsland.honeycomb}</span>
+                        <span className="flex items-center gap-0.5 text-amber-300" title="Honey Jewels">
+                          <Gem className="w-3 h-3" />
+                          {hud.finalIsland.honeyJewels}
+                        </span>
+                      </div>
+                      {hud.currentDimension === 'bee_dimension' && (
+                        <button
+                          type="button"
+                          onClick={() => engineRef.current?.donateHoneyToQueen()}
+                          className="pointer-events-auto w-full mt-0.5 rounded bg-amber-500/90 hover:bg-amber-400 text-stone-950 font-bold text-[9px] uppercase tracking-wide py-1"
+                          title="Offer 5 Honey to the Hive Queen"
+                        >
+                          Offer 5 Honey · Queen {hud.finalIsland.queenReputation}/3
+                        </button>
+                      )}
+                    </div>
+                  )}
 
                   {/* Optional Collapsible Extra Telemetry */}
                   <div className="pt-0.5 border-t border-stone-800/80">
@@ -2772,6 +2883,19 @@ export function SurvivalGameClient() {
                           >
                             Side-to-Side
                           </button>
+                          {hud.activeVehicle.preset === 'cadillac_coupe_deville' && (
+                            <button
+                              type="button"
+                              onClick={() => engineRef.current?.triggerHydraulicAction('three_wheel')}
+                              className={`min-h-[30px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                                hud.activeVehicle.hydraulicMode === 'three_wheel'
+                                  ? 'bg-emerald-400 border-emerald-100 text-stone-950'
+                                  : 'bg-stone-900 border-emerald-600/60 text-emerald-200'
+                              }`}
+                            >
+                              3-Wheel [H]
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => engineRef.current?.triggerHydraulicAction('coil_bounce')}
@@ -2894,6 +3018,17 @@ export function SurvivalGameClient() {
                             }`}
                           >
                             Lock [X]
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('three_wheel')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicMode === 'three_wheel'
+                                ? 'bg-emerald-400 border-emerald-100 text-stone-950'
+                                : 'bg-stone-900 border-emerald-600/60 text-emerald-200'
+                            }`}
+                          >
+                            3-Wheel [H]
                           </button>
                           <button
                             type="button"

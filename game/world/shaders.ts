@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 export { ensureGeometryHasUv, applySafeStandardMaps } from './textures';
 
-export type ShaderSurfaceMode = 'terrain' | 'foliage' | 'rock' | 'wood';
+export type ShaderSurfaceMode = 'terrain' | 'foliage' | 'grass' | 'palm_frond' | 'rock' | 'wood';
 
 export interface EnvironmentShaderUniforms {
   uShaderTime: { value: number };
@@ -11,6 +11,8 @@ export interface EnvironmentShaderUniforms {
   uShaderSkyColor: { value: THREE.Color };
   uShaderDaylight: { value: number };
   uShaderQuality: { value: number }; // 0 = Low, 1 = Medium, 2 = High
+  /** 0 = dry, 1 = fully rain-soaked surfaces. */
+  uShaderWetness: { value: number };
 }
 
 const SHARED_UNIFORMS: EnvironmentShaderUniforms = {
@@ -20,7 +22,13 @@ const SHARED_UNIFORMS: EnvironmentShaderUniforms = {
   uShaderSkyColor: { value: new THREE.Color(0x7cc4e0) },
   uShaderDaylight: { value: 1.0 },
   uShaderQuality: { value: 1.0 },
+  uShaderWetness: { value: 0 },
 };
+
+/** Globally drives rain wetness across terrain, rock, wood and foliage. */
+export function setShaderWetness(wetness: number): void {
+  SHARED_UNIFORMS.uShaderWetness.value = Math.max(0, Math.min(1, wetness));
+}
 
 export function updateShaderEnvironment(
   elapsed: number,
@@ -55,6 +63,18 @@ export function enhanceSurfaceMaterial<T extends THREE.MeshStandardMaterial>(
 ): T {
   if (enhancedMaterialKeys.has(material)) return material;
   enhancedMaterialKeys.add(material);
+  material.userData.surfaceMode = mode;
+
+  // Grass and palm fronds share the foliage lighting model (soft translucent
+  // leaves) but each needs its own wind mask: blades sway from the root up,
+  // while a frond pivots from the crown so its outer leaflets travel furthest.
+  const isFoliage = mode === 'foliage' || mode === 'grass' || mode === 'palm_frond';
+  const windMaskExpr =
+    mode === 'grass'
+      ? 'clamp(position.y * 0.95 + 0.28, 0.0, 1.55)'
+      : mode === 'palm_frond'
+        ? 'clamp(0.10 + length(position.xz) * 1.15, 0.0, 1.5)'
+        : 'clamp(position.y * 0.45 + 0.55, 0.0, 1.4)';
 
   material.customProgramCacheKey = () => `si_env_${mode}`;
 
@@ -65,6 +85,7 @@ export function enhanceSurfaceMaterial<T extends THREE.MeshStandardMaterial>(
     shader.uniforms.uShaderSkyColor = SHARED_UNIFORMS.uShaderSkyColor;
     shader.uniforms.uShaderDaylight = SHARED_UNIFORMS.uShaderDaylight;
     shader.uniforms.uShaderQuality = SHARED_UNIFORMS.uShaderQuality;
+    shader.uniforms.uShaderWetness = SHARED_UNIFORMS.uShaderWetness;
 
     shader.vertexShader = shader.vertexShader
       .replace(
@@ -87,14 +108,15 @@ vec4 siInstancePos = vec4(transformed, 1.0);
 #endif
 vec4 siWorldPosPre = modelMatrix * siInstancePos;
 ${
-  mode === 'foliage'
+  isFoliage
     ? `if (uShaderQuality >= 0.5) {
   vec3 siWindCamDelta = cameraPosition - siWorldPosPre.xyz;
-  if (dot(siWindCamDelta, siWindCamDelta) < 8100.0) {
-    float windMask = clamp(position.y * 0.45 + 0.55, 0.0, 1.4);
+  if (dot(siWindCamDelta, siWindCamDelta) < (uShaderQuality >= 2.0 ? 16900.0 : 8100.0)) {
+    float windMask = ${windMaskExpr};
     float wavePhase = siWorldPosPre.x * 0.55 + siWorldPosPre.z * 0.45 + uShaderTime * 1.85;
     float gust = sin(wavePhase) * ${windAmplitude.toFixed(4)} + cos(wavePhase * 1.65) * ${(windAmplitude * 0.4).toFixed(4)};
-    transformed.x += gust * windMask;
+    float flutter = sin(wavePhase * 3.35 + position.x * 4.2 + position.z * 2.6) * ${(windAmplitude * (mode === 'grass' ? 0.34 : 0.22)).toFixed(4)};
+    transformed.x += (gust + flutter) * windMask;
     transformed.z += sin(wavePhase * 0.8 + 1.2) * ${(windAmplitude * 0.65).toFixed(4)} * windMask;
   }
 }`
@@ -129,6 +151,7 @@ uniform vec3 uShaderSunColor;
 uniform vec3 uShaderSkyColor;
 uniform float uShaderDaylight;
 uniform float uShaderQuality;
+uniform float uShaderWetness;
 varying vec3 vSiWorldPos;
 varying vec3 vSiWorldNormal;
 varying float vSiLocalY;
@@ -166,6 +189,12 @@ ${
 }`
       : ''
 }
+if (uShaderWetness > 0.001) {
+  float wetUp = clamp(vSiWorldNormal.y * 0.5 + 0.5, 0.0, 1.0);
+  float rainRough = ${isFoliage ? '0.36' : mode === 'wood' ? '0.16' : '0.06'};
+  float rainStrength = uShaderWetness * mix(0.55, 1.0, wetUp) * ${isFoliage ? '0.5' : '0.92'};
+  roughnessFactor = mix(roughnessFactor, rainRough, rainStrength);
+}
 `,
       )
       .replace(
@@ -201,9 +230,16 @@ if (uShaderQuality >= 0.5) {
   float shoreWet = (1.0 - smoothstep(-0.04, 1.35 + swashColor, max(-0.1, vSiWorldPos.y))) * smoothstep(-0.5, 0.02, vSiWorldPos.y);
   diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.42, 0.40, 0.38), clamp(shoreWet, 0.0, 1.0) * 0.84);
   `
-      : mode === 'foliage'
+      : isFoliage
         ? `
   float canopyAo = mix(0.50, 1.18, clamp(siN.y * 0.5 + 0.54, 0.0, 1.0));
+  ${
+    mode === 'grass'
+      ? `// Baked contact shadow grounds each blade clump into the terrain.
+  canopyAo *= mix(0.58, 1.0, smoothstep(0.0, 0.6, vSiLocalY));
+  `
+      : ''
+  }
   if (siNearDetail > 0.5) {
     float leafVar = siNoise(vSiWorldPos.xz * 0.85 + vSiWorldPos.y * 0.6) * 0.62 + siNoise(vSiWorldPos.xz * 2.4 + vSiWorldPos.y * 1.7) * 0.38;
     diffuseColor.rgb *= canopyAo * (0.86 + leafVar * 0.28);
@@ -242,6 +278,10 @@ if (uShaderQuality >= 0.5) {
   `
   }
 }
+if (uShaderWetness > 0.001) {
+  float rainDarken = ${isFoliage ? '0.07' : mode === 'wood' ? '0.16' : '0.24'};
+  diffuseColor.rgb *= 1.0 - uShaderWetness * rainDarken;
+}
 `,
       )
       .replace(
@@ -252,7 +292,7 @@ if (uShaderQuality >= 0.5) {
   float skyFill = clamp(siNEnd.y * 0.5 + 0.5, 0.0, 1.0);
   float fresnelRim = pow(1.0 - max(0.0, dot(siNEnd, siViewEnd)), 3.4);
   gl_FragColor.rgb += uShaderSkyColor * (0.015 + 0.025 * skyFill) * (0.35 + 0.65 * uShaderDaylight);
-  gl_FragColor.rgb += uShaderSunColor * fresnelRim * uShaderDaylight * ${(mode === 'foliage' ? 0.125 : 0.058).toFixed(3)};
+  gl_FragColor.rgb += uShaderSunColor * fresnelRim * uShaderDaylight * ${(isFoliage ? 0.125 : 0.058).toFixed(3)};
   ${
     mode === 'terrain'
       ? `

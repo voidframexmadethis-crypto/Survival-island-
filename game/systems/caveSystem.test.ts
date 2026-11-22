@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   CAVE_COUNT,
+  CAVE_OWNED_AREA_EXCLUSIONS,
   CaveType,
   UI_LAYOUT,
   caveSystem,
   getSafeHudLayoutMetrics,
+  isCaveSiteValid,
 } from './caveSystem';
 
 test('caveSystem generates 5,000 procedural caves including all 5 special cave types within island bounds', () => {
@@ -31,6 +33,28 @@ test('caveSystem generates 5,000 procedural caves including all 5 special cave t
   assert.equal(counts.get('crystal'), 1);
   assert.equal(counts.get('red-dragon'), 1);
   assert.equal(counts.get('regular'), 4995);
+});
+
+test('island caves generate deterministically on wild hillsides, clear of owned areas', () => {
+  const island = { x: 0, z: 0, radius: 600 };
+  const first = caveSystem.generateIslandCaves(island).map((c) => [c.x, c.z]);
+  const second = caveSystem.generateIslandCaves(island).map((c) => [c.x, c.z]);
+  // Loading a save must restore the exact same cave layout, otherwise saved
+  // discovery flags would map onto different caves.
+  assert.deepEqual(second, first);
+
+  for (const cave of caveSystem.caves) {
+    assert.ok(
+      isCaveSiteValid(cave.x, cave.z),
+      `${cave.id} is not on a wild hillside (${cave.x.toFixed(1)}, ${cave.z.toFixed(1)})`,
+    );
+    for (const area of CAVE_OWNED_AREA_EXCLUSIONS) {
+      assert.ok(
+        Math.hypot(cave.x - area.x, cave.z - area.z) >= area.radius,
+        `${cave.id} spawned inside the ${area.label} exclusion zone`,
+      );
+    }
+  }
 });
 
 test('caveSystem.discover and defeatRedDragon properly gate dragon riding until the Red Dragon Boss is defeated', () => {

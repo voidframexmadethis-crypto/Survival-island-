@@ -1,3 +1,12 @@
+import {
+  HILL_HOUSE_POS,
+  HOMESTEAD_POS,
+  OCEAN_LEVEL,
+  VEHICLE_GARAGE_POS,
+  WHEATFIELD_POS,
+  getTerrainSurfaceHeight,
+} from '../world/terrain';
+
 export type CaveType =
   | 'regular'
   | 'civilization'
@@ -35,6 +44,112 @@ export interface CaveSummarySnapshot {
 
 export const CAVE_COUNT = 5000;
 export const CAVE_STREAM_CHUNK_SIZE = 64;
+
+// Caves must be bored into hillsides/mountain flanks, never on flat island ground.
+// The mouth also has to sit on a flank that actually keeps climbing uphill, so a
+// cave can't end up as a hole punched into a flat plateau or a shoreline cliff face.
+export const CAVE_MIN_HILL_SLOPE = 0.18;
+export const CAVE_MIN_SITE_HEIGHT = OCEAN_LEVEL + 2.2;
+export const CAVE_MIN_UPHILL_RISE = 0.8;
+export const CAVE_MAX_SITE_ATTEMPTS = 48;
+
+/** Premade / player-owned places that must stay cave-free. */
+export const CAVE_OWNED_AREA_EXCLUSIONS: readonly {
+  x: number;
+  z: number;
+  radius: number;
+  label: string;
+}[] = [
+  { ...VEHICLE_GARAGE_POS, radius: 60, label: 'vehicle garage' },
+  { ...HILL_HOUSE_POS, radius: 50, label: 'premade hilltop shelter' },
+  { ...HOMESTEAD_POS, radius: 48, label: 'homestead barnyard' },
+  { ...WHEATFIELD_POS, radius: 38, label: 'wheatfield & farm market' },
+];
+
+// The same island must always produce the same cave layout, otherwise loading a
+// save re-rolls every cave position and the saved cave discoveries point at
+// different caves than the ones the player actually explored.
+const CAVE_SITE_SEED = 0xca7e5eed;
+
+function createCaveSiteRng(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function isInsideOwnedArea(x: number, z: number): boolean {
+  for (let i = 0; i < CAVE_OWNED_AREA_EXCLUSIONS.length; i++) {
+    const area = CAVE_OWNED_AREA_EXCLUSIONS[i];
+    const dx = x - area.x;
+    const dz = z - area.z;
+    if (dx * dx + dz * dz < area.radius * area.radius) return true;
+  }
+  return false;
+}
+
+/** True when a cave mouth can sit here: wild hillside, above water, clear of owned land. */
+export function isCaveSiteValid(x: number, z: number): boolean {
+  if (isInsideOwnedArea(x, z)) return false;
+  // Sample the rendered terrain (not just the analytic heightfield) so the
+  // mouth is attached to the hillside the player actually sees and collides with.
+  const height = getTerrainSurfaceHeight(x, z);
+  if (height <= CAVE_MIN_SITE_HEIGHT) return false;
+
+  // Sample the actual uphill direction: the terrain must keep rising into the
+  // hill behind the mouth so the tunnel is buried in a flank, not a mound.
+  const e = 2.5;
+  const gx =
+    (getTerrainSurfaceHeight(x + e, z) - getTerrainSurfaceHeight(x - e, z)) /
+    (2 * e);
+  const gz =
+    (getTerrainSurfaceHeight(x, z + e) - getTerrainSurfaceHeight(x, z - e)) /
+    (2 * e);
+  const grade = Math.hypot(gx, gz);
+  if (grade < CAVE_MIN_HILL_SLOPE) return false;
+  const uphillY = getTerrainSurfaceHeight(
+    x + (gx / grade) * 4,
+    z + (gz / grade) * 4,
+  );
+  return uphillY - height >= CAVE_MIN_UPHILL_RISE;
+}
+
+/**
+ * Picks a cave mouth on a wild hill/mountain flank above the waterline. Flat
+ * ground, shorelines and the premade garage/shelter/farm areas are rejected; a
+ * deterministic fallback scan guarantees the requested cave count.
+ */
+function pickHillsideCaveSite(
+  island: { x: number; z: number },
+  radius: number,
+  rng: () => number,
+): { x: number; z: number } {
+  for (let attempt = 0; attempt < CAVE_MAX_SITE_ATTEMPTS; attempt++) {
+    const angle = rng() * Math.PI * 2;
+    const distance = Math.sqrt(rng()) * radius;
+    const x = island.x + Math.cos(angle) * distance;
+    const z = island.z + Math.sin(angle) * distance;
+    if (isCaveSiteValid(x, z)) return { x, z };
+  }
+
+  // Deterministic outward scan for pathological islands where random sampling
+  // missed every valid flank. Never falls back to flat ground.
+  for (let ring = 1; ring <= 48; ring++) {
+    const ringRadius = (ring / 48) * radius;
+    for (let k = 0; k < 48; k++) {
+      const angle = (k / 48) * Math.PI * 2 + ring * 0.61;
+      const x = island.x + Math.cos(angle) * ringRadius;
+      const z = island.z + Math.sin(angle) * ringRadius;
+      if (isCaveSiteValid(x, z)) return { x, z };
+    }
+  }
+
+  // Last resort only for degenerate terrain; still prefers a land site.
+  return { x: island.x, z: island.z };
+}
 
 const SPECIAL_CAVE_TYPES: readonly CaveType[] = [
   'civilization',
@@ -99,15 +214,15 @@ export const caveSystem = {
     this.islandRadius = safeRadius;
     this.dragonUnlocked = false;
 
+    const rng = createCaveSiteRng(CAVE_SITE_SEED);
     this.caves = Array.from({ length: CAVE_COUNT }, (_, i) => {
-      const angle = Math.random() * Math.PI * 2;
-      const distance = Math.sqrt(Math.random()) * safeRadius;
+      const site = pickHillsideCaveSite(island, safeRadius, rng);
 
       return {
         id: `cave-${i}`,
         type: i < SPECIAL_CAVE_TYPES.length ? SPECIAL_CAVE_TYPES[i] : 'regular',
-        x: island.x + Math.cos(angle) * distance,
-        z: island.z + Math.sin(angle) * distance,
+        x: site.x,
+        z: site.z,
         discovered: false,
         explored: false,
         bossDefeated: false,
@@ -282,8 +397,14 @@ export const caveSystem = {
         const existing = this.getCaveById(sc.id);
         if (existing) {
           existing.type = sc.type;
-          existing.x = sc.x;
-          existing.z = sc.z;
+          // Old saves may predate hillside/owned-area placement: keep saved
+          // coordinates only when they still satisfy the wild-hillside rules.
+          // Otherwise use the freshly generated deterministic site.
+          const savedOnHillside = isCaveSiteValid(sc.x, sc.z);
+          if (savedOnHillside) {
+            existing.x = sc.x;
+            existing.z = sc.z;
+          }
           existing.discovered = Boolean(sc.discovered);
           existing.explored = Boolean(sc.explored);
           existing.bossDefeated = Boolean(sc.bossDefeated);
@@ -379,6 +500,7 @@ export function getSafeHudLayoutMetrics(
 export {
   CAVE_TOTAL,
   CaveBoss,
+  getCaveEntranceYaw,
   IslandCaveSystem,
   LOAD_DISTANCE,
 } from './islandCaveSystem';

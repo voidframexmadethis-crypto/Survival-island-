@@ -107,11 +107,11 @@ export function upgradeGraphics(
   r.shadowMap.enabled = shadowsEnabled;
   r.shadowMap.type = THREE.PCFSoftShadowMap;
   r.toneMapping = THREE.ACESFilmicToneMapping;
-  r.toneMappingExposure = options?.exposure ?? 1.15;
+  r.toneMappingExposure = options?.exposure ?? 0.95;
   r.outputColorSpace = THREE.SRGBColorSpace;
 
   if (!s.getObjectByName('WorldSun')) {
-    const sun = new THREE.DirectionalLight(0xffedcf, 3);
+    const sun = new THREE.DirectionalLight(0xfff4e6, 2.7);
     sun.name = 'WorldSun';
     sun.position.set(100, 150, 80);
     sun.castShadow = shadowsEnabled;
@@ -122,7 +122,7 @@ export function upgradeGraphics(
     s.add(sun);
     s.add(sun.target);
 
-    const hemi = new THREE.HemisphereLight(0xc5e5ff, 0x66513b, 1.5);
+    const hemi = new THREE.HemisphereLight(0x9fc4e8, 0x4a4234, 0.7);
     hemi.name = 'WorldHemisphere';
     s.add(hemi);
   }
@@ -143,7 +143,7 @@ export function enableRealisticIslandLighting(
   // Enable physically correct lighting, ACES Filmic tone mapping, and soft PCF shadows.
   upgradeGraphics(renderer, scene, {
     shadowsEnabled,
-    exposure: options?.exposure ?? 1.15,
+    exposure: options?.exposure ?? 0.95,
     shadowMapSize,
   });
 
@@ -156,11 +156,11 @@ export function enableRealisticIslandLighting(
   const ambient =
     existingHemi instanceof THREE.HemisphereLight
       ? existingHemi
-      : new THREE.HemisphereLight(0xc5e5ff, 0x66513b, 1.5);
+      : new THREE.HemisphereLight(0x9fc4e8, 0x4a4234, 0.7);
   ambient.name = 'WorldHemisphere';
-  ambient.color.setHex(0xc5e5ff);
-  ambient.groundColor.setHex(0x66513b);
-  ambient.intensity = 1.5;
+  ambient.color.setHex(0x9fc4e8);
+  ambient.groundColor.setHex(0x4a4234);
+  ambient.intensity = 0.7;
   if (!existingHemi) {
     scene.add(ambient);
   }
@@ -170,10 +170,10 @@ export function enableRealisticIslandLighting(
   const sunlight =
     existingSun instanceof THREE.DirectionalLight
       ? existingSun
-      : new THREE.DirectionalLight(0xffedcf, 3);
+      : new THREE.DirectionalLight(0xfff4e6, 2.7);
   sunlight.name = 'WorldSun';
-  sunlight.color.setHex(0xffedcf);
-  sunlight.intensity = 3;
+  sunlight.color.setHex(0xfff4e6);
+  sunlight.intensity = 2.7;
   sunlight.position.set(100, 150, 80);
   sunlight.castShadow = shadowsEnabled;
 
@@ -206,7 +206,7 @@ export function enableRealisticIslandLighting(
   const skyFill =
     existingSkyFill instanceof THREE.DirectionalLight
       ? existingSkyFill
-      : new THREE.DirectionalLight(0xa5cfff, 0.45);
+      : new THREE.DirectionalLight(0xa5cfff, 0.32);
   skyFill.name = 'WorldSkyFill';
   skyFill.position.set(-60, 35, -80);
   if (!existingSkyFill) {

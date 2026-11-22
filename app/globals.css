@@ -186,75 +186,176 @@ input[type="range"].daw-mini-slider::-webkit-slider-thumb {
 
 /* Survival Island Carved Stone & Weathered Timber Menu Surfaces */
 .island-stone-slab {
+  position: relative;
   background:
-    radial-gradient(circle at 18% 20%, rgba(120, 113, 108, 0.22), transparent 52%),
-    radial-gradient(circle at 82% 78%, rgba(38, 46, 30, 0.36), transparent 55%),
+    radial-gradient(120% 85% at 16% 0%, rgba(168, 162, 158, 0.2), transparent 56%),
+    radial-gradient(100% 80% at 88% 100%, rgba(34, 54, 26, 0.4), transparent 60%),
     repeating-linear-gradient(
       115deg,
-      rgba(255, 255, 255, 0.025) 0px,
-      rgba(255, 255, 255, 0.025) 2px,
-      rgba(0, 0, 0, 0.14) 2px,
-      rgba(0, 0, 0, 0.14) 7px
+      rgba(255, 255, 255, 0.03) 0px,
+      rgba(255, 255, 255, 0.03) 2px,
+      rgba(0, 0, 0, 0.16) 2px,
+      rgba(0, 0, 0, 0.16) 7px
     ),
-    linear-gradient(172deg, #3c3a37 0%, #262523 48%, #191816 100%);
+    linear-gradient(174deg, #45423e 0%, #2b2a27 44%, #191816 100%);
   box-shadow:
-    inset 0 2px 1px rgba(231, 229, 228, 0.18),
-    inset 0 -3px 6px rgba(0, 0, 0, 0.72),
-    inset 0 0 26px rgba(20, 42, 18, 0.38),
-    0 16px 36px rgba(0, 0, 0, 0.72);
+    inset 0 1px 0 rgba(245, 245, 244, 0.2),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.55),
+    inset 0 -8px 22px rgba(0, 0, 0, 0.42),
+    inset 0 0 40px rgba(20, 42, 18, 0.34),
+    0 2px 0 rgba(255, 255, 255, 0.04),
+    0 24px 48px -18px rgba(0, 0, 0, 0.88);
 }
 
 .island-wood-plank {
+  position: relative;
   background:
     repeating-linear-gradient(
       180deg,
-      rgba(255, 228, 184, 0.045) 0px,
-      rgba(255, 228, 184, 0.045) 2px,
-      rgba(12, 7, 4, 0.22) 2px,
-      rgba(12, 7, 4, 0.22) 6px
+      rgba(255, 228, 184, 0.055) 0px,
+      rgba(255, 228, 184, 0.055) 2px,
+      rgba(12, 7, 4, 0.24) 2px,
+      rgba(12, 7, 4, 0.24) 6px
     ),
-    linear-gradient(90deg, #2d1c11 0%, #4b3120 24%, #573a25 52%, #3f2818 82%, #28180e 100%);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 42%),
+    linear-gradient(90deg, #2a1a0f 0%, #4c3220 24%, #5a3d27 52%, #402a19 82%, #26170d 100%);
   box-shadow:
-    inset 0 1px 0 rgba(254, 215, 170, 0.24),
-    inset 0 -2px 4px rgba(0, 0, 0, 0.78),
-    0 6px 16px rgba(0, 0, 0, 0.62);
+    inset 0 1px 0 rgba(254, 215, 170, 0.32),
+    inset 0 -2px 5px rgba(0, 0, 0, 0.8),
+    0 1px 0 rgba(255, 255, 255, 0.04),
+    0 10px 22px -10px rgba(0, 0, 0, 0.88);
+  transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease;
 }
 
 .island-wood-plank:hover {
   background:
     repeating-linear-gradient(
       180deg,
-      rgba(255, 232, 196, 0.065) 0px,
-      rgba(255, 232, 196, 0.065) 2px,
-      rgba(12, 7, 4, 0.18) 2px,
-      rgba(12, 7, 4, 0.18) 6px
+      rgba(255, 232, 196, 0.075) 0px,
+      rgba(255, 232, 196, 0.075) 2px,
+      rgba(12, 7, 4, 0.2) 2px,
+      rgba(12, 7, 4, 0.2) 6px
     ),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 42%),
     linear-gradient(90deg, #382315 0%, #5b3c27 24%, #6a472e 52%, #4d321e 82%, #311e12 100%);
 }
 
 .island-wood-plank-play {
+  position: relative;
   background:
     repeating-linear-gradient(
       180deg,
-      rgba(187, 247, 208, 0.055) 0px,
-      rgba(187, 247, 208, 0.055) 2px,
-      rgba(8, 22, 11, 0.26) 2px,
-      rgba(8, 22, 11, 0.26) 6px
+      rgba(187, 247, 208, 0.065) 0px,
+      rgba(187, 247, 208, 0.065) 2px,
+      rgba(8, 22, 11, 0.28) 2px,
+      rgba(8, 22, 11, 0.28) 6px
     ),
+    linear-gradient(180deg, rgba(220, 252, 231, 0.1), transparent 44%),
     linear-gradient(90deg, #1b321d 0%, #345229 30%, #4b3a22 68%, #28361c 100%);
   box-shadow:
-    0 0 22px rgba(74, 222, 128, 0.42),
-    inset 0 0 14px rgba(74, 222, 128, 0.24),
-    inset 0 -2px 4px rgba(0, 0, 0, 0.75),
-    0 8px 20px rgba(0, 0, 0, 0.7);
+    0 0 26px rgba(74, 222, 128, 0.4),
+    inset 0 0 18px rgba(74, 222, 128, 0.2),
+    inset 0 1px 0 rgba(220, 252, 231, 0.35),
+    inset 0 -2px 5px rgba(0, 0, 0, 0.72),
+    0 14px 30px -14px rgba(0, 0, 0, 0.9);
+  transition: transform 180ms ease, box-shadow 240ms ease, filter 180ms ease;
 }
 
 .island-wood-plank-play:hover {
   box-shadow:
-    0 0 30px rgba(74, 222, 128, 0.62),
-    inset 0 0 18px rgba(74, 222, 128, 0.34),
-    inset 0 -2px 4px rgba(0, 0, 0, 0.75),
-    0 10px 24px rgba(0, 0, 0, 0.75);
+    0 0 36px rgba(74, 222, 128, 0.58),
+    inset 0 0 22px rgba(74, 222, 128, 0.3),
+    inset 0 1px 0 rgba(220, 252, 231, 0.4),
+    inset 0 -2px 5px rgba(0, 0, 0, 0.72),
+    0 18px 36px -14px rgba(0, 0, 0, 0.92);
+}
+
+/* Premium menu depth: bevel highlight, sky reflection and engraved edge */
+.menu-3d-panel {
+  isolation: isolate;
+  transition: box-shadow 260ms ease, transform 260ms ease;
+}
+.menu-3d-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.085), transparent 24%),
+    radial-gradient(140% 90% at 18% -20%, rgba(190, 242, 100, 0.09), transparent 62%),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.2), transparent 10%, transparent 90%, rgba(0, 0, 0, 0.22));
+  opacity: 0.85;
+}
+.menu-3d-panel::after {
+  content: '';
+  position: absolute;
+  left: 7%;
+  right: 7%;
+  bottom: 0;
+  z-index: -1;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(245, 245, 244, 0.22), transparent);
+}
+
+.menu-cta,
+.menu-primary-cta,
+.menu-top-action,
+.menu-nav-row {
+  box-sizing: border-box;
+  max-width: 100%;
+  transition: transform 180ms ease, box-shadow 220ms ease, filter 180ms ease;
+}
+.menu-cta:active,
+.menu-primary-cta:active,
+.menu-top-action:active,
+.menu-nav-row:active {
+  transform: translateY(1px) scale(0.995);
+}
+
+@media (hover: hover) {
+  .menu-shell .island-wood-plank:hover,
+  .menu-shell .island-wood-plank-play:hover {
+    transform: translateY(-1px);
+  }
+  .menu-shell .menu-primary-cta:hover {
+    transform: translateY(-2px);
+  }
+  .menu-shell .menu-nav-row:hover {
+    transform: translateX(2px);
+  }
+  .menu-shell .menu-top-action:hover {
+    transform: translateY(-1px);
+  }
+}
+
+.menu-shell {
+  box-sizing: border-box;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+.menu-shell *,
+.menu-shell *::before,
+.menu-shell *::after {
+  box-sizing: border-box;
+}
+.menu-shell button:focus-visible,
+.menu-shell input:focus-visible {
+  outline: 2px solid rgba(251, 191, 36, 0.9);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu-shell *,
+  .menu-shell *::before,
+  .menu-shell *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }
 
 .island-stone-title {
