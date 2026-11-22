@@ -177,6 +177,7 @@ function mainlandTabFromId(id?: string): MainlandTab {
   ) {
     return raw;
   }
+  if (raw.startsWith('services')) return 'services';
   return 'district';
 }
 
@@ -4015,6 +4016,11 @@ export function SurvivalGameClient() {
           engine={engineInstance}
           hud={hud}
           initialTab={mainlandTabFromId(activeStationStructureId)}
+          businessId={
+            activeStationStructureId?.startsWith('mainland_services_')
+              ? activeStationStructureId.slice('mainland_services_'.length)
+              : undefined
+          }
           onClose={closeModal}
           onOpenIslandFeature={(modal) => openModal(modal)}
         />

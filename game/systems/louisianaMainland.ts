@@ -18,6 +18,7 @@ export type MainlandTab =
   | 'heat'
   | 'safehouse'
   | 'market'
+  | 'services'
   | 'transit'
   | 'outfitter'
   | 'challenges';
@@ -254,8 +255,8 @@ export const MAINLAND_PROPERTIES: readonly MainlandProperty[] = [
     price: 350,
     dailyIncome: 120,
     stashSlots: 8,
-    x: 120,
-    z: 390,
+    x: 88,
+    z: 1350,
     accent: '#f59e0b',
   },
   {
@@ -267,8 +268,8 @@ export const MAINLAND_PROPERTIES: readonly MainlandProperty[] = [
     price: 550,
     dailyIncome: 165,
     stashSlots: 6,
-    x: 34,
-    z: 390,
+    x: 2,
+    z: 1350,
     accent: '#38bdf8',
   },
   {
@@ -280,8 +281,8 @@ export const MAINLAND_PROPERTIES: readonly MainlandProperty[] = [
     price: 500,
     dailyIncome: 140,
     stashSlots: 10,
-    x: -40,
-    z: 500,
+    x: -72,
+    z: 1460,
     accent: '#22d3ee',
   },
   {
@@ -293,8 +294,8 @@ export const MAINLAND_PROPERTIES: readonly MainlandProperty[] = [
     price: 900,
     dailyIncome: 240,
     stashSlots: 16,
-    x: 120,
-    z: 468,
+    x: 88,
+    z: 1428,
     accent: '#a78bfa',
   },
 ];
@@ -590,13 +591,13 @@ export const MAINLAND_FACTIONS: readonly MainlandFaction[] = [
 
 export const MAINLAND_FAST_TRAVEL: readonly MainlandFastTravelPoint[] = [
   {
-    id: 'crescent_causeway',
-    name: 'Crescent Causeway Gateway',
-    subtitle: 'Coastal causeway · island landing ahead',
+    id: 'crescent_bridge',
+    name: 'Crescent River Bridge',
+    subtitle: 'West bank · East Bank terminal ahead',
     region: 'mainland',
     teleportKey: 'crescent causeway',
-    x: 64,
-    z: 520,
+    x: 140,
+    z: 1430,
     unlockedByDefault: true,
     accent: '#fbbf24',
   },
@@ -606,8 +607,8 @@ export const MAINLAND_FAST_TRAVEL: readonly MainlandFastTravelPoint[] = [
     subtitle: 'Streetcar stop · jobs board',
     region: 'mainland',
     teleportKey: 'crescent city',
-    x: 72,
-    z: 500,
+    x: 40,
+    z: 1460,
     unlockedByDefault: true,
     accent: '#facc15',
   },
@@ -617,8 +618,8 @@ export const MAINLAND_FAST_TRAVEL: readonly MainlandFastTravelPoint[] = [
     subtitle: 'Hydraulics · DONK · SLAB bays',
     region: 'mainland',
     teleportKey: 'bayou customs',
-    x: 34,
-    z: 390,
+    x: 2,
+    z: 1350,
     unlockedByDefault: true,
     accent: '#38bdf8',
   },
@@ -628,8 +629,8 @@ export const MAINLAND_FAST_TRAVEL: readonly MainlandFastTravelPoint[] = [
     subtitle: 'Stash locker · workbench',
     region: 'mainland',
     teleportKey: 'magazine street',
-    x: 120,
-    z: 390,
+    x: 88,
+    z: 1350,
     unlockedByDefault: false,
     accent: '#f59e0b',
   },
@@ -639,8 +640,8 @@ export const MAINLAND_FAST_TRAVEL: readonly MainlandFastTravelPoint[] = [
     subtitle: 'Airboat mooring · smuggler market',
     region: 'mainland',
     teleportKey: 'riverfront dock',
-    x: -40,
-    z: 500,
+    x: -72,
+    z: 1460,
     unlockedByDefault: false,
     accent: '#22d3ee',
   },
@@ -650,19 +651,19 @@ export const MAINLAND_FAST_TRAVEL: readonly MainlandFastTravelPoint[] = [
     subtitle: 'Hidden bunker · high-tier stash',
     region: 'mainland',
     teleportKey: 'vault locker',
-    x: 120,
-    z: 468,
+    x: 88,
+    z: 1428,
     unlockedByDefault: false,
     accent: '#a78bfa',
   },
   {
-    id: 'island_causeway',
-    name: 'Island Causeway Landing',
-    subtitle: 'Bridge foot · ferry pier below',
-    region: 'island',
-    teleportKey: 'island causeway',
-    x: 22,
-    z: 650,
+    id: 'east_bank',
+    name: 'East Bank Terminal',
+    subtitle: 'Police district · music hall district',
+    region: 'mainland',
+    teleportKey: 'east bank',
+    x: 375,
+    z: 1515,
     unlockedByDefault: true,
     accent: '#38bdf8',
   },
@@ -680,9 +681,9 @@ export const MAINLAND_FAST_TRAVEL: readonly MainlandFastTravelPoint[] = [
 ];
 
 export const MAINLAND_LOCATION = {
-  centerX: 72,
-  centerZ: 430,
-  radius: 190,
+  centerX: 40,
+  centerZ: 1400,
+  radius: 520,
 } as const;
 
 const PROPERTY_BY_ID = new Map(MAINLAND_PROPERTIES.map((p) => [p.id, p]));

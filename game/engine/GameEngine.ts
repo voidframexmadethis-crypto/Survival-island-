@@ -87,6 +87,14 @@ import {
   selectFerryCar,
 } from '../systems/ferryPickup';
 import { getCausewaySurfaceY } from '../systems/islandMainlandTransit';
+import {
+  MAINLAND_BUSINESSES,
+  getMainlandBusinessById,
+  getMainlandBusinessFloorY,
+  getMainlandBusinessService,
+  getMainlandBusinessServicePoints,
+  type MainlandServiceEffect,
+} from '../systems/louisianaBusinesses';
 import { sanitizeWorldAndEntities } from '../systems/worldSanitizer';
 import {
   getCosmeticImageTexture,
@@ -308,7 +316,7 @@ import {
   ISLAND_UFO_POS,
   OCEAN_LEVEL,
   PILLAGER_OUTPOST_POS,
-  PLAYABLE_MAX_RADIUS,
+  ISLAND_PLAY_RADIUS,
   PLAYER_SPAWN,
   SATURN_ROCKET_POS,
   SHIPWRECK_POS,
@@ -4740,7 +4748,7 @@ export class GameEngine {
     caveSystem.generateIslandCaves({
       x: 0,
       z: 0,
-      radius: Math.max(580, getPlayableMaxRadius() * 0.85),
+      radius: Math.max(580, ISLAND_PLAY_RADIUS * 0.85),
     });
     this.syncIslandCaveTerrainAndTunnels();
     this.finalIslandFeatures.resetProgress();
@@ -4951,7 +4959,7 @@ export class GameEngine {
       caveSystem.generateIslandCaves({
         x: 0,
         z: 0,
-        radius: save.caveProgress?.islandRadius || Math.max(580, getPlayableMaxRadius() * 0.85),
+        radius: save.caveProgress?.islandRadius || Math.max(580, ISLAND_PLAY_RADIUS * 0.85),
       });
       if (save.caveProgress) {
         caveSystem.hydrateCompactState(save.caveProgress);
@@ -7376,11 +7384,20 @@ export class GameEngine {
         rawTab === 'market' ||
         rawTab === 'transit' ||
         rawTab === 'outfitter' ||
-        rawTab === 'challenges'
-          ? rawTab
+        rawTab === 'challenges' ||
+        rawTab.startsWith('services')
+          ? rawTab.startsWith('services')
+            ? 'services'
+            : rawTab
           : 'district'
       ) as MainlandTab;
       this.openMainland(tab);
+      this.actionCooldown = 0.4;
+      return;
+    }
+    if (near && near.kind === 'mainland_business') {
+      const businessId = near.id.replace(/^mainland_business_/, '');
+      this.callbacks.onOpenStation('mainland', `mainland_services_${businessId}`);
       this.actionCooldown = 0.4;
       return;
     }
@@ -12165,6 +12182,29 @@ export class GameEngine {
           d,
         );
       }
+
+      // Enterable storefront counters. The buildings themselves are physically
+      // walkable; E at the staffed counter/desk opens that business's services.
+      for (let i = 0; i < MAINLAND_BUSINESSES.length; i++) {
+        const business = MAINLAND_BUSINESSES[i];
+        const points = getMainlandBusinessServicePoints(business);
+        for (let p = 0; p < points.length; p++) {
+          const point = points[p];
+          const serviceDist = Math.hypot(point.x - this.playerX, point.z - this.playerZ);
+          if (serviceDist > 4.4) continue;
+          return {
+            id: `mainland_business_${business.id}`,
+            label: `Use ${business.name}`,
+            sublabel: `${business.employeeName} · ${point.label}`,
+            kind: 'mainland_business',
+            actionCategory: 'use',
+            distance: serviceDist,
+            targetX: point.x,
+            targetY: this.playerY + 1.1,
+            targetZ: point.z,
+          };
+        }
+      }
     }
 
     const equippedId = this.getEquippedItemId();
@@ -15427,6 +15467,16 @@ export class GameEngine {
   // ---- Louisiana mainland / Crescent City ---------------------------------
 
   private updateMainland(dt: number): void {
+    const city = this.world?.crescentCity;
+    if (city?.streetcarGroup && city.streetcarRoute.length >= 2) {
+      const a = city.streetcarRoute[0];
+      const b = city.streetcarRoute[1];
+      const span = b.z - a.z;
+      const phase = (this.elapsed * 0.012) % 1;
+      const pingPong = phase < 0.5 ? phase * 2 : 2 - phase * 2;
+      city.streetcarGroup.position.z = a.z + span * pingPong;
+      city.streetcarGroup.rotation.y = phase < 0.5 ? 0 : Math.PI;
+    }
     let speedKmh = 0;
     let driftMps = 0;
     let driving = false;
@@ -16123,6 +16173,113 @@ export class GameEngine {
 
   public openMainland(tab: MainlandTab = 'district'): void {
     this.callbacks.onOpenStation('mainland', `mainland_${tab}`);
+  }
+
+  /** Uses a counter/desk service inside an enterable Crescent City business. */
+  public mainlandUseBusinessService(
+    businessId: string,
+    serviceId: string,
+  ): MainlandActionResult {
+    const business = getMainlandBusinessById(businessId);
+    if (!business) return { ok: false, message: 'That business is not open.' };
+    const service = getMainlandBusinessService(business, serviceId);
+    if (!service) return { ok: false, message: 'That service is unavailable.' };
+    if (service.effect === 'refuel' || service.effect === 'repair') {
+      if (!this.activeVehicleId) {
+        return { ok: false, message: 'Get in a vehicle first.' };
+      }
+    }
+    if (service.effect === 'bank_exchange' && this.getItemCount('emerald') <= 0) {
+      return { ok: false, message: 'You need one emerald to exchange.' };
+    }
+    if (this.coins < service.price) {
+      const result = {
+        ok: false,
+        message: `${service.label} costs ${service.price} coins; you have ${this.coins}.`,
+      };
+      this.mainlandToast(result);
+      return result;
+    }
+
+    if (service.price > 0 && service.effect !== 'bank_exchange') {
+      this.coins -= service.price;
+    }
+    let message = '';
+    const effect: MainlandServiceEffect = service.effect;
+    if (effect === 'meal') {
+      this.vitals.hunger = Math.min(100, this.vitals.hunger + 35);
+      this.vitals.thirst = Math.min(100, this.vitals.thirst + 12);
+      this.vitals.health = Math.min(this.vitals.maxHealth, this.vitals.health + 8);
+      message = `Ate at ${business.name}. Hunger restored.`;
+    } else if (effect === 'hearty_meal') {
+      this.vitals.hunger = Math.min(100, this.vitals.hunger + 60);
+      this.vitals.health = Math.min(this.vitals.maxHealth, this.vitals.health + 15);
+      message = `Finished a po-boy at ${business.name}.`;
+    } else if (effect === 'drink') {
+      this.vitals.thirst = Math.min(100, this.vitals.thirst + 40);
+      this.vitals.stamina = Math.min(100, this.vitals.stamina + 15);
+      message = `Cold drink from ${business.name}.`;
+    } else if (effect === 'coffee') {
+      this.vitals.thirst = Math.min(100, this.vitals.thirst + 18);
+      this.vitals.stamina = Math.min(100, this.vitals.stamina + 35);
+      message = `Coffee and a breather at ${business.name}.`;
+    } else if (effect === 'groceries') {
+      this.addItem('roasted_meat', 2, false);
+      this.addItem('filtered_water_bottle', 2, false);
+      message = `Groceries packed from ${business.name}.`;
+    } else if (effect === 'medical') {
+      this.vitals.health = Math.min(this.vitals.maxHealth, this.vitals.health + 45);
+      message = `Field medical kit used at ${business.name}.`;
+    } else if (effect === 'ammo') {
+      this.addItem('ammo', 30, false);
+      message = `Ammunition box purchased at ${business.name}.`;
+    } else if (effect === 'hotel') {
+      this.vitals.health = this.vitals.maxHealth;
+      this.vitals.stamina = 100;
+      this.vitals.temperatureC = 37;
+      message = `Checked into ${business.name}. Health and stamina restored.`;
+    } else if (effect === 'police_fine') {
+      this.mainland.heat = 0;
+      this.mainland.pursuitActive = false;
+      this.mainland.pursuitSeconds = 0;
+      this.mainland.escapeProgress = 0;
+      this.mainland.pursuitUnits = 0;
+      message = 'Fine paid. City heat cleared and pursuit ended.';
+    } else if (effect === 'refuel') {
+      const vehicle = this.vehicles.find((v) => v.id === this.activeVehicleId);
+      if (!vehicle) return { ok: false, message: 'Get in a vehicle first.' };
+      vehicle.fuel = 100;
+      message = `${vehicle.name} filled at ${business.name}.`;
+    } else if (effect === 'repair') {
+      const vehicle = this.vehicles.find((v) => v.id === this.activeVehicleId);
+      if (!vehicle) return { ok: false, message: 'Get in a vehicle first.' };
+      vehicle.hp = vehicle.maxHp;
+      message = `${vehicle.name} repaired at ${business.name}.`;
+    } else if (effect === 'bank_exchange') {
+      if (!this.removeItem('emerald', 1)) {
+        return { ok: false, message: 'You need one emerald to exchange.' };
+      }
+      this.coins += 160;
+      message = 'Emerald exchanged for 160 coins.';
+    } else if (effect === 'music') {
+      this.vitals.stamina = Math.min(100, this.vitals.stamina + 40);
+      this.vitals.health = Math.min(this.vitals.maxHealth, this.vitals.health + 5);
+      message = `Enjoyed the music at ${business.name}.`;
+    } else if (effect === 'garage_menu') {
+      message = 'Garage catalog opened.';
+    } else if (effect === 'market_menu') {
+      message = 'Market catalog opened.';
+    } else if (effect === 'transit_menu') {
+      message = 'Transit network opened.';
+    } else if (effect === 'outfitter_menu') {
+      message = 'Outfitter catalog opened.';
+    } else {
+      message = 'City network opened.';
+    }
+
+    const result = { ok: true, message: `${business.name}: ${message}` };
+    this.mainlandToast(result);
+    return result;
   }
 
   private updateFinalIslandFeatures(dt: number): void {
@@ -17347,10 +17504,16 @@ export class GameEngine {
         bestY = landmarkFloorY;
       }
 
-      // Raised island-to-mainland causeway deck (also used by the ferry car).
+      // Raised river bridge deck (also used by the ferry car).
       const causewayY = getCausewaySurfaceY(x, z, footY);
       if (causewayY > bestY) {
         bestY = causewayY;
+      }
+
+      // Walkable floors inside enterable Crescent City businesses.
+      const businessFloorY = getMainlandBusinessFloorY(x, z, footY);
+      if (businessFloorY > bestY) {
+        bestY = businessFloorY;
       }
     }
 

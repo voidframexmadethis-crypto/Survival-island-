@@ -79,13 +79,19 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
     if (!ctx) return;
 
     const size = 340;
-    const worldSpan = isFlat ? 640 : 1760; // Flat covers -320..+320, Grand Finale Island covers -880..+880
+    // The survival island still fits in its original -880..+880 map; Louisiana
+    // sits south of it across 300 m of open water. Saved fog cells keep using
+    // the original 1760 m span so old saves stay compatible.
+    const worldSpan = isFlat ? 640 : 4400;
+    const fogSpan = 1760;
     const fogGrid = 32;
     const exploredSet = new Set(hud.exploredCells || []);
     const isExploredWorld = (wx: number, wz: number) => {
       if (isFlat) return true;
-      const gx = Math.floor(((wx + worldSpan / 2) / worldSpan) * fogGrid);
-      const gz = Math.floor(((wz + worldSpan / 2) / worldSpan) * fogGrid);
+      if (Math.hypot(wx - 40, wz - 1400) < 540) return true;
+      if (Math.abs(wx) > fogSpan / 2 || Math.abs(wz) > fogSpan / 2) return false;
+      const gx = Math.floor(((wx + fogSpan / 2) / fogSpan) * fogGrid);
+      const gz = Math.floor(((wz + fogSpan / 2) / fogSpan) * fogGrid);
       return exploredSet.has(gz * fogGrid + gx);
     };
 
@@ -419,8 +425,7 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
       }
       ctx.putImageData(img, 0, 0);
 
-      // Island-to-mainland causeway: drawn above the terrain so the crossing
-      // route is immediately readable even before both endpoints are explored.
+      // Mississippi river bridge across the Louisiana mainland city.
       ctx.strokeStyle = '#f59e0b';
       ctx.lineWidth = 3;
       ctx.lineCap = 'round';
@@ -452,9 +457,9 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
         { label: 'Vehicle Garage', pos: VEHICLE_GARAGE_POS, color: '#38bdf8' },
         { label: 'Ferry Call Box', pos: FERRY_CALL_POS, color: '#38bdf8' },
         { label: 'Island Ferry Pier', pos: FERRY_DOCK_CAR_STOP, color: '#f59e0b' },
-        { label: 'Causeway Gateway', pos: CAUSEWAY_GATEWAY_POINT, color: '#fbbf24' },
-        { label: 'Causeway Island End', pos: CAUSEWAY_ISLAND_POINT, color: '#38bdf8' },
-        { label: 'Crescent City', pos: CRESCENT_CITY_POS, color: '#fbbf24' },
+        { label: 'River Bridge West', pos: CAUSEWAY_GATEWAY_POINT, color: '#fbbf24' },
+        { label: 'East Bank Terminal', pos: CAUSEWAY_ISLAND_POINT, color: '#38bdf8' },
+        { label: 'Crescent City · Louisiana', pos: CRESCENT_CITY_POS, color: '#fbbf24' },
         { label: 'Azure Lake', pos: LAKE_CENTER, color: '#2dd4bf' },
         { label: 'Trial Chambers', pos: TRIAL_CHAMBERS_POS, color: '#ea580c' },
         { label: 'Woodland Mansion', pos: WOODLAND_MANSION_POS, color: '#78350f' },

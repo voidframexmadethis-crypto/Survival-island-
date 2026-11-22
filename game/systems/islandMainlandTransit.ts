@@ -1,39 +1,33 @@
-import { getActiveTerrainWorldType, getTerrainHeight } from '../world/terrain';
+import { getActiveTerrainWorldType } from '../world/terrain';
+import { LOUISIANA_CITY_GROUND_Y } from '../world/louisianaLandmass';
 
 /**
- * Island <-> Louisiana mainland transit corridor.
- *
- * The causeway is both a playable road bridge and the final leg of the ferry
- * worker's drive. Keeping the path and the raised deck heights here means the
- * rendered bridge, player ground support, vehicle support and the ferry route
- * all share one source of truth.
+ * The island stays separated from Louisiana by open water. This module now
+ * owns the Mississippi river bridge inside Crescent City: it links the French
+ * Quarter/west bank to the East Bank terminal and police district.
  */
 
 export const CAUSEWAY_PATH = [
-  // Start south of the terminal kiosk, on the boulevard's outside lane.
-  { x: 64, z: 505 },
-  { x: 64, z: 520 },
-  { x: 50, z: 545 },
-  { x: 35, z: 575 },
-  { x: 22, z: 615 },
-  { x: 22, z: 650 },
-  { x: 22, z: 674 },
+  { x: 140, z: 1430 },
+  { x: 190, z: 1428 },
+  { x: 245, z: 1430 },
+  { x: 300, z: 1432 },
+  { x: 345, z: 1430 },
 ] as const;
 
-export const CAUSEWAY_WIDTH = 10.6;
+export const CAUSEWAY_WIDTH = 12.0;
 export const CAUSEWAY_HALF_WIDTH = CAUSEWAY_WIDTH * 0.5;
-export const CAUSEWAY_DECK_LIFT = 1.15;
-export const CAUSEWAY_RAMP_LENGTH = 18;
-export const CAUSEWAY_GATEWAY_POINT = { x: 64, z: 520 } as const;
-export const CAUSEWAY_ISLAND_POINT = { x: 22, z: 650 } as const;
+export const CAUSEWAY_DECK_LIFT = 0.95;
+export const CAUSEWAY_RAMP_LENGTH = 24;
+export const CAUSEWAY_DECK_Y = LOUISIANA_CITY_GROUND_Y + 1.07;
+export const CAUSEWAY_GATEWAY_POINT = { x: 140, z: 1430 } as const;
+export const CAUSEWAY_ISLAND_POINT = { x: 345, z: 1430 } as const;
 
 export interface CausewaySegment {
   ax: number;
   az: number;
-  ay: number;
   bx: number;
   bz: number;
-  by: number;
   dx: number;
   dz: number;
   length: number;
@@ -58,10 +52,8 @@ function buildSegments(): CausewaySegment[] {
     segments.push({
       ax: a.x,
       az: a.z,
-      ay: getTerrainHeight(a.x, a.z),
       bx: b.x,
       bz: b.z,
-      by: getTerrainHeight(b.x, b.z),
       dx,
       dz,
       length,
@@ -80,14 +72,13 @@ export const CAUSEWAY_LENGTH = CAUSEWAY_SEGMENTS.reduce(
 );
 
 /**
- * Allocation-free bridge deck sample. Returns -9999 when outside the raised
- * deck or when the foot is too far below it (so walking beneath the span does
- * not teleport the player onto it).
+ * Allocation-free bridge deck sample. The deck stays level above the river;
+ * only the two 24 m approach ramps rise from the city shelf.
  */
 export function getCausewaySurfaceY(x: number, z: number, footY = Infinity): number {
   if (getActiveTerrainWorldType() !== 'island') return -9999;
   let bestDistSq = CAUSEWAY_HALF_WIDTH * CAUSEWAY_HALF_WIDTH;
-  let bestY = -9999;
+  let bestDistance = 0;
   let found = false;
 
   for (let i = 0; i < CAUSEWAY_SEGMENTS.length; i++) {
@@ -104,16 +95,16 @@ export function getCausewaySurfaceY(x: number, z: number, footY = Infinity): num
     const distSq = dx * dx + dz * dz;
     if (distSq > bestDistSq) continue;
     bestDistSq = distSq;
-    const along = segment.startDistance + segment.length * t;
-    const edgeDistance = Math.min(along, CAUSEWAY_LENGTH - along);
-    const lift = CAUSEWAY_DECK_LIFT * smoothstep(0, CAUSEWAY_RAMP_LENGTH, edgeDistance);
-    bestY = segment.ay + (segment.by - segment.ay) * t + lift + 0.12;
+    bestDistance = segment.startDistance + segment.length * t;
     found = true;
   }
 
   if (!found) return -9999;
-  if (footY < bestY - 0.8) return -9999;
-  return bestY;
+  const edgeDistance = Math.min(bestDistance, CAUSEWAY_LENGTH - bestDistance);
+  const ramp = smoothstep(0, CAUSEWAY_RAMP_LENGTH, edgeDistance);
+  const surfaceY = LOUISIANA_CITY_GROUND_Y + 0.12 + ramp * CAUSEWAY_DECK_LIFT;
+  if (footY < surfaceY - 0.8) return -9999;
+  return surfaceY;
 }
 
 export interface CausewayFrame {
@@ -124,7 +115,7 @@ export interface CausewayFrame {
   distance: number;
 }
 
-/** Samples a deck frame at a distance along the causeway. Build-time only. */
+/** Samples a deck frame at a distance along the bridge. Build-time only. */
 export function sampleCausewayFrame(distance: number): CausewayFrame {
   const clamped = Math.max(0, Math.min(CAUSEWAY_LENGTH, distance));
   for (let i = 0; i < CAUSEWAY_SEGMENTS.length; i++) {
@@ -137,11 +128,11 @@ export function sampleCausewayFrame(distance: number): CausewayFrame {
       Math.min(1, (clamped - segment.startDistance) / Math.max(0.0001, segment.length)),
     );
     const edgeDistance = Math.min(clamped, CAUSEWAY_LENGTH - clamped);
-    const lift = CAUSEWAY_DECK_LIFT * smoothstep(0, CAUSEWAY_RAMP_LENGTH, edgeDistance);
+    const ramp = smoothstep(0, CAUSEWAY_RAMP_LENGTH, edgeDistance);
     return {
       x: segment.ax + segment.dx * t,
       z: segment.az + segment.dz * t,
-      y: segment.ay + (segment.by - segment.ay) * t + lift + 0.12,
+      y: LOUISIANA_CITY_GROUND_Y + 0.12 + ramp * CAUSEWAY_DECK_LIFT,
       yaw: segment.yaw,
       distance: clamped,
     };
@@ -150,25 +141,23 @@ export function sampleCausewayFrame(distance: number): CausewayFrame {
   return {
     x: last.bx,
     z: last.bz,
-    y: last.by + 0.12,
+    y: CAUSEWAY_DECK_Y,
     yaw: last.yaw,
     distance: CAUSEWAY_LENGTH,
   };
 }
 
-/** The nearest causeway fast-travel point to an arbitrary bridge coordinate. */
 export function isOnCauseway(x: number, z: number): boolean {
   return getCausewaySurfaceY(x, z, Infinity) > -999;
 }
 
-/** Sign text kept here so both the world geometry and UI labels stay aligned. */
 export const CAUSEWAY_SIGNS = {
   island: {
-    title: 'ISLAND LANDING',
-    subtitle: 'Ferry Pier · Causeway South',
+    title: 'EAST BANK',
+    subtitle: 'Terminal · Police District',
   },
   mainland: {
-    title: 'CRESCENT CITY',
-    subtitle: 'French Quarter · Causeway North',
+    title: 'FRENCH QUARTER',
+    subtitle: 'Canal Street · Riverbend',
   },
 } as const;

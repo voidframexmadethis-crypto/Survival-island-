@@ -1,4 +1,11 @@
 import { BiomeId, WorldType } from '../types';
+import {
+  getLouisianaBaseHeight,
+  getLouisianaBiome,
+  getLouisianaWaterAt,
+  isInLouisianaBounds,
+  isLouisianaFreshwater,
+} from './louisianaLandmass';
 
 export const OCEAN_LEVEL = 0.0;
 export const FLAT_GROUND_Y = 1.0;
@@ -80,20 +87,21 @@ export const VIKING_VILLAGE_POS = { x: 560, z: -260 };
 export const RESORT_CORNER_POS = { x: -480, z: 410 };
 export const RUINED_CASTLE_POS = { x: -360, z: -520 };
 
-// Louisiana mainland / Crescent City district on the island's southeast plain.
-// The city sits on a deliberately flat shelf so roads, parking decks, bayou
-// docks and vehicle ramps line up with the rendered terrain without carving.
-export const CRESCENT_CITY_POS = { x: 72, z: 430 };
-export const CRESCENT_CITY_TERMINAL_POS = { x: 72, z: 500 };
-export const CRESCENT_CITY_GARAGE_POS = { x: 34, z: 390 };
-export const CRESCENT_CITY_SAFEHOUSE_POS = { x: 120, z: 390 };
-export const CRESCENT_CITY_DOCKS_POS = { x: -40, z: 500 };
-export const CRESCENT_CITY_VAULT_POS = { x: 120, z: 468 };
-export const CRESCENT_CITY_PARKING_POS = { x: 34, z: 390 };
-export const CRESCENT_CITY_HIGHWAY_POS = { x: 178, z: 430 };
+// Louisiana mainland / Crescent City district: separated from the survival
+// island and generated on its own boot-shaped landmass to the south.
+export const CRESCENT_CITY_POS = { x: 40, z: 1390 };
+export const CRESCENT_CITY_TERMINAL_POS = { x: 40, z: 1460 };
+export const CRESCENT_CITY_GARAGE_POS = { x: 2, z: 1350 };
+export const CRESCENT_CITY_SAFEHOUSE_POS = { x: 88, z: 1350 };
+export const CRESCENT_CITY_DOCKS_POS = { x: -72, z: 1460 };
+export const CRESCENT_CITY_VAULT_POS = { x: 88, z: 1428 };
+export const CRESCENT_CITY_PARKING_POS = { x: 2, z: 1350 };
+export const CRESCENT_CITY_HIGHWAY_POS = { x: 146, z: 1390 };
 
-export const WORLD_RADIUS = 880;
-export const PLAYABLE_MAX_RADIUS = 820;
+export const WORLD_RADIUS = 2400;
+export const ISLAND_PLAY_RADIUS = 820;
+/** Includes the separated Louisiana landmass and the open-water crossing. */
+export const PLAYABLE_MAX_RADIUS = 2380;
 
 let activeTerrainWorldType: WorldType = 'island';
 
@@ -1027,6 +1035,8 @@ export function getRiverSample(
 
 export function getWaterLevelAt(x: number, z: number): number {
   if (activeTerrainWorldType === 'flat') return -999;
+  const louisianaWater = getLouisianaWaterAt(x, z);
+  if (louisianaWater) return louisianaWater.waterY;
   const ldx = x - LAKE_CENTER.x;
   const ldz = z - LAKE_CENTER.z;
   const lakeLim = LAKE_CENTER.radius + 3;
@@ -1048,6 +1058,7 @@ export function getWaterLevelAt(x: number, z: number): number {
 
 export function isFreshwaterAt(x: number, z: number): boolean {
   if (activeTerrainWorldType === 'flat') return false;
+  if (isLouisianaFreshwater(x, z)) return true;
   const h = getTerrainHeight(x, z);
   const ldx = x - LAKE_CENTER.x;
   const ldz = z - LAKE_CENTER.z;
@@ -1196,6 +1207,8 @@ const BIOME_ANCHOR_CIRCLES: readonly [number, number, number, BiomeId][] = [
 
 export function getBaseTerrainHeight(x: number, z: number): number {
   if (activeTerrainWorldType === 'flat') return FLAT_GROUND_Y;
+  const louisianaHeight = getLouisianaBaseHeight(x, z);
+  if (louisianaHeight !== null) return louisianaHeight;
   const r = Math.hypot(x, z);
   const angle = Math.atan2(z, x);
 
@@ -1580,6 +1593,16 @@ export function getBiomeAt(x: number, z: number): BiomeId {
   if (cdx * cdx + cdz * cdz < 121) return 'cave';
 
   const h = getTerrainHeight(x, z);
+  if (isInLouisianaBounds(x, z)) {
+    if (h < OCEAN_LEVEL - 0.15) return 'warm_ocean';
+    const louisianaBiome = getLouisianaBiome(x, z);
+    if (louisianaBiome === 'lake') return 'lake';
+    if (louisianaBiome === 'river') return 'river';
+    if (louisianaBiome === 'swamp') return 'swamp';
+    if (louisianaBiome === 'beach') return 'beach';
+    if (louisianaBiome === 'forest') return 'forest';
+    return 'plains';
+  }
   const ldx = x - LAKE_CENTER.x;
   const ldz = z - LAKE_CENTER.z;
   const lakeLim = LAKE_CENTER.radius + 2.5;

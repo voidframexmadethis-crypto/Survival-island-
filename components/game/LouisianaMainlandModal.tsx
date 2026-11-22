@@ -10,6 +10,7 @@ import {
   Coins,
   Crosshair,
   Flame,
+  Fuel,
   Gauge,
   Hammer,
   Home,
@@ -25,6 +26,8 @@ import {
   Sparkles,
   Store,
   Trophy,
+  UtensilsCrossed,
+  BedDouble,
   Users,
   Waves,
   Wrench,
@@ -49,11 +52,18 @@ import {
   type MainlandTab,
   type MainlandUpgradeId,
 } from '@/game/systems/louisianaMainland';
+import {
+  MAINLAND_BUSINESSES,
+  getMainlandBusinessById,
+  type MainlandBusiness,
+  type MainlandBusinessKind,
+} from '@/game/systems/louisianaBusinesses';
 
 interface LouisianaMainlandModalProps {
   engine: GameEngine;
   hud: HUDStateSnapshot;
   initialTab?: MainlandTab;
+  businessId?: string;
   onClose: () => void;
   onOpenIslandFeature?: (
     modal: 'crafting' | 'vehicles' | 'multiverse' | 'missions' | 'map' | 'ecosystem_journal' | 'dragon_sanctuary',
@@ -66,12 +76,28 @@ const TABS: { id: MainlandTab; label: string; icon: React.ReactNode }[] = [
   { id: 'heat', label: 'Heat', icon: <Flame className="w-4 h-4" /> },
   { id: 'safehouse', label: 'Safehouse', icon: <Home className="w-4 h-4" /> },
   { id: 'market', label: 'Market', icon: <Store className="w-4 h-4" /> },
+  { id: 'services', label: 'Businesses', icon: <UtensilsCrossed className="w-4 h-4" /> },
   { id: 'transit', label: 'Transit', icon: <Ship className="w-4 h-4" /> },
   { id: 'outfitter', label: 'Outfitter', icon: <Shirt className="w-4 h-4" /> },
   { id: 'challenges', label: 'Legacy', icon: <Trophy className="w-4 h-4" /> },
 ];
 
 const HEAT_COLORS = ['#22c55e', '#facc15', '#f59e0b', '#f97316', '#ef4444', '#dc2626'];
+
+function businessIcon(kind: MainlandBusinessKind): React.ReactNode {
+  if (kind === 'restaurant' || kind === 'cafe') return <UtensilsCrossed className="h-4 w-4" />;
+  if (kind === 'hotel') return <BedDouble className="h-4 w-4" />;
+  if (kind === 'gas' || kind === 'auto_parts') return <Fuel className="h-4 w-4" />;
+  if (kind === 'police') return <Shield className="h-4 w-4" />;
+  if (kind === 'music' || kind === 'bar') return <Music className="h-4 w-4" />;
+  if (kind === 'bank') return <CircleDollarSign className="h-4 w-4" />;
+  if (kind === 'outfitter') return <Shirt className="h-4 w-4" />;
+  return <Store className="h-4 w-4" />;
+}
+
+function businessKindLabel(kind: MainlandBusinessKind): string {
+  return kind.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
 
 function HeatStars({ heat, large = false }: { heat: number; large?: boolean }) {
   return (
@@ -114,6 +140,7 @@ export function LouisianaMainlandModal({
   engine,
   hud,
   initialTab = 'district',
+  businessId,
   onClose,
   onOpenIslandFeature,
 }: LouisianaMainlandModalProps) {
@@ -151,6 +178,8 @@ export function LouisianaMainlandModal({
     [onClose, run],
   );
 
+  const focusedBusiness = businessId ? getMainlandBusinessById(businessId) : undefined;
+  const visibleBusinesses = focusedBusiness ? [focusedBusiness] : MAINLAND_BUSINESSES;
   const activeVehicleLabel = hud.activeVehicle?.name ?? 'No vehicle selected';
   const ownedProperties = new Set(snapshot.ownedProperties);
   const ownedUpgrades = new Set(snapshot.ownedUpgrades);
@@ -685,6 +714,103 @@ export function LouisianaMainlandModal({
             </div>
           )}
 
+          {tab === 'services' && (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-amber-500/30 bg-amber-950/15 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm font-bold text-amber-100">
+                      <Store className="w-4 h-4" />
+                      Enterable Crescent City Businesses
+                    </div>
+                    <div className="mt-1 max-w-2xl text-[11px] text-stone-400">
+                      Walk through the doorway, approach the staffed counter and press E.
+                      Restaurants, stores, the hotel, police station, bank, gas station,
+                      music hall and auto-parts shop all have real interiors on the Louisiana landmass.
+                    </div>
+                  </div>
+                  <div className="rounded-full border border-amber-500/30 bg-stone-950/70 px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-amber-300">
+                    {MAINLAND_BUSINESSES.length} businesses
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-2">
+                {visibleBusinesses.map((business) => (
+                  <div
+                    key={business.id}
+                    className="rounded-xl border border-stone-800 bg-stone-950/70 p-4"
+                    style={{ borderColor: `${business.accent}45` }}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 text-sm font-bold text-stone-100">
+                          <span
+                            className="flex h-7 w-7 items-center justify-center rounded-full"
+                            style={{ backgroundColor: `${business.accent}22`, color: business.accent }}
+                          >
+                            {businessIcon(business.kind)}
+                          </span>
+                          <span className="truncate">{business.name}</span>
+                        </div>
+                        <div className="mt-1 text-[10px] uppercase tracking-wide text-stone-500">
+                          {businessKindLabel(business.kind)} · {business.subtitle}
+                        </div>
+                      </div>
+                      <span className="shrink-0 rounded-full border border-stone-700 bg-stone-900 px-2 py-0.5 text-[9px] text-stone-400">
+                        {Math.round(business.x)}, {Math.round(business.z)}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-[11px] leading-relaxed text-stone-400">
+                      {business.description}
+                    </p>
+                    <div className="mt-2 text-[10px] text-stone-500">
+                      {business.employeeName} · {business.employeeTitle}
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {business.services.map((service) => {
+                        const isMenu =
+                          service.effect === 'garage_menu' ||
+                          service.effect === 'market_menu' ||
+                          service.effect === 'transit_menu' ||
+                          service.effect === 'outfitter_menu' ||
+                          service.effect === 'network';
+                        return (
+                          <div
+                            key={service.id}
+                            className="flex items-center justify-between gap-3 rounded-lg border border-stone-800 bg-stone-900/60 px-3 py-2"
+                          >
+                            <div className="min-w-0">
+                              <div className="text-[11px] font-bold text-stone-200">{service.label}</div>
+                              <div className="text-[10px] text-stone-500">{service.description}</div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (isMenu) {
+                                  if (service.effect === 'garage_menu') setTab('garage');
+                                  else if (service.effect === 'market_menu') setTab('market');
+                                  else if (service.effect === 'transit_menu') setTab('transit');
+                                  else if (service.effect === 'outfitter_menu') setTab('outfitter');
+                                  else setTab('district');
+                                  return;
+                                }
+                                run(engine.mainlandUseBusinessService(business.id, service.id));
+                              }}
+                              className="shrink-0 rounded-lg bg-stone-800 px-3 py-1.5 text-[11px] font-bold text-stone-100 transition hover:bg-amber-500 hover:text-stone-950"
+                            >
+                              {service.price > 0 ? `${service.price} coins` : 'Open'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {tab === 'transit' && (
             <div className="space-y-4">
               <div className="rounded-xl border border-cyan-500/30 bg-cyan-950/20 p-4">
@@ -695,7 +821,7 @@ export function LouisianaMainlandModal({
                       Island Ferry & Riverfront Airboat
                     </div>
                     <div className="mt-1 text-[11px] text-stone-400">
-                      To reach the mainland, call the blue ferry box beside the Hilltop House garage. The worker walks up, takes one of your parked cars and drives you to the island pier. The airboat handles the return crossing. You can also drive or walk the coastal causeway between Island Landing and the Crescent Causeway Gateway.
+                      The island and Louisiana are separated by open water. Call the blue ferry box beside the Hilltop House garage; the worker walks up, takes one of your parked cars and drives you to the island pier. The ferry handles the crossing, and the airboat returns you to the Crescent City riverfront.
                     </div>
                   </div>
                   <div className="flex gap-2">
@@ -727,27 +853,27 @@ export function LouisianaMainlandModal({
                   <div>
                     <div className="flex items-center gap-2 text-sm font-bold text-amber-100">
                       <Navigation className="w-4 h-4" />
-                      Coastal Causeway · Island ↔ Mainland
+                      Mississippi River Bridge · West Bank ↔ East Bank
                     </div>
                     <div className="mt-1 max-w-2xl text-[11px] text-stone-400">
-                      A lit, drivable plate-girder causeway runs from the Crescent Causeway Gateway (64, 520) to Island Landing (22, 650). Follow the overhead signs and glowing waypoint arches. The same crossing carries your survival meters, inventory, weapons, outfit, active car, fuel, cargo, time and weather in both directions.
+                      Inside Louisiana, a lit plate-girder bridge crosses the Mississippi from the French Quarter (140, 1430) to the East Bank terminal (345, 1430). It is fully drivable and walkable; the island itself is reached only by ferry across open water.
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
-                      onClick={() => runAndClose(engine.mainlandFastTravel('island_causeway'))}
+                      onClick={() => runAndClose(engine.mainlandFastTravel('east_bank'))}
                       className="rounded-lg border border-sky-500/40 bg-sky-950/60 px-3 py-2 text-xs font-bold text-sky-200 hover:bg-sky-500 hover:text-stone-950 transition"
                     >
-                      Island causeway end
+                      East Bank terminal
                     </button>
                     {playerOnMainland && (
                       <button
                         type="button"
-                        onClick={() => runAndClose(engine.mainlandFastTravel('crescent_causeway'))}
+                        onClick={() => runAndClose(engine.mainlandFastTravel('crescent_bridge'))}
                         className="rounded-lg border border-amber-500/40 bg-stone-950/70 px-3 py-2 text-xs font-bold text-amber-200 hover:bg-amber-500 hover:text-stone-950 transition"
                       >
-                        Crescent gateway
+                        French Quarter bridge
                       </button>
                     )}
                   </div>

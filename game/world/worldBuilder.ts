@@ -4,8 +4,14 @@ import { ResourceNodeKind, ResourceNodeState } from '../types';
 import { FrameBudgetQueue } from '../systems/frameBudgetQueue';
 import { WorldChunk, WorldChunkManager } from './worldChunkSystem';
 import { buildLouisianaMainland, type LouisianaMainlandHandles } from './louisianaMainland';
+import { buildLouisianaBusinesses } from './louisianaBusinesses';
 import { buildIslandFerryDock } from './ferryDock';
 import { buildTransitCauseway } from './transitCauseway';
+import {
+  buildLouisianaWaterMeshes,
+  createLouisianaTerrainGeometries,
+} from './louisianaLandmass';
+import { buildLouisianaWilds } from './louisianaWilds';
 import {
   CaveTerrainOpening,
   filterTerrainIndexForCaveOpenings,
@@ -640,6 +646,37 @@ export function buildIslandWorld(
   lakeMesh.userData.noShadowCast = true;
   lakeMesh.userData.preserveEnvMapIntensity = true;
   overworldGroup.add(lakeMesh);
+
+  // Separated Louisiana landmass: its own terrain chunks, waterways and wild
+  // cypress marsh. Every piece is a normal overworld child, so the existing
+  // sector/landmark culler sleeps it while the player is on the survival island.
+  const louisianaChunkGeometries = createLouisianaTerrainGeometries();
+  for (let i = 0; i < louisianaChunkGeometries.length; i++) {
+    const chunk = new THREE.Mesh(louisianaChunkGeometries[i], terrainMat);
+    chunk.receiveShadow = true;
+    chunk.castShadow = false;
+    chunk.userData.noShadowCast = true;
+    chunk.userData.preserveShadowFlags = true;
+    overworldGroup.add(chunk);
+  }
+  const louisianaWaterMat = new THREE.MeshStandardMaterial({
+    color: 0x1d6f72,
+    normalMap: waterNormalTex,
+    normalScale: new THREE.Vector2(0.32, 0.32),
+    roughness: 0.15,
+    metalness: 0.22,
+    transparent: true,
+    opacity: 0.87,
+  });
+  louisianaWaterMat.userData = { sharedMaterial: true };
+  const louisianaWaterMeshes = buildLouisianaWaterMeshes(louisianaWaterMat);
+  for (let i = 0; i < louisianaWaterMeshes.length; i++) {
+    overworldGroup.add(louisianaWaterMeshes[i]);
+  }
+  const louisianaWildGroups = buildLouisianaWilds();
+  for (let i = 0; i < louisianaWildGroups.length; i++) {
+    overworldGroup.add(louisianaWildGroups[i]);
+  }
 
   // Build animated freshwater ribbons + whitewater rapids streaks for ALL flowing rivers across the island
   const rapidsFoamMat = new THREE.MeshBasicMaterial({
@@ -6830,7 +6867,19 @@ gl_Position = projectionMatrix * mvPosition;`,
   for (let i = 0; i < crescentCity.colliders.length; i++) {
     colliders.push(crescentCity.colliders[i]);
   }
-  staticMergeTargets.push({ group: crescentCity.group });
+  staticMergeTargets.push({
+    group: crescentCity.group,
+    protectedObjs: [crescentCity.streetcarGroup],
+  });
+
+  // Enterable storefronts, restaurants, hotel, police station, bank and more.
+  // They live in their own cullable group so the island never pays their draw cost.
+  const louisianaBusinesses = buildLouisianaBusinesses();
+  overworldGroup.add(louisianaBusinesses.group);
+  for (let i = 0; i < louisianaBusinesses.colliders.length; i++) {
+    colliders.push(louisianaBusinesses.colliders[i]);
+  }
+  staticMergeTargets.push({ group: louisianaBusinesses.group });
 
   // Island ferry pier and the shelter-side call box. The pier is the scripted
   // destination for the worker's car run; the call box starts the pickup.
@@ -6842,9 +6891,8 @@ gl_Position = projectionMatrix * mvPosition;`,
   staticMergeTargets.push({ group: islandFerry.dockGroup });
   staticMergeTargets.push({ group: islandFerry.callGroup });
 
-  // Drivable island-to-mainland causeway. It is also the final leg of the
-  // ferry worker's route, so the bridge deck and vehicle ground support stay
-  // locked to the same sampled surface.
+  // Drivable Mississippi river bridge inside Crescent City. The survival
+  // island stays across open water and is reached by ferry only.
   const transitCauseway = buildTransitCauseway();
   overworldGroup.add(transitCauseway.group);
   staticMergeTargets.push({ group: transitCauseway.group });
@@ -6922,8 +6970,10 @@ gl_Position = projectionMatrix * mvPosition;`,
     tmpCullBox.getCenter(tmpCullCenter);
     tmpCullBox.getSize(tmpCullSize);
     const radius = Math.hypot(tmpCullSize.x * 0.5, tmpCullSize.z * 0.5);
-    // Only distance-cull localized biome landmarks & feature clusters (skip world-spanning shells)
-    if (radius > 0.1 && radius < 260) {
+    // Only distance-cull localized biome landmarks & feature clusters (skip world-spanning shells).
+    // The separated Crescent City is one large static district, so it needs the
+    // larger localized limit; it still sleeps completely when the island is far away.
+    if (radius > 0.1 && radius < 640) {
       cullableLandmarks.push({
         obj: child,
         cx: tmpCullCenter.x,

@@ -43,13 +43,13 @@ function createSignTexture(title: string, subtitle: string): THREE.CanvasTexture
 }
 
 /**
- * Elevated coastal causeway from the Crescent City terminal to the island
- * ferry pier. The deck is intentionally low and wide: a drivable plate-girder
- * bridge, not a decorative landmark the player can fall through.
+ * Mississippi river bridge inside separated Louisiana. It links the French
+ * Quarter/west bank to the East Bank terminal. The island is never connected
+ * by road; open water is preserved between the two destinations.
  */
 export function buildTransitCauseway(): TransitCausewayHandles {
   const group = new THREE.Group();
-  group.name = 'island-mainland-causeway';
+  group.name = 'mississippi-river-bridge';
 
   const deckMat = new THREE.MeshStandardMaterial({
     color: 0x3c464b,

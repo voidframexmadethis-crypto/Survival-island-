@@ -16,8 +16,9 @@ import * as THREE from "three";
 const _dayDeepColor = new THREE.Color("#042744");
 const _dayShallowColor = new THREE.Color("#0fc4ad");
 
-const SHORE_TEX_SIZE = 256;
-const SHORE_WORLD_HALF = 960;
+const SHORE_TEX_SIZE = 512;
+// Includes the separated Louisiana landmass and the open-water gap.
+const SHORE_WORLD_HALF = 2400;
 
 export class RealisticOcean {
   private water: THREE.Mesh;

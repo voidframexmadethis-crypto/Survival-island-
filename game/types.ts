@@ -1318,7 +1318,8 @@ export interface NearbyInteraction {
     | 'dragon_egg'
     | 'dragon_sanctuary'
     | 'ferry_pickup'
-    | 'mainland_terminal';
+    | 'mainland_terminal'
+    | 'mainland_business';
   actionCategory?:
     | 'chop'
     | 'mine'

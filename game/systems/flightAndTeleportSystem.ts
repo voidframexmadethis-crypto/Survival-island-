@@ -1,4 +1,8 @@
 import {
+  CAUSEWAY_GATEWAY_POINT,
+  CAUSEWAY_ISLAND_POINT,
+} from './islandMainlandTransit';
+import {
   AUTUMN_GROVE_POS,
   BADLANDS_MINESHAFT_POS,
   BURIED_TREASURE_POS,
@@ -100,9 +104,12 @@ export const ISLAND_TELEPORT_DESTINATIONS: Record<string, TeleportDestination> =
   'resort corner': { x: RESORT_CORNER_POS.x, y: 6, z: RESORT_CORNER_POS.z },
   'crescent city': { x: CRESCENT_CITY_POS.x, z: CRESCENT_CITY_POS.z },
   'crescent terminal': { x: CRESCENT_CITY_TERMINAL_POS.x, z: CRESCENT_CITY_TERMINAL_POS.z },
-  'crescent causeway': { x: 64, z: 520 },
-  'island causeway': { x: 22, z: 650 },
-  'coastal causeway': { x: 43, z: 582 },
+  'crescent causeway': { x: CAUSEWAY_GATEWAY_POINT.x, z: CAUSEWAY_GATEWAY_POINT.z },
+  'crescent bridge': { x: CAUSEWAY_GATEWAY_POINT.x, z: CAUSEWAY_GATEWAY_POINT.z },
+  'river bridge': { x: CAUSEWAY_GATEWAY_POINT.x, z: CAUSEWAY_GATEWAY_POINT.z },
+  'island causeway': { x: 0, z: 680 },
+  'coastal causeway': { x: CAUSEWAY_GATEWAY_POINT.x, z: CAUSEWAY_GATEWAY_POINT.z },
+  'east bank': { x: CAUSEWAY_ISLAND_POINT.x, z: CAUSEWAY_ISLAND_POINT.z },
   'bayou customs': { x: CRESCENT_CITY_GARAGE_POS.x, z: CRESCENT_CITY_GARAGE_POS.z },
   'magazine street': { x: CRESCENT_CITY_SAFEHOUSE_POS.x, z: CRESCENT_CITY_SAFEHOUSE_POS.z },
   'riverfront dock': { x: CRESCENT_CITY_DOCKS_POS.x, z: CRESCENT_CITY_DOCKS_POS.z },

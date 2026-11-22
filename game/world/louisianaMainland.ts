@@ -1,14 +1,29 @@
 import * as THREE from 'three';
-import {
-  CRESCENT_CITY_DOCKS_POS,
-  CRESCENT_CITY_GARAGE_POS,
-  CRESCENT_CITY_PARKING_POS,
-  CRESCENT_CITY_POS,
-  CRESCENT_CITY_SAFEHOUSE_POS,
-  CRESCENT_CITY_TERMINAL_POS,
-  CRESCENT_CITY_VAULT_POS,
-  getTerrainHeight,
-} from './terrain';
+import { getTerrainHeight } from './terrain';
+import { LOUISIANA_CITY_OFFSET } from './louisianaLandmass';
+import { MAINLAND_BUSINESSES } from '../systems/louisianaBusinesses';
+
+// The original city layout coordinates are used locally, then the whole
+// district is translated onto the separated Louisiana landmass. Keeping the
+// local layout avoids duplicating the shipped street/business geometry while
+// ensuring every world-facing coordinate lands on the mainland.
+const CITY = {
+  pos: { x: 72, z: 430 },
+  terminal: { x: 72, z: 500 },
+  garage: { x: 34, z: 390 },
+  safehouse: { x: 120, z: 390 },
+  docks: { x: -40, z: 500 },
+  vault: { x: 120, z: 468 },
+  parking: { x: 34, z: 390 },
+} as const;
+
+function toWorldX(localX: number): number {
+  return localX + LOUISIANA_CITY_OFFSET.x;
+}
+
+function toWorldZ(localZ: number): number {
+  return localZ + LOUISIANA_CITY_OFFSET.z;
+}
 
 /**
  * Louisiana mainland district geometry.
@@ -27,6 +42,8 @@ export interface LouisianaMainlandHandles {
   vaultPos: THREE.Vector3;
   parkingPos: THREE.Vector3;
   stuntRamps: { x: number; z: number; width: number; depth: number; label: string }[];
+  streetcarGroup: THREE.Group;
+  streetcarRoute: { x: number; z: number }[];
   colliders: { x: number; z: number; radius: number }[];
 }
 
@@ -75,7 +92,11 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
   const group = new THREE.Group();
   group.name = 'crescent-city-mainland';
 
-  const baseY = getTerrainHeight(CRESCENT_CITY_POS.x, CRESCENT_CITY_POS.z) + 0.03;
+  // The city group is translated onto the Louisiana shelf, so every local
+  // ground sample must use its world coordinate, not the old island location.
+  const groundYAtLocal = (lx: number, lz: number): number =>
+    getTerrainHeight(lx + LOUISIANA_CITY_OFFSET.x, lz + LOUISIANA_CITY_OFFSET.z);
+  const baseY = groundYAtLocal(CITY.pos.x, CITY.pos.z) + 0.03;
   const colliders: { x: number; z: number; radius: number }[] = [];
   const rand = seededRandom(91427);
 
@@ -211,7 +232,6 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
   };
 
   // ---- Roads, sidewalks and streetcar tracks --------------------------------
-  const asphalt = addInstanced(boxGeo, asphaltMat, 12, false);
   const roadSpecs = [
     // Main north-south boulevard from the landing to the city center.
     { x: 72, z: 430, w: 15, d: 152, ry: 0 },
@@ -236,7 +256,23 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
     { x: 72, z: 500, w: 26, d: 12, ry: 0 },
     // Highway elevated deck.
     { x: 179, z: 430, w: 52, d: 9, ry: 0, elev: 5.9 },
+    // Expanded mainland grid: north, south, west and east-bank neighborhoods.
+    { x: 55, z: 300, w: 420, d: 10, ry: 0 },
+    { x: 55, z: 560, w: 440, d: 11, ry: 0 },
+    { x: -250, z: 430, w: 11, d: 290, ry: 0 },
+    { x: -140, z: 430, w: 10, d: 290, ry: 0 },
+    { x: 250, z: 430, w: 11, d: 290, ry: 0 },
+    { x: 370, z: 430, w: 10, d: 300, ry: 0 },
+    { x: -300, z: 300, w: 120, d: 9, ry: 0 },
+    { x: -300, z: 560, w: 150, d: 10, ry: 0 },
+    { x: 250, z: 300, w: 210, d: 9, ry: 0 },
+    { x: 285, z: 560, w: 220, d: 10, ry: 0 },
+    { x: 318, z: 440, w: 66, d: 9, ry: 0 },
+    { x: 318, z: 510, w: 66, d: 9, ry: 0 },
+    { x: 300, z: 390, w: 120, d: 8, ry: -0.18 },
+    { x: 300, z: 590, w: 120, d: 8, ry: 0.16 },
   ];
+  const asphalt = addInstanced(boxGeo, asphaltMat, roadSpecs.length, false);
   for (let i = 0; i < asphalt.count; i++) {
     const spec = roadSpecs[i];
     dummy.position.set(spec.x, baseY + (spec.elev ?? 0.06), spec.z);
@@ -260,7 +296,6 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
   }
 
   // Sidewalk strips.
-  const sidewalk = addInstanced(boxGeo, concreteMat, 8, false);
   const sidewalks = [
     { x: 72, z: 430, w: 1.6, d: 150, dx: -8.3 },
     { x: 72, z: 430, w: 1.6, d: 150, dx: 8.3 },
@@ -270,7 +305,14 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
     { x: 32, z: 430, w: 1.2, d: 96, dx: 5.1 },
     { x: 120, z: 430, w: 1.2, d: 96, dx: -5.1 },
     { x: 120, z: 430, w: 1.2, d: 96, dx: 5.1 },
+    { x: 55, z: 294, w: 414, d: 1.4 },
+    { x: 55, z: 566, w: 434, d: 1.4 },
+    { x: -256, z: 430, w: 1.4, d: 284, dx: 0 },
+    { x: -146, z: 430, w: 1.4, d: 284, dx: 0 },
+    { x: 244, z: 430, w: 1.4, d: 284, dx: 0 },
+    { x: 364, z: 430, w: 1.4, d: 294, dx: 0 },
   ];
+  const sidewalk = addInstanced(boxGeo, concreteMat, sidewalks.length, false);
   for (let i = 0; i < sidewalk.count; i++) {
     const s = sidewalks[i];
     dummy.position.set(s.x + (s.dx ?? 0), baseY + 0.1, s.z + (s.dz ?? 0));
@@ -291,17 +333,47 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
 
   // ---- City blocks ---------------------------------------------------------
   const reserved = [
-    { x: CRESCENT_CITY_GARAGE_POS.x, z: CRESCENT_CITY_GARAGE_POS.z, radius: 19 },
-    { x: CRESCENT_CITY_SAFEHOUSE_POS.x, z: CRESCENT_CITY_SAFEHOUSE_POS.z, radius: 14 },
-    { x: CRESCENT_CITY_VAULT_POS.x, z: CRESCENT_CITY_VAULT_POS.z, radius: 12 },
-    { x: CRESCENT_CITY_TERMINAL_POS.x, z: CRESCENT_CITY_TERMINAL_POS.z, radius: 12 },
+    { x: CITY.garage.x, z: CITY.garage.z, radius: 19 },
+    { x: CITY.safehouse.x, z: CITY.safehouse.z, radius: 14 },
+    { x: CITY.vault.x, z: CITY.vault.z, radius: 12 },
+    { x: CITY.terminal.x, z: CITY.terminal.z, radius: 12 },
+    ...MAINLAND_BUSINESSES.map((business) => ({
+      x: business.x - LOUISIANA_CITY_OFFSET.x,
+      z: business.z - LOUISIANA_CITY_OFFSET.z,
+      radius: Math.max(business.w, business.d) * 0.72,
+    })),
   ];
   const blocks = [
     { x0: 8, x1: 60, z0: 352, z1: 408 },
     { x0: 84, x1: 158, z0: 352, z1: 408 },
     { x0: 8, x1: 60, z0: 452, z1: 502 },
     { x0: 84, x1: 158, z0: 452, z1: 502 },
+    // Northwest and west-bank blocks.
+    { x0: -340, x1: -260, z0: 308, z1: 388 },
+    { x0: -340, x1: -260, z0: 462, z1: 542 },
+    { x0: -225, x1: -155, z0: 308, z1: 388 },
+    { x0: -225, x1: -155, z0: 462, z1: 542 },
+    // North boulevard blocks.
+    { x0: -85, x1: 0, z0: 312, z1: 372 },
+    { x0: 185, x1: 238, z0: 312, z1: 372 },
+    // East-bank blocks across the Mississippi.
+    { x0: 272, x1: 352, z0: 312, z1: 388 },
+    { x0: 272, x1: 352, z0: 552, z1: 620 },
+    { x0: 388, x1: 452, z0: 312, z1: 388 },
+    { x0: 388, x1: 452, z0: 552, z1: 620 },
+    // Riverbend / south blocks.
+    { x0: -92, x1: 12, z0: 578, z1: 616 },
+    { x0: 200, x1: 285, z0: 578, z1: 616 },
   ];
+  const onRoad = (x: number, z: number): boolean => {
+    for (let r = 0; r < roadSpecs.length; r++) {
+      const road = roadSpecs[r];
+      if (Math.abs(x - road.x) < road.w * 0.5 + 4.2 && Math.abs(z - road.z) < road.d * 0.5 + 4.2) {
+        return true;
+      }
+    }
+    return false;
+  };
   const lots: BuildingLot[] = [];
   for (let b = 0; b < blocks.length; b++) {
     const block = blocks[b];
@@ -311,8 +383,8 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
         const d = 9 + rand() * 7;
         const x = block.x0 + 9 + col * ((block.x1 - block.x0 - 18) / 2) + (rand() - 0.5) * 2;
         const z = block.z0 + 8 + row * ((block.z1 - block.z0 - 16) / 1.35) + (rand() - 0.5) * 2;
-        // Keep the two side streets and the central boulevard clear.
-        if (Math.abs(x - 32) < 8.5 || Math.abs(x - 120) < 8.5) continue;
+        // Keep the boulevards, side streets and every business footprint clear.
+        if (onRoad(x, z)) continue;
         if (intersectsReserved(x, z, w, d, reserved)) continue;
         const floors = 2 + Math.floor(rand() * 4);
         const h = 5.4 + floors * 3.1 + rand() * 2;
@@ -340,7 +412,7 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
   const tempColor = new THREE.Color();
   for (let i = 0; i < lots.length; i++) {
     const lot = lots[i];
-    const y = getTerrainHeight(lot.x, lot.z);
+    const y = groundYAtLocal(lot.x, lot.z);
     dummy.position.set(lot.x, y + lot.h * 0.5, lot.z);
     dummy.rotation.set(0, 0, 0);
     dummy.scale.set(lot.w, lot.h, lot.d);
@@ -434,7 +506,7 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
   );
   for (let i = 0; i < treeSpots.length; i++) {
     const spot = treeSpots[i];
-    const y = getTerrainHeight(spot.x, spot.z);
+    const y = groundYAtLocal(spot.x, spot.z);
     dummy.position.set(spot.x, y + 1.6 * spot.scale, spot.z);
     dummy.rotation.set(0, rand() * Math.PI, 0);
     dummy.scale.set(spot.scale, spot.scale, spot.scale);
@@ -468,7 +540,7 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
   );
   for (let i = 0; i < lampSpots.length; i++) {
     const spot = lampSpots[i];
-    const y = getTerrainHeight(spot.x, spot.z);
+    const y = groundYAtLocal(spot.x, spot.z);
     dummy.position.set(spot.x, y + 2.2, spot.z);
     dummy.rotation.set(0, 0, 0);
     dummy.scale.set(1, 1, 1);
@@ -485,9 +557,9 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
 
   // ---- Multi-story parking garage with rooftop stunt ramp -----------------
   const garage = new THREE.Group();
-  garage.position.set(CRESCENT_CITY_GARAGE_POS.x, 0, CRESCENT_CITY_GARAGE_POS.z);
+  garage.position.set(CITY.garage.x, 0, CITY.garage.z);
   group.add(garage);
-  const garageY = getTerrainHeight(CRESCENT_CITY_GARAGE_POS.x, CRESCENT_CITY_GARAGE_POS.z);
+  const garageY = groundYAtLocal(CITY.garage.x, CITY.garage.z);
   addBox(concreteMat, 30, 0.7, 25, 0, garageY + 0.35, 0, 0, 0, 0, garage);
   addBox(concreteMat, 29, 0.45, 24, 0, garageY + 3.8, 0, 0, 0, 0, garage);
   addBox(concreteMat, 29, 0.45, 24, 0, garageY + 7.2, 0, 0, 0, 0, garage);
@@ -521,8 +593,8 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
   for (let ix = -1; ix <= 1; ix += 2) {
     for (let iz = -1; iz <= 1; iz += 2) {
       colliders.push({
-        x: CRESCENT_CITY_GARAGE_POS.x + ix * 10.2,
-        z: CRESCENT_CITY_GARAGE_POS.z + iz * 11.6,
+        x: CITY.garage.x + ix * 10.2,
+        z: CITY.garage.z + iz * 11.6,
         radius: 1.3,
       });
     }
@@ -530,9 +602,9 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
 
   // ---- Safehouse, workbench & stash locker --------------------------------
   const safehouse = new THREE.Group();
-  safehouse.position.set(CRESCENT_CITY_SAFEHOUSE_POS.x, 0, CRESCENT_CITY_SAFEHOUSE_POS.z);
+  safehouse.position.set(CITY.safehouse.x, 0, CITY.safehouse.z);
   group.add(safehouse);
-  const safeY = getTerrainHeight(CRESCENT_CITY_SAFEHOUSE_POS.x, CRESCENT_CITY_SAFEHOUSE_POS.z);
+  const safeY = groundYAtLocal(CITY.safehouse.x, CITY.safehouse.z);
   addBox(new THREE.MeshStandardMaterial({ color: 0xe3cfa9, roughness: 0.86 }), 12, 6.4, 10, 0, safeY + 3.2, 0, 0, 0, 0, safehouse);
   addBox(roofMat, 13.4, 0.5, 11.4, 0, safeY + 6.55, 0, 0, 0, 0, safehouse);
   addBox(woodMat, 12.2, 0.35, 3.4, 0, safeY + 0.5, 6.3, 0, 0, 0, safehouse);
@@ -546,14 +618,14 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
   const safeLight = new THREE.PointLight(0xffb347, 2.0, 22, 1.8);
   safeLight.position.set(0, safeY + 3.0, 7.4);
   safehouse.add(safeLight);
-  colliders.push({ x: CRESCENT_CITY_SAFEHOUSE_POS.x + 4.6, z: CRESCENT_CITY_SAFEHOUSE_POS.z - 1.2, radius: 2.2 });
-  colliders.push({ x: CRESCENT_CITY_SAFEHOUSE_POS.x - 4.6, z: CRESCENT_CITY_SAFEHOUSE_POS.z - 1.2, radius: 2.2 });
+  colliders.push({ x: CITY.safehouse.x + 4.6, z: CITY.safehouse.z - 1.2, radius: 2.2 });
+  colliders.push({ x: CITY.safehouse.x - 4.6, z: CITY.safehouse.z - 1.2, radius: 2.2 });
 
   // ---- Flood tunnel bunker / vault entrance -------------------------------
   const vault = new THREE.Group();
-  vault.position.set(CRESCENT_CITY_VAULT_POS.x, 0, CRESCENT_CITY_VAULT_POS.z);
+  vault.position.set(CITY.vault.x, 0, CITY.vault.z);
   group.add(vault);
-  const vaultY = getTerrainHeight(CRESCENT_CITY_VAULT_POS.x, CRESCENT_CITY_VAULT_POS.z);
+  const vaultY = groundYAtLocal(CITY.vault.x, CITY.vault.z);
   addBox(concreteDarkMat, 15, 4.6, 12, 0, vaultY + 2.3, 0, 0, 0, 0, vault);
   addBox(concreteMat, 16, 0.5, 13, 0, vaultY + 4.7, 0, 0, 0, 0, vault);
   addBox(new THREE.MeshBasicMaterial({ color: 0x0b0f12 }), 4.2, 3.2, 0.35, 0, vaultY + 1.7, 6.1, 0, 0, 0, vault);
@@ -567,12 +639,12 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
   const vaultLight = new THREE.PointLight(0x22d3ee, 1.7, 20, 1.8);
   vaultLight.position.set(0, vaultY + 2.4, 6.8);
   vault.add(vaultLight);
-  colliders.push({ x: CRESCENT_CITY_VAULT_POS.x - 6.2, z: CRESCENT_CITY_VAULT_POS.z, radius: 2.4 });
-  colliders.push({ x: CRESCENT_CITY_VAULT_POS.x + 6.2, z: CRESCENT_CITY_VAULT_POS.z, radius: 2.4 });
+  colliders.push({ x: CITY.vault.x - 6.2, z: CITY.vault.z, radius: 2.4 });
+  colliders.push({ x: CITY.vault.x + 6.2, z: CITY.vault.z, radius: 2.4 });
 
   // ---- Bayou, cypress swamp & wooden docks --------------------------------
-  const bayouX = CRESCENT_CITY_DOCKS_POS.x;
-  const bayouZ = CRESCENT_CITY_DOCKS_POS.z;
+  const bayouX = CITY.docks.x;
+  const bayouZ = CITY.docks.z;
   const bayouY = baseY + 0.18;
   const bayouWater = new THREE.Mesh(planeGeo, waterMat);
   bayouWater.rotation.x = -Math.PI * 0.5;
@@ -590,7 +662,7 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
     const dist = 10 + rand() * 30;
     const cx = bayouX + Math.cos(angle) * dist;
     const cz = bayouZ + Math.sin(angle) * dist * 0.62;
-    const cy = getTerrainHeight(cx, cz);
+    const cy = groundYAtLocal(cx, cz);
     addBox(trunkMat, 0.55, 5.8 + rand() * 2, 0.55, cx, cy + 3.0, cz, 0, 0, 0);
     const canopy = new THREE.Mesh(new THREE.ConeGeometry(2.0 + rand(), 4.4, 7), cypressMat);
     canopy.position.set(cx, cy + 6.1, cz);
@@ -637,11 +709,104 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
   reeds.instanceMatrix.needsUpdate = true;
   reeds.computeBoundingSphere();
 
+  // ---- Street traffic & the moving Canal Street car ----------------------
+  const trafficCount = 28;
+  const trafficBodies = addInstanced(boxGeo, new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.58,
+    metalness: 0.18,
+  }), trafficCount);
+  const trafficCabins = addInstanced(boxGeo, new THREE.MeshStandardMaterial({
+    color: 0xb7d2df,
+    roughness: 0.2,
+    metalness: 0.35,
+  }), trafficCount, false);
+  const trafficColors = [0x1d4ed8, 0xb91c1c, 0xf8fafc, 0x334155, 0xd97706, 0x0f766e, 0x7c3aed];
+  const trafficColor = new THREE.Color();
+  for (let i = 0; i < trafficCount; i++) {
+    const lane = i % 4;
+    const x = lane === 0 ? 63 : lane === 1 ? 80 : lane === 2 ? -147 : 247;
+    const z = 310 + (i / trafficCount) * 295 + (lane % 2) * 3.2;
+    const yaw = lane < 2 ? 0 : Math.PI * 0.5;
+    const y = groundYAtLocal(x, z);
+    dummy.position.set(x, y + 0.42, z);
+    dummy.rotation.set(0, yaw, 0);
+    dummy.scale.set(lane < 2 ? 1.8 : 3.9, 0.62, lane < 2 ? 3.9 : 1.8);
+    dummy.updateMatrix();
+    trafficBodies.setMatrixAt(i, dummy.matrix);
+    trafficColor.setHex(trafficColors[i % trafficColors.length]);
+    trafficBodies.setColorAt(i, trafficColor);
+    dummy.position.set(x, y + 0.92, z);
+    dummy.scale.set(lane < 2 ? 1.45 : 2.6, 0.52, lane < 2 ? 2.1 : 1.25);
+    dummy.updateMatrix();
+    trafficCabins.setMatrixAt(i, dummy.matrix);
+  }
+  trafficBodies.instanceMatrix.needsUpdate = true;
+  trafficBodies.instanceColor!.needsUpdate = true;
+  trafficBodies.computeBoundingSphere();
+  trafficCabins.instanceMatrix.needsUpdate = true;
+  trafficCabins.computeBoundingSphere();
+
+  const streetcarGroup = new THREE.Group();
+  streetcarGroup.name = 'canal-street-streetcar';
+  streetcarGroup.userData.dynamic = true;
+  streetcarGroup.position.set(72, baseY + 0.3, 340);
+  group.add(streetcarGroup);
+  addBox(
+    new THREE.MeshStandardMaterial({ color: 0x14532d, roughness: 0.5, metalness: 0.2 }),
+    2.4,
+    2.7,
+    9.2,
+    0,
+    1.55,
+    0,
+    0,
+    0,
+    0,
+    streetcarGroup,
+  );
+  addBox(
+    new THREE.MeshStandardMaterial({ color: 0xfef3c7, emissive: 0xffd166, emissiveIntensity: 0.5, roughness: 0.4 }),
+    2.12,
+    0.85,
+    7.3,
+    0,
+    2.35,
+    0,
+    0,
+    0,
+    0,
+    streetcarGroup,
+  );
+  addBox(ironMat, 2.0, 0.22, 8.4, 0, 0.5, 0, 0, 0, 0, streetcarGroup);
+  for (let side = -1; side <= 1; side += 2) {
+    addBox(
+      new THREE.MeshStandardMaterial({ color: 0x0b0f12, roughness: 0.75 }),
+      0.18,
+      1.2,
+      1.2,
+      side * 1.22,
+      1.65,
+      2.7,
+      0,
+      0,
+      0,
+      streetcarGroup,
+    );
+  }
+  const streetcarRoute = [
+    { x: 72, z: 320 },
+    { x: 72, z: 580 },
+  ];
+  streetcarGroup.traverse((object) => {
+    object.userData.noStaticMerge = true;
+  });
+
   // ---- Crescent City Terminal & streetcar shelter ------------------------
   const terminal = new THREE.Group();
-  terminal.position.set(CRESCENT_CITY_TERMINAL_POS.x, 0, CRESCENT_CITY_TERMINAL_POS.z);
+  terminal.position.set(CITY.terminal.x, 0, CITY.terminal.z);
   group.add(terminal);
-  const terminalY = getTerrainHeight(CRESCENT_CITY_TERMINAL_POS.x, CRESCENT_CITY_TERMINAL_POS.z);
+  const terminalY = groundYAtLocal(CITY.terminal.x, CITY.terminal.z);
   addBox(concreteMat, 6.0, 0.35, 4.2, 0, terminalY + 0.18, 0, 0, 0, 0, terminal);
   addBox(ironMat, 0.22, 4.4, 0.22, -4.8, terminalY + 2.2, 1.2, 0, 0, 0, terminal);
   addBox(ironMat, 0.22, 4.4, 0.22, 4.8, terminalY + 2.2, 1.2, 0, 0, 0, terminal);
@@ -655,8 +820,8 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
   const terminalLight = new THREE.PointLight(0xffb347, 2.2, 26, 1.7);
   terminalLight.position.set(0, terminalY + 2.6, 1.5);
   terminal.add(terminalLight);
-  colliders.push({ x: CRESCENT_CITY_TERMINAL_POS.x - 3.6, z: CRESCENT_CITY_TERMINAL_POS.z - 0.8, radius: 1.0 });
-  colliders.push({ x: CRESCENT_CITY_TERMINAL_POS.x + 3.6, z: CRESCENT_CITY_TERMINAL_POS.z - 0.8, radius: 1.0 });
+  colliders.push({ x: CITY.terminal.x - 3.6, z: CITY.terminal.z - 0.8, radius: 1.0 });
+  colliders.push({ x: CITY.terminal.x + 3.6, z: CITY.terminal.z - 0.8, radius: 1.0 });
 
   // ---- Ground-level stunt ramps ------------------------------------------
   const stuntRamps = [
@@ -664,7 +829,7 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
     { x: 151, z: 430, width: 7, depth: 10, label: 'Highway ramp jump' },
   ];
   for (const ramp of stuntRamps) {
-    const y = getTerrainHeight(ramp.x, ramp.z);
+    const y = groundYAtLocal(ramp.x, ramp.z);
     addBox(
       new THREE.MeshStandardMaterial({
         color: 0x3b3f43,
@@ -691,7 +856,7 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
     { x: 158, z: 430, color: 0x38bdf8 },
   ];
   for (const spot of signSpots) {
-    const y = getTerrainHeight(spot.x, spot.z);
+    const y = groundYAtLocal(spot.x, spot.z);
     const mat = new THREE.MeshStandardMaterial({
       color: spot.color,
       emissive: spot.color,
@@ -702,42 +867,60 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
     addBox(mat, 3.2, 1.1, 0.18, spot.x, y + 3.4, spot.z);
   }
 
-  // Static matrix updates: the whole district is frozen after build.
+  // Translate the whole shipped district onto the separated Louisiana shelf.
+  group.position.set(LOUISIANA_CITY_OFFSET.x, 0, LOUISIANA_CITY_OFFSET.z);
   group.updateMatrixWorld(true);
   group.traverse((obj) => {
+    if (obj === streetcarGroup) {
+      obj.matrixAutoUpdate = true;
+      return;
+    }
     obj.updateMatrix();
     obj.matrixAutoUpdate = false;
   });
 
+  const worldColliders = colliders.map((collider) => ({
+    x: toWorldX(collider.x),
+    z: toWorldZ(collider.z),
+    radius: collider.radius,
+  }));
+  const worldStuntRamps = stuntRamps.map((ramp) => ({
+    ...ramp,
+    x: toWorldX(ramp.x),
+    z: toWorldZ(ramp.z),
+  }));
+
   return {
     group,
     terminalPos: new THREE.Vector3(
-      CRESCENT_CITY_TERMINAL_POS.x,
+      toWorldX(CITY.terminal.x),
       terminalY + 1.4,
-      CRESCENT_CITY_TERMINAL_POS.z,
+      toWorldZ(CITY.terminal.z),
     ),
     garagePos: new THREE.Vector3(
-      CRESCENT_CITY_GARAGE_POS.x,
+      toWorldX(CITY.garage.x),
       garageY + 1.2,
-      CRESCENT_CITY_GARAGE_POS.z + 8,
+      toWorldZ(CITY.garage.z + 8),
     ),
     safehousePos: new THREE.Vector3(
-      CRESCENT_CITY_SAFEHOUSE_POS.x,
+      toWorldX(CITY.safehouse.x),
       safeY + 1.2,
-      CRESCENT_CITY_SAFEHOUSE_POS.z + 6.5,
+      toWorldZ(CITY.safehouse.z + 6.5),
     ),
-    docksPos: new THREE.Vector3(bayouX - 4, baseY + 1.1, bayouZ),
+    docksPos: new THREE.Vector3(toWorldX(bayouX - 4), baseY + 1.1, toWorldZ(bayouZ)),
     vaultPos: new THREE.Vector3(
-      CRESCENT_CITY_VAULT_POS.x,
+      toWorldX(CITY.vault.x),
       vaultY + 1.2,
-      CRESCENT_CITY_VAULT_POS.z + 6.8,
+      toWorldZ(CITY.vault.z + 6.8),
     ),
     parkingPos: new THREE.Vector3(
-      CRESCENT_CITY_PARKING_POS.x,
+      toWorldX(CITY.parking.x),
       garageY + 1.2,
-      CRESCENT_CITY_PARKING_POS.z + 8,
+      toWorldZ(CITY.parking.z + 8),
     ),
-    stuntRamps,
-    colliders,
+    stuntRamps: worldStuntRamps,
+    streetcarGroup,
+    streetcarRoute,
+    colliders: worldColliders,
   };
 }
