@@ -7457,6 +7457,16 @@ export class GameEngine {
         this.toggleHillHouseDoor();
         break;
       }
+      case 'house_bowling': {
+        const rolled = this.world?.bowlingAlley?.rollBall() ?? false;
+        if (rolled) {
+          this.sound.playKineticGearTick();
+          this.toast('Released the 7 kg ball down the 60-foot lane!', 'info');
+        } else {
+          this.toast('Wait for the pins to finish falling and reset.', 'warning');
+        }
+        break;
+      }
     }
   }
 
@@ -7858,7 +7868,8 @@ export class GameEngine {
         near.kind === 'house_music_studio' ||
         near.kind === 'house_studio_drums' ||
         near.kind === 'house_studio_booth' ||
-        near.kind === 'house_door')
+        near.kind === 'house_door' ||
+        near.kind === 'house_bowling')
     ) {
       const st = this.getActiveStations().find((s) => s.id === near.id);
       if (st) {
@@ -8380,7 +8391,8 @@ export class GameEngine {
         near.kind === 'house_shower' ||
         near.kind === 'house_music_studio' ||
         near.kind === 'house_studio_drums' ||
-        near.kind === 'house_studio_booth'
+        near.kind === 'house_studio_booth' ||
+        near.kind === 'house_bowling'
       ) {
         const st = this.getActiveStations().find((s) => s.id === near.id);
         if (st) {
@@ -17278,6 +17290,17 @@ export class GameEngine {
     if (this.worldType === 'island' && this.currentDimension === 'overworld') {
       this.waterpark?.update(dt, this.playerX, this.playerY, this.playerZ);
       this.handleWaterparkEvents();
+      this.world?.bowlingAlley?.update(dt);
+      for (const event of this.world?.bowlingAlley?.consumeEvents() ?? []) {
+        this.cameraShakeTimer = Math.max(this.cameraShakeTimer, 0.14);
+        this.sound.playKineticGearTick();
+        this.toast(
+          event.strike
+            ? `STRIKE! All 10 pins down · ${Math.round(event.ballMph)} mph bowling ball`
+            : `${event.knocked} pin${event.knocked === 1 ? '' : 's'} down · ${event.standing} standing`,
+          event.strike ? 'discovery' : 'info',
+        );
+      }
     }
 
     // 1. Always move the player smoothly first before world & biome updates

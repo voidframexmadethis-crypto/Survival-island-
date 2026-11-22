@@ -4488,7 +4488,8 @@ export interface HouseStationTarget {
     | 'house_music_studio'
     | 'house_studio_drums'
     | 'house_studio_booth'
-    | 'house_door';
+    | 'house_door'
+    | 'house_bowling';
   label: string;
   sublabel: string;
   x: number;
@@ -4529,6 +4530,7 @@ export function createHilltopHouse(
   woodTex: THREE.CanvasTexture,
 ): HilltopHouseResult {
   const group = new THREE.Group();
+  group.name = 'hilltop-house';
   group.position.set(worldX, worldY, worldZ);
 
   const colliders: { x: number; z: number; radius: number }[] = [];
@@ -4634,8 +4636,17 @@ export function createHilltopHouse(
     }
   };
 
-  // West Back Wall
-  addWall(-5.2, 0, 0.24, 8.6);
+  // West Back Wall, with a real 2 m garden door aligned under the upstairs
+  // landing so the exterior stair can serve both floors.
+  addWall(-5.2, -1.45, 0.24, 5.5);
+  addWall(-5.2, 3.75, 0.24, 0.9);
+  const westGardenHeader = new THREE.Mesh(
+    new THREE.BoxGeometry(0.28, 0.72, 2.05),
+    trimMat,
+  );
+  westGardenHeader.position.set(-5.2, 2.78, 2.3);
+  westGardenHeader.userData.isHouseWall = true;
+  group.add(westGardenHeader);
   // North Wall
   addWall(-0.5, -4.2, 9.6, 0.24);
   // South Partition Wall (Z = +4.2) separating main rooms from Dedicated Music Studio Wing,
@@ -4751,19 +4762,19 @@ export function createHilltopHouse(
     addLocalCollider(6.1, pz, 0.28);
   });
 
-  // 3. Pitched Timber Shingle Roof + Warm Ceiling Lights
+  // 3. Taller Pitched Timber Shingle Roof over the new second storey.
   const roofPitchL = new THREE.Mesh(roundedBox(12.2, 0.22, 5.4, 0.1, 3), roofMat);
-  roofPitchL.position.set(0.3, 4.05, -2.2);
+  roofPitchL.position.set(0.3, 7.06, -2.2);
   roofPitchL.rotation.x = 0.38;
   roofPitchL.castShadow = true;
   roofPitchL.userData.isHouseWall = true;
   const roofPitchR = new THREE.Mesh(roundedBox(12.2, 0.22, 5.4, 0.1, 3), roofMat);
-  roofPitchR.position.set(0.3, 4.05, 2.2);
+  roofPitchR.position.set(0.3, 7.06, 2.2);
   roofPitchR.rotation.x = -0.38;
   roofPitchR.castShadow = true;
   roofPitchR.userData.isHouseWall = true;
   const ridgeBeam = new THREE.Mesh(roundedBox(12.3, 0.25, 0.35, 0.1, 2), trimMat);
-  ridgeBeam.position.set(0.3, 4.95, 0);
+  ridgeBeam.position.set(0.3, 7.96, 0);
   group.add(roofPitchL, roofPitchR, ridgeBeam);
 
   // Warm Interior Ceiling Lights
@@ -5274,6 +5285,206 @@ export function createHilltopHouse(
   group.add(micBase, micPole, micBoom, micBody, micCapsule, popFilter);
   addLocalCollider(-2.85, 7.05, 0.28);
 
+  // ==========================================================
+  // 9. SECOND-STOREY OWNER'S SUITE: EXTRA BEDROOM & FULL BATH
+  // ==========================================================
+  const upperFloorY = 3.55;
+  const upperWallH = 2.9;
+
+  const upperFloor = new THREE.Mesh(
+    roundedBox(9.6, 0.14, 8.6, 0.045, 2),
+    floorMat,
+  );
+  upperFloor.name = 'hilltop-upper-floor';
+  upperFloor.position.set(-0.5, upperFloorY - 0.07, 0);
+  upperFloor.receiveShadow = true;
+  group.add(upperFloor);
+
+  const upperDeck = new THREE.Mesh(
+    roundedBox(1.35, 0.14, 8.4, 0.04, 2),
+    trimMat,
+  );
+  upperDeck.position.set(-5.875, upperFloorY - 0.07, 0);
+  upperDeck.receiveShadow = true;
+  group.add(upperDeck);
+
+  const addUpperWall = (lx: number, lz: number, sx: number, sz: number) => {
+    const outer = new THREE.Mesh(roundedBox(sx, upperWallH, sz, 0.07, 2), wallOuterMat);
+    outer.position.set(lx, upperFloorY + upperWallH * 0.5, lz);
+    outer.castShadow = true;
+    outer.receiveShadow = true;
+    outer.userData.isHouseWall = true;
+    const inner = new THREE.Mesh(
+      roundedBox(Math.max(0.06, sx - 0.04), upperWallH - 0.05, Math.max(0.06, sz - 0.04), 0.04, 1),
+      wallInnerMat,
+    );
+    inner.position.copy(outer.position);
+    inner.userData.isHouseWall = true;
+    group.add(outer, inner);
+  };
+
+  addUpperWall(-0.5, -4.2, 9.6, 0.24); // north
+  addUpperWall(-0.5, 4.2, 9.6, 0.24); // south
+  addUpperWall(4.2, 0, 0.24, 8.6); // east
+  addUpperWall(-5.2, -1.45, 0.24, 5.5); // west, below the new deck door
+  addUpperWall(-5.2, 3.75, 0.24, 0.9); // west, south jamb
+  addUpperWall(-2.1, 0.8, 6.2, 0.18); // bath / bedroom partition, open east passage
+
+  const upperDoorHeader = new THREE.Mesh(
+    new THREE.BoxGeometry(0.28, 0.65, 2.0),
+    trimMat,
+  );
+  upperDoorHeader.position.set(-5.2, upperFloorY + 2.58, 2.3);
+  group.add(upperDoorHeader);
+
+  // Full residential stair: 18 treads, two stringers and guard rails.
+  const stairGroup = new THREE.Group();
+  stairGroup.name = 'hilltop-upper-stair';
+  group.add(stairGroup);
+  const stairSteps = 18;
+  const stairRun = 7.2 / stairSteps;
+  const stairRise = (upperFloorY - 0.08) / stairSteps;
+  for (let i = 0; i < stairSteps; i++) {
+    const step = new THREE.Mesh(
+      new THREE.BoxGeometry(1.5, stairRise, stairRun + 0.015),
+      trimMat,
+    );
+    step.position.set(
+      -7.3,
+      0.08 + (i + 0.5) * stairRise,
+      -3.3 + (i + 0.5) * stairRun,
+    );
+    step.castShadow = true;
+    step.receiveShadow = true;
+    stairGroup.add(step);
+  }
+  const stairSlope = Math.atan2(upperFloorY - 0.08, 7.2);
+  const stairStringer = new THREE.Mesh(
+    new THREE.BoxGeometry(1.55, 0.18, 8.05),
+    foundationMat,
+  );
+  stairStringer.position.set(-7.3, 0.08 + (upperFloorY - 0.08) * 0.5 - 0.11, 0.3);
+  stairStringer.rotation.x = -stairSlope;
+  stairStringer.castShadow = true;
+  stairGroup.add(stairStringer);
+  for (const side of [-1, 1]) {
+    const rail = new THREE.Mesh(
+      new THREE.BoxGeometry(0.06, 0.06, 8.05),
+      steelMat,
+    );
+    rail.position.set(-7.3 + side * 0.73, 0.08 + (upperFloorY - 0.08) * 0.5 + 0.95, 0.3);
+    rail.rotation.x = -stairSlope;
+    stairGroup.add(rail);
+    for (let i = 0; i <= 6; i++) {
+      const t = i / 6;
+      const post = new THREE.Mesh(
+        new THREE.BoxGeometry(0.055, 1.0, 0.055),
+        steelMat,
+      );
+      post.position.set(
+        -7.3 + side * 0.73,
+        0.08 + t * (upperFloorY - 0.08) + 0.5,
+        -3.3 + t * 7.2,
+      );
+      stairGroup.add(post);
+    }
+  }
+
+  // Upper deck guard rail, with a clear opening at the stair landing.
+  const deckRail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 7.4), steelMat);
+  deckRail.position.set(-6.54, upperFloorY + 1.0, -0.55);
+  group.add(deckRail);
+  for (let i = 0; i <= 7; i++) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.055, 1.0, 0.055), steelMat);
+    post.position.set(-6.54, upperFloorY + 0.5, -4.1 + i * 1.05);
+    group.add(post);
+  }
+
+  // Upper windows on the east, west and north walls.
+  for (const [wx, wy, wz, sx, sy, sz] of [
+    [4.2, upperFloorY + 1.65, -2.1, 0.28, 1.25, 1.4],
+    [4.2, upperFloorY + 1.65, 2.1, 0.28, 1.25, 1.4],
+    [-5.2, upperFloorY + 1.65, -2.9, 0.28, 1.25, 1.3],
+    [-1.6, upperFloorY + 1.65, -4.2, 1.4, 1.25, 0.28],
+  ] as const) {
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.08, sy + 0.08, sz + 0.08), trimMat);
+    frame.position.set(wx, wy, wz);
+    const pane = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.12, sy - 0.08, sz - 0.08), glassMat);
+    pane.position.set(wx, wy, wz);
+    group.add(frame, pane);
+  }
+
+  // Extra bedroom: king bed, nightstands, dresser and rug.
+  const upperBed = new THREE.Group();
+  upperBed.name = 'hilltop-upper-bedroom';
+  upperBed.position.set(-2.1, upperFloorY, -2.0);
+  const upperBedFrame = new THREE.Mesh(new THREE.BoxGeometry(2.25, 0.34, 1.95), trimMat);
+  upperBedFrame.position.y = 0.22;
+  const upperBedMattress = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.28, 1.8), fabricMat);
+  upperBedMattress.position.y = 0.53;
+  const upperBedHeadboard = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.18, 2.05), trimMat);
+  upperBedHeadboard.position.set(-1.06, 0.62, 0);
+  const upperPillowL = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.16, 0.62), porcelainMat);
+  upperPillowL.position.set(-0.66, 0.75, -0.4);
+  const upperPillowR = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.16, 0.62), porcelainMat);
+  upperPillowR.position.set(-0.66, 0.75, 0.4);
+  upperBed.add(upperBedFrame, upperBedMattress, upperBedHeadboard, upperPillowL, upperPillowR);
+  for (const z of [-1.35, 1.35]) {
+    const nightstand = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.58, 0.58), trimMat);
+    nightstand.position.set(-0.95, 0.29, z);
+    const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.24, 0.36, 12), fabricMat);
+    lamp.position.set(-0.95, 0.76, z);
+    upperBed.add(nightstand, lamp);
+  }
+  const dresser = new THREE.Mesh(new THREE.BoxGeometry(0.55, 1.0, 1.8), trimMat);
+  dresser.position.set(3.75, 0.5, -1.4);
+  upperBed.add(dresser);
+  const bedroomRug = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.025, 2.8), rugMat);
+  bedroomRug.position.set(0.45, 0.025, 0.2);
+  bedroomRug.name = 'hilltop-upper-bedroom-rug';
+  upperBed.add(bedroomRug);
+  group.add(upperBed);
+
+  // Extra full bath: tiled floor, tub/shower, vanity, sink and toilet.
+  const upperBath = new THREE.Group();
+  upperBath.name = 'hilltop-upper-bath';
+  upperBath.position.set(0, upperFloorY, 0);
+  const bathTile = new THREE.Mesh(new THREE.BoxGeometry(6.1, 0.025, 3.3), tileMat);
+  bathTile.position.set(-2.1, 0.02, 2.5);
+  upperBath.add(bathTile);
+  const tub = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.62, 0.92), porcelainMat);
+  tub.position.set(-4.05, 0.34, 2.65);
+  const tubInner = new THREE.Mesh(new THREE.BoxGeometry(1.62, 0.06, 0.68), glassMat);
+  tubInner.position.set(-4.05, 0.57, 2.65);
+  const upperShowerHead = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.1, 10), chromeMat);
+  upperShowerHead.position.set(-4.85, 2.0, 2.65);
+  const upperShowerPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1.3, 8), chromeMat);
+  upperShowerPipe.position.set(-4.88, 1.35, 2.65);
+  const upperShowerGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.0, 1.15), glassMat);
+  upperShowerGlass.position.set(-3.05, 1.1, 2.65);
+  upperBath.add(tub, tubInner, upperShowerHead, upperShowerPipe, upperShowerGlass);
+  const vanity = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.82, 0.62), trimMat);
+  vanity.position.set(-1.4, 0.42, 1.25);
+  const basin = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.12, 0.42), porcelainMat);
+  basin.position.set(-1.4, 0.86, 1.25);
+  const upperMirror = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.1, 0.05), glassMat);
+  upperMirror.position.set(-1.4, 1.75, 1.02);
+  const upperToiletBase = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.5, 0.66), porcelainMat);
+  upperToiletBase.position.set(-0.1, 0.25, 3.5);
+  const upperToiletTank = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.62, 0.26), porcelainMat);
+  upperToiletTank.position.set(-0.1, 0.65, 3.78);
+  const upperToiletSeat = new THREE.Mesh(new THREE.TorusGeometry(0.25, 0.07, 8, 16), porcelainMat);
+  upperToiletSeat.rotation.x = Math.PI / 2;
+  upperToiletSeat.position.set(-0.1, 0.53, 3.38);
+  upperBath.add(vanity, basin, upperMirror, upperToiletBase, upperToiletTank, upperToiletSeat);
+  group.add(upperBath);
+
+  const upperBedLight = new THREE.PointLight(0xffe4b5, 0.9, 10, 1.6);
+  upperBedLight.position.set(0.2, upperFloorY + 2.4, -1.2);
+  const upperBathLight = new THREE.PointLight(0xe0f2fe, 1.0, 8, 1.5);
+  upperBathLight.position.set(-2.8, upperFloorY + 2.35, 2.5);
+  group.add(upperBedLight, upperBathLight);
+
   const stations: HouseStationTarget[] = [
     {
       id: 'house_music_studio',
@@ -5402,6 +5613,50 @@ export function createHilltopHouse(
       y: worldY,
       z: worldZ,
       range: 2.8,
+    },
+    {
+      id: 'house_upper_bed',
+      kind: 'house_bed',
+      label: 'Sleep in Upstairs Bedroom',
+      sublabel: 'Private owner suite · full Health, Stamina & Warmth',
+      x: worldX - 2.1,
+      y: worldY + 3.55,
+      z: worldZ - 1.7,
+      range: 2.8,
+    },
+    {
+      id: 'house_upper_shower',
+      kind: 'house_shower',
+      label: 'Use Upstairs Bath / Shower',
+      sublabel: 'Second full bath · hot water, +60 Stamina & +25 HP',
+      x: worldX - 4.05,
+      y: worldY + 3.55,
+      z: worldZ + 2.65,
+      range: 2.4,
+    },
+    {
+      id: 'house_upper_sink',
+      kind: 'house_sink',
+      label: 'Use Upstairs Bath Sink',
+      sublabel: 'Drink fresh water & refill bottles',
+      x: worldX - 1.4,
+      y: worldY + 3.55,
+      z: worldZ + 1.55,
+      range: 2.0,
+    },
+    {
+      id: 'house_upper_toilet',
+      kind: 'house_toilet',
+      label: 'Use Upstairs Bath Toilet',
+      sublabel: 'Private second bathroom',
+      x: worldX - 0.1,
+      y: worldY + 3.55,
+      z: worldZ + 3.35,
+      range: 1.9,
+      sitX: worldX - 0.1,
+      sitY: worldY + 3.6,
+      sitZ: worldZ + 3.4,
+      sitYaw: Math.PI,
     },
   ];
 

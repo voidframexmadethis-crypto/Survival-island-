@@ -1310,6 +1310,7 @@ export interface NearbyInteraction {
     | 'house_studio_drums'
     | 'house_studio_booth'
     | 'house_door'
+    | 'house_bowling'
     | 'structural_block'
     | 'kinetic_node'
     | 'modular_vehicle'

@@ -82,6 +82,27 @@ export const WATERPARK_TOWERS: readonly WaterparkTowerSpec[] = [
   { id: 'kids', name: 'Tadpole Landing', x: -30, z: 20, height: 13, color: '#0369a1' },
 ];
 
+/** One continuous spiral staircase wraps each tower from the deck to its summit deck. */
+export const WATERPARK_TOWER_STAIR = {
+  radius: 4.55,
+  width: 1.45,
+  baseRise: 0.35,
+  landingRise: 0.25,
+} as const;
+
+export function getWaterparkTowerStairTurns(height: number): number {
+  return height > 50 ? 4 : height > 30 ? 3 : 2;
+}
+
+/** Stair-walking height at t = 0 (deck) through t = 1 (summit landing). */
+export function getWaterparkTowerStairY(height: number, t: number): number {
+  return (
+    WATERPARK_DECK_Y +
+    WATERPARK_TOWER_STAIR.baseRise +
+    clamp(t, 0, 1) * (height - 0.1)
+  );
+}
+
 export const WATERPARK_POOLS = [
   { id: 'wave', name: 'Hurricane Bay Wave Pool', x: -2, z: 26, w: 38, d: 20, depth: 1.8 },
   { id: 'splash', name: 'Anaconda Splash Basin', x: 36, z: 12, w: 18, d: 14, depth: 1.4 },
@@ -606,7 +627,11 @@ export function isInWaterparkClearZone(x: number, z: number): boolean {
   return Math.hypot(x - (bx0 + vx * t), z - (bz0 + vz * t)) < 7;
 }
 
-/** Walkable deck and skybridge surface, used by the engine's ground solver. */
+/**
+ * Walkable deck, skybridge, spiral tower stairs and summit decks. The ground
+ * solver calls this every frame, so a player can physically climb every tower
+ * instead of only boarding from a ground kiosk.
+ */
 export function getWaterparkSurfaceY(
   x: number,
   z: number,
@@ -615,11 +640,48 @@ export function getWaterparkSurfaceY(
 ): number {
   const dx = x - WATERPARK_SITE.x;
   const dz = z - WATERPARK_SITE.z;
+  const sweepFootY = Math.max(footY, prevFootY);
+  let bestY = -9999;
+
   if (
     pointInRoundRect(dx, dz, WATERPARK_DECK_HALF_W, WATERPARK_DECK_HALF_D, 16) &&
-    Math.max(footY, prevFootY) >= WATERPARK_DECK_Y - 1.85
+    sweepFootY >= WATERPARK_DECK_Y - 1.85
   ) {
-    return WATERPARK_DECK_Y;
+    bestY = WATERPARK_DECK_Y;
+  }
+
+  for (const tower of WATERPARK_TOWERS) {
+    const localX = dx - tower.x;
+    const localZ = dz - tower.z;
+    const summitY = WATERPARK_DECK_Y + tower.height + WATERPARK_TOWER_STAIR.landingRise;
+
+    // Summit landing, inset just enough that the rising spiral stair is not
+    // mistaken for the deck on the turn directly below it.
+    if (
+      Math.abs(localX) <= 4.6 &&
+      Math.abs(localZ) <= 4.6 &&
+      Math.hypot(localX, localZ) <= 4.18 &&
+      sweepFootY >= summitY - 0.65 &&
+      summitY > bestY
+    ) {
+      bestY = summitY;
+    }
+
+    // Spiral stair ribbon. Multiple turns occupy the same X/Z footprint at
+    // different heights, so pick the tread closest to the player's feet.
+    const radial = Math.hypot(localX, localZ);
+    if (Math.abs(radial - WATERPARK_TOWER_STAIR.radius) > 0.82) continue;
+    let angle = Math.atan2(localZ, localX);
+    if (angle < 0) angle += Math.PI * 2;
+    const turns = getWaterparkTowerStairTurns(tower.height);
+    for (let turn = 0; turn <= turns; turn++) {
+      const t = (angle / (Math.PI * 2) + turn) / turns;
+      if (t > 1.000001) continue;
+      const stairY = getWaterparkTowerStairY(tower.height, t);
+      if (stairY <= sweepFootY + 0.62 && stairY > bestY) {
+        bestY = stairY;
+      }
+    }
   }
 
   const bx0 = HILL_HOUSE_POS.x - 8;
@@ -633,9 +695,9 @@ export function getWaterparkSurfaceY(
   const distance = Math.hypot(x - (bx0 + vx * t), z - (bz0 + vz * t));
   if (distance < 3.2) {
     const bridgeY = lerp(8.4, WATERPARK_DECK_Y, t);
-    if (Math.max(footY, prevFootY) >= bridgeY - 1.85) return bridgeY;
+    if (sweepFootY >= bridgeY - 1.85 && bridgeY > bestY) bestY = bridgeY;
   }
-  return -9999;
+  return bestY;
 }
 
 export function getWaterparkBridgeLine() {

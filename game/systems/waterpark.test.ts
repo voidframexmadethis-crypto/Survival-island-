@@ -12,9 +12,13 @@ import {
   WATERPARK_POOLS,
   WATERPARK_SITE,
   WATERPARK_SLIDES,
+  WATERPARK_TOWER_STAIR,
+  WATERPARK_TOWERS,
   buildWaterparkSlidePath,
   getWaterparkStats,
   getWaterparkSurfaceY,
+  getWaterparkTowerStairTurns,
+  getWaterparkTowerStairY,
   isInWaterparkClearZone,
   sanitizeWaterparkState,
 } from '../world/waterparkLayout';
@@ -88,6 +92,57 @@ test('waterpark clear zone covers the deck and access bridge but not the wider i
     WATERPARK_DECK_Y,
   );
   assert.equal(getWaterparkSurfaceY(WATERPARK_SITE.x, WATERPARK_SITE.z, 0), -9999);
+});
+
+test('every tower staircase is continuously solid from deck to summit', () => {
+  for (const tower of WATERPARK_TOWERS) {
+    const turns = getWaterparkTowerStairTurns(tower.height);
+    let previousY = WATERPARK_DECK_Y;
+    const samples = turns * 72;
+    for (let i = 0; i <= samples; i++) {
+      const t = i / samples;
+      const angle = t * turns * Math.PI * 2;
+      const wx = WATERPARK_SITE.x + tower.x + Math.cos(angle) * WATERPARK_TOWER_STAIR.radius;
+      const wz = WATERPARK_SITE.z + tower.z + Math.sin(angle) * WATERPARK_TOWER_STAIR.radius;
+      const expectedY = getWaterparkTowerStairY(tower.height, t);
+      const surfaceY = getWaterparkSurfaceY(wx, wz, expectedY + 0.1, expectedY + 0.1);
+      assertClose(surfaceY, expectedY, 0.02);
+      assert.ok(surfaceY - previousY <= 0.52, `${tower.id} stair has a non-walkable step`);
+      previousY = surfaceY;
+    }
+    const summitY =
+      WATERPARK_DECK_Y + tower.height + WATERPARK_TOWER_STAIR.landingRise;
+    const summit = getWaterparkSurfaceY(
+      WATERPARK_SITE.x + tower.x + 2.5,
+      WATERPARK_SITE.z + tower.z - 2.5,
+      summitY + 0.1,
+      summitY + 0.1,
+    );
+    assertClose(summit, summitY, 0.02);
+  }
+});
+
+test('every slide boards from its walkable summit deck, never from the ground', () => {
+  const scene = new THREE.Scene();
+  const runtime = new WaterparkRuntime(scene);
+  const mainTower = WATERPARK_TOWERS.find((tower) => tower.id === 'main')!;
+  const mainSlides = WATERPARK_SLIDES.filter((slide) => slide.tower === 'main');
+  const first = mainSlides[0];
+  const angle = 0.18;
+  const summitY = WATERPARK_DECK_Y + mainTower.height + WATERPARK_TOWER_STAIR.landingRise;
+  const near = runtime.getNearbyInteraction(
+    WATERPARK_SITE.x + mainTower.x + Math.cos(angle) * 3.95,
+    summitY,
+    WATERPARK_SITE.z + mainTower.z + Math.sin(angle) * 3.95,
+  );
+  assert.equal(near?.rideId, first.id);
+  const ground = runtime.getNearbyInteraction(
+    WATERPARK_SITE.x + mainTower.x,
+    WATERPARK_DECK_Y,
+    WATERPARK_SITE.z + mainTower.z,
+  );
+  assert.equal(ground, null);
+  runtime.dispose();
 });
 
 test('steeper water channels accelerate harder than nearly flat runouts', () => {

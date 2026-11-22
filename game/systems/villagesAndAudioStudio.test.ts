@@ -28,6 +28,8 @@ import * as THREE from 'three';
 import {
   HILL_HOUSE_POS,
   HILL_HOUSE_Y,
+  HILLTOP_HOUSE_STAIR,
+  HILLTOP_UPPER_FLOOR_Y,
   VEHICLE_GARAGE_POS,
   VEHICLE_GARAGE_Y,
   getHilltopBaseFloorY,
@@ -193,6 +195,62 @@ test('premade hill house exposes hinged double doors and a door interaction stat
   assert.ok(doorStation);
   assert.match(doorStation!.label, /Double Doors/i);
 });
+
+test('hilltop house adds a continuous exterior stair to a solid extra bedroom and bath floor', () => {
+  const house = createHilltopHouse(
+    HILL_HOUSE_POS.x,
+    HILL_HOUSE_Y,
+    HILL_HOUSE_POS.z,
+    new THREE.Texture() as unknown as THREE.CanvasTexture,
+  );
+  assert.ok(house.group.getObjectByName('hilltop-upper-floor'));
+  assert.ok(house.group.getObjectByName('hilltop-upper-stair'));
+  assert.ok(house.group.getObjectByName('hilltop-upper-bedroom'));
+  assert.ok(house.group.getObjectByName('hilltop-upper-bath'));
+
+  const upperBed = house.stations.find((station) => station.id === 'house_upper_bed');
+  const upperBath = house.stations.find((station) => station.id === 'house_upper_shower');
+  assert.ok(upperBed);
+  assert.ok(upperBath);
+  assertClose(upperBed!.y, HILLTOP_UPPER_FLOOR_Y, 0.001);
+  assertClose(upperBath!.y, HILLTOP_UPPER_FLOOR_Y, 0.001);
+
+  const stairX = (HILLTOP_HOUSE_STAIR.minX + HILLTOP_HOUSE_STAIR.maxX) * 0.5;
+  let prevY = getTerrainHeight(stairX, HILLTOP_HOUSE_STAIR.minZ);
+  const steps = 90;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const z = HILLTOP_HOUSE_STAIR.minZ + (HILLTOP_HOUSE_STAIR.maxZ - HILLTOP_HOUSE_STAIR.minZ) * t;
+    const surfaceY = Math.max(
+      getTerrainHeight(stairX, z),
+      getHilltopBaseFloorY(stairX, z, prevY),
+    );
+    assert.ok(surfaceY <= prevY + 0.45, `stair step ${i} is not walkable`);
+    assert.ok(surfaceY >= prevY - 0.02, `stair step ${i} sinks`);
+    prevY = surfaceY;
+  }
+  assertClose(prevY, HILLTOP_UPPER_FLOOR_Y, 0.06);
+
+  const deckX = HILL_HOUSE_POS.x - 6.0;
+  const deckZ = HILL_HOUSE_POS.z + 2.5;
+  assertClose(
+    getHilltopBaseFloorY(deckX, deckZ, HILLTOP_UPPER_FLOOR_Y),
+    HILLTOP_UPPER_FLOOR_Y,
+    0.001,
+  );
+  assertClose(
+    getHilltopBaseFloorY(HILL_HOUSE_POS.x, HILL_HOUSE_POS.z, HILL_HOUSE_Y),
+    HILL_HOUSE_Y + 0.08,
+    0.001,
+  );
+});
+
+function assertClose(actual: number, expected: number, epsilon = 0.001) {
+  assert.ok(
+    Math.abs(actual - expected) <= epsilon,
+    `expected ${actual} to be within ${epsilon} of ${expected}`,
+  );
+}
 
 test('walking from East porch through living room into Music Studio and Recording Booth is unobstructed and never falls through floor', () => {
   const house = createHilltopHouse(

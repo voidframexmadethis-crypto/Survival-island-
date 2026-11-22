@@ -116,6 +116,7 @@ interface Kiosk {
   rideId: string;
   slide: WaterparkSlideHandles;
   x: number;
+  y: number;
   z: number;
 }
 
@@ -215,6 +216,7 @@ export class WaterparkRuntime {
         rideId: slide.spec.id,
         slide,
         x: slide.boarding.x,
+        y: slide.boarding.y,
         z: slide.boarding.z,
       });
     }
@@ -281,30 +283,34 @@ export class WaterparkRuntime {
     playerZ: number,
   ): WaterparkInteraction | null {
     if (!this.visible || this.active) return null;
-    if (Math.abs(playerY - WATERPARK_DECK_Y) > 4.2) return null;
     let best: WaterparkInteraction | null = null;
     const consider = (candidate: WaterparkInteraction) => {
       if (candidate.distance > 3.9) return;
       if (!best || candidate.distance < best.distance) best = candidate;
     };
 
+    // Rides board from the summit. The player must physically climb the tower
+    // stairs, where the walkable collision surface meets these gates.
     for (const kiosk of this.kiosks) {
       const x = WATERPARK_SITE.x + kiosk.x;
+      const y = WATERPARK_DECK_Y + kiosk.y;
       const z = WATERPARK_SITE.z + kiosk.z;
+      if (Math.abs(playerY - y) > 2.4) continue;
       const distance = Math.hypot(playerX - x, playerZ - z);
       if (distance > 3.9) continue;
       consider({
         rideId: kiosk.rideId,
         label: `Ride ${kiosk.slide.spec.name}`,
-        sublabel: `${slideKindLabel(kiosk.slide.spec.kind)} · ${kiosk.slide.spec.topHeight.toFixed(0)} m tower · press E to board`,
+        sublabel: `${slideKindLabel(kiosk.slide.spec.kind)} · summit boarding · ${kiosk.slide.spec.topHeight.toFixed(0)} m drop · press E`,
         kind: 'slide',
         x,
-        y: WATERPARK_DECK_Y,
+        y,
         z,
         distance,
       });
     }
 
+    if (Math.abs(playerY - WATERPARK_DECK_Y) > 3.0) return best;
     for (const feature of WATERPARK_FEATURES) {
       const x = WATERPARK_SITE.x + feature.x;
       const z = WATERPARK_SITE.z + feature.z;

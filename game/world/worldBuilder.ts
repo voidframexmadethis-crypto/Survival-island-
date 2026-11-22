@@ -17,6 +17,7 @@ import { buildLouisianaWilds } from './louisianaWilds';
 import { buildDragonValleyCliffRing } from './dragonValleyCliffs';
 import { roundedBox } from './roundedBox';
 import { isInWaterparkClearZone } from './waterparkLayout';
+import { HilltopBowlingAlley } from '../systems/hilltopBowling';
 import {
   CaveTerrainOpening,
   filterTerrainIndexForCaveOpenings,
@@ -98,6 +99,7 @@ import {
   getRiverSample,
   getTerrainHeight,
   getTerrainSlope,
+  isInBowlingAlleyClearZone,
 } from './terrain';
 import {
   SaturnVRocketHandles,
@@ -246,6 +248,7 @@ export interface WorldHandles {
   tvWorldPos: THREE.Vector3;
   hillHousePos: THREE.Vector3;
   hillHouseDoor: import('./models').HilltopHouseDoorHandle;
+  bowlingAlley: HilltopBowlingAlley;
   dragonValleyFlyers: DragonValleyFlyerHandle[];
   dragonValleyBeacon: DragonValleyBeaconHandle;
   abandonedDragonGroup: THREE.Group;
@@ -4007,6 +4010,21 @@ export function buildIslandWorld(
   });
   hillHouse.colliders.forEach((hc) => colliders.push(hc));
 
+  // D2. Covered regulation bowling shelter on the level shelf west of the house.
+  const bowlingAlley = new HilltopBowlingAlley();
+  overworldGroup.add(bowlingAlley.group);
+  bowlingAlley.colliders.forEach((bc) => colliders.push(bc));
+  hillHouse.stations.push({
+    id: 'house_bowling',
+    kind: 'house_bowling',
+    label: 'Roll a Real Bowling Ball',
+    sublabel: 'Bayou Lanes · regulation 18.29 m lane · E to bowl',
+    x: bowlingAlley.station.x,
+    y: bowlingAlley.station.y,
+    z: bowlingAlley.station.z,
+    range: 3.1,
+  });
+
   // E. Expanded Covered 3-Bay Custom Vehicle Garage Zone Beside the Shelter (VEHICLE_GARAGE_POS)
   const garageGroundY = getTerrainHeight(VEHICLE_GARAGE_POS.x, VEHICLE_GARAGE_POS.z);
   const garageGroup = new THREE.Group();
@@ -5601,6 +5619,7 @@ export function buildIslandWorld(
 
     if (Math.hypot(x - PLAYER_SPAWN.x, z - PLAYER_SPAWN.z) < 20) continue;
     if (isInWaterparkClearZone(x, z)) continue;
+    if (isInBowlingAlleyClearZone(x, z)) continue;
     if (z >= PLAYER_SPAWN.z + 2 && Math.abs(x - SHIPWRECK_POS.x) < 34) continue; // Keep shipwreck shoreline corridor clean
     if (Math.hypot(x - DRAGON_VALLEY_POS.x, z - DRAGON_VALLEY_POS.z) < 28) continue;
     if (Math.hypot(x - VIKING_VILLAGE_POS.x, z - VIKING_VILLAGE_POS.z) < 28) continue;
@@ -6367,6 +6386,7 @@ export function buildIslandWorld(
 
   const isClearOfStructures = (px: number, pz: number): boolean => {
     if (isInWaterparkClearZone(px, pz)) return false;
+    if (isInBowlingAlleyClearZone(px, pz)) return false;
     if (Math.hypot(px - SNOWY_WOODLAND_POS.x, pz - SNOWY_WOODLAND_POS.z) < 14) return false;
     if (Math.hypot(px - AUTUMN_GROVE_POS.x, pz - AUTUMN_GROVE_POS.z) < 11) return false;
     if (Math.hypot(px - SWAMP_POS.x, pz - SWAMP_POS.z) < SWAMP_POS.radius + 2.5) return false;
@@ -7012,6 +7032,7 @@ export function buildIslandWorld(
     const bBiome = getBiomeAt(bx, bz);
     if (Math.hypot(bx - PLAYER_SPAWN.x, bz - PLAYER_SPAWN.z) < 5.5) continue;
     if (isInWaterparkClearZone(bx, bz)) continue;
+    if (isInBowlingAlleyClearZone(bx, bz)) continue;
     if (Math.hypot(bx - HILL_HOUSE_POS.x, bz - HILL_HOUSE_POS.z) < 16.5) continue;
     if (Math.hypot(bx - VEHICLE_GARAGE_POS.x, bz - VEHICLE_GARAGE_POS.z) < 18.5) continue;
 
@@ -7898,6 +7919,7 @@ gl_Position = projectionMatrix * mvPosition;`,
     tvWorldPos: new THREE.Vector3(HILL_HOUSE_POS.x + 0.75, HILL_HOUSE_Y + 1.24, HILL_HOUSE_POS.z + 0.41),
     hillHousePos: new THREE.Vector3(HILL_HOUSE_POS.x, HILL_HOUSE_Y, HILL_HOUSE_POS.z),
     hillHouseDoor: hillHouse.door,
+    bowlingAlley,
     dragonValleyFlyers,
     dragonValleyBeacon:
       dragonValleyBeacon ?? {

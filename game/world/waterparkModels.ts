@@ -9,9 +9,11 @@ import {
   WATERPARK_POOLS,
   WATERPARK_SITE,
   WATERPARK_SLIDES,
+  WATERPARK_TOWER_STAIR,
   WATERPARK_TOWERS,
   buildWaterparkSlidePath,
   getWaterparkBridgeLine,
+  getWaterparkTowerStairTurns,
   type WaterparkSlideKind,
   type WaterparkSlideSpec,
   type WaterparkTowerSpec,
@@ -34,7 +36,7 @@ export interface WaterparkSlideHandles {
   curve: THREE.CatmullRomCurve3;
   samples: WaterparkPathSample[];
   length: number;
-  boarding: { x: number; z: number };
+  boarding: { x: number; y: number; z: number };
 }
 
 export interface WaterparkInnerTube {
@@ -826,29 +828,45 @@ export function buildWaterparkModel(): WaterparkModelHandles {
     addBox(towerGroup, towerRoofMat, 10.4, 0.45, 10.4, 0, tower.height + 5.3, 0);
     addBox(towerGroup, whiteMat, 6.4, 1.8, 0.25, 0, tower.height + 4.4, 0, 0);
     addSign(towerGroup, tower.name, tower.color, 7.2, 1.0, 0, tower.height + 4.4, 0.16, 0);
-    // Spiral emergency stair around the elevator core.
+    // Spiral emergency stair around the elevator core. Its top tread lands
+    // flush with the summit deck, and the ground solver uses the same helix.
     const stairPoints: THREE.Vector3[] = [];
-    const turns = tower.height > 50 ? 4 : tower.height > 30 ? 3 : 2;
-    const stairSteps = 86;
+    const turns = getWaterparkTowerStairTurns(tower.height);
+    const stairSteps = 128;
     for (let i = 0; i <= stairSteps; i++) {
       const t = i / stairSteps;
       const angle = t * turns * Math.PI * 2;
       stairPoints.push(
         new THREE.Vector3(
-          Math.cos(angle) * 4.55,
-          0.35 + t * (tower.height - 0.7),
-          Math.sin(angle) * 4.55,
+          Math.cos(angle) * WATERPARK_TOWER_STAIR.radius,
+          WATERPARK_TOWER_STAIR.baseRise + t * (tower.height - 0.1),
+          Math.sin(angle) * WATERPARK_TOWER_STAIR.radius,
         ),
       );
     }
     const stairCurve = new THREE.CatmullRomCurve3(stairPoints, false, 'centripetal');
-    const stair = buildOpenSlideGeometry(stairCurve, 1.45, 0.42, 130);
+    const stair = buildOpenSlideGeometry(
+      stairCurve,
+      WATERPARK_TOWER_STAIR.width,
+      0.42,
+      150,
+    );
     geometries.add(stair.shell);
     railGeos.push(stair.leftRail, stair.rightRail);
     const stairMesh = new THREE.Mesh(stair.shell, concreteMat);
     stairMesh.castShadow = true;
     towerGroup.add(stairMesh);
-    addSign(towerGroup, `${WATERPARK_SLIDES.filter((s) => s.tower === tower.id).length} slides`, '#fef3c7', 4.6, 0.7, 0, 2.7, 6.1, 0);
+    addSign(
+      towerGroup,
+      `STAIRS TO SUMMIT · ${WATERPARK_SLIDES.filter((s) => s.tower === tower.id).length} RIDES`,
+      '#fef3c7',
+      5.4,
+      0.7,
+      0,
+      2.7,
+      6.1,
+      0,
+    );
   }
 
   // Slide shells, water ribbons, edge tubes, supports, rings and splash mouths.
@@ -869,12 +887,13 @@ export function buildWaterparkModel(): WaterparkModelHandles {
     const tower = WATERPARK_TOWERS.find((t) => t.id === spec.tower) ?? WATERPARK_TOWERS[0];
     const siblings = slidesByTower.get(spec.tower) ?? [spec];
     const index = siblings.findIndex((s) => s.id === spec.id);
-    const boardingRadius = tower.id === 'main' || tower.id === 'east' ? 8.4 : 7.2;
+    const boardingRadius = 3.95;
     const angle =
       (index / Math.max(1, siblings.length)) * Math.PI * 2 +
       (tower.id === 'main' ? 0.18 : tower.id === 'east' ? 0.9 : tower.id === 'family' ? 1.7 : 2.4);
     const boarding = {
       x: tower.x + Math.cos(angle) * boardingRadius,
+      y: tower.height + WATERPARK_TOWER_STAIR.landingRise,
       z: tower.z + Math.sin(angle) * boardingRadius,
     };
     slides.push({ spec, curve, samples, length, boarding });
@@ -975,9 +994,10 @@ export function buildWaterparkModel(): WaterparkModelHandles {
       postMatrices.push(matrix);
     }
 
-    // Queue kiosk at the tower base.
+    // Boarding gate on the walkable summit deck.
     const kiosk = new THREE.Group();
-    kiosk.position.set(boarding.x, 0.02, boarding.z);
+    kiosk.position.set(boarding.x, boarding.y + 0.02, boarding.z);
+    kiosk.scale.setScalar(0.82);
     const faceYaw = Math.atan2(tower.x - boarding.x, tower.z - boarding.z);
     kiosk.rotation.y = faceYaw;
     root.add(kiosk);

@@ -21,6 +21,31 @@ export const WHEATFIELD_POS = { x: -6, z: 112 };
 export const FARMER_POS = { x: -24, z: 114 };
 export const HILL_HOUSE_POS = { x: -78, z: 128 };
 export const HILL_HOUSE_Y = 8.4;
+export const HILLTOP_UPPER_FLOOR_Y = HILL_HOUSE_Y + 3.55;
+export const HILLTOP_HOUSE_STAIR = {
+  minX: HILL_HOUSE_POS.x - 8.05,
+  maxX: HILL_HOUSE_POS.x - 6.55,
+  minZ: HILL_HOUSE_POS.z - 3.3,
+  maxZ: HILL_HOUSE_POS.z + 3.9,
+  bottomY: HILL_HOUSE_Y + 0.08,
+  topY: HILLTOP_UPPER_FLOOR_Y,
+} as const;
+export const BOWLING_ALLEY_POS = { x: -107, z: 128 };
+export const BOWLING_ALLEY_FLOOR_Y = HILL_HOUSE_Y + 0.16;
+export const BOWLING_ALLEY_CLEAR_ZONE = {
+  minX: BOWLING_ALLEY_POS.x - 25,
+  maxX: BOWLING_ALLEY_POS.x + 14,
+  minZ: BOWLING_ALLEY_POS.z - 8,
+  maxZ: BOWLING_ALLEY_POS.z + 8,
+} as const;
+export function isInBowlingAlleyClearZone(x: number, z: number): boolean {
+  return (
+    x >= BOWLING_ALLEY_CLEAR_ZONE.minX &&
+    x <= BOWLING_ALLEY_CLEAR_ZONE.maxX &&
+    z >= BOWLING_ALLEY_CLEAR_ZONE.minZ &&
+    z <= BOWLING_ALLEY_CLEAR_ZONE.maxZ
+  );
+}
 export const VEHICLE_GARAGE_POS = { x: -52, z: 152 };
 export const VEHICLE_GARAGE_Y = 3.25;
 export const UNDERGROUND_ELEVATOR_POS = { x: -34, z: 152 };
@@ -216,6 +241,47 @@ export function getHilltopBaseFloorY(
     if (sweepFootY >= stepTop - 1.65 && stepTop > bestY) {
       bestY = stepTop;
     }
+  }
+
+  // Second-storey suite and its exterior west deck.
+  if (
+    dx >= -6.55 &&
+    dx <= 4.2 &&
+    dz >= -4.2 &&
+    dz <= 4.2 &&
+    sweepFootY >= HILLTOP_UPPER_FLOOR_Y - 1.35 &&
+    HILLTOP_UPPER_FLOOR_Y > bestY
+  ) {
+    bestY = HILLTOP_UPPER_FLOOR_Y;
+  }
+
+  // Full-height exterior stair from the west lawn to the upper deck.
+  if (
+    x >= HILLTOP_HOUSE_STAIR.minX &&
+    x <= HILLTOP_HOUSE_STAIR.maxX &&
+    z >= HILLTOP_HOUSE_STAIR.minZ &&
+    z <= HILLTOP_HOUSE_STAIR.maxZ
+  ) {
+    const t = (z - HILLTOP_HOUSE_STAIR.minZ) /
+      (HILLTOP_HOUSE_STAIR.maxZ - HILLTOP_HOUSE_STAIR.minZ);
+    const stairY =
+      HILLTOP_HOUSE_STAIR.bottomY +
+      t * (HILLTOP_HOUSE_STAIR.topY - HILLTOP_HOUSE_STAIR.bottomY);
+    if (sweepFootY >= stairY - 0.55 && stairY > bestY) {
+      bestY = stairY;
+    }
+  }
+
+  // Level floor and approach of the covered bowling shelter.
+  if (
+    x >= BOWLING_ALLEY_CLEAR_ZONE.minX + 1.5 &&
+    x <= BOWLING_ALLEY_CLEAR_ZONE.maxX - 1.5 &&
+    z >= BOWLING_ALLEY_CLEAR_ZONE.minZ + 1.0 &&
+    z <= BOWLING_ALLEY_CLEAR_ZONE.maxZ - 1.0 &&
+    sweepFootY >= BOWLING_ALLEY_FLOOR_Y - 0.65 &&
+    BOWLING_ALLEY_FLOOR_Y > bestY
+  ) {
+    bestY = BOWLING_ALLEY_FLOOR_Y;
   }
 
   return bestY;
@@ -1176,6 +1242,10 @@ const FLAT_PADS: readonly [number, number, number, number, number, number][] = [
   [VIKING_VILLAGE_POS.x, VIKING_VILLAGE_POS.z, 34.0, 66.0, 66.0 * 66.0, 6.0],
   [RESORT_CORNER_POS.x, RESORT_CORNER_POS.z, 32.0, 64.0, 64.0 * 64.0, 4.0],
   [RUINED_CASTLE_POS.x, RUINED_CASTLE_POS.z, 34.0, 68.0, 68.0 * 68.0, 6.0],
+  // Level hilltop shelf for the sheltered bowling alley west of the house.
+  [BOWLING_ALLEY_POS.x - 7.5, BOWLING_ALLEY_POS.z, 11.0, 18.0, 18.0 * 18.0, HILL_HOUSE_Y],
+  // Walkable level path from the house's new west stair to the alley entrance.
+  [HILL_HOUSE_POS.x - 14.0, HILL_HOUSE_POS.z, 3.5, 8.0, 8.0 * 8.0, HILL_HOUSE_Y],
 ];
 
 const BIOME_ANCHOR_CIRCLES: readonly [number, number, number, BiomeId][] = [
