@@ -135,6 +135,7 @@ import { DimensionWheelModal } from './DimensionWheelModal';
 import { MusicStudioModal } from './MusicStudioModal';
 import { WorldSelectionMenu } from './WorldSelectionMenu';
 import { CoasterStudioModal } from './CoasterStudioModal';
+import { ParkCreatorModal } from './ParkCreatorModal';
 import { EcosystemJournalModal } from './EcosystemJournalModal';
 import { DragonSanctuaryModal } from './DragonSanctuaryModal';
 import { ExchangeModal } from './ExchangeModal';
@@ -208,6 +209,7 @@ export function SurvivalGameClient() {
   const launchPendingRef = useRef(false);
   const [currentSlotId, setCurrentSlotId] = useState<string>('slot_1');
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
+  const [parkCreatorOpen, setParkCreatorOpen] = useState(false);
   const [activeStationStructureId, setActiveStationStructureId] = useState<
     string | undefined
   >(undefined);
@@ -1768,11 +1770,11 @@ export function SurvivalGameClient() {
                   <div className="grid grid-cols-2 gap-1">
                     <button
                       type="button"
-                      onClick={() => openModal('coaster')}
+                      onClick={() => setParkCreatorOpen(true)}
                       className="min-h-[28px] px-2 rounded bg-sky-500 hover:bg-sky-400 text-stone-950 font-bold text-[10px] flex items-center justify-center gap-1 whitespace-nowrap shrink-0"
                     >
                       <RollerCoaster className="w-3 h-3" />
-                      <span>Coasters</span>
+                      <span>Park</span>
                     </button>
                     <button
                       type="button"
@@ -2183,12 +2185,12 @@ export function SurvivalGameClient() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => openModal('coaster')}
+                      onClick={() => setParkCreatorOpen(true)}
                       className="px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg bg-stone-950/90 hover:bg-stone-900 text-sky-300 font-display font-bold text-[11px] sm:text-sm flex items-center gap-1 sm:gap-1.5 shadow-lg border border-sky-500/40 transition whitespace-nowrap shrink-0"
-                      title="Roller Coaster Creator"
+                      title="Amusement Park Creator"
                     >
                       <RollerCoaster className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                      <span className="hidden sm:inline">COASTER</span>
+                      <span className="hidden sm:inline">PARK</span>
                     </button>
                     <button
                       type="button"
@@ -4437,7 +4439,19 @@ export function SurvivalGameClient() {
           onResetTrain={(id) => engineRef.current?.resetCoasterTrain(id)}
           onBoardRide={(id) => engineRef.current?.boardCoasterRide(id)}
           onOpenMusicStudio={() => openModal('music_studio')}
+          onOpenParkCreator={() => setParkCreatorOpen(true)}
           onClose={closeModal}
+        />
+      )}
+
+      {parkCreatorOpen && engineInstance && (
+        <ParkCreatorModal
+          engine={engineInstance}
+          onClose={() => setParkCreatorOpen(false)}
+          onOpenRideConsole={() => {
+            setParkCreatorOpen(false);
+            openModal('coaster');
+          }}
         />
       )}
 

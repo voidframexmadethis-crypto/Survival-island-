@@ -1174,6 +1174,7 @@ export interface GameSaveData {
   flatSurfaceStyle?: FlatSurfaceStyle;
   gameMode?: GameMode;
   coasters?: SavedCoasterData[];
+  amusementParks?: import('./systems/amusementParkRuntime').SavedAmusementPark[];
   tvChannel?: number;
   tvPower?: boolean;
   tvEmbedSrc?: string;

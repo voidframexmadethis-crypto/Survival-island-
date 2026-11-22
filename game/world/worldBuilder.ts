@@ -6,6 +6,7 @@ import { FrameBudgetQueue } from '../systems/frameBudgetQueue';
 import { WorldChunk, WorldChunkManager } from './worldChunkSystem';
 import { buildLouisianaMainland, type LouisianaMainlandHandles } from './louisianaMainland';
 import { buildLouisianaBusinesses } from './louisianaBusinesses';
+import { buildLouisianaNeighborhoods } from './louisianaNeighborhoods';
 import { buildIslandFerryDock } from './ferryDock';
 import { buildTransitCauseway } from './transitCauseway';
 import {
@@ -13,6 +14,7 @@ import {
   createLouisianaTerrainGeometries,
 } from './louisianaLandmass';
 import { buildLouisianaWilds } from './louisianaWilds';
+import { buildDragonValleyCliffRing } from './dragonValleyCliffs';
 import {
   CaveTerrainOpening,
   filterTerrainIndexForCaveOpenings,
@@ -5238,6 +5240,11 @@ export function buildIslandWorld(
     overworldGroup.add(dvGroup);
     staticMergeTargets.push({ group: dvGroup });
 
+    // Fractured natural rock walls and roost ledges sit in the carved bowl.
+    const dragonCliffRing = buildDragonValleyCliffRing();
+    overworldGroup.add(dragonCliffRing);
+    staticMergeTargets.push({ group: dragonCliffRing });
+
     // Wild dragons continuously circle the valley. They stay unmerged so the
     // engine can animate wing beats and cull them beyond the draw distance.
     const addRoostDragon = (
@@ -7111,6 +7118,7 @@ gl_Position = projectionMatrix * mvPosition;`,
     colliders.push(louisianaBusinesses.colliders[i]);
   }
   staticMergeTargets.push({ group: louisianaBusinesses.group });
+  overworldGroup.add(buildLouisianaNeighborhoods());
 
   // Island ferry pier and the shelter-side call box. The pier is the scripted
   // destination for the worker's car run; the call box starts the pickup.

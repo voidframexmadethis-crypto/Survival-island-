@@ -1212,6 +1212,75 @@ const BIOME_ANCHOR_CIRCLES: readonly [number, number, number, BiomeId][] = [
   [MANGROVE_SWAMP_POS.x, MANGROVE_SWAMP_POS.z, 76.0 * 76.0, 'mangrove_swamp'],
 ];
 
+/**
+ * Carves Dragon Valley into the mountain: a broad recessed floor, sheer natural
+ * cliff walls, an outer mountain shoulder and a single descending pass toward
+ * the hill house. Applied after the flat pads so the valley is real terrain,
+ * not a platform sitting on top of it.
+ */
+function carveDragonValley(x: number, z: number, height: number): number {
+  const dx = x - DRAGON_VALLEY_POS.x;
+  const dz = z - DRAGON_VALLEY_POS.z;
+  const distance = Math.hypot(dx, dz);
+  if (distance > 88) return height;
+  const angle = Math.atan2(dz, dx);
+  const passAngle = Math.atan2(
+    HILL_HOUSE_POS.z - DRAGON_VALLEY_POS.z,
+    HILL_HOUSE_POS.x - DRAGON_VALLEY_POS.x,
+  );
+  let delta = angle - passAngle;
+  while (delta > Math.PI) delta -= Math.PI * 2;
+  while (delta < -Math.PI) delta += Math.PI * 2;
+  const pass = (1 - smoothstep(0.1, 0.28, Math.abs(delta))) *
+    (1 - smoothstep(60, 82, distance));
+
+  const floor = 7.25 +
+    Math.sin(x * 0.19 + z * 0.07) * 0.22 +
+    Math.cos(z * 0.23 - x * 0.05) * 0.18;
+  const ridge =
+    Math.sin(angle * 5 + 0.7) * 3.2 +
+    Math.sin(angle * 9 - 1.4) * 1.7 +
+    fbm(x * 0.05 + 7.1, z * 0.05 + 4.3, 3) * 5.0;
+  const wallTop = floor + 24.5 + ridge;
+  let target: number;
+  if (distance < 21) {
+    target = floor;
+  } else if (distance < 34) {
+    const t = smoothstep(21, 34, distance);
+    target = floor + Math.pow(t, 1.55) * (wallTop - floor);
+  } else {
+    target = wallTop + (height - wallTop) * smoothstep(34, 76, distance);
+  }
+  // A single pass through the rim gives the valley a walk-in entrance without
+  // breaking the continuous cliff line everywhere else.
+  target = target * (1 - pass * 0.94) + (floor + 1.4) * (pass * 0.94);
+
+  // The hill house and its east access ramp share this side of the mountain.
+  // Preserve the existing flat pad/ramp instead of letting the new rim bury it.
+  const padX = Math.max(0, HILL_HOUSE_POS.x - 8.8 - x, x - (HILL_HOUSE_POS.x + 22));
+  const padZ = Math.max(0, HILL_HOUSE_POS.z - 7.8 - z, z - (HILL_HOUSE_POS.z + 11.5));
+  const padProtect = 1 - smoothstep(0, 4.5, Math.hypot(padX, padZ));
+  target = target * (1 - padProtect) + height * padProtect;
+
+  // The garage apron sits on the same mountain shoulder. Keep its bays and
+  // forecourt level while the rim closes around the outside of the property.
+  const garageX = Math.max(
+    0,
+    VEHICLE_GARAGE_POS.x - 11 - x,
+    x - (VEHICLE_GARAGE_POS.x + 11),
+  );
+  const garageZ = Math.max(
+    0,
+    VEHICLE_GARAGE_POS.z - 11 - z,
+    z - (VEHICLE_GARAGE_POS.z + 11),
+  );
+  const garageProtect = 1 - smoothstep(0, 5, Math.hypot(garageX, garageZ));
+  target = target * (1 - garageProtect) + height * garageProtect;
+
+  const outerBlend = 1 - smoothstep(74, 88, distance);
+  return height * (1 - outerBlend) + target * outerBlend;
+}
+
 export function getBaseTerrainHeight(x: number, z: number): number {
   if (activeTerrainWorldType === 'flat') return FLAT_GROUND_Y;
   const louisianaHeight = getLouisianaBaseHeight(x, z);
@@ -1585,6 +1654,8 @@ export function getBaseTerrainHeight(x: number, z: number): number {
       h = h * (1 - blend) + p[5] * blend;
     }
   }
+
+  h = carveDragonValley(x, z, h);
 
   return h;
 }

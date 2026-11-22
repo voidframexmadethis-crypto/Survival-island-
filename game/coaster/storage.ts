@@ -10,6 +10,7 @@ import {
   DEFAULT_MANUFACTURER_ID,
 } from './catalog';
 import { validateTrainDesign } from './trainDesigner';
+import { sanitizePark } from './park';
 import type {
   CameraPose,
   CoasterProject,
@@ -186,6 +187,7 @@ export function sanitizeProject(raw: unknown): CoasterProject {
     schemaVersion: 1,
     id: typeof source.id === 'string' && source.id ? source.id : newId('project'),
     name: typeof source.name === 'string' && source.name.trim() ? source.name.trim().slice(0, 80) : 'Imported Coaster',
+    park: sanitizePark(source.park, typeof source.name === 'string' ? `${source.name} Park` : 'Imported Park'),
     createdAt: finite(source.createdAt, now),
     updatedAt: finite(source.updatedAt, now),
     points,

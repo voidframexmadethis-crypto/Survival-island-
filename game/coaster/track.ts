@@ -2,6 +2,7 @@ import {
   DEFAULT_COASTER_TYPE_ID,
   DEFAULT_MANUFACTURER_ID,
 } from './catalog';
+import { createEmptyPark } from './park';
 import type {
   CameraPose,
   CoasterElementKind,
@@ -226,6 +227,7 @@ export function createBlankProject(name = 'Untitled Coaster'): CoasterProject {
     schemaVersion: 1,
     id: newId('project'),
     name,
+    park: createEmptyPark(name.replace(/coaster/i, 'Park') || 'Seaside Park'),
     createdAt: now,
     updatedAt: now,
     closed: false,

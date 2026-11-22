@@ -31,13 +31,17 @@ import {
   Route,
   Save,
   Sparkles,
+  Store,
   Trash2,
   TrainFront,
+  Trees,
   Undo2,
   Upload,
   Volume2,
   Waves,
   VolumeX,
+  Droplets,
+  CircleDot,
   Wand2,
   Wrench,
   Crosshair,
@@ -106,6 +110,18 @@ import {
   TrainDesignService,
   describeTrain,
 } from '@/game/coaster/trainDesigner';
+import { ParkPanel } from './ParkPanel';
+import {
+  createDeliveryPayload,
+  createEmptyPark,
+  getParkCatalogEntry,
+  parkFromJson,
+  parkToJson,
+  sanitizePark,
+  type ParkCategory,
+  type ParkElement,
+  type ParkElementKind,
+} from '@/game/coaster/park';
 import type {
   CameraProjection,
   CoasterElementKind,
@@ -124,10 +140,11 @@ import type {
   Vec3,
 } from '@/game/coaster/types';
 
-type Tab = 'build' | 'elements' | 'catalog' | 'properties' | 'trains' | 'mechanics' | 'test' | 'projects';
+type Tab = 'build' | 'park' | 'elements' | 'catalog' | 'properties' | 'trains' | 'mechanics' | 'test' | 'projects';
 
 const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
   { key: 'build', label: 'Build', icon: Grid3x3 },
+  { key: 'park', label: 'Park', icon: Trees },
   { key: 'elements', label: 'Elements', icon: Layers },
   { key: 'catalog', label: 'Catalog', icon: Factory },
   { key: 'properties', label: 'Point', icon: Move3d },
@@ -236,6 +253,7 @@ export function CoasterStudioClient() {
     editPoints: (points: TrackPoint[], selectedIndex: number) => void;
     handlePreview: (kind: StudioHandleKind, value: number) => void;
     telemetry: (telemetry: TrainTelemetry, mechanical: MechanicalSnapshot, stats: TrackStats) => void;
+    placeParkElement: (kind: ParkElementKind, position: { x: number; z: number }, rotation: number) => void;
   }>({
     select: () => {},
     add: () => {},
@@ -244,6 +262,7 @@ export function CoasterStudioClient() {
     editPoints: () => {},
     handlePreview: () => {},
     telemetry: () => {},
+    placeParkElement: () => {},
   });
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const undoRef = useRef<() => void>(() => {});
@@ -280,6 +299,10 @@ export function CoasterStudioClient() {
   const [curveOffset, setCurveOffset] = useState(0);
   const [scalePercent, setScalePercent] = useState(100);
   const [scaleBaseLength, setScaleBaseLength] = useState(1);
+  const [parkBrush, setParkBrushState] = useState<ParkElementKind | null>(null);
+  const [parkRotation, setParkRotation] = useState(0);
+  const [parkCategory, setParkCategory] = useState<ParkCategory>('paths');
+  const [embedded, setEmbedded] = useState(false);
   const trainService = useMemo(() => {
     const endpoint = process.env.NEXT_PUBLIC_COASTER_TRAIN_PROVIDER_URL;
     return new TrainDesignService({
@@ -364,6 +387,8 @@ export function CoasterStudioClient() {
         onTelemetry: (nextTelemetry, nextMechanical, nextStats) =>
           callbacksRef.current.telemetry(nextTelemetry, nextMechanical, nextStats),
         onNotice: (message) => toast(message),
+        onPlaceParkElement: (kind, position, rotation) =>
+          callbacksRef.current.placeParkElement(kind, position, rotation),
       });
     } catch (error) {
       const timer = setTimeout(() => {
@@ -380,6 +405,7 @@ export function CoasterStudioClient() {
     scene.setSnap(snap);
     scene.setProjection(projectRef.current.camera.projection);
     scene.setRideCamera(projectRef.current.camera.rideMode);
+    scene.setProject(projectRef.current);
     scene.focusTrack();
     return () => {
       scene.dispose();
@@ -405,6 +431,25 @@ export function CoasterStudioClient() {
   useEffect(() => {
     sceneRef.current?.setTool(tool);
   }, [tool]);
+
+  useEffect(() => {
+    setEmbedded(window.parent !== window);
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'si-amusement-park-delivered') {
+        toast(
+          event.data.ok
+            ? `Park delivered to Survival Island at ${event.data.site ?? 'an open site'}.`
+            : event.data.error || 'The island could not receive that delivery.',
+        );
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [toast]);
+
+  useEffect(() => {
+    sceneRef.current?.setParkBrush(parkBrush, parkRotation);
+  }, [parkBrush, parkRotation]);
 
   useEffect(() => {
     sceneRef.current?.setSnap(snap);
@@ -518,6 +563,7 @@ export function CoasterStudioClient() {
         setMechanical(nextMechanical);
         setStats(nextStats);
       },
+      placeParkElement: () => {},
     };
   });
 
@@ -675,6 +721,108 @@ export function CoasterStudioClient() {
     setProject(saved);
     refreshProjectList();
     toast(`Saved “${saved.name}” to the standalone coaster library.`);
+  };
+
+  const currentPark = project.park ?? createEmptyPark(project.name);
+
+  const updatePark = (patch: Partial<typeof currentPark>, record = true) => {
+    const nextPark = sanitizePark({ ...currentPark, ...patch }, currentPark.name);
+    applyProject({ ...projectRef.current, park: nextPark }, record, selectedIdRef.current);
+  };
+
+  const placeParkElement = (
+    kind: ParkElementKind,
+    position: { x: number; z: number },
+    rotation: number,
+  ) => {
+    const park = projectRef.current.park ?? createEmptyPark(projectRef.current.name);
+    const catalog = getParkCatalogEntry(kind);
+    if (catalog.unique && park.elements.some((element) => element.kind === kind)) {
+      updatePark({
+        elements: park.elements.map((element) =>
+          element.kind === kind
+            ? { ...element, x: position.x, z: position.z, rotation: ((rotation % 360) + 360) % 360 }
+            : element,
+        ),
+      });
+      toast(`${catalog.label} moved into position.`);
+      return;
+    }
+    const element: ParkElement = {
+      id: newId('park_el'),
+      kind,
+      x: Math.max(-240, Math.min(240, position.x)),
+      z: Math.max(-240, Math.min(240, position.z)),
+      rotation: ((rotation % 360) + 360) % 360,
+      scale: 1,
+    };
+    updatePark({ elements: [...park.elements, element] });
+    toast(`${catalog.label} placed. Keep clicking to add more, or use Select to stop.`);
+  };
+
+  callbacksRef.current.placeParkElement = placeParkElement;
+
+  const removeParkElement = (id: string) => {
+    updatePark({ elements: currentPark.elements.filter((element) => element.id !== id) });
+  };
+
+  const updateParkElement = (id: string, patch: Partial<ParkElement>) => {
+    updatePark({
+      elements: currentPark.elements.map((element) =>
+        element.id === id ? { ...element, ...patch } : element,
+      ),
+    });
+  };
+
+  const regenerateStarterPark = () => {
+    const starter = createEmptyPark(currentPark.name || `${project.name} Park`);
+    updatePark({
+      elements: starter.elements,
+      entrance: starter.entrance,
+      theme: currentPark.theme,
+    });
+    sceneRef.current?.focusPark();
+    toast('Starter park laid out around the current coaster footprint.');
+  };
+
+  const deliverParkToIsland = () => {
+    const payload = createDeliveryPayload({
+      ...projectRef.current,
+      park: projectRef.current.park ?? createEmptyPark(projectRef.current.name),
+    });
+    try {
+      window.localStorage.setItem('si_ultimate_park_delivery_v1', JSON.stringify(payload));
+    } catch {
+      // Delivery still works through the embedded studio message.
+    }
+    if (window.parent !== window) {
+      window.parent.postMessage({ type: 'si-amusement-park-delivery', payload }, '*');
+      toast('Helicopter delivery dispatched to Survival Island…');
+    } else {
+      toast('Park queued. Open Survival Island → Coaster Studio → Deliver to Island.');
+    }
+  };
+
+  const exportPark = () => {
+    const blob = new Blob([parkToJson(currentPark)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${currentPark.name.replace(/[^a-z0-9-_]+/gi, '-').toLowerCase() || 'park'}.park.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    toast('Entire park JSON exported.');
+  };
+
+  const importPark = async (file: File | null) => {
+    if (!file) return;
+    try {
+      const imported = parkFromJson(await file.text(), currentPark.name);
+      updatePark(imported);
+      toast(`Imported park “${imported.name}” with ${imported.elements.length} elements.`);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Could not import that park.');
+    }
   };
 
   const saveProjectAs = () => {
@@ -936,10 +1084,10 @@ export function CoasterStudioClient() {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span className="truncate font-mono text-[10px] font-black uppercase tracking-[0.22em] text-amber-300 sm:text-[11px]">
-              Ultimate Coaster Studio
+              Amusement Park & Coaster Creator
             </span>
             <span className="hidden rounded border border-amber-400/40 bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-amber-200 sm:inline">
-              Creative
+              Park Builder
             </span>
           </div>
           <input
@@ -1588,6 +1736,29 @@ export function CoasterStudioClient() {
           </nav>
 
           <div className={`survival-scroll min-h-0 flex-1 overflow-y-auto p-3 ${drawerOpen ? '' : 'hidden'}`}>
+            {tab === 'park' && (
+              <ParkPanel
+                park={currentPark}
+                brush={parkBrush}
+                rotation={parkRotation}
+                category={parkCategory}
+                embedded={embedded}
+                onSetBrush={setParkBrushState}
+                onSetRotation={setParkRotation}
+                onSetCategory={setParkCategory}
+                onUpdatePark={(patch) => updatePark(patch)}
+                onRemoveElement={removeParkElement}
+                onUpdateElement={updateParkElement}
+                onRegenerate={regenerateStarterPark}
+                onClear={() => updatePark({ elements: [] })}
+                onDeliver={deliverParkToIsland}
+                onExport={exportPark}
+                onImport={importPark}
+                onFocus={() => sceneRef.current?.focusPark()}
+                onSave={saveProject}
+              />
+            )}
+
             {tab === 'build' && (
               <div className="space-y-3">
                 <section className="rounded-xl border border-stone-800 bg-stone-900/40 p-3">

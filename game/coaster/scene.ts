@@ -18,6 +18,8 @@ import {
   segmentMetrics,
   setSegmentLengthBetween,
 } from './track';
+import { buildParkModel, updateParkModel, type ParkModelHandles } from './parkModels';
+import type { ParkElementKind } from './park';
 import type {
   CameraPose,
   CameraProjection,
@@ -57,6 +59,7 @@ export interface CoasterSceneCallbacks {
   onHandlePreview: (kind: StudioHandleKind, value: number) => void;
   onTelemetry: (telemetry: TrainTelemetry, mechanical: MechanicalSnapshot, stats: TrackStats) => void;
   onNotice: (message: string) => void;
+  onPlaceParkElement: (kind: ParkElementKind, position: { x: number; z: number }, rotation: number) => void;
 }
 
 interface MechanicalVisual {
@@ -171,6 +174,7 @@ export class CoasterStudioScene {
     handles: new THREE.Group(),
     mechanical: new THREE.Group(),
     trains: new THREE.Group(),
+    park: new THREE.Group(),
   };
   private editorMode: StudioEditorMode = 'segment';
   private handleMeshes: THREE.Mesh[] = [];
@@ -195,6 +199,9 @@ export class CoasterStudioScene {
   private nodeBaseMaterial!: THREE.MeshStandardMaterial;
   private nodeSelectedMaterial!: THREE.MeshStandardMaterial;
   private mechanicalVisuals: MechanicalVisual[] = [];
+  private parkHandles: ParkModelHandles | null = null;
+  private parkBrush: ParkElementKind | null = null;
+  private parkBrushRotation = 0;
   private stationGroup: THREE.Group | null = null;
   private stationGate: THREE.Mesh | null = null;
   private selectedIndex = -1;
@@ -249,6 +256,7 @@ export class CoasterStudioScene {
       this.groups.handles,
       this.groups.mechanical,
       this.groups.trains,
+      this.groups.park,
     );
 
     const aspect = Math.max(0.1, container.clientWidth / Math.max(1, container.clientHeight));
@@ -286,6 +294,7 @@ export class CoasterStudioScene {
     this.simulation = this.createSimulation();
     this.mechanics = new MechanicalController(this.samples, deriveMechanics(project.points));
     this.rebuildAll();
+    this.rebuildPark();
 
     this.boundPointerDown = this.onPointerDown.bind(this);
     this.boundPointerMove = this.onPointerMove.bind(this);
@@ -466,6 +475,7 @@ export class CoasterStudioScene {
       this.project.splineResolution !== project.splineResolution ||
       this.project.supports !== project.supports;
     const projectChanged = this.project.id !== project.id;
+    const parkChanged = this.project.park !== project.park;
     this.project = project;
     this.trainDesign = project.train;
     if (this.simulation) {
@@ -474,6 +484,7 @@ export class CoasterStudioScene {
       this.simulation.options.emptyTrainMassKg = 1400 + project.train.cars * 1050;
     }
     if (projectChanged) this.applyCameraPose(project.camera);
+    if (parkChanged) this.rebuildPark();
     if (geometryChanged) {
       this.samples = sampleTrack(project.points, project.closed, project.splineResolution ?? 14);
       this.simulation = this.createSimulation();
@@ -485,6 +496,50 @@ export class CoasterStudioScene {
     } else {
       this.rebuildTrains();
     }
+  }
+
+  private rebuildPark(): void {
+    if (this.parkHandles) {
+      this.groups.park.remove(this.parkHandles.group);
+      this.parkHandles.dispose();
+      this.parkHandles = null;
+    }
+    if (!this.project.park) return;
+    this.parkHandles = buildParkModel(this.project.park, {
+      groundAt: () => 0,
+      originY: 0,
+      yaw: 0,
+      includeVisitors: true,
+    });
+    this.groups.park.add(this.parkHandles.group);
+  }
+
+  setParkBrush(kind: ParkElementKind | null, rotation = 0): void {
+    this.parkBrush = kind;
+    this.parkBrushRotation = rotation;
+    this.renderer.domElement.style.cursor = kind ? 'copy' : this.tool === 'add' ? 'crosshair' : 'grab';
+  }
+
+  focusPark(): void {
+    if (!this.parkHandles) {
+      this.focusTrack();
+      return;
+    }
+    const bounds = this.parkHandles.bounds;
+    const center = new THREE.Vector3(
+      (bounds.minX + bounds.maxX) * 0.5,
+      4,
+      (bounds.minZ + bounds.maxZ) * 0.5,
+    );
+    const span = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ, 40);
+    this.setRideCamera('free');
+    this.activeControls.target.copy(center);
+    this.activeCamera.position.set(center.x + span * 0.6, Math.max(30, span * 0.7), center.z + span * 0.7);
+    if (this.projection === 'orthographic') {
+      this.orthoCamera.zoom = Math.max(0.2, 100 / span);
+      this.orthoCamera.updateProjectionMatrix();
+    }
+    this.activeControls.update();
   }
 
   setSelected(index: number): void {
@@ -507,7 +562,7 @@ export class CoasterStudioScene {
 
   setTool(tool: StudioTool): void {
     this.tool = tool;
-    this.renderer.domElement.style.cursor = tool === 'add' ? 'crosshair' : 'grab';
+    this.renderer.domElement.style.cursor = this.parkBrush ? 'copy' : tool === 'add' ? 'crosshair' : 'grab';
   }
 
   setSnap(snap: number): void {
@@ -1610,7 +1665,7 @@ export class CoasterStudioScene {
       this.renderer.domElement.setPointerCapture?.(event.pointerId);
       return;
     }
-    if (this.tool === 'add') {
+    if (this.tool === 'add' && !this.parkBrush) {
       const ground = this.pickGround(event);
       if (ground) {
         event.stopPropagation();
@@ -1692,6 +1747,14 @@ export class CoasterStudioScene {
       }
       return;
     }
+    if (this.parkBrush && travel < 7 && this.activePointers.size === 0) {
+      const ground = this.pickGround(event);
+      if (ground) {
+        event.stopPropagation();
+        this.callbacks.onPlaceParkElement(this.parkBrush, ground, this.parkBrushRotation);
+        return;
+      }
+    }
     if (this.tool === 'select' && travel < 7 && this.activePointers.size === 0) {
       const index = this.pickTrack(event);
       if (index !== null) {
@@ -1761,6 +1824,7 @@ export class CoasterStudioScene {
     this.mechanics.update(frameDt);
     this.updateMechanicalVisuals(now / 1000);
     this.updateStationGate(dt);
+    if (this.parkHandles) updateParkModel(this.parkHandles, dt, now / 1000);
     if (this.rideCamera === 'free') this.activeControls.update();
     this.renderer.render(this.scene, this.activeCamera);
 
@@ -1793,6 +1857,8 @@ export class CoasterStudioScene {
 
   dispose(): void {
     this.disposed = true;
+    this.parkHandles?.dispose();
+    this.parkHandles = null;
     cancelAnimationFrame(this.animationFrame);
     this.resizeObserver.disconnect();
     this.renderer.domElement.removeEventListener('pointerdown', this.boundPointerDown, true);

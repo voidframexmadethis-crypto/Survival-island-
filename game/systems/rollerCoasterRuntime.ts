@@ -1031,42 +1031,54 @@ export class RollerCoasterRuntime {
     this.clearAll();
     if (!Array.isArray(list)) return;
     for (const item of list) {
-      if (!item || !Array.isArray(item.nodes) || item.nodes.length === 0) continue;
-      const editor = new CoasterEditor();
-      for (const n of item.nodes) {
-        editor.addPoint(
-          {
-            x: Number(n.position?.x) || 0,
-            y: Number(n.position?.y) || 2,
-            z: Number(n.position?.z) || 0,
-          },
-          Number(n.bank) || 0,
-          n.segmentType,
-          n.targetSpeed,
-        );
-      }
-      const entry: ActiveCoasterEntry = {
-        id: item.id || `coaster_loaded_${++this.seq}`,
-        name: item.name || `Coaster ${this.seq}`,
-        trackColor: item.trackColor || TRACK_COLORS[0],
-        trainCarCount: Math.max(1, Math.min(8, item.trainCarCount || 4)),
-        stationPos: item.stationPos || { x: 0, y: 1, z: 0 },
-        editor,
-        pieceTags: Array.isArray(item.pieceTags) ? [...item.pieceTags] : [],
-        closedCircuit: Boolean(item.closedCircuit),
-        coasterType: item.coasterType || 'steel',
-        samples: [],
-        train: new CoasterTrain([]),
-        running: false,
-        meshGroup: new THREE.Group(),
-        carMeshes: [],
-        maxHeightM: 0,
-        estPeakSpeedKmh: 0,
-        inversionsCount: 0,
-      };
-      this.coasters.set(entry.id, entry);
-      this.rebuildEntryGeometry(entry);
+      this.addCoasterData(item);
     }
+  }
+
+  /** Adds one coaster without clearing the existing island layout. */
+  public addCoasterData(item: SavedCoasterData): string | null {
+    if (!item || !Array.isArray(item.nodes) || item.nodes.length < 2) return null;
+    this.seq += 1;
+    const editor = new CoasterEditor();
+    for (const n of item.nodes) {
+      editor.addPoint(
+        {
+          x: Number(n.position?.x) || 0,
+          y: Number(n.position?.y) || 2,
+          z: Number(n.position?.z) || 0,
+        },
+        Number(n.bank) || 0,
+        n.segmentType,
+        n.targetSpeed,
+      );
+    }
+    const requestedId = item.id || `coaster_loaded_${this.seq}`;
+    const id = this.coasters.has(requestedId)
+      ? `${requestedId}_${Date.now().toString(36)}`
+      : requestedId;
+    const entry: ActiveCoasterEntry = {
+      id,
+      name: item.name || `Coaster ${this.seq}`,
+      trackColor: item.trackColor || TRACK_COLORS[0],
+      trainCarCount: Math.max(1, Math.min(8, item.trainCarCount || 4)),
+      stationPos: item.stationPos || { x: 0, y: 1, z: 0 },
+      editor,
+      pieceTags: Array.isArray(item.pieceTags) ? [...item.pieceTags] : [],
+      closedCircuit: Boolean(item.closedCircuit),
+      coasterType: item.coasterType || 'steel',
+      samples: [],
+      train: new CoasterTrain([]),
+      running: false,
+      meshGroup: new THREE.Group(),
+      carMeshes: [],
+      maxHeightM: 0,
+      estPeakSpeedKmh: 0,
+      inversionsCount: 0,
+    };
+    this.coasters.set(entry.id, entry);
+    this.rebuildEntryGeometry(entry);
+    this.hudCacheDirty = true;
+    return id;
   }
 
   public depumpCoaster(coasterId: string): boolean {

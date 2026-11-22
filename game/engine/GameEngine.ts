@@ -269,6 +269,7 @@ import {
   ResourceNodeKind,
   ResourceNodeState,
   ResourceToast,
+  SavedCoasterData,
   SavedResourceNodeState,
   StructuralBlock,
   StructuralBlockKind,
@@ -411,6 +412,16 @@ import {
   CoasterPiecePresetKey,
   RollerCoasterRuntime,
 } from '../systems/rollerCoasterRuntime';
+import {
+  AmusementParkRuntime,
+  findAmusementParkSite,
+  type AmusementParkSite,
+  type SavedAmusementPark,
+} from '../systems/amusementParkRuntime';
+import {
+  sanitizePark,
+  type AmusementParkDeliveryPayload,
+} from '../coaster/park';
 import { CustomInversion } from '../systems/rollerCoasterSystem';
 import { RealisticOcean } from '../world/RealisticOcean';
 import {
@@ -1188,6 +1199,7 @@ export class GameEngine {
   private flatSurfaceStyle: FlatSurfaceStyle = 'turf_grid';
   private flatWorld!: FlatWorldHandles;
   private coasterRuntime!: RollerCoasterRuntime;
+  private amusementParkRuntime!: AmusementParkRuntime;
   private ridingCoasterId: string | null = null;
   private gameMode: GameMode = 'survival';
   private hitMarkerActive = false;
@@ -1622,6 +1634,7 @@ export class GameEngine {
     });
     this.flatWorld.setVisible(false);
     this.coasterRuntime = new RollerCoasterRuntime(this.scene);
+    this.amusementParkRuntime = new AmusementParkRuntime(this.scene);
     this.realisticOcean = new RealisticOcean(
       this.scene,
       6400,
@@ -5332,6 +5345,7 @@ export class GameEngine {
     }
 
     this.coasterRuntime?.importCoasters(save.coasters);
+    this.amusementParkRuntime?.restore(save.amusementParks);
     this.ecosystem = save.ecosystem || createInitialEcosystem();
     this.lostWorld = normalizeLostWorldState(save.lostWorld);
     this.lostWorldTickAccum = 0;
@@ -6114,6 +6128,7 @@ export class GameEngine {
         cargoItems: v.cargoItems.map((c) => ({ ...c })),
       })),
       coasters: this.coasterRuntime?.exportCoasters() || [],
+      amusementParks: this.amusementParkRuntime?.serialize() || [],
       ecosystem: { ...this.ecosystem },
       lostWorld: this.lostWorld,
       terrainDeltas: this.worldType === 'island' ? exportSparseTerrainDeltas() : [],
@@ -16905,7 +16920,7 @@ export class GameEngine {
 
     this._cavePlayerVec.set(this.playerX, this.playerY, this.playerZ);
     this.islandCaveSystem.update(this._cavePlayerVec, this.scene);
-    this.world?.setCaveOpenings(this.islandCaveSystem.getOpenings());
+    this.world?.setCaveOpenings(this.islandCaveSystem.getCarvedOpenings());
 
     const nearby = caveSystem.getCavesNear(
       this.playerX,
@@ -17191,6 +17206,7 @@ export class GameEngine {
             this.syncDragonDailyGrowth();
             this.updateDragonValleyWorld(dt);
             this.coasterRuntime?.update(dt, this.playerX, this.playerZ);
+            this.amusementParkRuntime?.update(dt);
           }
           this.updateVehicles(dt);
           this.updateBuildPreview();
@@ -24328,6 +24344,7 @@ export class GameEngine {
     this.world?.dispose();
     this.flatWorld?.dispose();
     this.coasterRuntime?.dispose();
+    this.amusementParkRuntime?.dispose();
     if (this.terrainEngine) {
       this.terrainEngine.dispose(this.scene);
     }
@@ -24459,6 +24476,131 @@ export class GameEngine {
     this.toast(`Loaded demo coaster: ${demoName} (${coasterType})!`, 'discovery');
     this.emitHud();
     return coasterId;
+  }
+
+  /**
+   * Airlifts a completed studio park onto a surveyed open island site. The
+   * coaster is converted to the in-world runtime, while the park layout is
+   * built as persistent world geometry with live rides, visitors and shops.
+   */
+  public deliverAmusementPark(payload: AmusementParkDeliveryPayload): {
+    ok: boolean;
+    parkId?: string;
+    name?: string;
+    site?: AmusementParkSite;
+    coasterId?: string | null;
+    error?: string;
+  } {
+    if (!this.amusementParkRuntime || !this.coasterRuntime) {
+      return { ok: false, error: 'World is not ready for a delivery.' };
+    }
+    if (!payload || !payload.park) {
+      return { ok: false, error: 'The delivery did not include a park layout.' };
+    }
+    const park = sanitizePark(payload.park, payload.name || 'Delivered Park');
+    if (park.elements.length === 0) {
+      return { ok: false, error: 'Add park paths, rides or shops before delivering.' };
+    }
+    const site = findAmusementParkSite(
+      { x: this.playerX, z: this.playerZ },
+      this.amusementParkRuntime.getSites(),
+    );
+
+    let coasterId: string | null = null;
+    const source = payload.coaster;
+    if (source && Array.isArray(source.points) && source.points.length >= 2) {
+      const cos = Math.cos(site.yaw);
+      const sin = Math.sin(site.yaw);
+      const nodes = source.points.slice(0, 220).map((point) => {
+        const localX = Number.isFinite(point.x) ? point.x : 0;
+        const localZ = Number.isFinite(point.z) ? point.z : 0;
+        const x = site.x + localX * cos + localZ * sin;
+        const z = site.z - localX * sin + localZ * cos;
+        const ground = getTerrainSurfaceHeight(x, z);
+        const y = Math.max(ground + 0.8, site.y + (Number.isFinite(point.y) ? point.y : 4));
+        const kind = String(point.kind || 'track');
+        const segmentType: SavedCoasterData['nodes'][number]['segmentType'] =
+          kind === 'station' || kind === 'unload_station' || kind === 'storage'
+            ? 'station'
+            : kind === 'chain_lift' || kind === 'cable_lift'
+              ? 'chain_lift'
+              : kind === 'launch'
+                ? 'lsm_launch'
+                : kind === 'brake'
+                  ? 'trim_brake'
+                  : kind === 'block_brake' || kind === 'magnetic_brake'
+                    ? 'block_brake'
+                    : kind === 'splashdown'
+                      ? 'splashdown'
+                      : 'coast';
+        return {
+          position: { x, y, z },
+          bank: Number.isFinite(point.bank) ? point.bank : 0,
+          segmentType,
+          targetSpeed: Number.isFinite(point.targetSpeed) ? point.targetSpeed : undefined,
+        };
+      });
+      const typeId = source.coasterType || '';
+      const coasterType: CoasterModelType = typeId.includes('water')
+        ? 'log_flume'
+        : typeId.includes('wood')
+          ? 'wooden'
+          : typeId.includes('invert')
+            ? 'inverted'
+            : typeId.includes('fly')
+              ? 'flying'
+              : typeId.includes('launch')
+                ? 'air_launch_modern'
+                : typeId.includes('hyper') || typeId.includes('giga') || typeId.includes('strata')
+                  ? 'steel'
+                  : 'sit_down';
+      const coasterData: SavedCoasterData = {
+        id: `delivered_coaster_${Date.now().toString(36)}`,
+        name: source.name || `${park.name} Coaster`,
+        trackColor: /^#[0-9a-f]{6}$/i.test(source.trackColor || '')
+          ? source.trackColor
+          : '#e8b04b',
+        trainCarCount: Math.max(1, Math.min(8, source.trainCarCount || 4)),
+        stationPos: { ...nodes[0].position },
+        nodes,
+        pieceTags: ['delivered', 'studio'],
+        closedCircuit: Boolean(source.closed),
+        coasterType,
+      };
+      coasterId = this.coasterRuntime.addCoasterData(coasterData);
+    }
+
+    const saved = this.amusementParkRuntime.add(
+      { ...payload, name: park.name, park },
+      site,
+      coasterId,
+    );
+    this.sound.playWeldSnap();
+    this.toast(
+      `Helicopter delivering “${saved.name}” to ${site.x.toFixed(0)}, ${site.z.toFixed(0)} — the park is landing now.`,
+      'discovery',
+    );
+    this.emitHud();
+    return {
+      ok: true,
+      parkId: saved.id,
+      name: saved.name,
+      site,
+      coasterId,
+    };
+  }
+
+  public getDeliveredParks(): { id: string; name: string; site: AmusementParkSite; elements: number }[] {
+    return this.amusementParkRuntime?.getSummaries() ?? [];
+  }
+
+  public removeAmusementPark(parkId: string): boolean {
+    const removed = this.amusementParkRuntime?.remove(parkId) ?? false;
+    if (removed) {
+      this.toast('Amusement park removed from the island.', 'info');
+      this.emitHud();
+    }
+    return removed;
   }
 
   public deleteCoaster(coasterId: string): boolean {

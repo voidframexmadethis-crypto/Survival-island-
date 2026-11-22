@@ -184,6 +184,8 @@ export interface TrainDesign {
 
 export interface CoasterProject {
   schemaVersion: 1;
+  /** Amusement-park layout authored alongside this coaster. */
+  park?: import('./park').ParkLayout;
   id: string;
   name: string;
   createdAt: number;

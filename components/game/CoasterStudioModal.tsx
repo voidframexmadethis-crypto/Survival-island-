@@ -17,6 +17,7 @@ import {
   RotateCcw,
    ShieldCheck,
   Sparkles,
+  Trees,
   Trash2,
   Wand2,
   X,
@@ -62,6 +63,7 @@ interface CoasterStudioModalProps {
   onResetTrain: (coasterId: string) => void;
   onBoardRide: (coasterId: string) => void;
   onOpenMusicStudio?: () => void;
+  onOpenParkCreator?: () => void;
   onClose: () => void;
 }
 
@@ -173,6 +175,7 @@ export function CoasterStudioModal({
   onResetTrain,
   onBoardRide,
   onOpenMusicStudio,
+  onOpenParkCreator,
   onClose,
 }: CoasterStudioModalProps) {
   const coasters: CoasterHudSummaryItem[] = hud.coasters ?? [];
@@ -234,6 +237,17 @@ export function CoasterStudioModal({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            {onOpenParkCreator && (
+              <button
+                type="button"
+                onClick={onOpenParkCreator}
+                className="min-h-[40px] px-3.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-stone-950 font-bold text-xs flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                title="Open the live 3D amusement park and coaster construction viewport"
+              >
+                <Trees className="w-4 h-4" />
+                <span>3D Park Creator</span>
+              </button>
+            )}
             <a
               href="/coaster-studio"
               target="_blank"

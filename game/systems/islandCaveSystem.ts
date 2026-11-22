@@ -504,6 +504,7 @@ export class IslandCaveSystem {
     group.add(light);
 
     this.addInteriorDetails(group, cave, samples, palette, rand);
+    this.addRockDetails(group, cave, samples, palette, rand);
 
     const openingRadius = Math.max(3.6, dims.halfWidth * 1.38);
     return {
@@ -898,6 +899,96 @@ export class IslandCaveSystem {
     return Math.max(-0.35, Math.min(0.35, Math.atan(rise / 3) * 0.65));
   }
 
+  /**
+   * Stalactites, load-bearing rock columns and fallen boulders make the bore
+   * read as a real cavern. All formations share two instanced meshes so a
+   * special cave costs only two extra draw calls.
+   */
+  private addRockDetails(
+    group: THREE.Group,
+    cave: Cave,
+    samples: CaveSample[],
+    palette: { rock: number; floor: number; beacon: number; emissive: number },
+    rand: () => number,
+  ): void {
+    if (samples.length < 6) return;
+    const rockMat = new THREE.MeshStandardMaterial({
+      color: palette.rock,
+      roughness: 1,
+      metalness: 0,
+      flatShading: true,
+    });
+    const stalCount = cave.type === 'regular' ? 8 : 16;
+    const stalGeo = new THREE.ConeGeometry(0.18, 1.4, 5);
+    const stalactites = new THREE.InstancedMesh(stalGeo, rockMat, stalCount);
+    const matrix = new THREE.Matrix4();
+    const quat = new THREE.Quaternion();
+    const euler = new THREE.Euler();
+    const pos = new THREE.Vector3();
+    const scl = new THREE.Vector3();
+    for (let i = 0; i < stalCount; i++) {
+      const sample = samples[1 + Math.floor(rand() * (samples.length - 3))];
+      const side = rand() < 0.5 ? -1 : 1;
+      const scale = 0.55 + rand() * 1.5;
+      pos.set(
+        sample.lx + side * sample.halfWidth * (0.15 + rand() * 0.62),
+        sample.ceilingY - (1.4 * scale) * 0.4,
+        sample.lz + (rand() - 0.5) * 0.8,
+      );
+      scl.set(scale, scale, scale);
+      euler.set(Math.PI, rand() * 0.4, 0);
+      quat.setFromEuler(euler);
+      stalactites.setMatrixAt(i, matrix.compose(pos, quat, scl));
+    }
+    stalactites.instanceMatrix.needsUpdate = true;
+    stalactites.castShadow = false;
+    stalactites.userData.noShadowCast = true;
+    group.add(stalactites);
+
+    const columnCount = cave.type === 'regular' ? 2 : 4;
+    const colGeo = new THREE.CylinderGeometry(0.32, 0.48, 1, 7);
+    const columns = new THREE.InstancedMesh(colGeo, rockMat, columnCount);
+    for (let i = 0; i < columnCount; i++) {
+      const sample = samples[Math.floor(samples.length * (0.42 + i * 0.13)) % samples.length];
+      const side = i % 2 === 0 ? -1 : 1;
+      const height = Math.max(1.2, sample.ceilingY - sample.floorY - 0.25);
+      pos.set(
+        sample.lx + side * sample.halfWidth * 0.66,
+        sample.floorY + height * 0.5,
+        sample.lz,
+      );
+      scl.set(0.75 + rand() * 0.8, height, 0.75 + rand() * 0.8);
+      quat.identity();
+      columns.setMatrixAt(i, matrix.compose(pos, quat, scl));
+    }
+    columns.instanceMatrix.needsUpdate = true;
+    columns.castShadow = false;
+    columns.userData.noShadowCast = true;
+    group.add(columns);
+
+    const boulderCount = cave.type === 'regular' ? 4 : 9;
+    const boulderGeo = new THREE.DodecahedronGeometry(0.32, 0);
+    const boulders = new THREE.InstancedMesh(boulderGeo, rockMat, boulderCount);
+    for (let i = 0; i < boulderCount; i++) {
+      const sample = samples[1 + Math.floor(rand() * (samples.length - 2))];
+      const side = rand() < 0.5 ? -1 : 1;
+      const scale = 0.6 + rand() * 1.2;
+      pos.set(
+        sample.lx + side * sample.halfWidth * rand() * 0.72,
+        sample.floorY + 0.16 * scale,
+        sample.lz + (rand() - 0.5) * 1.2,
+      );
+      scl.set(scale * 1.2, scale * 0.7, scale);
+      euler.set(rand() * 0.5, rand() * Math.PI, rand() * 0.3);
+      quat.setFromEuler(euler);
+      boulders.setMatrixAt(i, matrix.compose(pos, quat, scl));
+    }
+    boulders.instanceMatrix.needsUpdate = true;
+    boulders.castShadow = false;
+    boulders.userData.noShadowCast = true;
+    group.add(boulders);
+  }
+
   private addInteriorDetails(
     group: THREE.Group,
     cave: Cave,
@@ -1083,9 +1174,45 @@ export class IslandCaveSystem {
     });
   }
 
+  /** Mouth-only openings, kept for save/UI compatibility and focused audits. */
   getOpenings(): CaveTerrainOpening[] {
     const out: CaveTerrainOpening[] = [];
     for (const entry of this.active.values()) out.push(entry.opening);
+    return out;
+  }
+
+  /**
+   * Terrain cuts for the mouth plus any stretch just inside the entrance where
+   * the carved bore passes through the visible hillside. Removing those
+   * intruding triangles prevents a terrain sheet from clipping through the
+   * tunnel roof while keeping the rest of the mountain intact.
+   */
+  getCarvedOpenings(): CaveTerrainOpening[] {
+    const out: CaveTerrainOpening[] = [];
+    for (const entry of this.active.values()) {
+      out.push(entry.opening);
+      let lastX = entry.mouthX;
+      let lastZ = entry.mouthZ;
+      let added = 0;
+      for (let i = 2; i < entry.samples.length && added < 7; i++) {
+        const sample = entry.samples[i];
+        if (sample.t > 0.55) break;
+        const terrainY = getTerrainSurfaceHeight(sample.worldX, sample.worldZ);
+        const intersectsBore =
+          terrainY > sample.floorY - 0.35 && terrainY < sample.ceilingY + 0.25;
+        if (!intersectsBore) continue;
+        const spacing = Math.hypot(sample.worldX - lastX, sample.worldZ - lastZ);
+        if (spacing < 3.2) continue;
+        out.push({
+          x: sample.worldX,
+          z: sample.worldZ,
+          radius: Math.min(4.4, sample.halfWidth + 0.55),
+        });
+        lastX = sample.worldX;
+        lastZ = sample.worldZ;
+        added++;
+      }
+    }
     return out;
   }
 
