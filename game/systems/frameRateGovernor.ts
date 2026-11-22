@@ -28,6 +28,10 @@ export interface FrameRateGovernorOptions {
   upWindows?: number;
   /** Frames longer than this are treated as tab-switch/loading stalls, not GPU load. */
   stallFrameMs?: number;
+  /** A frame at or above this duration counts toward an immediate quality drop. */
+  severeFrameMs?: number;
+  /** Consecutive severe frames that force a drop before the sample window closes. */
+  severeFrameLimit?: number;
   /** Optional discrete scale ladder; defaults to an 8% stepped ladder. */
   steps?: readonly number[];
 }
@@ -43,6 +47,8 @@ export class FrameRateGovernor {
   private readonly upFps: number;
   private readonly upWindows: number;
   private readonly stallFrameMs: number;
+  private readonly severeFrameMs: number;
+  private readonly severeFrameLimit: number;
   private readonly steps: readonly number[];
 
   private level = 0;
@@ -53,6 +59,7 @@ export class FrameRateGovernor {
   private healthyWindows = 0;
   private lastFps = 0;
   private settleWindows = 0;
+  private severeFrames = 0;
 
   constructor(options: FrameRateGovernorOptions = {}) {
     this.targetFps = Math.max(30, options.targetFps ?? 60);
@@ -71,6 +78,8 @@ export class FrameRateGovernor {
     this.upFps = Math.min(this.targetFps + 4, options.upFps ?? 59);
     this.upWindows = Math.max(1, Math.round(options.upWindows ?? 8));
     this.stallFrameMs = Math.max(60, options.stallFrameMs ?? 220);
+    this.severeFrameMs = Math.max(24, options.severeFrameMs ?? 34);
+    this.severeFrameLimit = Math.max(1, Math.round(options.severeFrameLimit ?? 2));
   }
 
   /** Multiplier currently applied to the preset base pixel ratio. */
@@ -105,6 +114,7 @@ export class FrameRateGovernor {
     this.healthyWindows = 0;
     this.lastFps = 0;
     this.settleWindows = 0;
+    this.severeFrames = 0;
   }
 
   /**
@@ -128,6 +138,28 @@ export class FrameRateGovernor {
       this.windowFrames = 0;
       this.windowFrameMs = 0;
       return false;
+    }
+
+    // Emergency fast path: a short burst of visibly long frames should trim
+    // render scale immediately instead of waiting for a full one-second window.
+    if (frameMs >= this.severeFrameMs) {
+      this.severeFrames += 1;
+    } else {
+      this.severeFrames = Math.max(0, this.severeFrames - 1);
+    }
+    if (
+      this.severeFrames >= this.severeFrameLimit &&
+      this.settleWindows === 0 &&
+      this.level < this.steps.length - 1
+    ) {
+      this.level += 1;
+      this.severeFrames = 0;
+      this.healthyWindows = 0;
+      this.settleWindows = 1;
+      this.windowStartMs = nowMs;
+      this.windowFrames = 0;
+      this.windowFrameMs = 0;
+      return true;
     }
 
     this.windowFrames += 1;

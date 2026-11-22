@@ -63,6 +63,24 @@ test('governor restores resolution after sustained 60 FPS headroom', () => {
   assert.equal(governor.scale, 1);
 });
 
+test('governor cuts quality immediately on a burst of severe frames', () => {
+  const governor = new FrameRateGovernor({
+    startupGraceMs: 0,
+    severeFrameMs: 50,
+    severeFrameLimit: 2,
+    sampleWindowMs: 1000,
+  });
+  const now = { value: 0 };
+  governor.reset(0);
+  let changes = 0;
+  for (let i = 0; i < 12; i++) {
+    now.value += 60;
+    if (governor.noteFrame(60, now.value)) changes++;
+  }
+  assert.ok(changes >= 1, 'severe frames should trigger an immediate quality cut');
+  assert.ok(governor.tier > 0, 'the render scale should move down');
+});
+
 test('governor ignores loading stalls and tab-switch frames', () => {
   const governor = new FrameRateGovernor();
   const now = { value: 0 };

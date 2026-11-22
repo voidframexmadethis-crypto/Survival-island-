@@ -258,14 +258,22 @@ export class RealisticRainSystem {
 
     const scale = Math.max(0.2, Math.min(1, params.densityScale));
     const stormBoost = params.isStorm ? 1.0 : 0.72;
-    this.streakGeo.instanceCount = Math.max(
+    const nextStreaks = Math.max(
       180,
       Math.round(MAX_RAIN_STREAKS * scale * stormBoost),
     );
-    this.splashGeo.instanceCount = Math.max(
+    const nextSplashes = Math.max(
       24,
       Math.round(MAX_SPLASH_RINGS * scale * stormBoost),
     );
+    // Instance counts only change when the invisible frame blocker moves a
+    // quality step, never every frame. That avoids needless GPU state churn.
+    if (this.streakGeo.instanceCount !== nextStreaks) {
+      this.streakGeo.instanceCount = nextStreaks;
+    }
+    if (this.splashGeo.instanceCount !== nextSplashes) {
+      this.splashGeo.instanceCount = nextSplashes;
+    }
 
     const su = this.streakMat.uniforms;
     // Keep shader time small so multi-hour sessions never lose float precision

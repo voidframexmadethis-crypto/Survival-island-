@@ -691,11 +691,28 @@ export class GameEngine {
   // presets (no shader recompiles, no framebuffer thrash on every step).
   private readonly frameGovernor = new FrameRateGovernor({
     targetFps: 60,
-    minScale: 0.6,
+    minScale: 0.5,
     maxScale: 1,
+    sampleWindowMs: 650,
+    startupGraceMs: 1800,
+    downFps: 57,
+    upFps: 63,
+    upWindows: 6,
+    stallFrameMs: 420,
+    severeFrameMs: 34,
+    severeFrameLimit: 2,
+    steps: [1, 0.9, 0.8, 0.7, 0.6, 0.5],
   });
   private basePixelRatio = 1;
   private appliedRenderScale = 1;
+  // Rain is the most fill-rate-sensitive effect in a storm. This budget trims
+  // only rain density and splash rings when the frame blocker sees pressure,
+  // keeping the weather alive without sacrificing movement or the world itself.
+  private rainQualityScale = 1;
+  private rainQualityTimer = 0;
+  private rainHealthyWindows = 0;
+  private rainPerformanceMode = false;
+  private rainRenderScale = 1;
   private envSignature = '';
   private envRefreshCooldown = 0;
   private surfaceWetness = 0;
@@ -2652,7 +2669,7 @@ export class GameEngine {
       if (wasNotPlaying) {
         this.applyCinematicQualityForMode();
         this.frameGovernor.reset();
-        this.applyRenderScale(1);
+        this.applyRenderScale(this.rainRenderScale);
         this.ensurePlayerHasGun(false);
         if (!this.cinematicActive) {
           this.snapPlayerCamera();
@@ -2831,7 +2848,8 @@ export class GameEngine {
     this.appliedRenderScale = 1;
     this.frameGovernor.reset();
     this.applyRenderScale(
-      this.mode === 'menu' && !this.isTouchDevice && !this.isSoftwareGl ? 1.12 : 1,
+      (this.mode === 'menu' && !this.isTouchDevice && !this.isSoftwareGl ? 1.12 : 1) *
+        this.rainRenderScale,
     );
     this.applyCinematicQualityForMode();
     this.renderer.shadowMap.enabled = shadowsOn;
@@ -10918,8 +10936,8 @@ export class GameEngine {
       groundY: rainGroundY,
       isStorm: this.weather === 'storm' || stormCinematic,
       isNight: sunElev < 0.05,
-      densityScale: Math.min(1, this.effectiveParticleScale),
-      showSplashes: !this.cinematicActive,
+      densityScale: Math.min(1, this.effectiveParticleScale) * this.rainQualityScale,
+      showSplashes: !this.cinematicActive && this.rainQualityScale > 0.5,
     });
 
     if (this.mode === 'playing' && !this.gameOver && !this.cinematicActive) {
@@ -17133,7 +17151,11 @@ export class GameEngine {
     // the GPU cannot sustain 60 FPS, and restore it when headroom returns.
     // Never let dynamic resolution soften the title screen; gameplay keeps the governor.
     if (this.mode !== 'menu' && this.frameGovernor.noteFrame(rawFrameMs, nowPerf)) {
-      this.applyRenderScale(this.frameGovernor.scale);
+      this.applyRenderScale(this.frameGovernor.scale * this.rainRenderScale);
+      // A quality drop is an emergency signal: pull rain overdraw back at the
+      // same time instead of waiting for the next half-second rain window.
+      this.rainQualityScale = Math.max(0.35, this.rainQualityScale * 0.82);
+      this.rainHealthyWindows = 0;
     }
     const frameTime = Math.min(clampedDt, 0.05);
     this.lastFramePerfMs = nowPerf;
@@ -17151,6 +17173,51 @@ export class GameEngine {
       this.fpsDisplayTimer = 0;
       this.fpsDisplayFrames = 0;
       this.fpsDisplayAccumMs = 0;
+    }
+
+    // Invisible rain frame-drop blocker. It never shows UI and never changes
+    // gameplay; it simply spends fewer fragments on rain until the device has
+    // sustained headroom again.
+    const rainActive =
+      this.mode !== 'menu' &&
+      this.worldType !== 'flat' &&
+      (this.weather === 'rain' ||
+        this.weather === 'storm' ||
+        (this.cinematicActive && !this.navigatorFarewellCinematic));
+    if (rainActive !== this.rainPerformanceMode) {
+      this.rainPerformanceMode = rainActive;
+      // Rain raises fragment and overdraw cost. Distant grass drops to its
+      // reduced-blade LOD before the first storm frame, and the internal render
+      // buffer takes a slight 8% resolution trim, then restores when the weather
+      // clears. No menu, HUD notice, or gameplay change is involved.
+      this.rainRenderScale = rainActive ? 0.92 : 1;
+      this.world?.setRainPerformanceMode(rainActive, this.playerX, this.playerZ);
+      this.applyRenderScale(this.frameGovernor.scale * this.rainRenderScale);
+      if (rainActive) {
+        this.rainQualityScale = Math.min(this.rainQualityScale, 0.85);
+      }
+    }
+    this.rainQualityTimer += frameTime;
+    if (this.rainQualityTimer >= 0.5) {
+      this.rainQualityTimer = 0;
+      // currentFps is clamped for the HUD, so recovery must use the governor's
+      // real window average; otherwise rain quality could never climb back up.
+      const fpsSample = this.frameGovernor.fps > 0 ? this.frameGovernor.fps : this.currentFps;
+      if (rainActive && fpsSample < 57) {
+        this.rainQualityScale = Math.max(0.35, this.rainQualityScale - 0.14);
+        this.rainHealthyWindows = 0;
+      } else if (rainActive && fpsSample >= 59) {
+        this.rainHealthyWindows += 1;
+        if (this.rainHealthyWindows >= 4) {
+          this.rainQualityScale = Math.min(1, this.rainQualityScale + 0.08);
+          this.rainHealthyWindows = 0;
+        }
+      } else if (!rainActive) {
+        this.rainQualityScale = Math.min(1, this.rainQualityScale + 0.12);
+        this.rainHealthyWindows = 0;
+      } else {
+        this.rainHealthyWindows = 0;
+      }
     }
 
     // Stable Graphics Policy: Auto-FPS Guard no longer flips shadows, DPR, or draw distance mid-gameplay

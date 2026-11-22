@@ -267,6 +267,8 @@ export interface WorldHandles {
   restoreBatchedNode: (nodeId: string) => void;
   setBatchedNodeVisible: (nodeId: string, visible: boolean) => void;
   setWorldShadowCasting: (enabled: boolean) => void;
+  /** Swaps distant grass to its lightest LOD while rain is falling. */
+  setRainPerformanceMode: (enabled: boolean, playerX?: number, playerZ?: number) => void;
   /** Ultra preset: maximum texture filtering, richer PBR response and denser grass clumps. */
   setUltraFidelity: (enabled: boolean) => void;
   cullWorldByDistance: (
@@ -6779,6 +6781,7 @@ export function buildIslandWorld(
     variant: GrassVariant;
   }[] = [];
   let grassUltraActive = false;
+  let grassRainPerformanceMode = false;
   let lastGrassLodX = Number.NaN;
   let lastGrassLodZ = Number.NaN;
   const applyGrassLod = (px: number, pz: number, force = false): void => {
@@ -6794,7 +6797,24 @@ export function buildIslandWorld(
       const dx = entry.cx - px;
       const dz = entry.cz - pz;
       const dSq = dx * dx + dz * dz;
-      const lod = dSq < 62 * 62 ? (grassUltraActive ? 'ultra' : 'near') : dSq < 102 * 102 ? 'near' : 'far';
+      // Match the rain-only LOD with a rain-only draw distance. This is updated
+      // whenever the player moves, so nearby grass never remains culled.
+      if (grassRainPerformanceMode) {
+        entry.mesh.visible = !Number.isFinite(dSq) || dSq <= 88 * 88;
+      } else if (!entry.mesh.visible) {
+        entry.mesh.visible = true;
+      }
+      const lod = grassRainPerformanceMode
+        ? dSq < 42 * 42
+          ? 'near'
+          : 'far'
+        : dSq < 62 * 62
+          ? grassUltraActive
+            ? 'ultra'
+            : 'near'
+          : dSq < 102 * 102
+            ? 'near'
+            : 'far';
       const geoSet = grassVariantGeometries.get(entry.variant);
       if (!geoSet) continue;
       const key = `${entry.variant}:${lod}`;
@@ -7717,6 +7737,18 @@ gl_Position = projectionMatrix * mvPosition;`,
     'clearcoatRoughnessMap',
   ] as const;
 
+  const setRainPerformanceMode = (
+    enabled: boolean,
+    playerX?: number,
+    playerZ?: number,
+  ): void => {
+    if (enabled === grassRainPerformanceMode) return;
+    grassRainPerformanceMode = enabled;
+    const px = Number.isFinite(playerX) ? (playerX as number) : lastGrassLodX;
+    const pz = Number.isFinite(playerZ) ? (playerZ as number) : lastGrassLodZ;
+    applyGrassLod(px, pz, true);
+  };
+
   const setUltraFidelity = (enabled: boolean): void => {
     if (enabled === ultraFidelityActive) return;
     ultraFidelityActive = enabled;
@@ -7895,6 +7927,7 @@ gl_Position = projectionMatrix * mvPosition;`,
     restoreBatchedNode,
     setBatchedNodeVisible,
     setWorldShadowCasting,
+    setRainPerformanceMode,
     setUltraFidelity,
     cullWorldByDistance,
     resetTerrainIndex,
