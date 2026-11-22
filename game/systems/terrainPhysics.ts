@@ -455,12 +455,14 @@ export class VolumetricTerrainEngine {
     }
 
     // 1B. Dynamic Rainwater Puddle Accumulation & Evaporation
+    // Scan less often and over a tighter radius. The old 0.35 s / 76 m pass
+    // repeatedly rewrote a large wet-color region and was the rain frame spike.
     this.puddleUpdateCooldown -= dt;
     if (this.puddleUpdateCooldown <= 0) {
-      this.puddleUpdateCooldown = 0.35;
+      this.puddleUpdateCooldown = 0.8;
       if (isRaining) {
-        const fillRate = isStorming ? 0.14 : 0.075;
-        const maxRange = 76;
+        const fillRate = isStorming ? 0.2 : 0.12;
+        const maxRange = 56;
         const minIx = Math.max(2, Math.floor((playerX - maxRange + TERRAIN_HALF) / TERRAIN_STEP));
         const maxIx = Math.min(TERRAIN_VERTS - 3, Math.ceil((playerX + maxRange + TERRAIN_HALF) / TERRAIN_STEP));
         const minIz = Math.max(2, Math.floor((playerZ - maxRange + TERRAIN_HALF) / TERRAIN_STEP));
@@ -493,9 +495,8 @@ export class VolumetricTerrainEngine {
               terrainWetnessGrid[idx] = Math.min(1.0, prevWet + fillRate * 1.4);
               this.hasWetnessOrPuddles = true;
               this.puddleScanDirty = true;
-              if (terrainWetnessGrid[idx] - prevWet > 0.05) {
-                this.markDirtyArea(vx, vz, TERRAIN_STEP, false);
-              }
+              // The global wet-surface shader handles the rain sheen. Do not
+              // rebuild a large terrain-color region just to darken wet cells.
             } else {
               terrainWetnessGrid[idx] = Math.min(0.65, terrainWetnessGrid[idx] + fillRate * 0.45);
               this.hasWetnessOrPuddles = true;
@@ -508,9 +509,9 @@ export class VolumetricTerrainEngine {
     // 1C. Coastal Shoreline Sand Erosion during Rainfall & Storm Surge
     this.coastalErosionCooldown -= dt;
     if (isRaining && this.coastalErosionCooldown <= 0) {
-      this.coastalErosionCooldown = 0.55;
+      this.coastalErosionCooldown = 1.1;
       const sandErode = isStorming ? 0.022 : 0.009;
-      for (let k = 0; k < (isStorming ? 18 : 10); k++) {
+      for (let k = 0; k < (isStorming ? 10 : 6); k++) {
         const angle = Math.random() * Math.PI * 2;
         const rad = 98 + Math.random() * 44;
         const sx = Math.cos(angle) * rad;
@@ -561,7 +562,7 @@ export class VolumetricTerrainEngine {
     // 3. Detect natural river/lake bank breaches (if player dug/blasted beside Azure Lake, Farm Pond, or River)
     this.breachCheckCooldown -= dt;
     if (this.breachCheckCooldown <= 0) {
-      this.breachCheckCooldown = 0.45;
+      this.breachCheckCooldown = 0.65;
       // Sample perimeter around Azure Lake
       for (let k = 0; k < 10; k++) {
         const a = Math.random() * Math.PI * 2;
@@ -588,9 +589,10 @@ export class VolumetricTerrainEngine {
           this.spawnDroplet(px, pz, Math.cos(a) * 1.6, Math.sin(a) * 1.6, 0.9, 6.0);
         }
       }
-      // Rainstorm hillslope runoff droplets near player
-      if (isRaining && this.droplets.length < (isStorming ? 220 : 180)) {
-        const runoffCount = isStorming ? 6 : 3;
+      // Rainstorm hillslope runoff droplets near player. The GPU splash rings
+      // carry the rain visual; capping runoff keeps the CPU erosion pass light.
+      if (isRaining && this.droplets.length < (isStorming ? 84 : 64)) {
+        const runoffCount = isStorming ? 3 : 2;
         for (let k = 0; k < runoffCount; k++) {
           const rx = playerX + (Math.random() - 0.5) * 64;
           const rz = playerZ + (Math.random() - 0.5) * 64;
