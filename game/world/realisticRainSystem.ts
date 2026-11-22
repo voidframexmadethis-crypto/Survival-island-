@@ -222,23 +222,17 @@ export class RealisticRainSystem {
     this.group.add(this.streakMesh, this.splashMesh);
     this.group.visible = false;
     this.group.userData.ignoreLightingPass = true;
+    // Rain is removed from gameplay: zero instances guarantees no draw even if
+    // an older save or caller attempts to toggle the weather again.
+    this.streakGeo.instanceCount = 0;
+    this.splashGeo.instanceCount = 0;
   }
 
-  /**
-   * Compiles both rain shaders during world load. Without this, the first
-   * shower of the session pays a multi-millisecond shader compile hitch.
-   */
+  /** Rain is disabled at launch, so there are no shaders to prewarm. */
   public prewarm(renderer: THREE.WebGLRenderer, camera: THREE.Camera): void {
-    const wasVisible = this.group.visible;
-    const prevStreaks = this.streakGeo.instanceCount;
-    const prevSplashes = this.splashGeo.instanceCount;
-    this.group.visible = true;
-    this.streakGeo.instanceCount = 8;
-    this.splashGeo.instanceCount = 4;
-    renderer.compile(this.group, camera);
-    this.streakGeo.instanceCount = prevStreaks;
-    this.splashGeo.instanceCount = prevSplashes;
-    this.group.visible = wasVisible;
+    void renderer;
+    void camera;
+    this.group.visible = false;
   }
 
   public update(params: {
@@ -253,50 +247,13 @@ export class RealisticRainSystem {
     densityScale: number;
     showSplashes: boolean;
   }): void {
-    this.group.visible = params.visible;
-    if (!params.visible) return;
-
-    const scale = Math.max(0.2, Math.min(1, params.densityScale));
-    const stormBoost = params.isStorm ? 1.0 : 0.72;
-    const nextStreaks = Math.max(
-      180,
-      Math.round(MAX_RAIN_STREAKS * scale * stormBoost),
-    );
-    const nextSplashes = Math.max(
-      24,
-      Math.round(MAX_SPLASH_RINGS * scale * stormBoost),
-    );
-    // Instance counts only change when the invisible frame blocker moves a
-    // quality step, never every frame. That avoids needless GPU state churn.
-    if (this.streakGeo.instanceCount !== nextStreaks) {
-      this.streakGeo.instanceCount = nextStreaks;
-    }
-    if (this.splashGeo.instanceCount !== nextSplashes) {
-      this.splashGeo.instanceCount = nextSplashes;
-    }
-
-    const su = this.streakMat.uniforms;
-    // Keep shader time small so multi-hour sessions never lose float precision
-    // in the wrapping mod() and start popping streaks.
-    const stableTime = params.elapsed % 3600;
-    su.uTime.value = stableTime;
-    su.uCenter.value.set(params.centerX, Math.max(0, params.centerY - 6.5), params.centerZ);
-    su.uFallSpeed.value = params.isStorm ? 32.0 : 23.0;
-    su.uWindX.value = params.isStorm
-      ? 6.4 + Math.sin(params.elapsed * 0.7) * 1.8
-      : 2.2 + Math.sin(params.elapsed * 0.4) * 0.7;
-    su.uWindZ.value = params.isStorm ? 2.6 : 0.9;
-    su.uOpacity.value = params.isStorm ? 0.5 : 0.36;
-    su.uColor.value.setHex(params.isNight ? 0x93c5fd : 0xe2e8f0);
-
-    this.splashMesh.visible = params.showSplashes;
-    if (params.showSplashes) {
-      const pu = this.splashMat.uniforms;
-      pu.uTime.value = stableTime;
-      pu.uCenter.value.set(params.centerX, 0, params.centerZ);
-      pu.uGroundY.value = params.groundY;
-      pu.uOpacity.value = params.isStorm ? 0.42 : 0.28;
-    }
+    // Rain is removed from the game. Keep this no-op entry point so older
+    // callers and saved sessions cannot re-enable the draw path.
+    void params;
+    this.group.visible = false;
+    this.splashMesh.visible = false;
+    this.streakGeo.instanceCount = 0;
+    this.splashGeo.instanceCount = 0;
   }
 
   public dispose(): void {

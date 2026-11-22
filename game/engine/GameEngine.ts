@@ -418,6 +418,8 @@ import {
   type AmusementParkSite,
   type SavedAmusementPark,
 } from '../systems/amusementParkRuntime';
+import { WaterparkRuntime } from '../systems/waterparkRuntime';
+import { getWaterparkSurfaceY } from '../world/waterparkLayout';
 import {
   sanitizePark,
   type AmusementParkDeliveryPayload,
@@ -705,14 +707,6 @@ export class GameEngine {
   });
   private basePixelRatio = 1;
   private appliedRenderScale = 1;
-  // Rain is the most fill-rate-sensitive effect in a storm. This budget trims
-  // only rain density and splash rings when the frame blocker sees pressure,
-  // keeping the weather alive without sacrificing movement or the world itself.
-  private rainQualityScale = 1;
-  private rainQualityTimer = 0;
-  private rainHealthyWindows = 0;
-  private rainPerformanceMode = false;
-  private rainRenderScale = 1;
   private envSignature = '';
   private envRefreshCooldown = 0;
   private surfaceWetness = 0;
@@ -1217,7 +1211,9 @@ export class GameEngine {
   private flatWorld!: FlatWorldHandles;
   private coasterRuntime!: RollerCoasterRuntime;
   private amusementParkRuntime!: AmusementParkRuntime;
+  private waterpark!: WaterparkRuntime;
   private ridingCoasterId: string | null = null;
+  private ridingWaterparkId: string | null = null;
   private gameMode: GameMode = 'survival';
   private hitMarkerActive = false;
   private nearbyInteraction: NearbyInteraction | null = null;
@@ -1658,6 +1654,8 @@ export class GameEngine {
     this.flatWorld.setVisible(false);
     this.coasterRuntime = new RollerCoasterRuntime(this.scene);
     this.amusementParkRuntime = new AmusementParkRuntime(this.scene);
+    this.waterpark = new WaterparkRuntime(this.scene);
+    this.waterpark.setVisible(this.worldType === 'island');
     this.realisticOcean = new RealisticOcean(
       this.scene,
       6400,
@@ -1785,10 +1783,10 @@ export class GameEngine {
     this.scene.add(this.navigatorCompanion.departureBoardGroup);
     this.scene.add(this.navigatorCompanion.droppedGunGroup);
 
-    // Ultra-realistic GPU-driven Volumetric Rain Streaks + Ground Splash Ripples (0 CPU loop, 2 draw calls)
+    // Rain is disabled at launch. Keep the object for save compatibility, but
+    // never add it to the scene, draw it, or compile its shaders.
     this.rainSystem = new RealisticRainSystem();
-    this.scene.add(this.rainSystem.group);
-    this.rainSystem.prewarm(this.renderer, this.camera);
+    this.rainSystem.group.visible = false;
 
     this.creatures = new CreatureManager(this.scene);
     this.structureManager = new StructureManager(this.scene);
@@ -1951,17 +1949,14 @@ export class GameEngine {
       // Temporarily mark hidden worlds/ship/storm FX visible during boot compilation so shaders pre-warm
       const prevFlatVis = this.flatWorld.flatGroup.visible;
       const prevShipVis = this.shipModel.visible;
-      const prevRainVis = this.rainSystem.group.visible;
       const prevStarVis = this.skyBodies.starPoints.visible;
       this.flatWorld.setVisible(true);
       this.shipModel.visible = true;
-      this.rainSystem.group.visible = true;
       this.skyBodies.starPoints.visible = true;
       this.renderer.compile(this.scene, this.camera);
       this.prewarmSceneTextures(this.scene);
       this.flatWorld.setVisible(prevFlatVis);
       this.shipModel.visible = prevShipVis;
-      this.rainSystem.group.visible = prevRainVis;
       this.skyBodies.starPoints.visible = prevStarVis;
     }
     // Compile bloom/grade/FXAA programs during boot instead of the first gameplay frame.
@@ -2187,6 +2182,11 @@ export class GameEngine {
     // from keyboard repeat (crouch toggled every OS repeat and caused ground clipping).
     if (e.repeat) return;
     this.sound.unlock();
+    if (this.ridingWaterparkId && !this.gameOver && (e.code === 'KeyE' || keyLower === 'e' || e.code === 'Space')) {
+      e.preventDefault();
+      this.exitWaterparkRide();
+      return;
+    }
     if (this.ridingCoasterId && !this.gameOver && (e.code === 'KeyE' || keyLower === 'e' || e.code === 'Space')) {
       e.preventDefault();
       this.exitCoasterRide();
@@ -2670,7 +2670,7 @@ export class GameEngine {
       if (wasNotPlaying) {
         this.applyCinematicQualityForMode();
         this.frameGovernor.reset();
-        this.applyRenderScale(this.rainRenderScale);
+        this.applyRenderScale(1);
         this.ensurePlayerHasGun(false);
         if (!this.cinematicActive) {
           this.snapPlayerCamera();
@@ -2849,8 +2849,7 @@ export class GameEngine {
     this.appliedRenderScale = 1;
     this.frameGovernor.reset();
     this.applyRenderScale(
-      (this.mode === 'menu' && !this.isTouchDevice && !this.isSoftwareGl ? 1.12 : 1) *
-        this.rainRenderScale,
+      this.mode === 'menu' && !this.isTouchDevice && !this.isSoftwareGl ? 1.12 : 1,
     );
     this.applyCinematicQualityForMode();
     this.renderer.shadowMap.enabled = shadowsOn;
@@ -4577,6 +4576,8 @@ export class GameEngine {
     this.flightAndTeleport.toggleFlight(false);
     this.clearMovementInputs();
     this.ridingCoasterId = null;
+    this.ridingWaterparkId = null;
+    this.waterpark?.resetProgress();
     this.currentDimension = 'overworld';
     if (this.activeDimensionWorld) {
       disposeDimensionWorld(this.activeDimensionWorld);
@@ -5114,12 +5115,14 @@ export class GameEngine {
     this.flightAndTeleport.toggleFlight(false);
     this.clearMovementInputs();
     this.ridingCoasterId = null;
+    this.ridingWaterparkId = null;
     this.currentDimension = 'overworld';
     if (this.activeDimensionWorld) {
       disposeDimensionWorld(this.activeDimensionWorld);
       this.activeDimensionWorld = null;
     }
     this.applyWorldEnvironment(loadedWorldType, loadedSurface);
+    this.waterpark?.restore(save.waterpark);
 
     this.masterRuntime = resetGameSession(
       this._chaseTargetScratch,
@@ -5533,6 +5536,8 @@ export class GameEngine {
     this.clearTransitAndElevatorState();
     this.seatedState = null;
     this.ridingCoasterId = null;
+    this.ridingWaterparkId = null;
+    this.waterpark?.exitRide();
     if (this.worldType === 'flat') {
       this.playerX = FLAT_PLAYER_SPAWN.x;
       this.playerZ = FLAT_PLAYER_SPAWN.z;
@@ -6194,6 +6199,7 @@ export class GameEngine {
       })),
       coasters: this.coasterRuntime?.exportCoasters() || [],
       amusementParks: this.amusementParkRuntime?.serialize() || [],
+      waterpark: this.waterpark?.serialize(),
       ecosystem: { ...this.ecosystem },
       lostWorld: this.lostWorld,
       terrainDeltas: this.worldType === 'island' ? exportSparseTerrainDeltas() : [],
@@ -7749,6 +7755,12 @@ export class GameEngine {
       return;
     }
 
+    if (this.ridingWaterparkId) {
+      this.exitWaterparkRide();
+      this.actionCooldown = 0.4;
+      return;
+    }
+
     if (this.ridingCoasterId) {
       this.exitCoasterRide();
       this.actionCooldown = 0.4;
@@ -7790,6 +7802,11 @@ export class GameEngine {
       } else if (near.id === 'ferry_board') {
         this.boardFerryPassenger();
       }
+      this.actionCooldown = 0.45;
+      return;
+    }
+    if (near && near.kind === 'waterpark_ride') {
+      this.startWaterparkRide(near.id);
       this.actionCooldown = 0.45;
       return;
     }
@@ -10589,27 +10606,16 @@ export class GameEngine {
 
   private updateWeatherAndAtmosphere(dt: number): void {
     const isFlat = this.worldType === 'flat';
+    // Rain is removed for launch. Legacy saves, mods, or multiplayer peers may
+    // still send the old rain state, so normalize it to overcast immediately.
+    if (this.weather === 'rain') this.weather = 'overcast';
     // The farewell is an intimate, clear-water scene; do not inherit the storm
     // lighting and rain that the pirate intro deliberately forces.
     const stormCinematic = this.cinematicActive && !this.navigatorFarewellCinematic;
 
-    // Rain progressively soaks exposed surfaces; the surface shaders darken and
-    // sharpen their specular response while it dries out afterwards.
-    const wetTarget =
-      this.weather === 'storm'
-        ? 1
-        : this.weather === 'rain'
-          ? 0.85
-          : this.weather === 'overcast'
-            ? 0.22
-            : 0;
-    this.surfaceWetness = THREE.MathUtils.damp(
-      this.surfaceWetness,
-      wetTarget,
-      0.5,
-      dt,
-    );
-    setShaderWetness(this.surfaceWetness);
+    // Rain is removed, so surfaces stay dry and skip the wet-shader work.
+    this.surfaceWetness = 0;
+    setShaderWetness(0);
     if (this.mode === 'playing' && !this.gameOver && !this.cinematicActive) {
       // Full day-night cycle scaled by mod dayLengthMultiplier
       const dayLenMult = Math.max(0.2, this.modSystem?.tweaks.dayLengthMultiplier ?? 1);
@@ -10635,19 +10641,12 @@ export class GameEngine {
         if (this.weatherTimer <= 0) {
           this.weatherTimer = 65 + Math.random() * 55;
           const r = Math.random();
+          // Rain is disabled; weather only cycles clear → overcast → storm.
           const next: WeatherType =
-            r < 0.48
-              ? 'clear'
-              : r < 0.72
-                ? 'overcast'
-                : r < 0.9
-                  ? 'rain'
-                  : 'storm';
+            r < 0.52 ? 'clear' : r < 0.86 ? 'overcast' : 'storm';
           if (next !== this.weather) {
             this.weather = next;
-            if (next === 'rain') {
-              this.toast('Tropical rain showers begin to fall.', 'info');
-            } else if (next === 'storm') {
+            if (next === 'storm') {
               this.toast(
                 'A heavy storm approaches! Seek shelter or build a fire.',
                 'warning',
@@ -10782,8 +10781,6 @@ export class GameEngine {
 
     if (this.weather === 'overcast') {
       _skyColor.lerp(_stormSky, 0.45);
-    } else if (this.weather === 'rain') {
-      _skyColor.lerp(_stormSky, 0.65);
     } else if (this.weather === 'storm' || this.cinematicActive) {
       _skyColor.lerp(_stormDeepSky, 0.82);
     }
@@ -10812,11 +10809,9 @@ export class GameEngine {
     const weatherFog =
       this.weather === 'storm' || this.cinematicActive
         ? 0.0056
-        : this.weather === 'rain'
-          ? 0.0036
-          : this.weather === 'overcast'
-            ? 0.0021
-            : 0.00062;
+        : this.weather === 'overcast'
+          ? 0.0021
+          : 0.00062;
     const fogDensity = (weatherFog + (1 - daylight) * 0.0028) * this.effectiveFogMult;
     _fogScratchColor
       .copy(_skyColor)
@@ -10827,11 +10822,9 @@ export class GameEngine {
     const weatherDim =
       this.weather === 'storm' || this.cinematicActive
         ? 0.45
-        : this.weather === 'rain'
-          ? 0.62
-          : this.weather === 'overcast'
-            ? 0.78
-            : 1.0;
+        : this.weather === 'overcast'
+          ? 0.78
+          : 1.0;
 
     const sunFade = THREE.MathUtils.clamp((sunElev + 0.06) / 0.42, 0, 1);
     const moonRise = THREE.MathUtils.clamp((-sunElev + 0.06) / 0.5, 0, 1);
@@ -10947,32 +10940,7 @@ export class GameEngine {
       );
     }
 
-    // GPU-driven volumetric raindrop streaks + expanding ground splash ripples (zero FPS drop)
-    const showRain =
-      this.mode !== 'menu' &&
-      !isFlat &&
-      this.effectiveParticleScale > 0.05 &&
-      (this.weather === 'rain' ||
-        this.weather === 'storm' ||
-        stormCinematic);
-    const rainCenter = stormCinematic
-      ? this.shipModel.position
-      : this.camera.position;
-    const rainGroundY = this.cinematicActive
-      ? OCEAN_LEVEL
-      : Math.max(OCEAN_LEVEL, getTerrainHeight(rainCenter.x, rainCenter.z));
-    this.rainSystem.update({
-      visible: showRain,
-      elapsed: this.elapsed,
-      centerX: rainCenter.x,
-      centerY: rainCenter.y,
-      centerZ: rainCenter.z,
-      groundY: rainGroundY,
-      isStorm: this.weather === 'storm' || stormCinematic,
-      isNight: sunElev < 0.05,
-      densityScale: Math.min(1, this.effectiveParticleScale) * this.rainQualityScale,
-      showSplashes: !this.cinematicActive && this.rainQualityScale > 0.5,
-    });
+    // No rain is rendered or simulated.
 
     if (this.mode === 'playing' && !this.gameOver && !this.cinematicActive) {
       for (const st of this.structures) {
@@ -11118,6 +11086,14 @@ export class GameEngine {
       this.totemFlashTimer = Math.max(0, this.totemFlashTimer - dt);
     }
     if (this.coldWarnCooldown > 0) this.coldWarnCooldown -= dt;
+
+    if (this.ridingWaterparkId) {
+      this.playerVelY = 0;
+      this.currentSpeedMps = 0;
+      this.isSprinting = false;
+      this.grounded = false;
+      return;
+    }
 
     if (this.activeVehicleId) {
       // The ferry worker is driving; the player is a passenger and must not
@@ -12604,6 +12580,27 @@ export class GameEngine {
     const nearHouseStation = this.findNearestHouseStationInteraction();
     if (nearHouseStation) {
       return nearHouseStation;
+    }
+
+    if (this.worldType === 'island' && this.waterpark) {
+      const waterparkNear = this.waterpark.getNearbyInteraction(
+        this.playerX,
+        this.playerY,
+        this.playerZ,
+      );
+      if (waterparkNear) {
+        return {
+          id: waterparkNear.rideId,
+          label: waterparkNear.label,
+          sublabel: waterparkNear.sublabel,
+          kind: 'waterpark_ride',
+          actionCategory: 'use',
+          distance: waterparkNear.distance,
+          targetX: waterparkNear.x,
+          targetY: waterparkNear.y,
+          targetZ: waterparkNear.z,
+        };
+      }
     }
 
     // Island ferry pickup: the worker waits at the car door, then the player
@@ -15108,6 +15105,23 @@ export class GameEngine {
       return;
     }
 
+    if (this.ridingWaterparkId && this.waterpark) {
+      const rideCam = this.waterpark.getRideTransform();
+      if (rideCam) {
+        this.handsRig.root.visible = false;
+        if (this.localPlayerHandle) this.localPlayerHandle.group.visible = false;
+        this.camera.position.copy(rideCam.position);
+        this.camera.up.copy(rideCam.up);
+        this.camera.lookAt(rideCam.lookAt);
+        this.playerX = rideCam.position.x;
+        this.playerY = rideCam.position.y;
+        this.playerZ = rideCam.position.z;
+        this.playerVelY = 0;
+        return;
+      }
+      this.exitWaterparkRide(true);
+    }
+
     if (this.ridingCoasterId && this.coasterRuntime) {
       const rideCam = this.coasterRuntime.getRideCameraTransform(this.ridingCoasterId);
       if (rideCam) {
@@ -15823,6 +15837,10 @@ export class GameEngine {
               lateralG: activeRideData.lateralG,
               segmentLabel: activeRideData.segmentLabel,
             }
+          : null,
+      activeWaterparkRide:
+        this.ridingWaterparkId && this.waterpark
+          ? this.waterpark.getHudState()
           : null,
       bloodMoonActive: this.isBloodMoonNight(),
       daysUntilBloodMoon: isFlat ? 0 : 7 - ((this.dayCount - 1) % 7),
@@ -17190,11 +17208,7 @@ export class GameEngine {
     // the GPU cannot sustain 60 FPS, and restore it when headroom returns.
     // Never let dynamic resolution soften the title screen; gameplay keeps the governor.
     if (this.mode !== 'menu' && this.frameGovernor.noteFrame(rawFrameMs, nowPerf)) {
-      this.applyRenderScale(this.frameGovernor.scale * this.rainRenderScale);
-      // A quality drop is an emergency signal: pull rain overdraw back at the
-      // same time instead of waiting for the next half-second rain window.
-      this.rainQualityScale = Math.max(0.35, this.rainQualityScale * 0.82);
-      this.rainHealthyWindows = 0;
+      this.applyRenderScale(this.frameGovernor.scale);
     }
     const frameTime = Math.min(clampedDt, 0.05);
     this.lastFramePerfMs = nowPerf;
@@ -17208,55 +17222,10 @@ export class GameEngine {
       const measuredFps = Math.round(
         (this.fpsDisplayFrames * 1000) / Math.max(1, this.fpsDisplayAccumMs),
       );
-      this.currentFps = Math.min(60, Math.max(1, measuredFps));
+      this.currentFps = Math.min(300, Math.max(1, measuredFps));
       this.fpsDisplayTimer = 0;
       this.fpsDisplayFrames = 0;
       this.fpsDisplayAccumMs = 0;
-    }
-
-    // Invisible rain frame-drop blocker. It never shows UI and never changes
-    // gameplay; it simply spends fewer fragments on rain until the device has
-    // sustained headroom again.
-    const rainActive =
-      this.mode !== 'menu' &&
-      this.worldType !== 'flat' &&
-      (this.weather === 'rain' ||
-        this.weather === 'storm' ||
-        (this.cinematicActive && !this.navigatorFarewellCinematic));
-    if (rainActive !== this.rainPerformanceMode) {
-      this.rainPerformanceMode = rainActive;
-      // Rain raises fragment and overdraw cost. Distant grass drops to its
-      // reduced-blade LOD before the first storm frame, and the internal render
-      // buffer takes a slight 8% resolution trim, then restores when the weather
-      // clears. No menu, HUD notice, or gameplay change is involved.
-      this.rainRenderScale = rainActive ? 0.92 : 1;
-      this.world?.setRainPerformanceMode(rainActive, this.playerX, this.playerZ);
-      this.applyRenderScale(this.frameGovernor.scale * this.rainRenderScale);
-      if (rainActive) {
-        this.rainQualityScale = Math.min(this.rainQualityScale, 0.85);
-      }
-    }
-    this.rainQualityTimer += frameTime;
-    if (this.rainQualityTimer >= 0.5) {
-      this.rainQualityTimer = 0;
-      // currentFps is clamped for the HUD, so recovery must use the governor's
-      // real window average; otherwise rain quality could never climb back up.
-      const fpsSample = this.frameGovernor.fps > 0 ? this.frameGovernor.fps : this.currentFps;
-      if (rainActive && fpsSample < 57) {
-        this.rainQualityScale = Math.max(0.35, this.rainQualityScale - 0.14);
-        this.rainHealthyWindows = 0;
-      } else if (rainActive && fpsSample >= 59) {
-        this.rainHealthyWindows += 1;
-        if (this.rainHealthyWindows >= 4) {
-          this.rainQualityScale = Math.min(1, this.rainQualityScale + 0.08);
-          this.rainHealthyWindows = 0;
-        }
-      } else if (!rainActive) {
-        this.rainQualityScale = Math.min(1, this.rainQualityScale + 0.12);
-        this.rainHealthyWindows = 0;
-      } else {
-        this.rainHealthyWindows = 0;
-      }
     }
 
     // Stable Graphics Policy: Auto-FPS Guard no longer flips shadows, DPR, or draw distance mid-gameplay
@@ -17298,6 +17267,11 @@ export class GameEngine {
     // Scripted island ferry pickup runs before player control so the worker's
     // car owns the player position while the player is riding shotgun.
     this.updateFerryPickup(dt);
+
+    if (this.worldType === 'island' && this.currentDimension === 'overworld') {
+      this.waterpark?.update(dt, this.playerX, this.playerY, this.playerZ);
+      this.handleWaterparkEvents();
+    }
 
     // 1. Always move the player smoothly first before world & biome updates
     const playerActive =
@@ -18092,7 +18066,11 @@ export class GameEngine {
     const deckY = this.inSpacePlanet
       ? -999
       : this.getStructuralSurfaceY(x, z, footY);
-    return Math.max(terrainY, deckY);
+    const waterparkY =
+      this.worldType === 'island'
+        ? getWaterparkSurfaceY(x, z, footY)
+        : -9999;
+    return Math.max(terrainY, deckY, waterparkY);
   }
 
   private applyPlayerGroundCollision(
@@ -23658,6 +23636,7 @@ export class GameEngine {
       }
     }
     this.flatWorld?.setVisible(showFlat);
+    this.waterpark?.setVisible(showIsland);
     this.realisticOcean?.setVisible(showIsland);
     this.creatures?.setOverworldActive(showIsland);
     this.structureManager?.setDimensionVisible(showIsland);
@@ -24541,6 +24520,7 @@ export class GameEngine {
     this.flatWorld?.dispose();
     this.coasterRuntime?.dispose();
     this.amusementParkRuntime?.dispose();
+    this.waterpark?.dispose();
     if (this.terrainEngine) {
       this.terrainEngine.dispose(this.scene);
     }
@@ -24977,6 +24957,83 @@ export class GameEngine {
     const ok = this.coasterRuntime.resetTrain(coasterId);
     if (ok) this.emitHud();
     return ok;
+  }
+
+  public startWaterparkRide(rideId: string): boolean {
+    if (!this.waterpark || this.worldType !== 'island') return false;
+    if (this.ridingCoasterId || this.ridingWaterparkId) return false;
+    if (!this.waterpark.startRide(rideId)) {
+      this.toast('That waterpark attraction is not ready.', 'warning');
+      return false;
+    }
+    this.ridingWaterparkId = rideId;
+    this.nearbyInteraction = null;
+    this.sound.playWeldSnap();
+    const hud = this.waterpark.getHudState();
+    this.toast(
+      hud
+        ? `${hud.name} — press E to step out at the splashdown`
+        : 'Waterpark ride started — press E to step out',
+      'discovery',
+    );
+    this.emitHud();
+    return true;
+  }
+
+  public exitWaterparkRide(silent = false): void {
+    if (!this.ridingWaterparkId || !this.waterpark) return;
+    const exit = this.waterpark.exitRide();
+    this.ridingWaterparkId = null;
+    this.playerX = exit.x;
+    this.playerY = exit.y;
+    this.playerZ = exit.z;
+    this.playerVelY = 0;
+    this.playerYaw = exit.yaw;
+    this.camYaw = exit.yaw - Math.PI;
+    this.camPitch = -0.05;
+    this.camStepOffsetY = 0;
+    this.camBobBlend = 0;
+    this.wallTiltAngle = 0;
+    this.camera.rotation.order = 'YXZ';
+    this.camera.up.set(0, 1, 0);
+    const groundY = this.getPlayerGroundSurfaceY(
+      this.playerX,
+      this.playerZ,
+      this.playerY + 1.5,
+    );
+    this.applyPlayerGroundCollision(groundY, 0, false, false);
+    if (!silent) {
+      this.sound.playWashBottle();
+      this.toast('Stepped out at the waterpark splashdown deck', 'info');
+    }
+    this.emitHud();
+  }
+
+  private handleWaterparkEvents(): void {
+    if (!this.waterpark) return;
+    for (const event of this.waterpark.consumeEvents()) {
+      if (event.type === 'ride_complete') {
+        this.sound.playWashBottle();
+        this.cameraShakeTimer = Math.max(this.cameraShakeTimer, 0.18);
+        this.spawnParticles(this.playerX, this.playerY + 0.25, this.playerZ, 0x7dd3fc, 24);
+        this.toast(
+          `${event.name} complete — ${event.timeSeconds.toFixed(1)}s at ${Math.round(event.speedKmh)} km/h${event.newBest ? ' · NEW PARK RECORD' : ''}`,
+          'discovery',
+        );
+      } else if (event.type === 'soaked') {
+        this.cameraShakeTimer = Math.max(this.cameraShakeTimer, 0.32);
+        this.spawnParticles(
+          this.playerX,
+          this.playerY + this.currentEyeHeight,
+          this.playerZ,
+          0x7dd3fc,
+          30,
+        );
+        this.sound.playWashBottle();
+        this.toast('SOAKED! The 1,500-gallon Delta Dump Bucket just emptied on you.', 'warning');
+      }
+      this.emitHud();
+    }
   }
 
   public boardCoasterRide(coasterId: string): boolean {

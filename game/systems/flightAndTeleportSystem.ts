@@ -62,6 +62,7 @@ import {
   WOODED_BADLANDS_POS,
   WOODLAND_MANSION_POS,
 } from '../world/terrain';
+import { WATERPARK_DECK_Y, WATERPARK_SITE } from '../world/waterparkLayout';
 
 export interface FlightPlayerState {
   x: number;
@@ -159,6 +160,16 @@ export const ISLAND_TELEPORT_DESTINATIONS: Record<string, TeleportDestination> =
   shipwreck: { x: SHIPWRECK_POS.x, y: 8, z: SHIPWRECK_POS.z },
   homestead: { x: HOMESTEAD_POS.x, z: HOMESTEAD_POS.z },
   'hill house': { x: HILL_HOUSE_POS.x, z: HILL_HOUSE_POS.z },
+  waterpark: {
+    x: WATERPARK_SITE.x + 38,
+    y: WATERPARK_DECK_Y + 0.65,
+    z: WATERPARK_SITE.z - 42,
+  },
+  'hilltop waterpark': {
+    x: WATERPARK_SITE.x + 38,
+    y: WATERPARK_DECK_Y + 0.65,
+    z: WATERPARK_SITE.z - 42,
+  },
   garage: { x: VEHICLE_GARAGE_POS.x, z: VEHICLE_GARAGE_POS.z },
   farmer: { x: FARMER_POS.x, z: FARMER_POS.z },
   wheatfield: { x: WHEATFIELD_POS.x, z: WHEATFIELD_POS.z },

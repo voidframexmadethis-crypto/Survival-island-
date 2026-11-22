@@ -2496,6 +2496,47 @@ export function SurvivalGameClient() {
               </div>
             )}
 
+            {/* Active Waterpark Ride HUD */}
+            {hud.activeWaterparkRide && !activeModal && (
+              <div
+                onPointerDown={(e) => e.stopPropagation()}
+                className="pointer-events-auto relative z-30 w-[min(95vw,560px)] rounded-xl bg-cyan-950/92 border border-cyan-300/60 px-3.5 py-2.5 shadow-2xl flex items-center justify-between gap-3"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-cyan-400/20 border border-cyan-300/50 flex items-center justify-center text-cyan-200 shrink-0">
+                    <Waves className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xs sm:text-sm font-bold text-stone-50 truncate">
+                      {hud.activeWaterparkRide.name}
+                    </div>
+                    <div className="text-[11px] font-mono-tabular text-cyan-100/80 flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
+                      <span className="text-cyan-200 font-bold">
+                        {Math.round(hud.activeWaterparkRide.speedKmh)} km/h
+                      </span>
+                      <span>Elev {hud.activeWaterparkRide.heightM.toFixed(1)}m</span>
+                      <span>{hud.activeWaterparkRide.verticalG.toFixed(1)}G</span>
+                      {hud.activeWaterparkRide.lateralG !== 0 && (
+                        <span>{hud.activeWaterparkRide.lateralG.toFixed(1)}g lat</span>
+                      )}
+                      <span className="font-sans text-cyan-200/60">
+                        {hud.activeWaterparkRide.segmentLabel}
+                      </span>
+                      <span>{Math.round(hud.activeWaterparkRide.progressPercent)}%</span>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => engineRef.current?.exitWaterparkRide()}
+                  className="min-h-[34px] px-3 py-1 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-cyan-950 text-xs font-bold flex items-center gap-1 whitespace-nowrap shrink-0"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Step Out [E]</span>
+                </button>
+              </div>
+            )}
+
             {/* Saturn V Launch Telemetry HUD (IGNITION -> STAGE 1 -> STAGE 2 -> ORBIT READY) */}
             {(hud.spaceState?.launchPhase === 'IGNITION' ||
               hud.spaceState?.launchPhase === 'ASCENT') && (

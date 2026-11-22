@@ -16,6 +16,7 @@ import {
 import { buildLouisianaWilds } from './louisianaWilds';
 import { buildDragonValleyCliffRing } from './dragonValleyCliffs';
 import { roundedBox } from './roundedBox';
+import { isInWaterparkClearZone } from './waterparkLayout';
 import {
   CaveTerrainOpening,
   filterTerrainIndexForCaveOpenings,
@@ -5599,6 +5600,7 @@ export function buildIslandWorld(
     const z = Math.sin(angle) * rad;
 
     if (Math.hypot(x - PLAYER_SPAWN.x, z - PLAYER_SPAWN.z) < 20) continue;
+    if (isInWaterparkClearZone(x, z)) continue;
     if (z >= PLAYER_SPAWN.z + 2 && Math.abs(x - SHIPWRECK_POS.x) < 34) continue; // Keep shipwreck shoreline corridor clean
     if (Math.hypot(x - DRAGON_VALLEY_POS.x, z - DRAGON_VALLEY_POS.z) < 28) continue;
     if (Math.hypot(x - VIKING_VILLAGE_POS.x, z - VIKING_VILLAGE_POS.z) < 28) continue;
@@ -6364,6 +6366,7 @@ export function buildIslandWorld(
   };
 
   const isClearOfStructures = (px: number, pz: number): boolean => {
+    if (isInWaterparkClearZone(px, pz)) return false;
     if (Math.hypot(px - SNOWY_WOODLAND_POS.x, pz - SNOWY_WOODLAND_POS.z) < 14) return false;
     if (Math.hypot(px - AUTUMN_GROVE_POS.x, pz - AUTUMN_GROVE_POS.z) < 11) return false;
     if (Math.hypot(px - SWAMP_POS.x, pz - SWAMP_POS.z) < SWAMP_POS.radius + 2.5) return false;
@@ -7008,6 +7011,7 @@ export function buildIslandWorld(
     const by = getTerrainHeight(bx, bz);
     const bBiome = getBiomeAt(bx, bz);
     if (Math.hypot(bx - PLAYER_SPAWN.x, bz - PLAYER_SPAWN.z) < 5.5) continue;
+    if (isInWaterparkClearZone(bx, bz)) continue;
     if (Math.hypot(bx - HILL_HOUSE_POS.x, bz - HILL_HOUSE_POS.z) < 16.5) continue;
     if (Math.hypot(bx - VEHICLE_GARAGE_POS.x, bz - VEHICLE_GARAGE_POS.z) < 18.5) continue;
 

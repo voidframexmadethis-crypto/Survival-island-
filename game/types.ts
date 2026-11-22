@@ -1175,6 +1175,7 @@ export interface GameSaveData {
   gameMode?: GameMode;
   coasters?: SavedCoasterData[];
   amusementParks?: import('./systems/amusementParkRuntime').SavedAmusementPark[];
+  waterpark?: import('./world/waterparkLayout').WaterparkSavedState;
   tvChannel?: number;
   tvPower?: boolean;
   tvEmbedSrc?: string;
@@ -1324,6 +1325,7 @@ export interface NearbyInteraction {
     | 'dragon_abandoned'
     | 'ferry_pickup'
     | 'mainland_terminal'
+    | 'waterpark_ride'
     | 'mainland_business';
   actionCategory?:
     | 'chop'
@@ -1474,6 +1476,18 @@ export interface HUDStateSnapshot {
     verticalG?: number;
     lateralG?: number;
     segmentLabel?: string;
+  } | null;
+  activeWaterparkRide?: {
+    rideId: string;
+    name: string;
+    kind: 'slide' | 'lazy' | 'wave' | 'bucket';
+    speedKmh: number;
+    heightM: number;
+    progressPercent: number;
+    verticalG: number;
+    lateralG: number;
+    segmentLabel: string;
+    elapsedSeconds: number;
   } | null;
   bloodMoonActive?: boolean;
   daysUntilBloodMoon?: number;
