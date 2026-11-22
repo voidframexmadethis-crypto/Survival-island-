@@ -807,6 +807,43 @@ export function WorldSelectionMenu({
                   </div>
                 </div>
               )}
+
+              {selectedWorldType && effectiveMode === 'sandbox' && (
+                <a
+                  href="/coaster-studio"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-coaster-studio="true"
+                  className="group mt-3 flex min-w-0 flex-col gap-3 rounded-2xl border-2 border-amber-400/55 bg-gradient-to-br from-stone-900 via-stone-950 to-sky-950/80 p-3.5 transition hover:border-amber-300 hover:shadow-[0_0_32px_rgba(251,191,36,0.16)] sm:flex-row sm:items-center sm:p-4"
+                >
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-amber-300/40 bg-amber-400/10">
+                    <RollerCoaster className="h-6 w-6 text-amber-300" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="font-display text-sm font-black tracking-wide text-stone-50">
+                        ULTIMATE COASTER STUDIO
+                      </span>
+                      <span className="rounded bg-amber-400 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-stone-950">
+                        Standalone
+                      </span>
+                    </span>
+                    <span className="mt-1 block text-[11px] leading-snug text-stone-300">
+                      A separate flat, empty creative world for UC3-style spline track building, mechanical systems,
+                      prompt-built trains and ride physics. Never touches island saves.
+                    </span>
+                    <span className="mt-1.5 flex flex-wrap gap-1.5 text-[9px] font-bold uppercase tracking-wider text-sky-200/90">
+                      <span className="rounded border border-sky-400/30 bg-sky-400/10 px-1.5 py-0.5">3D spline editor</span>
+                      <span className="rounded border border-sky-400/30 bg-sky-400/10 px-1.5 py-0.5">Train designer</span>
+                      <span className="rounded border border-sky-400/30 bg-sky-400/10 px-1.5 py-0.5">Ride simulation</span>
+                    </span>
+                  </span>
+                  <span className="flex min-h-[40px] shrink-0 items-center justify-center gap-1.5 rounded-xl border border-amber-300/50 bg-amber-400/15 px-3 py-2 text-[11px] font-black text-amber-100 transition group-hover:bg-amber-400 group-hover:text-stone-950">
+                    Open studio
+                    <ChevronRight className="h-4 w-4" />
+                  </span>
+                </a>
+              )}
             </div>
 
             {/* Saved Worlds List */}

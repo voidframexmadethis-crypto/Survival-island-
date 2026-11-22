@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import {
   AlertTriangle,
+  ArrowUpRight,
   CheckCircle2,
   FileSpreadsheet,
   GitMerge,
@@ -233,6 +234,16 @@ export function CoasterStudioModal({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <a
+              href="/coaster-studio"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="min-h-[40px] px-3 rounded-xl bg-amber-400/15 hover:bg-amber-400/25 border border-amber-400/50 text-amber-200 text-xs font-bold flex items-center gap-1.5 whitespace-nowrap shrink-0"
+              title="Open the standalone flat-world coaster construction studio"
+            >
+              <ArrowUpRight className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Standalone Studio</span>
+            </a>
             {onOpenMusicStudio && (
               <button
                 type="button"
