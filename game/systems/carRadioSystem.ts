@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { CarTrunkBassSystem } from './carTrunkBassSystem';
 
 export interface RadioCarDescriptor {
   id?: string;
@@ -347,6 +348,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
   limiter: null as DynamicsCompressorNode | null,
   carPanner: null as PannerNode | null,
   subwoofer: null as CarSubwooferHandles | null,
+  trunkBassSystem: null as CarTrunkBassSystem | null,
   freqData: null as Uint8Array<ArrayBuffer> | null,
   connectedElements: new WeakMap<HTMLMediaElement, MediaElementAudioSourceNode>(),
   cameraMode: 'CHASE' as DrivingCameraMode,
@@ -374,6 +376,8 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     if (!AudioCtx) return;
 
     if (!this.audioCtx || this.audioCtx.state === 'closed') {
+      this.trunkBassSystem?.dispose();
+      this.trunkBassSystem = null;
       this.audioCtx = new AudioCtx();
       const profile = AUDIO_PROFILES[this.activeCarType];
 
@@ -428,7 +432,15 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       this.carPanner.maxDistance = 90;
       this.carPanner.rolloffFactor = 0.9;
 
-      this.sourceBus.connect(this.bassFilter);
+      // The slab sub-bass stage sits between the radio bus and the existing
+      // cabin/panner chain. It reuses this context and source bus, so there is
+      // still only one media-source binding and one car audio graph.
+      this.trunkBassSystem = new CarTrunkBassSystem();
+      if (!this.trunkBassSystem.attachGraph(this.audioCtx, this.sourceBus, this.bassFilter)) {
+        this.trunkBassSystem.dispose();
+        this.trunkBassSystem = null;
+        this.sourceBus.connect(this.bassFilter);
+      }
       this.bassFilter.connect(this.subFilter);
       this.subFilter.connect(this.analyser);
       this.analyser.connect(this.compressor);
@@ -521,6 +533,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     const carType = resolveCarAudioType(car);
     const profile = AUDIO_PROFILES[carType];
     this.activeCarType = carType;
+    this.trunkBassSystem?.setRattleEnabled(oldSchool);
     const boost = this.bassBoost ? 1 : 0;
     if (this.bassFilter && this.audioCtx) {
       this.bassFilter.frequency.value = 100;

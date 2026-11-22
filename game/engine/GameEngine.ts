@@ -1328,6 +1328,7 @@ export class GameEngine {
   private readonly _tapNdc = new THREE.Vector2();
   private hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
   private trunkBassPulse = 0;
+  private trunkBassPressure = 0;
   private chestThumpPulse = 0;
   private vehicleDanceStates = new Map<string, GarageDanceState>();
 
@@ -4791,6 +4792,7 @@ export class GameEngine {
     this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.trunkBassPulse = 0;
+    this.trunkBassPressure = 0;
     this.chestThumpPulse = 0;
     this.ferryRideActive = false;
     this.ferryPickup.reset();
@@ -17248,7 +17250,12 @@ export class GameEngine {
     // Cabin/car-body shiver from the live sub-bass. Tiny on purpose: it should
     // read as SPL, not as camera shake that fights the player's aim.
     if (this.mode === 'playing' && this.trunkBassPulse > 0.03) {
-      const shiver = this.trunkBassPulse * 0.0035;
+      // Cabin SPL pressure is allowed to read a little stronger than the
+      // baseline body shiver, but stays far below aim-fighting shake.
+      const shiver = Math.max(
+        this.trunkBassPulse * 0.0035,
+        this.trunkBassPressure * 0.009,
+      );
       this.camera.position.y += Math.sin(this.elapsed * 63) * shiver;
       this.camera.position.x += Math.sin(this.elapsed * 71) * shiver * 0.6;
     }
@@ -18289,6 +18296,7 @@ export class GameEngine {
     this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.trunkBassPulse = 0;
+    this.trunkBassPressure = 0;
   }
 
   private setupStarterEngineeringShowcase(
@@ -19160,6 +19168,7 @@ export class GameEngine {
       : { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.trunkBassPulse = 0;
+    this.trunkBassPressure = 0;
     this.chestThumpPulse = 0;
     this.vehicleInteriorCamera = false;
     CABIN_BASS_AND_FIRST_PERSON.setCameraMode('CHASE');
@@ -19318,6 +19327,7 @@ export class GameEngine {
     this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.trunkBassPulse = 0;
+    this.trunkBassPressure = 0;
     this.chestThumpPulse = 0;
     try {
       if (typeof document !== 'undefined' && document.pointerLockElement) {
@@ -19757,6 +19767,7 @@ export class GameEngine {
     av.trunkBassEnabled = !av.trunkBassEnabled;
     if (!av.trunkBassEnabled) {
       this.trunkBassPulse = 0;
+      this.trunkBassPressure = 0;
       this.chestThumpPulse = 0;
     } else {
       this.sound.playPickup();
@@ -20352,9 +20363,44 @@ export class GameEngine {
             this.toRadioCarDescriptor(radioCarForSample),
           )
         : { bassLevel: 0, chestThump: 0, trunkPump: 0 };
+
+    // The dedicated trunk stage has its own 58 Hz shelf and post-compressor
+    // analyser. It shares the radio context/source and feeds the slab body
+    // flex, rattle, and cabin pressure shake.
+    const trunkBass = CABIN_BASS_AND_FIRST_PERSON.trunkBassSystem;
+    let liveTrunkEnergy = 0;
+    let liveTrunkPressure = 0;
+    if (trunkBass) {
+      const isInsideRadioCar = Boolean(
+        activeV && radioSourceV && activeV.id === radioSourceV.id,
+      );
+      let distanceToTrunk = 0;
+      if (!isInsideRadioCar && radioSourceHandles) {
+        const tdx = this.playerX - radioSourceHandles.root.position.x;
+        const tdz = this.playerZ - radioSourceHandles.root.position.z;
+        distanceToTrunk = Math.sqrt(tdx * tdx + tdz * tdz);
+      }
+      const radioPlaying = Boolean(
+        radioSourceV &&
+          this.isOldSchoolVehicle(radioSourceV) &&
+          CABIN_BASS_AND_FIRST_PERSON.stereoPlaying,
+      );
+      trunkBass.step(isInsideRadioCar, distanceToTrunk, radioPlaying);
+      if (radioPlaying) {
+        const proximity = isInsideRadioCar
+          ? 1
+          : Math.max(0, 1 - distanceToTrunk / 14);
+        liveTrunkEnergy = trunkBass.bassEnergy * proximity;
+        liveTrunkPressure = liveTrunkEnergy;
+      }
+    }
+
     const effectiveRadioTrunk =
-      radioSpatialVolume > 0.01 ? radioSample.trunkPump * radioSpatialVolume : 0;
+      radioSpatialVolume > 0.01
+        ? Math.max(radioSample.trunkPump * radioSpatialVolume, liveTrunkEnergy)
+        : 0;
     this.trunkBassPulse = effectiveRadioTrunk;
+    this.trunkBassPressure = liveTrunkPressure;
     this.chestThumpPulse = activeV ? radioSample.chestThump : 0;
 
     // Solve 4-corner hydraulic & airbag/coil-over spring-damper physics for active vehicle
@@ -20719,17 +20765,18 @@ export class GameEngine {
         const baseTrunkY = handles.trunkLid.userData.baseY as number;
         // Sheet metal buzz: the lid lifts with the beat and chatters hard on the
         // harmonics, exactly like a real trunk lid on a loud system.
+        const flex = showBassPulse * showBassPulse;
         const rattle =
           showBassPulse > 0.02
             ? Math.sin(this.elapsed * 57) * showBassPulse * (0.006 + 0.004 * rattleShake)
             : 0;
         const targetTrunk =
           (v.trunkOpen ? 0.96 : 0) +
-          (showBassPulse > 0.01 ? -0.05 * showBassPulse : 0) +
+          (showBassPulse > 0.01 ? -0.05 * showBassPulse - flex * 0.035 : 0) +
           rattle;
         handles.trunkLid.position.y =
           showBassPulse > 0.01
-            ? baseTrunkY + showBassPulse * 0.05 + rattle * 0.6
+            ? baseTrunkY + showBassPulse * 0.05 + flex * 0.018 + rattle * 0.6
             : baseTrunkY;
         handles.trunkLid.rotation.x = THREE.MathUtils.damp(
           handles.trunkLid.rotation.x,
