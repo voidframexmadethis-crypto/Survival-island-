@@ -92,6 +92,11 @@ export type P2PPacket =
       peerId: string;
       name: string;
       text: string;
+    }
+  | {
+      type: 'lost_world_sync';
+      kind: string;
+      payload: Record<string, unknown>;
     };
 
 interface PeerConnectionEntry {

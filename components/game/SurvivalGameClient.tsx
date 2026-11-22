@@ -142,6 +142,7 @@ import { PayhipMarketplaceModal } from './PayhipMarketplaceModal';
 import { BlankPhoneMarketplaceModal } from './BlankPhoneMarketplaceModal';
 import { NavigatorCompanionModal } from './NavigatorCompanionModal';
 import { LouisianaMainlandModal } from './LouisianaMainlandModal';
+import { LostWorldModal } from './LostWorldModal';
 import type { MainlandTab } from '@/game/systems/louisianaMainland';
 import {
   CustomPhoneMarketplaceState,
@@ -1555,6 +1556,23 @@ export function SurvivalGameClient() {
           </div>
         </div>
       )}
+
+      {/* LOST WORLD STORY BEAT — playable subtitle, controls stay live */}
+      {screen === 'playing' &&
+        !activeModal &&
+        hud?.lostWorldBeat?.active &&
+        !hud.cinematicActive && (
+          <div className="pointer-events-none fixed inset-x-0 bottom-24 sm:bottom-28 z-30 flex justify-center px-4">
+            <div className="max-w-xl rounded-xl border border-amber-500/50 bg-stone-950/90 px-4 py-2.5 text-center shadow-2xl">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-amber-300">
+                {hud.lostWorldBeat.title}
+              </div>
+              <div className="text-xs sm:text-sm text-stone-100 mt-0.5">
+                {hud.lostWorldBeat.subtitle}
+              </div>
+            </div>
+          </div>
+        )}
 
       {/* IN-GAME FIRST-PERSON HUD (CLEAN MINECRAFT-INSPIRED LAYOUT) */}
       {screen === 'playing' && hud && !hud.cinematicActive && (
@@ -4015,6 +4033,10 @@ export function SurvivalGameClient() {
         />
       )}
 
+      {activeModal === 'lost_world' && engineInstance && (
+        <LostWorldModal engine={engineInstance} onClose={closeModal} />
+      )}
+
       {activeModal === 'mainland' && hud && engineInstance && (
         <LouisianaMainlandModal
           engine={engineInstance}
@@ -4603,6 +4625,20 @@ export function SurvivalGameClient() {
               >
                 <Globe2 className="w-5 h-5 text-emerald-300 shrink-0" />
                 <span>Ecosystem Journal</span>
+              </button>
+              <button
+                onClick={() => openModal('lost_world')}
+                className="p-3.5 rounded-xl bg-amber-950/80 hover:bg-amber-500 hover:text-stone-950 border border-amber-500/50 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
+              >
+                <Globe2 className="w-5 h-5 text-amber-300 shrink-0" />
+                <span className="flex items-center gap-2">
+                  Lost World
+                  {hud?.lostWorld && (
+                    <span className="rounded-full bg-amber-500/20 border border-amber-400/50 px-1.5 py-0.5 text-[9px] font-bold text-amber-200">
+                      {hud.lostWorld.evolutionStage}
+                    </span>
+                  )}
+                </span>
               </button>
               <button
                 onClick={() => setActiveModal('music_studio')}

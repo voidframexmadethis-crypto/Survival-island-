@@ -1195,6 +1195,7 @@ export interface GameSaveData {
   crystalArmorHp?: number;
   visitedDimensions?: DimensionId[];
   ecosystem?: EcosystemSimulationData;
+  lostWorld?: import('./systems/lostWorldExpansion').LostWorldState;
   clearedStructureIds?: string[];
   caveProgress?: import('./systems/caveSystem').CaveCompactSave;
   finalIsland?: import('./systems/finalIslandFeatures').FinalIslandSaveState;
@@ -1254,7 +1255,8 @@ export type ActiveModal =
   | 'car_radio'
   | 'navigator_companion'
   | 'viking_village'
-  | 'mainland';
+  | 'mainland'
+  | 'lost_world';
 
 export interface NearbyInteraction {
   id: string;
@@ -1539,6 +1541,8 @@ export interface HUDStateSnapshot {
   caveSummary?: import('./systems/caveSystem').CaveSummarySnapshot;
   finalIsland?: import('./systems/finalIslandFeatures').FinalIslandHudState;
   mainland?: import('./systems/louisianaMainland').MainlandHudState;
+  lostWorld?: import('./systems/lostWorldExpansion').LostWorldHudState;
+  lostWorldBeat?: { title: string; subtitle: string; active: boolean };
   dragonEggs?: string[];
   vikingVillageProgress?: {
     completedQuestIds: string[];

@@ -7,6 +7,23 @@ import {
   simulateEcosystemTick,
 } from '../systems/livingEcosystemSystem';
 import {
+  createLostWorldState,
+  type LostWorldActionContext,
+  type LostWorldEffects,
+  type LostWorldState,
+} from '../systems/lostWorldExpansion';
+import {
+  foodFreshnessFor,
+  getLostWorldHudState,
+  normalizeLostWorldState,
+  syncInventoryFood,
+  tickLostWorld,
+} from '../systems/lostWorldSimulation';
+import {
+  buildLostWorldActions,
+  performLostWorldAction,
+} from '../systems/lostWorldActions';
+import {
   SmartTvSystem,
   TvChannelId,
   normalizeChannelId,
@@ -1045,6 +1062,16 @@ export class GameEngine {
 
   // Survival & World State
   public ecosystem: EcosystemSimulationData = createInitialEcosystem();
+  // The 55-system Lost World expansion lives beside the ecosystem and is
+  // persisted through the same save path. All timers are fixed-cost.
+  public lostWorld: LostWorldState = createLostWorldState();
+  private lostWorldTickAccum = 0;
+  private lostWorldTemperatureOffset = 0;
+  private lostWorldCinematicTimer = 0;
+  private lostWorldCinematicTitle = '';
+  private lostWorldCinematicSubtitle = '';
+  private lostWorldAlertCooldown = 0;
+  private lostWorldLastAlert = '';
   private vitals: PlayerVitals = {
     health: 100,
     maxHealth: 100,
@@ -5306,6 +5333,11 @@ export class GameEngine {
 
     this.coasterRuntime?.importCoasters(save.coasters);
     this.ecosystem = save.ecosystem || createInitialEcosystem();
+    this.lostWorld = normalizeLostWorldState(save.lostWorld);
+    this.lostWorldTickAccum = 0;
+    this.lostWorldTemperatureOffset = 0;
+    this.lostWorldCinematicTimer = 0;
+    syncInventoryFood(this.lostWorld, this.inventory, this.dayCount);
 
     // Restore saved Smart TV channel, power state & playback controls
     if (typeof save.tvVolume === 'number') {
@@ -6083,6 +6115,7 @@ export class GameEngine {
       })),
       coasters: this.coasterRuntime?.exportCoasters() || [],
       ecosystem: { ...this.ecosystem },
+      lostWorld: this.lostWorld,
       terrainDeltas: this.worldType === 'island' ? exportSparseTerrainDeltas() : [],
       visitedBiomes: Array.from(this.visitedBiomes),
       exploredCells: this.getExploredCellsArray(),
@@ -6620,11 +6653,17 @@ export class GameEngine {
 
     if (def.category === 'food') {
       const prevCleanSlot = this.hotbarItemIds.indexOf('filtered_water_bottle');
+      const freshness = foodFreshnessFor(this.lostWorld, itemId);
+      const safeFreshness = Math.max(0.3, freshness);
       this.removeItem(itemId, 1);
+      if (freshness <= 0.15) {
+        this.vitals.health = Math.max(1, this.vitals.health - 4);
+        this.toast('That food had turned. You forced it down (-4 HP).', 'warning');
+      }
       if (def.hungerRestore) {
         this.vitals.hunger = Math.min(
           this.vitals.maxHunger,
-          this.vitals.hunger + def.hungerRestore,
+          this.vitals.hunger + def.hungerRestore * safeFreshness,
         );
       }
       if (def.thirstRestore) {
@@ -8607,6 +8646,7 @@ export class GameEngine {
   ): void {
     const name = c.displayNameOverride || c.spec.displayName;
     this.stats.animalsHunted += 1;
+    this.recordLostWorldWildlifeThreat(c.species);
     const isDino = this.isDinosaurSpecies(c.species);
     if (isDino) {
       this.stats.dinosaursEncountered += 1;
@@ -10465,6 +10505,10 @@ export class GameEngine {
 
       if (isFlat) {
         this.weather = 'clear';
+      } else if (this.lostWorld.hurricane.active) {
+        // Hurricane simulation owns the weather while a storm is active.
+        this.weather = 'storm';
+        this.weatherTimer = Math.max(this.weatherTimer, 45);
       } else {
         // Dynamic Weather Cycling
         this.weatherTimer -= dt;
@@ -11164,6 +11208,8 @@ export class GameEngine {
         if (sheltered) targetTemp += 1.8;
         if (nearFire) targetTemp += 3.8;
         if (this.isSprinting) targetTemp += 0.6;
+        // Lost World exposure: wet clothing, shade, shelter insulation and season.
+        targetTemp += this.lostWorldTemperatureOffset;
       }
       targetTemp = THREE.MathUtils.clamp(targetTemp, 31.5, 37.8);
       this.vitals.temperatureC = THREE.MathUtils.damp(
@@ -15594,6 +15640,8 @@ export class GameEngine {
       visitedDimensions: this.cachedVisitedDimensions,
       finalIsland: this.finalIslandFeatures.getHudSnapshot(),
       mainland: this.mainland.getHudSnapshot(this.dayCount),
+      lostWorld: getLostWorldHudState(this.lostWorld),
+      lostWorldBeat: this.getLostWorldCinematicBeat(),
       unlockedGildedPaint: this.unlockedGildedPaint,
       crystalArmorHp: this.crystalArmorHp,
       activePortals: this.activePortals.map((p) => ({ ...p })),
@@ -17108,6 +17156,7 @@ export class GameEngine {
           { x: this.playerX, y: this.playerY, z: this.playerZ },
         );
       }
+      this.updateLostWorld(dt);
     }
     if (
       this.realisticOcean &&
@@ -22929,7 +22978,84 @@ export class GameEngine {
       if (this.p2pChatLog.length > 40) this.p2pChatLog.shift();
       this.toast(`${packet.name}: ${packet.text}`, 'info');
       this.emitHud();
+    } else if (packet.type === 'lost_world_sync') {
+      this.handleLostWorldSync(packet.kind, packet.payload, fromPeerId);
     }
+  }
+
+  private handleLostWorldSync(
+    kind: string,
+    payload: Record<string, unknown>,
+    fromPeerId: string,
+  ): void {
+    if (kind === 'shared_business') {
+      const businessId = typeof payload.businessId === 'string' ? payload.businessId : '';
+      const business = this.lostWorld.businesses.find((b) => b.id === businessId);
+      if (business && !business.sharedWithPeer) {
+        business.sharedWithPeer = 'Co-op partner';
+        this.lostWorld.coop.sharedBusinessId = business.id;
+        this.toast(`${business.name} shared with you by a co-op partner.`, 'discovery');
+      }
+    } else if (kind === 'challenge_start') {
+      this.lostWorld.coop.challengeId =
+        typeof payload.id === 'string' ? payload.id : 'challenge_remote';
+      this.lostWorld.coop.challengeTitle =
+        typeof payload.title === 'string' ? payload.title : 'Community Challenge';
+      this.lostWorld.coop.challengeGoal =
+        typeof payload.goal === 'number' ? payload.goal : 20;
+      this.lostWorld.coop.challengeReward =
+        typeof payload.reward === 'number' ? payload.reward : 300;
+      this.lostWorld.coop.challengeProgress = 0;
+      this.lostWorld.coop.challengeCompleted = false;
+      this.toast(`${this.lostWorld.coop.challengeTitle} started by the room.`, 'discovery');
+    } else if (kind === 'challenge_progress') {
+      if (typeof payload.progress === 'number') {
+        this.lostWorld.coop.challengeProgress = payload.progress;
+      }
+    } else if (kind === 'challenge_complete') {
+      const reward = typeof payload.reward === 'number' ? payload.reward : 300;
+      this.lostWorld.coop.challengeCompleted = true;
+      this.coins += reward;
+      this.toast(`Community challenge complete: +${reward} coins.`, 'discovery');
+    } else if (kind === 'car_meet') {
+      this.lostWorld.coop.sharedActivities.unshift('Shared car meet from the P2P room');
+      this.toast('A co-op partner is hosting a car meet at Warehouse Row.', 'info');
+    } else if (kind === 'trade_offer') {
+      const id = typeof payload.id === 'string' ? payload.id : '';
+      const itemId = typeof payload.itemId === 'string' ? (payload.itemId as ItemId) : null;
+      const quantity = typeof payload.quantity === 'number' ? payload.quantity : 1;
+      const price = typeof payload.price === 'number' ? payload.price : 0;
+      if (id && itemId) {
+        this.lostWorld.coop.trades.push({
+          id,
+          peerId: fromPeerId,
+          peerName: typeof payload.from === 'string' ? payload.from : 'Co-op partner',
+          itemId,
+          quantity,
+          price,
+          direction: 'incoming',
+          day: this.dayCount,
+        });
+        this.toast(`Trade offer from a co-op partner: ${quantity}× ${itemId} for ${price}c.`, 'info');
+      }
+    } else if (kind === 'trade_accept') {
+      const id = typeof payload.id === 'string' ? payload.id : '';
+      const trade = this.lostWorld.coop.trades.find((t) => t.id === id);
+      if (trade && trade.direction === 'outgoing') {
+        this.lostWorld.coop.trades = this.lostWorld.coop.trades.filter((t) => t.id !== id);
+        this.coins += trade.price;
+        this.toast(`Trade accepted: +${trade.price} coins.`, 'discovery');
+      }
+    } else if (kind === 'trade_decline') {
+      const id = typeof payload.id === 'string' ? payload.id : '';
+      const trade = this.lostWorld.coop.trades.find((t) => t.id === id);
+      if (trade && trade.direction === 'outgoing') {
+        this.addItem(trade.itemId, trade.quantity, false);
+        this.lostWorld.coop.trades = this.lostWorld.coop.trades.filter((t) => t.id !== id);
+        this.toast('Trade declined. Your escrow was returned.', 'info');
+      }
+    }
+    this.emitHud();
   }
 
   private updateMultiplayer(dt: number): void {
@@ -24549,6 +24675,308 @@ export class GameEngine {
     this.playerYaw = this.camYaw + Math.PI;
     this.toast('Disembarked at unload platform', 'info');
     this.emitHud();
+  }
+
+  private computeLostWorldShelterState(): { sheltered: boolean; nearFire: boolean } {
+    let sheltered = false;
+    let nearFire = false;
+    for (let i = 0; i < this.structures.length; i++) {
+      const s = this.structures[i];
+      if (s.dimension && s.dimension !== 'overworld') continue;
+      const dx = s.x - this.playerX;
+      const dz = s.z - this.playerZ;
+      const dSq = dx * dx + dz * dz;
+      if (!sheltered && (s.type === 'basic_shelter' || s.type === 'sleeping_area') && dSq < 36) {
+        sheltered = true;
+      } else if (!nearFire && (s.type === 'campfire' || s.type === 'cooking_station') && dSq < 64) {
+        nearFire = true;
+      }
+      if (sheltered && nearFire) break;
+    }
+    return { sheltered, nearFire };
+  }
+
+  public getLostWorldActionContext(): LostWorldActionContext {
+    const items: Partial<Record<ItemId, number>> = {};
+    for (let i = 0; i < this.inventory.length; i++) {
+      const slot = this.inventory[i];
+      items[slot.itemId] = (items[slot.itemId] ?? 0) + slot.quantity;
+    }
+    const shelter = this.computeLostWorldShelterState();
+    const peers = this.p2p?.connected
+      ? this.p2p
+          .getStatusSnapshot()
+          .peers.filter((p) => p.connected)
+          .map((p) => ({ peerId: p.peerId, name: p.name }))
+      : [];
+    return {
+      coins: this.coins,
+      items,
+      vitals: { ...this.vitals },
+      day: this.dayCount,
+      timeOfDay: this.timeOfDay,
+      weather: this.weather,
+      playerX: this.playerX,
+      playerZ: this.playerZ,
+      scene: this.worldType === 'flat' ? 'flat' : this.playerZ > 900 ? 'mainland' : 'island',
+      sheltered: shelter.sheltered,
+      nearFire: shelter.nearFire,
+      isSwimming: this.isSwimming,
+      vehicles: this.vehicles.map((v) => ({
+        id: v.id,
+        name: v.name,
+        preset: v.preset,
+        paintColor: v.paintColor,
+        hasTrunkBass: Boolean(v.trunkBassEnabled),
+        trunkBassEnabled: Boolean(v.trunkBassEnabled),
+        underglowColor: v.underglowColor,
+        rimLightColor: v.rimLightColor,
+        hp: v.hp,
+        maxHp: v.maxHp,
+        fuel: v.fuel,
+      })),
+      activeVehicleId: this.activeVehicleId,
+      dragons: this.getDragons().map((d) => ({ id: d.id, name: d.name })),
+      navigatorActive: Boolean(this.navigatorCompanion?.isCompanionActive()),
+      recruitedCount: this.lostWorld.recruits.filter(
+        (r) => r.status === 'recruited' || r.status === 'assigned',
+      ).length,
+      multiplayerConnected: Boolean(this.p2p?.connected),
+      multiplayerPeers: peers,
+    };
+  }
+
+  private recordLostWorldWildlifeThreat(species: CreatureSpecies): void {
+    let memory = this.lostWorld.wildlifeMemory.find((m) => m.species === species);
+    if (!memory) {
+      memory = {
+        species,
+        encounters: 0,
+        threats: 0,
+        lastEncounterDay: this.dayCount,
+        reaction: 'calm',
+      };
+      this.lostWorld.wildlifeMemory.push(memory);
+    }
+    memory.threats += 1;
+    memory.encounters += 1;
+    memory.lastEncounterDay = this.dayCount;
+    memory.reaction = memory.threats >= 3 ? 'aggressive' : memory.threats >= 1 ? 'wary' : 'calm';
+    const territory = this.lostWorld.territories.find((t) => t.species === species);
+    if (territory) territory.aggression = Math.min(100, territory.aggression + 6);
+
+    // Shared hunts advance the room challenge automatically over the real P2P link.
+    const coop = this.lostWorld.coop;
+    if (coop.challengeId && !coop.challengeCompleted && this.p2p?.connected) {
+      coop.challengeProgress += 1;
+      this.p2p.broadcast({
+        type: 'lost_world_sync',
+        kind: 'challenge_progress',
+        payload: { id: coop.challengeId, progress: coop.challengeProgress },
+      });
+      if (coop.challengeProgress >= coop.challengeGoal) {
+        coop.challengeCompleted = true;
+        this.coins += coop.challengeReward;
+        this.p2p.broadcast({
+          type: 'lost_world_sync',
+          kind: 'challenge_complete',
+          payload: { id: coop.challengeId, reward: coop.challengeReward },
+        });
+        this.toast(
+          `${coop.challengeTitle} complete: +${coop.challengeReward} coins.`,
+          'discovery',
+        );
+      }
+    }
+  }
+
+  private updateLostWorld(dt: number): void {
+    this.lostWorldAlertCooldown = Math.max(0, this.lostWorldAlertCooldown - dt);
+    if (this.lostWorldCinematicTimer > 0) {
+      this.lostWorldCinematicTimer = Math.max(0, this.lostWorldCinematicTimer - dt);
+    }
+
+    this.lostWorldTickAccum += dt;
+    if (this.lostWorldTickAccum < 1.0) return;
+    const accumulated = this.lostWorldTickAccum;
+    this.lostWorldTickAccum = 0;
+
+    const shelter = this.computeLostWorldShelterState();
+    const activeVehicle = this.vehicles.find((v) => v.id === this.activeVehicleId) ?? null;
+    const report = tickLostWorld(this.lostWorld, {
+      dtSeconds: accumulated,
+      day: this.dayCount,
+      timeOfDay: this.timeOfDay,
+      weather: this.weather,
+      playerX: this.playerX,
+      playerZ: this.playerZ,
+      sheltered: shelter.sheltered,
+      nearFire: shelter.nearFire,
+      isSwimming: this.isSwimming,
+      activeVehicle: activeVehicle
+        ? {
+            id: activeVehicle.id,
+            speedKmh: Math.hypot(activeVehicle.vx, activeVehicle.vz) * 3.6,
+            fuel: activeVehicle.fuel,
+            hp: activeVehicle.hp,
+            maxHp: activeVehicle.maxHp,
+          }
+        : null,
+      recruitedCount: this.lostWorld.recruits.filter(
+        (r) => r.status === 'recruited' || r.status === 'assigned',
+      ).length,
+      scene: this.worldType === 'flat' ? 'flat' : this.playerZ > 900 ? 'mainland' : 'island',
+    });
+    this.lostWorldTemperatureOffset = report.temperatureOffset;
+    if (report.forceWeather) this.weather = report.forceWeather;
+    if (report.vehicleDamage && activeVehicle && report.vehicleDamage.amount > 0) {
+      activeVehicle.hp = Math.max(1, activeVehicle.hp - report.vehicleDamage.amount);
+    }
+    syncInventoryFood(this.lostWorld, this.inventory, this.dayCount);
+
+    if (
+      this.lostWorldAlertCooldown <= 0 &&
+      report.alerts.length > 0 &&
+      report.alerts[0].text !== this.lostWorldLastAlert
+    ) {
+      const alert = report.alerts[0];
+      this.lostWorldLastAlert = alert.text;
+      this.lostWorldAlertCooldown = 45;
+      const tone = alert.tone === 'danger' || alert.tone === 'warning' ? 'warning' : 'discovery';
+      this.toast(alert.text, tone);
+    }
+  }
+
+  public getLostWorldSnapshot(): LostWorldState {
+    return JSON.parse(JSON.stringify(this.lostWorld)) as LostWorldState;
+  }
+
+  public getLostWorldPanel(): {
+    state: LostWorldState;
+    actions: ReturnType<typeof buildLostWorldActions>;
+  } {
+    return {
+      state: this.getLostWorldSnapshot(),
+      actions: buildLostWorldActions(this.lostWorld, this.getLostWorldActionContext()),
+    };
+  }
+
+  public performLostWorldAction(actionId: string) {
+    const ctx = this.getLostWorldActionContext();
+    const result = performLostWorldAction(this.lostWorld, actionId, ctx);
+    if (result.ok) {
+      this.applyLostWorldEffects(result.effects);
+      this.sound.playCraftSuccess();
+    }
+    this.toast(result.message, result.ok ? 'discovery' : 'warning');
+    this.emitHud();
+    return result;
+  }
+
+  private applyLostWorldEffects(effects: LostWorldEffects): void {
+    if (typeof effects.coins === 'number' && effects.coins !== 0) {
+      this.coins = Math.max(0, this.coins + effects.coins);
+    }
+    if (effects.items) {
+      for (let i = 0; i < effects.items.length; i++) {
+        const grant = effects.items[i];
+        if (grant.quantity > 0) {
+          this.addItem(grant.itemId, grant.quantity, false);
+        } else if (grant.quantity < 0) {
+          this.removeItem(grant.itemId, -grant.quantity);
+        }
+      }
+    }
+    if (effects.vitals) {
+      const v = effects.vitals;
+      if (typeof v.health === 'number') {
+        this.vitals.health = THREE.MathUtils.clamp(
+          this.vitals.health + v.health,
+          1,
+          this.vitals.maxHealth,
+        );
+      }
+      if (typeof v.hunger === 'number') {
+        this.vitals.hunger = THREE.MathUtils.clamp(this.vitals.hunger + v.hunger, 0, this.vitals.maxHunger);
+      }
+      if (typeof v.thirst === 'number') {
+        this.vitals.thirst = THREE.MathUtils.clamp(this.vitals.thirst + v.thirst, 0, this.vitals.maxThirst);
+      }
+      if (typeof v.stamina === 'number') {
+        this.vitals.stamina = THREE.MathUtils.clamp(this.vitals.stamina + v.stamina, 0, this.vitals.maxStamina);
+      }
+    }
+    if (effects.placeStructure) {
+      const blueprint = effects.placeStructure;
+      const x = THREE.MathUtils.clamp(blueprint.x, -900, 900);
+      const z = THREE.MathUtils.clamp(blueprint.z, -900, 1600);
+      const st: PlacedStructure = {
+        id: `struct_lw_${Date.now()}_${Math.floor(Math.random() * 9999)}`,
+        type: blueprint.type,
+        x,
+        y: getTerrainHeight(x, z),
+        z,
+        rotationY: this.camYaw,
+        lit: blueprint.type === 'campfire' || blueprint.type === 'cooking_station',
+      };
+      this.spawnStructure(st);
+      this.p2p?.broadcast({ type: 'place_structure', structure: st });
+    }
+    if (effects.spawnVehiclePreset) {
+      const fwdX = -Math.sin(this.camYaw);
+      const fwdZ = -Math.cos(this.camYaw);
+      const sx = THREE.MathUtils.clamp(this.playerX + fwdX * 6.5, -900, 900);
+      const sz = THREE.MathUtils.clamp(this.playerZ + fwdZ * 6.5, -900, 1600);
+      const sy = getTerrainHeight(sx, sz);
+      const v = createVehicleFromPreset(
+        `veh_restored_${Date.now()}`,
+        effects.spawnVehiclePreset as VehiclePresetKey,
+        sx,
+        sy + 0.15,
+        sz,
+        this.camYaw + Math.PI,
+      );
+      this.spawnVehicleInstance(v);
+      this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle: v });
+      this.spawnParticles(sx, sy + 1.0, sz, 0xfbbf24, 18);
+    }
+    if (effects.vehiclePatch) {
+      const { vehicleId, patch } = effects.vehiclePatch;
+      const vehicle = this.vehicles.find((v) => v.id === vehicleId);
+      if (vehicle) {
+        Object.assign(vehicle, patch);
+        this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle });
+      }
+    }
+    if (effects.feedDragonId) {
+      this.feedDragon(effects.feedDragonId, 6);
+    }
+    if (effects.waterCrops) {
+      for (let i = 0; i < this.plantedCrops.length; i++) {
+        this.plantedCrops[i].watered = true;
+      }
+    }
+    if (effects.setWeather) this.weather = effects.setWeather;
+    if (effects.cinematic) {
+      this.lostWorldCinematicTitle = effects.cinematic.title;
+      this.lostWorldCinematicSubtitle = effects.cinematic.subtitle;
+      this.lostWorldCinematicTimer = Math.max(1, effects.cinematic.duration);
+    }
+    if (effects.broadcast) {
+      this.p2p?.broadcast({
+        type: 'lost_world_sync',
+        kind: effects.broadcast.kind,
+        payload: effects.broadcast.payload,
+      });
+    }
+  }
+
+  public getLostWorldCinematicBeat(): { title: string; subtitle: string; active: boolean } {
+    return {
+      title: this.lostWorldCinematicTitle,
+      subtitle: this.lostWorldCinematicSubtitle,
+      active: this.lostWorldCinematicTimer > 0,
+    };
   }
 
   public getRendererLoadSnapshot() {
