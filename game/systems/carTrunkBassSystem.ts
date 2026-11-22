@@ -1,3 +1,5 @@
+import { Delta88TrunkRattleSynth } from './delta88TrunkRattleSynth';
+
 /**
  * Dedicated slab/trunk sub-bass stage for the car stereo.
  *
@@ -7,13 +9,11 @@
  * used standalone with `init(audioElement)`.
  *
  * Hot-path rules:
- * - FFT and rattle data are allocated once.
+ * - FFT data is allocated once.
  * - `step` performs no object allocations.
- * - one looping rattle voice is preallocated; hits only gate its gain.
+ * - short rattle pulses are only created on an actual bass hit.
  */
 
-const RATTLE_SECONDS = 0.055;
-const RATTLE_MIN_INTERVAL_SECONDS = 0.085;
 const TRUNK_RATTLE_RANGE_METERS = 28;
 const TRUNK_RATTLE_NEAR_METERS = 14;
 
@@ -37,24 +37,22 @@ export class CarTrunkBassSystem {
   private compressor: DynamicsCompressorNode | null = null;
   private masterGain: GainNode | null = null;
   private analyser: AnalyserNode | null = null;
-  private rattleSource: AudioBufferSourceNode | null = null;
-  private rattleFilter: BiquadFilterNode | null = null;
-  private rattleGain: GainNode | null = null;
+  private rattleLimiter: DynamicsCompressorNode | null = null;
+  private rattleSynth: Delta88TrunkRattleSynth | null = null;
   private ownsContext = false;
   private attachedToExternalGraph = false;
   private disposed = false;
 
   /** Pre-allocated FFT buffer: zero per-frame garbage. */
   private readonly fftData = new Uint8Array(new ArrayBuffer(64));
-  private rattleNoiseBuffer: AudioBuffer | null = null;
-  private lastRattleTime = -Infinity;
   private previousSubBass = 0;
   private rattleEnabled = true;
+  private rattleMultiplier = 1;
 
   /** 0.0 to 1.0, driven by the real playing track's sub-band energy. */
   public bassEnergy = 0;
   public isInsideCar = true;
-  /** Exposed for telemetry/tests; the rattle voice itself is preallocated. */
+  /** Exposed for telemetry/tests; increments when a pulse actually fires. */
   public rattleBursts = 0;
 
   /**
@@ -119,6 +117,10 @@ export class CarTrunkBassSystem {
     this.rattleEnabled = enabled;
   }
 
+  public setRattleMultiplier(multiplier: number): void {
+    this.rattleMultiplier = Math.max(0, Math.min(2, multiplier));
+  }
+
   private buildChain(ctx: AudioContext, output: AudioNode, masterLevel: number): void {
     // 1. Deep slab shelf: 58 Hz with +18 dB of trunk-moving weight, plus a
     // focused 64 Hz resonance so the sub reads through the mix.
@@ -166,59 +168,30 @@ export class CarTrunkBassSystem {
     this.analyser.connect(this.masterGain);
     this.masterGain.connect(output);
 
-    // One preallocated noise voice. Retriggering only turns its gain up/down;
-    // it never creates three new Web Audio nodes per 808 hit.
-    const sampleRate = ctx.sampleRate;
-    const length = Math.max(1, Math.floor(sampleRate));
-    this.rattleNoiseBuffer = ctx.createBuffer(1, length, sampleRate);
-    const data = this.rattleNoiseBuffer.getChannelData(0);
-    for (let i = 0; i < length; i += 1) {
-      data[i] = Math.random() * 2 - 1;
-    }
-    this.rattleSource = ctx.createBufferSource();
-    this.rattleSource.buffer = this.rattleNoiseBuffer;
-    this.rattleSource.loop = true;
-    this.rattleFilter = ctx.createBiquadFilter();
-    this.rattleFilter.type = 'bandpass';
-    this.rattleFilter.frequency.value = 420;
-    this.rattleFilter.Q.value = 4.5;
-    this.rattleGain = ctx.createGain();
-    this.rattleGain.gain.value = 0;
-    this.rattleSource.connect(this.rattleFilter);
-    this.rattleFilter.connect(this.rattleGain);
-    this.rattleGain.connect(this.masterGain);
-    this.rattleSource.start();
+    // Dedicated rattle limiter keeps the metallic pulses punchy and prevents
+    // them from clipping the cabin mix on heavy 808s or the Blue DONK profile.
+    this.rattleLimiter = ctx.createDynamicsCompressor();
+    this.rattleLimiter.threshold.value = -8;
+    this.rattleLimiter.knee.value = 6;
+    this.rattleLimiter.ratio.value = 12;
+    this.rattleLimiter.attack.value = 0.002;
+    this.rattleLimiter.release.value = 0.09;
+    this.rattleLimiter.connect(this.masterGain);
+    this.rattleSynth = new Delta88TrunkRattleSynth(ctx, this.rattleLimiter);
   }
 
-  /** Synthesized sheet-metal / license-plate buzz on heavy 808 hits. */
+  /** Short Delta 88-style metal pulse on a bass hit. */
   private triggerTrunkRattle(intensity: number): void {
+    if (!this.rattleEnabled || !this.rattleSynth) return;
     if (
-      !this.rattleEnabled ||
-      !this.ctx ||
-      !this.rattleSource ||
-      !this.rattleFilter ||
-      !this.rattleGain
+      this.rattleSynth.triggerOnBassHit(
+        intensity,
+        this.rattleMultiplier,
+        this.isInsideCar,
+      )
     ) {
-      return;
+      this.rattleBursts += 1;
     }
-    const now = this.ctx.currentTime;
-    if (now - this.lastRattleTime < RATTLE_MIN_INTERVAL_SECONDS) return;
-    this.lastRattleTime = now;
-    this.rattleBursts += 1;
-
-    this.rattleFilter.frequency.setTargetAtTime(
-      340 + intensity * 260,
-      now,
-      0.006,
-    );
-
-    const perspectiveMult = this.isInsideCar ? 0.36 : 0.95;
-    const level = Math.min(0.64, Math.max(0, intensity) * perspectiveMult);
-    const gain = this.rattleGain.gain;
-    gain.cancelScheduledValues(now);
-    gain.setValueAtTime(level, now);
-    gain.exponentialRampToValueAtTime(0.001, now + 0.052);
-    gain.setValueAtTime(0, now + RATTLE_SECONDS);
   }
 
   /**
@@ -297,20 +270,13 @@ export class CarTrunkBassSystem {
     }
     this.sourceNode = null;
     try {
-      this.rattleSource?.stop();
-    } catch {
-      // Source already stopped.
-    }
-    try {
       this.subBoostFilter?.disconnect();
       this.subPeakFilter?.disconnect();
       this.cabinLowpassFilter?.disconnect();
       this.compressor?.disconnect();
       this.analyser?.disconnect();
       this.masterGain?.disconnect();
-      this.rattleSource?.disconnect();
-      this.rattleFilter?.disconnect();
-      this.rattleGain?.disconnect();
+      this.rattleLimiter?.disconnect();
     } catch {
       // Already disconnected.
     }
@@ -320,10 +286,9 @@ export class CarTrunkBassSystem {
     this.compressor = null;
     this.analyser = null;
     this.masterGain = null;
-    this.rattleSource = null;
-    this.rattleFilter = null;
-    this.rattleGain = null;
-    this.rattleNoiseBuffer = null;
+    this.rattleLimiter = null;
+    this.rattleSynth = null;
+    this.rattleMultiplier = 1;
     if (this.ownsContext && this.ctx && this.ctx.state !== 'closed') {
       void this.ctx.close().catch(() => {});
     }

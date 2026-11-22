@@ -534,6 +534,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     const profile = AUDIO_PROFILES[carType];
     this.activeCarType = carType;
     this.trunkBassSystem?.setRattleEnabled(oldSchool);
+    this.trunkBassSystem?.setRattleMultiplier(carType === 'donk' ? 1.65 : 1);
     const boost = this.bassBoost ? 1 : 0;
     if (this.bassFilter && this.audioCtx) {
       this.bassFilter.frequency.value = 100;

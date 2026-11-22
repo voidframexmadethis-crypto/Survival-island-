@@ -6,6 +6,7 @@ interface MockParam {
   value: number;
   setTargetAtTime: (value: number, start: number, constant: number) => void;
   setValueAtTime: (value: number, start: number) => void;
+  linearRampToValueAtTime: (value: number, end: number) => void;
   exponentialRampToValueAtTime: (value: number, end: number) => void;
   cancelScheduledValues: (start: number) => void;
 }
@@ -17,6 +18,9 @@ function makeParam(value = 0): MockParam {
       this.value = next;
     },
     setValueAtTime(next) {
+      this.value = next;
+    },
+    linearRampToValueAtTime(next) {
       this.value = next;
     },
     exponentialRampToValueAtTime(next) {
@@ -55,6 +59,7 @@ interface MockAnalyser extends MockNode {
 
 interface MockSource extends MockNode {
   buffer: unknown;
+  playbackRate: MockParam;
   started: boolean;
   stopped: boolean;
   start: () => void;
@@ -132,6 +137,7 @@ function makeMockGraph() {
       const source: MockSource = {
         ...makeNode('source'),
         buffer: null,
+        playbackRate: makeParam(1),
         started: false,
         stopped: false,
         start() {
@@ -208,11 +214,12 @@ test('attachGraph builds the 58 Hz trunk DSP without a second media source', () 
   assert.equal(cabin.type, 'lowpass');
   assert.equal(graph.compressors[0].threshold.value, -14);
   assert.equal(graph.compressors[0].ratio.value, 8);
+  assert.equal(graph.compressors[1].threshold.value, -8);
+  assert.equal(graph.compressors[1].ratio.value, 12);
   assert.equal(graph.analysers[0].fftSize, 1024);
   assert.equal(graph.analysers[0].smoothingTimeConstant, 0.45);
-  // A single looping rattle voice is created up front, not per hit.
-  assert.equal(graph.sources.length, 1);
-  assert.equal(graph.sources[0].started, true);
+  // No rattle voice runs continuously; pulses are created only on hits.
+  assert.equal(graph.sources.length, 0);
 
   // The existing radio source bus feeds only the new DSP, and the DSP returns
   // into the existing cabin chain instead of opening another destination.
@@ -238,6 +245,19 @@ test('step converts sub-bass hits into rattle bursts and respects proximity', ()
   assert.equal(system.bassEnergy, 1);
   assert.equal(system.rattleBursts, 1);
   assert.equal(graph.sources.length, 1);
+  assert.equal(graph.sources[0].started, true);
+  assert.equal(graph.sources[0].stopped, true);
+  assert.ok(
+    graph.sources[0].playbackRate.value >= 0.92 - 1e-6 &&
+      graph.sources[0].playbackRate.value <= 1.16 + 1e-6,
+  );
+  const bodyBand = graph.filters.find(
+    (f) => f.type === 'bandpass' && f.frequency.value >= 480 && f.frequency.value <= 760,
+  );
+  const edgeHigh = graph.filters.find((f) => f.frequency.value === 2100);
+  assert.ok(bodyBand);
+  assert.ok(edgeHigh);
+  assert.equal(edgeHigh.gain.value, 3.5);
 
   // A sustained 808 must not machine-gun the rattle between beats.
   graph.ctx.currentTime = 1.2;
@@ -261,7 +281,7 @@ test('step converts sub-bass hits into rattle bursts and respects proximity', ()
   graph.ctx.currentTime = 2.4;
   system.step(true, 0, true);
   assert.equal(system.rattleBursts, 2);
-  assert.equal(graph.sources.length, 1);
+  assert.equal(graph.sources.length, 2);
 
   // Radio off decays energy and does not create more rattle.
   graph.ctx.currentTime = 3;
