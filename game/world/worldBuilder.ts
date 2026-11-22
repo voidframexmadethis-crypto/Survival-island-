@@ -188,10 +188,20 @@ export interface DragonValleyFlyerHandle {
   group: THREE.Group;
   wingL: THREE.Group;
   wingR: THREE.Group;
+  centerX: number;
+  centerZ: number;
   radius: number;
   height: number;
   speed: number;
   phase: number;
+  visibilityRange: number;
+}
+
+export interface DragonValleyBeaconHandle {
+  group: THREE.Group;
+  beamMat: THREE.MeshBasicMaterial;
+  coreMat: THREE.MeshBasicMaterial;
+  ring: THREE.Mesh;
 }
 
 export interface WorldHandles {
@@ -230,6 +240,7 @@ export interface WorldHandles {
   hillHousePos: THREE.Vector3;
   hillHouseDoor: import('./models').HilltopHouseDoorHandle;
   dragonValleyFlyers: DragonValleyFlyerHandle[];
+  dragonValleyBeacon: DragonValleyBeaconHandle;
   abandonedDragonGroup: THREE.Group;
   garagePos: THREE.Vector3;
   garageBenchPos: THREE.Vector3;
@@ -913,6 +924,7 @@ export function buildIslandWorld(
   const shadowCasters: THREE.Object3D[] = [];
   const staticMergeTargets: { group: THREE.Object3D; protectedObjs?: THREE.Object3D[] }[] = [];
   const dragonValleyFlyers: DragonValleyFlyerHandle[] = [];
+  let dragonValleyBeacon: DragonValleyBeaconHandle | null = null;
   let abandonedDragonGroup: THREE.Group | null = null;
   const disposableGeos: THREE.BufferGeometry[] = [];
   const disposableMats: THREE.Material[] = [];
@@ -5163,7 +5175,7 @@ export function buildIslandWorld(
       jetSkiAccentMat,
     );
 
-    // 1. DRAGON VALLEY (420, -380) — Obsidian canyon spires, magma pool & perched Winged Dragon
+    // 1. DRAGON VALLEY — Towering obsidian cliff and dragon roost north of the hill house
     const dvGroup = new THREE.Group();
     const dvY = getTerrainHeight(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z);
     dvGroup.position.set(DRAGON_VALLEY_POS.x, dvY, DRAGON_VALLEY_POS.z);
@@ -5205,6 +5217,33 @@ export function buildIslandWorld(
     dragonTail.rotation.x = -Math.PI * 0.42;
     dragonTail.position.set(0, 3.2, -4.5);
     dvGroup.add(dragonBody, dragonNeck, dragonHead, dragonEyeL, dragonEyeR, wingL, wingR, dragonTail);
+
+    // The valley's signature landmark: a sheer dragon cliff with broad roosting
+    // shelves. The beacon sits on its summit and is visible from the hill house.
+    const dragonCliff = new THREE.Mesh(
+      new THREE.CylinderGeometry(12, 18, 34, 9),
+      obsidianMat,
+    );
+    dragonCliff.position.set(-20, 17, -8);
+    dragonCliff.castShadow = true;
+    dragonCliff.receiveShadow = true;
+    const cliffLedgeLow = new THREE.Mesh(
+      new THREE.CylinderGeometry(17, 17, 1.2, 9),
+      obsidianMat,
+    );
+    cliffLedgeLow.position.set(-20, 9.4, -8);
+    cliffLedgeLow.castShadow = true;
+    const cliffLedgeHigh = new THREE.Mesh(
+      new THREE.CylinderGeometry(10.5, 10.5, 1.0, 9),
+      obsidianMat,
+    );
+    cliffLedgeHigh.position.set(-20, 23.4, -8);
+    cliffLedgeHigh.castShadow = true;
+    const cliffTop = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 0.8, 9), obsidianMat);
+    cliffTop.position.set(-20, 34.2, -8);
+    cliffTop.castShadow = true;
+    dvGroup.add(dragonCliff, cliffLedgeLow, cliffLedgeHigh, cliffTop);
+
     overworldGroup.add(dvGroup);
     staticMergeTargets.push({ group: dvGroup });
 
@@ -5221,7 +5260,108 @@ export function buildIslandWorld(
       metalness: 0.12,
     });
     disposableMats.push(stormScaleMat, shadowScaleMat);
+
+    const addRoostDragon = (
+      x: number,
+      y: number,
+      z: number,
+      scale: number,
+      scaleMat: THREE.Material,
+      rotY: number,
+    ) => {
+      const roost = new THREE.Group();
+      roost.position.set(x, y, z);
+      roost.rotation.y = rotY;
+      roost.scale.setScalar(scale);
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.55, 2.4, 4, 8), scaleMat);
+      body.rotation.x = Math.PI * 0.5;
+      body.position.y = 0.9;
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.62, 1.25), scaleMat);
+      head.position.set(0, 1.5, 1.7);
+      const tail = new THREE.Mesh(new THREE.ConeGeometry(0.4, 2.8, 6), scaleMat);
+      tail.rotation.x = -Math.PI * 0.5;
+      tail.position.set(0, 0.55, -2.1);
+      const foldedL = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.1, 1.5), dragonWingMat);
+      foldedL.position.set(-1.15, 1.1, -0.15);
+      foldedL.rotation.z = -0.62;
+      foldedL.rotation.y = 0.3;
+      const foldedR = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.1, 1.5), dragonWingMat);
+      foldedR.position.set(1.15, 1.1, -0.15);
+      foldedR.rotation.z = 0.62;
+      foldedR.rotation.y = -0.3;
+      roost.add(body, head, tail, foldedL, foldedR);
+      dvGroup.add(roost);
+    };
+
+    // A full roost: rock-sized hatchling through huge adults on every shelf.
+    addRoostDragon(9.5, 0.35, 8.5, 0.18, shadowScaleMat, 0.5);
+    addRoostDragon(6.5, 0.45, 11.5, 0.3, dragonScaleMat, -0.7);
+    addRoostDragon(11.5, 0.6, 6.5, 0.44, stormScaleMat, 1.2);
+    addRoostDragon(-10.5, 0.55, 8.5, 0.62, dragonScaleMat, 2.1);
+    addRoostDragon(-12.0, 10.05, -5.0, 0.8, stormScaleMat, -0.4);
+    addRoostDragon(-29.0, 10.05, -4.0, 1.02, shadowScaleMat, 0.9);
+    addRoostDragon(-15.0, 23.95, -8.0, 1.24, dragonScaleMat, 0.2);
+    addRoostDragon(-25.5, 23.95, -8.0, 1.46, stormScaleMat, -0.65);
+    addRoostDragon(-20.0, 34.65, -8.0, 1.62, shadowScaleMat, 0.0);
+    addRoostDragon(-24.0, 34.65, -5.0, 1.82, dragonScaleMat, 0.85);
+
+    // Huge island-findable beacon planted on the cliff summit.
+    const beaconGroup = new THREE.Group();
+    beaconGroup.position.set(DRAGON_VALLEY_POS.x - 20, dvY + 35, DRAGON_VALLEY_POS.z - 8);
+    const beaconBase = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 6.0, 2.2, 9), obsidianMat);
+    beaconBase.position.y = 0.4;
+    const beaconBeamMat = new THREE.MeshBasicMaterial({
+      color: 0xfbbf24,
+      transparent: true,
+      opacity: 0.22,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      fog: false,
+    });
+    const beaconCoreMat = new THREE.MeshBasicMaterial({
+      color: 0xfff7d6,
+      transparent: true,
+      opacity: 0.72,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      fog: false,
+    });
+    const beaconBeam = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.4, 3.2, 230, 10, 1, true),
+      beaconBeamMat,
+    );
+    beaconBeam.position.y = 116;
+    const beaconCore = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.45, 1.0, 238, 8, 1, true),
+      beaconCoreMat,
+    );
+    beaconCore.position.y = 120;
+    const beaconRingMat = new THREE.MeshBasicMaterial({
+      color: 0xfde68a,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      fog: false,
+    });
+    const beaconRing = new THREE.Mesh(new THREE.TorusGeometry(4.4, 0.3, 8, 24), beaconRingMat);
+    beaconRing.rotation.x = Math.PI * 0.5;
+    beaconRing.position.y = 1.4;
+    beaconGroup.add(beaconBase, beaconBeam, beaconCore, beaconRing);
+    overworldGroup.add(beaconGroup);
+    disposableMats.push(beaconBeamMat, beaconCoreMat, beaconRingMat);
+    dragonValleyBeacon = {
+      group: beaconGroup,
+      beamMat: beaconBeamMat,
+      coreMat: beaconCoreMat,
+      ring: beaconRing,
+    };
+
     const addValleyFlyer = (
+      centerX: number,
+      centerZ: number,
+      visibilityRange: number,
       radius: number,
       height: number,
       speed: number,
@@ -5250,9 +5390,9 @@ export function buildIslandWorld(
       group.add(body, head, tail, wingL, wingR);
       group.scale.setScalar(scale);
       group.position.set(
-        DRAGON_VALLEY_POS.x + Math.cos(phase) * radius,
-        dvY + height + Math.sin(phase * 2.3) * 1.6,
-        DRAGON_VALLEY_POS.z + Math.sin(phase) * radius,
+        centerX + Math.cos(phase) * radius,
+        getTerrainHeight(centerX, centerZ) + height + Math.sin(phase * 2.3) * 1.6,
+        centerZ + Math.sin(phase) * radius,
       );
       group.rotation.y = -phase;
       group.traverse((obj) => {
@@ -5262,11 +5402,29 @@ export function buildIslandWorld(
         }
       });
       overworldGroup.add(group);
-      dragonValleyFlyers.push({ group, wingL, wingR, radius, height, speed, phase });
+      dragonValleyFlyers.push({
+        group,
+        wingL,
+        wingR,
+        centerX,
+        centerZ,
+        radius,
+        height,
+        speed,
+        phase,
+        visibilityRange,
+      });
     };
-    addValleyFlyer(25, 15, 0.22, 0.3, 1.0, dragonScaleMat);
-    addValleyFlyer(33, 21, 0.17, 2.5, 1.35, stormScaleMat);
-    addValleyFlyer(20, 11, 0.28, 4.4, 0.85, shadowScaleMat);
+    addValleyFlyer(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 340, 25, 15, 0.22, 0.3, 1.0, dragonScaleMat);
+    addValleyFlyer(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 340, 33, 21, 0.17, 2.5, 1.35, stormScaleMat);
+    addValleyFlyer(DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 340, 20, 11, 0.28, 4.4, 0.85, shadowScaleMat);
+
+    // Island-wide patrols keep dragons visible over the shelter, homestead and
+    // central island, not just inside Dragon Valley.
+    addValleyFlyer(HILL_HOUSE_POS.x, HILL_HOUSE_POS.z, 280, 72, 30, 0.11, 1.1, 1.15, stormScaleMat);
+    addValleyFlyer(HILL_HOUSE_POS.x, HILL_HOUSE_POS.z, 280, 48, 22, 0.16, 4.0, 0.8, shadowScaleMat);
+    addValleyFlyer(0, 0, 360, 180, 56, 0.055, 3.2, 1.55, dragonScaleMat);
+    addValleyFlyer(HOMESTEAD_POS.x, HOMESTEAD_POS.z, 260, 58, 26, 0.13, 5.2, 1.0, dragonScaleMat);
 
     // Abandoned adult dragon curled around its old hoard at the valley edge.
     abandonedDragonGroup = new THREE.Group();
@@ -7551,6 +7709,13 @@ gl_Position = projectionMatrix * mvPosition;`,
     hillHousePos: new THREE.Vector3(HILL_HOUSE_POS.x, HILL_HOUSE_Y, HILL_HOUSE_POS.z),
     hillHouseDoor: hillHouse.door,
     dragonValleyFlyers,
+    dragonValleyBeacon:
+      dragonValleyBeacon ?? {
+        group: new THREE.Group(),
+        beamMat: new THREE.MeshBasicMaterial(),
+        coreMat: new THREE.MeshBasicMaterial(),
+        ring: new THREE.Mesh(),
+      },
     abandonedDragonGroup: abandonedDragonGroup ?? new THREE.Group(),
     garagePos,
     garageBenchPos,

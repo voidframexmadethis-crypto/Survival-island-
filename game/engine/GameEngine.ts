@@ -33,6 +33,7 @@ import {
   TikiDrinkKey,
 } from '../data/grandFinalePack';
 import {
+  DRAGON_ADULT_DAYS,
   DRAGON_VALLEY_SYSTEM,
   DragonCard,
   DragonCompanion,
@@ -306,6 +307,7 @@ import {
   BIOME_INFO,
   CAVE_POS,
   DRAGON_VALLEY_ABANDONED_POS,
+  DRAGON_VALLEY_BIOME_RADIUS,
   DRAGON_VALLEY_POS,
   EXPEDITION_POS,
   FARMER_POS,
@@ -805,10 +807,10 @@ export class GameEngine {
   private grandFinaleTikiCooldown = 0;
   private grandFinaleZoneCheckTimer = 0;
   private grandFinaleGhosts: GrandFinaleGhostEntity[] = [
-    { id: 'gf_dragon_1', zoneKey: 'dragon valley', x: 420, z: -380, hp: 100, maxHp: 100, active: true, name: 'Cinder Drake' },
-    { id: 'gf_viking_1', zoneKey: 'viking village', x: 560, z: -260, hp: 100, maxHp: 100, active: true, name: 'Draugr Raider' },
-    { id: 'gf_resort_1', zoneKey: 'resort corner', x: -480, z: 410, hp: 80, maxHp: 80, active: true, name: 'Tide Wraith' },
-    { id: 'gf_castle_boss', zoneKey: 'ruined castle', x: -360, z: -520, hp: 180, maxHp: 180, active: true, isBoss: true, name: 'Fallen King Ghost' },
+    { id: 'gf_dragon_1', zoneKey: 'dragon valley', x: GRAND_FINALE_PACK.zones['dragon valley'].x, z: GRAND_FINALE_PACK.zones['dragon valley'].z, hp: 100, maxHp: 100, active: true, name: 'Cinder Drake' },
+    { id: 'gf_viking_1', zoneKey: 'viking village', x: GRAND_FINALE_PACK.zones['viking village'].x, z: GRAND_FINALE_PACK.zones['viking village'].z, hp: 100, maxHp: 100, active: true, name: 'Draugr Raider' },
+    { id: 'gf_resort_1', zoneKey: 'resort corner', x: GRAND_FINALE_PACK.zones['resort corner'].x, z: GRAND_FINALE_PACK.zones['resort corner'].z, hp: 80, maxHp: 80, active: true, name: 'Tide Wraith' },
+    { id: 'gf_castle_boss', zoneKey: 'ruined castle', x: GRAND_FINALE_PACK.zones['ruined castle'].x, z: GRAND_FINALE_PACK.zones['ruined castle'].z, hp: 180, maxHp: 180, active: true, isBoss: true, name: 'Fallen King Ghost' },
   ];
 
   // Spatial Hash Grids (16m cells) for O(1) zero-GC world collider and resource node lookups
@@ -868,10 +870,10 @@ export class GameEngine {
     collected: boolean;
     mesh?: THREE.Group;
   }[] = [
-    { id: 'dv_egg_ember', species: 'Ember', x: DRAGON_VALLEY_POS.x - 9.5, z: DRAGON_VALLEY_POS.z + 8.5, collected: false },
-    { id: 'dv_egg_frost', species: 'Frost', x: DRAGON_VALLEY_POS.x + 10.2, z: DRAGON_VALLEY_POS.z + 7.4, collected: false },
-    { id: 'dv_egg_storm', species: 'Storm', x: DRAGON_VALLEY_POS.x - 10.8, z: DRAGON_VALLEY_POS.z - 7.6, collected: false },
-    { id: 'dv_egg_shadow', species: 'Shadow', x: DRAGON_VALLEY_POS.x + 11.0, z: DRAGON_VALLEY_POS.z - 8.2, collected: false },
+    { id: 'dv_egg_ember', species: 'Ember', x: DRAGON_VALLEY_POS.x - 8, z: DRAGON_VALLEY_POS.z + 19, collected: false },
+    { id: 'dv_egg_frost', species: 'Frost', x: DRAGON_VALLEY_POS.x + 13, z: DRAGON_VALLEY_POS.z + 14, collected: false },
+    { id: 'dv_egg_storm', species: 'Storm', x: DRAGON_VALLEY_POS.x + 18, z: DRAGON_VALLEY_POS.z + 3, collected: false },
+    { id: 'dv_egg_shadow', species: 'Shadow', x: DRAGON_VALLEY_POS.x + 10, z: DRAGON_VALLEY_POS.z - 18, collected: false },
   ];
   private dragonPlayerRef: DragonPlayerRef = { mountedDragonId: null };
   private dragonFlight: DragonFlightSystem = {
@@ -888,6 +890,7 @@ export class GameEngine {
   };
   private hillHouseDoorOpen = false;
   private hillHouseDoorAngle = 0;
+  private dragonGrowthDay = 1;
 
   // Multiverse & Portal Vortex Handles
   private activeDimensionWorld: DimensionWorldHandle | null = null;
@@ -2988,6 +2991,9 @@ export class GameEngine {
       growth: 100,
       speed: 68,
       isMounted: false,
+      daysRaised: 16,
+      health: 100,
+      maxHealth: 100,
     };
     this.dragons.push(rescued);
     DRAGON_VALLEY_SYSTEM.ensureCoreEntry(rescued);
@@ -4523,6 +4529,7 @@ export class GameEngine {
       this.syncIslandCaveTerrainAndTunnels();
       this.dragons = DRAGON_VALLEY_SYSTEM.resetToStarter();
       this.dragonPlayerRef.mountedDragonId = null;
+      this.dragonGrowthDay = this.dayCount;
       this.hillHouseDoorOpen = false;
       this.hillHouseDoorAngle = 0;
       vikingVillage.reset();
@@ -4844,6 +4851,7 @@ export class GameEngine {
     this.lastCaveStreamZ = -9999;
     this.dragons = DRAGON_VALLEY_SYSTEM.resetToStarter();
     this.dragonPlayerRef.mountedDragonId = null;
+    this.dragonGrowthDay = this.dayCount;
     this.hillHouseDoorOpen = false;
     this.hillHouseDoorAngle = 0;
     vikingVillage.reset();
@@ -5063,6 +5071,7 @@ export class GameEngine {
     this.lastCaveStreamZ = -9999;
     this.dragons = DRAGON_VALLEY_SYSTEM.importSave(save.dragonValleySave);
     this.dragonPlayerRef.mountedDragonId = null;
+    this.dragonGrowthDay = this.dayCount;
     this.hillHouseDoorOpen = false;
     this.hillHouseDoorAngle = 0;
     vikingVillage.importSave(save.vikingVillageSave);
@@ -7276,6 +7285,30 @@ export class GameEngine {
     door.pivotR.rotation.y = this.hillHouseDoorAngle;
   }
 
+  private syncDragonDailyGrowth(): void {
+    if (this.dayCount <= this.dragonGrowthDay) {
+      if (this.dayCount < this.dragonGrowthDay) this.dragonGrowthDay = this.dayCount;
+      return;
+    }
+    const days = Math.min(DRAGON_ADULT_DAYS, this.dayCount - this.dragonGrowthDay);
+    this.dragonGrowthDay = this.dayCount;
+    const alreadyFull = new Set(
+      this.dragons.filter((d) => (d.daysRaised ?? 0) >= DRAGON_ADULT_DAYS).map((d) => d.id),
+    );
+    const changed = DRAGON_VALLEY_SYSTEM.advanceDays(this.dragons, days);
+    if (changed.length === 0) return;
+    const newlyFull = changed.filter(
+      (d) => d.daysRaised >= DRAGON_ADULT_DAYS && !alreadyFull.has(d.id),
+    );
+    if (newlyFull.length > 0) {
+      this.toast(
+        `${newlyFull.map((d) => d.name).join(' & ')} reached full adult health after ${DRAGON_ADULT_DAYS} island days!`,
+        'discovery',
+      );
+    }
+    this.emitHud();
+  }
+
   private updateDragonValleyWorld(): void {
     const world = this.world;
     if (!world) return;
@@ -7283,16 +7316,16 @@ export class GameEngine {
       this.worldType === 'island' &&
       this.currentDimension === 'overworld' &&
       !this.inSpacePlanet;
-    const nearValley =
-      Math.hypot(this.playerX - DRAGON_VALLEY_POS.x, this.playerZ - DRAGON_VALLEY_POS.z) <
-      320;
     for (let i = 0; i < world.dragonValleyFlyers.length; i++) {
       const flyer = world.dragonValleyFlyers[i];
-      flyer.group.visible = active && nearValley;
+      const near =
+        Math.hypot(this.playerX - flyer.centerX, this.playerZ - flyer.centerZ) <
+        flyer.visibilityRange;
+      flyer.group.visible = active && near;
       if (!flyer.group.visible) continue;
       const angle = this.elapsed * flyer.speed + flyer.phase;
-      const x = DRAGON_VALLEY_POS.x + Math.cos(angle) * flyer.radius;
-      const z = DRAGON_VALLEY_POS.z + Math.sin(angle) * flyer.radius;
+      const x = flyer.centerX + Math.cos(angle) * flyer.radius;
+      const z = flyer.centerZ + Math.sin(angle) * flyer.radius;
       flyer.group.position.set(
         x,
         getTerrainHeight(x, z) + flyer.height + Math.sin(angle * 2.3) * 1.6,
@@ -7304,6 +7337,18 @@ export class GameEngine {
       flyer.wingL.rotation.z = flap;
       flyer.wingR.rotation.z = -flap;
     }
+    const beacon = world.dragonValleyBeacon;
+    beacon.group.visible = active;
+    if (active) {
+      const pulse = 0.5 + 0.5 * Math.sin(this.elapsed * 1.7);
+      beacon.group.scale.set(0.92 + pulse * 0.12, 1, 0.92 + pulse * 0.12);
+      beacon.beamMat.opacity = 0.16 + pulse * 0.18;
+      beacon.coreMat.opacity = 0.52 + pulse * 0.32;
+      beacon.ring.rotation.z = this.elapsed * 0.55;
+    }
+    const nearValley =
+      Math.hypot(this.playerX - DRAGON_VALLEY_POS.x, this.playerZ - DRAGON_VALLEY_POS.z) <
+      DRAGON_VALLEY_BIOME_RADIUS + 90;
     const rescued = DRAGON_VALLEY_SYSTEM.hasRescuedEncounter(
       this.abandonedDragonEncounter.id,
     );
@@ -16901,6 +16946,7 @@ export class GameEngine {
             this.updateStructuralAndTerrainSystems(dt);
             this.updateKineticNetwork(dt);
             this.updateHillHouseDoor(dt);
+            this.syncDragonDailyGrowth();
             this.updateDragonValleyWorld();
             this.coasterRuntime?.update(dt, this.playerX, this.playerZ);
           }

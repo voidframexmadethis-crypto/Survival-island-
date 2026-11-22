@@ -97,7 +97,34 @@ test('DRAGON_VALLEY_SYSTEM save/load preserves eggs, colors, age, bond, and ride
   assert.equal(restored[0].color, 'Stormgold');
   assert.equal(restored[0].age, 3);
   assert.equal(restored[0].rideable, true);
+  assert.equal(restored[0].daysRaised, 6);
+  assert.equal(restored[0].health, 50);
   assert.equal(dragonValley.canRide(restored[0].id), true);
+});
+
+test('hatchlings mature into full-health adults across 16 island days', () => {
+  DRAGON_VALLEY_SYSTEM.resetToStarter();
+  const baby = DRAGON_VALLEY_SYSTEM.hatchEgg('Ember', 'Pebble');
+  assert.ok(baby);
+  assert.equal(baby.daysRaised, 0);
+  assert.equal(baby.health, 20);
+  assert.equal(baby.maxHealth, 100);
+
+  DRAGON_VALLEY_SYSTEM.advanceDays([baby], 6);
+  assert.equal(baby.daysRaised, 6);
+  assert.equal(baby.age, 1);
+  assert.equal(baby.stage, 'Juvenile');
+  assert.equal(baby.growth, 38);
+  assert.equal(baby.health, 50);
+
+  DRAGON_VALLEY_SYSTEM.advanceDays([baby], 10);
+  assert.equal(baby.daysRaised, 16);
+  assert.equal(baby.age, 3);
+  assert.equal(baby.stage, 'Adult');
+  assert.equal(baby.growth, 100);
+  assert.equal(baby.health, 100);
+  assert.equal(baby.maxHealth, 100);
+  assert.equal(baby.rideable, true);
 });
 
 test('dragon cards track rarity, codex entries, and rescued encounters through save/load', () => {

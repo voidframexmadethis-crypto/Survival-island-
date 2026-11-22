@@ -82,8 +82,11 @@ export const FROZEN_OCEAN_ICEBERG_POS = { x: -175, z: -755 };
 export const BURIED_TREASURE_POS = { x: 72, z: 702 };
 
 // Grand Finale Pack Expanded Outer Biomes (740m Grand Island Expansion)
-export const DRAGON_VALLEY_POS = { x: 420, z: -380 };
-export const DRAGON_VALLEY_ABANDONED_POS = { x: 401, z: -365 };
+// Dragon Valley sits on a towering cliff roughly 60 blocks north of the
+// premade hill house so the beacon is obvious from the shelter porch.
+export const DRAGON_VALLEY_POS = { x: -78, z: 190 };
+export const DRAGON_VALLEY_ABANDONED_POS = { x: -95, z: 205 };
+export const DRAGON_VALLEY_BIOME_RADIUS = 45;
 export const VIKING_VILLAGE_POS = { x: 560, z: -260 };
 export const RESORT_CORNER_POS = { x: -480, z: 410 };
 export const RUINED_CASTLE_POS = { x: -360, z: -520 };
@@ -1163,7 +1166,7 @@ const FLAT_PADS: readonly [number, number, number, number, number, number][] = [
   [SAVANNA_OUTPOST_POS.x, SAVANNA_OUTPOST_POS.z, 7.5, 14.0, 14.0 * 14.0, 5.6],
   [BADLANDS_MINESHAFT_POS.x, BADLANDS_MINESHAFT_POS.z, 9.0, 16.0, 16.0 * 16.0, 6.4],
   [SWAMP_HUT_POS.x, SWAMP_HUT_POS.z, 8.0, 14.0, 14.0 * 14.0, 2.35],
-  [DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 36.0, 72.0, 72.0 * 72.0, 10.0],
+  [DRAGON_VALLEY_POS.x, DRAGON_VALLEY_POS.z, 36.0, 40.0, 40.0 * 40.0, 10.0],
   [VIKING_VILLAGE_POS.x, VIKING_VILLAGE_POS.z, 34.0, 66.0, 66.0 * 66.0, 6.0],
   [RESORT_CORNER_POS.x, RESORT_CORNER_POS.z, 32.0, 64.0, 64.0 * 64.0, 4.0],
   [RUINED_CASTLE_POS.x, RUINED_CASTLE_POS.z, 34.0, 68.0, 68.0 * 68.0, 6.0],
@@ -1628,7 +1631,8 @@ export function getBiomeAt(x: number, z: number): BiomeId {
   // Grand Finale Pack Outer Biomes
   let bdx = x - DRAGON_VALLEY_POS.x;
   let bdz = z - DRAGON_VALLEY_POS.z;
-  if (bdx * bdx + bdz * bdz < 8464) return 'dragon_valley';
+  if (bdx * bdx + bdz * bdz < DRAGON_VALLEY_BIOME_RADIUS * DRAGON_VALLEY_BIOME_RADIUS)
+    return 'dragon_valley';
   bdx = x - VIKING_VILLAGE_POS.x;
   bdz = z - VIKING_VILLAGE_POS.z;
   if (bdx * bdx + bdz * bdz < 7744) return 'viking_village';

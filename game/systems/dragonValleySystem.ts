@@ -31,6 +31,27 @@ export interface DragonCompanion extends Dragon {
   growth: number; // 0 to 100
   speed: number;
   isMounted: boolean;
+  daysRaised: number; // island days since hatching, capped at DRAGON_ADULT_DAYS
+  health: number;
+  maxHealth: number;
+}
+
+export const DRAGON_ADULT_DAYS = 16;
+
+export function dragonHealthForDays(daysRaised: number): { health: number; maxHealth: number } {
+  const ratio = Math.max(0, Math.min(1, daysRaised / DRAGON_ADULT_DAYS));
+  const maxHealth = 100;
+  return {
+    health: Math.round(20 + ratio * (maxHealth - 20)),
+    maxHealth,
+  };
+}
+
+export function daysFromDragonProgress(age: number, growth: number): number {
+  if (age >= 3 || growth >= 100) return DRAGON_ADULT_DAYS;
+  if (age >= 2) return 11;
+  if (age >= 1) return 6;
+  return Math.max(0, Math.min(DRAGON_ADULT_DAYS, Math.round((growth / 100) * DRAGON_ADULT_DAYS)));
 }
 
 export interface DragonPlayerRef {
@@ -246,6 +267,8 @@ export const DRAGON_VALLEY_SYSTEM = {
       growth: 35,
       speed: 46,
       isMounted: false,
+      daysRaised: 6,
+      ...dragonHealthForDays(6),
     };
     dragonValley.dragons.push({
       id: starter.id,
@@ -352,6 +375,8 @@ export const DRAGON_VALLEY_SYSTEM = {
       growth: 0,
       speed: speedFromDragon(coreDragon.age, coreDragon.bond, elements),
       isMounted: false,
+      daysRaised: 0,
+      ...dragonHealthForDays(0),
     };
   },
 
@@ -429,7 +454,35 @@ export const DRAGON_VALLEY_SYSTEM = {
       growth: 67,
       speed: Math.max(dragonA.speed, dragonB.speed) + 6,
       isMounted: false,
+      daysRaised: 11,
+      ...dragonHealthForDays(11),
     };
+  },
+
+  advanceDays(dragons: DragonCompanion[], days = 1): DragonCompanion[] {
+    const changed: DragonCompanion[] = [];
+    if (days <= 0) return changed;
+    for (const dragon of dragons) {
+      if ((dragon.daysRaised ?? 0) >= DRAGON_ADULT_DAYS) continue;
+      this.ensureCoreEntry(dragon);
+      const nextDays = Math.min(DRAGON_ADULT_DAYS, (dragon.daysRaised ?? 0) + days);
+      dragon.daysRaised = nextDays;
+      dragon.growth = Math.max(
+        dragon.growth,
+        Math.round((nextDays / DRAGON_ADULT_DAYS) * 100),
+      );
+      const core = dragonValley.dragons.find((entry) => entry.id === dragon.id);
+      if (core) {
+        const targetAge = nextDays >= 16 ? 3 : nextDays >= 11 ? 2 : nextDays >= 6 ? 1 : 0;
+        while (core.age < targetAge) dragonValley.grow(core.id);
+      }
+      const health = dragonHealthForDays(nextDays);
+      dragon.health = health.health;
+      dragon.maxHealth = health.maxHealth;
+      this.syncCompanionFromCore(dragon);
+      changed.push(dragon);
+    }
+    return changed;
   },
 
   // Anvil + Name Tag workflow: renames a dragon or customizes its display tag
@@ -516,6 +569,15 @@ export const DRAGON_VALLEY_SYSTEM = {
             growth: typeof d.growth === 'number' ? d.growth : Math.min(100, age * 34),
             speed: typeof d.speed === 'number' ? d.speed : speedFromDragon(age, bond, elements),
             isMounted: false,
+            daysRaised:
+              typeof d.daysRaised === 'number'
+                ? Math.min(DRAGON_ADULT_DAYS, d.daysRaised)
+                : daysFromDragonProgress(age, d.growth ?? 0),
+            ...dragonHealthForDays(
+              typeof d.daysRaised === 'number'
+                ? Math.min(DRAGON_ADULT_DAYS, d.daysRaised)
+                : daysFromDragonProgress(age, d.growth ?? 0),
+            ),
           };
         })
       : [];

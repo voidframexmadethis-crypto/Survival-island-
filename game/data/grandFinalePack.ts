@@ -1,3 +1,10 @@
+import {
+  DRAGON_VALLEY_POS,
+  RESORT_CORNER_POS,
+  RUINED_CASTLE_POS,
+  VIKING_VILLAGE_POS,
+} from '../world/terrain';
+
 export type GrandFinaleZoneKey =
   | 'dragon valley'
   | 'viking village'
@@ -56,8 +63,8 @@ export const GRAND_FINALE_PACK = {
   zones: {
     'dragon valley': {
       id: 'dragon_valley',
-      x: 420,
-      z: -380,
+      x: DRAGON_VALLEY_POS.x,
+      z: DRAGON_VALLEY_POS.z,
       yClearance: 10,
       mountType: 'dragon',
       maxEntities: 5,
@@ -65,8 +72,8 @@ export const GRAND_FINALE_PACK = {
     },
     'viking village': {
       id: 'viking_village',
-      x: 560,
-      z: -260,
+      x: VIKING_VILLAGE_POS.x,
+      z: VIKING_VILLAGE_POS.z,
       yClearance: 6,
       mountType: null,
       maxEntities: 6,
@@ -74,8 +81,8 @@ export const GRAND_FINALE_PACK = {
     },
     'resort corner': {
       id: 'resort_corner',
-      x: -480,
-      z: 410,
+      x: RESORT_CORNER_POS.x,
+      z: RESORT_CORNER_POS.z,
       yClearance: 4,
       hasJetSkis: true,
       hasTikiLounge: true,
@@ -84,8 +91,8 @@ export const GRAND_FINALE_PACK = {
     },
     'ruined castle': {
       id: 'ruined_castle',
-      x: -360,
-      z: -520,
+      x: RUINED_CASTLE_POS.x,
+      z: RUINED_CASTLE_POS.z,
       yClearance: 6,
       bossName: 'Fallen King Ghost',
       maxEntities: 7,

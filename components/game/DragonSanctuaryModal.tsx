@@ -29,6 +29,7 @@ import {
   DragonRarity,
   rarityFromElements,
 } from '@/game/systems/dragonValleySystem';
+import { DRAGON_VALLEY_ABANDONED_POS, DRAGON_VALLEY_POS } from '@/game/world/terrain';
 
 interface DragonSanctuaryModalProps {
   dragons: DragonCompanion[];
@@ -194,7 +195,7 @@ export function DragonSanctuaryModal({
                   <div className="text-indigo-200/75">
                     {abandonedDragonRescued
                       ? 'The grown Storm-Shadow dragon now lives in your sanctuary.'
-                      : 'Find the grown Storm-Shadow dragon at X 401, Z -365 for a Legendary card, 2 Gold Bars & 1 Diamond Crystal.'}
+                      : `Find the grown Storm-Shadow dragon at X ${DRAGON_VALLEY_ABANDONED_POS.x}, Z ${DRAGON_VALLEY_ABANDONED_POS.z} for a Legendary card, 2 Gold Bars & 1 Diamond Crystal.`}
                   </div>
                 </div>
               </div>
@@ -243,7 +244,7 @@ export function DragonSanctuaryModal({
               <div className="text-xs text-stone-400 font-mono-tabular">
                 {atCap
                   ? `Sanctuary full (${DRAGON_VALLEY_SYSTEM.maxActiveDragons} max)`
-                  : 'Find eggs at Dragon Valley nests (X 420, Z -380) or Viking Village'}
+                  : `Find eggs under the golden beacon at X ${DRAGON_VALLEY_POS.x}, Z ${DRAGON_VALLEY_POS.z} or trade with the Viking Village`}
               </div>
             </div>
 
@@ -373,12 +374,15 @@ export function DragonSanctuaryModal({
                       </div>
                     </div>
 
-                    {/* Age, Hunger, Bond & Growth Stats */}
-                    <div className="grid grid-cols-3 gap-2 text-xs">
+                    {/* Age, Hunger, Bond, Health & Growth Stats */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                       <div className="rounded-lg bg-stone-900/90 border border-stone-800 px-3 py-2">
-                        <div className="text-stone-400 text-[11px]">Age &amp; Riding</div>
+                        <div className="text-stone-400 text-[11px]">Age &amp; Raising</div>
                         <div className="font-mono-tabular font-bold text-stone-100 mt-0.5">
-                          Age {d.age} · {d.rideable ? 'Rideable' : `${Math.max(0, 3 - d.age)} to ride`}
+                          Age {d.age} · Day {d.daysRaised}/16
+                        </div>
+                        <div className="text-[10px] text-stone-500 mt-0.5">
+                          {d.rideable ? 'Rideable' : `${Math.max(0, 3 - d.age)} age-ups to ride`}
                         </div>
                       </div>
                       <div className="rounded-lg bg-stone-900/90 border border-stone-800 px-3 py-2">
@@ -395,12 +399,23 @@ export function DragonSanctuaryModal({
                           {d.bond}
                         </div>
                       </div>
+                      <div className="rounded-lg bg-stone-900/90 border border-stone-800 px-3 py-2">
+                        <div className="text-stone-400 text-[11px]">Adult Health</div>
+                        <div className="font-mono-tabular font-bold text-sky-300 mt-0.5">
+                          {d.health}/{d.maxHealth}
+                        </div>
+                        <div className="text-[10px] text-stone-500 mt-0.5">
+                          {d.daysRaised >= 16
+                            ? 'Fully grown'
+                            : `${16 - d.daysRaised} island days left`}
+                        </div>
+                      </div>
                     </div>
 
                     {/* Growth Bar */}
                     <div className="space-y-1">
                       <div className="flex justify-between text-[11px] text-stone-400 font-mono-tabular">
-                        <span>Growth Progress</span>
+                        <span>Growth Progress · Day {d.daysRaised}/16</span>
                         <span>{d.growth}%</span>
                       </div>
                       <div className="h-2 rounded-full bg-stone-800 overflow-hidden">
