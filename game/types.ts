@@ -394,8 +394,10 @@ export interface ModularVehicleData {
   rimLightMode?: 'off' | 'solid' | 'blink' | 'music';
   rimLightColor?: string;
   hydraulicsDanceEnabled?: boolean;
+  /** Built as a hydraulic dancer, the only builds that hop all four wheels. */
+  hydraulicsDanceAvailable?: boolean;
   /** Parked hydraulic pose that remains visible after exiting the car. */
-  hydraulicStance?: 'three_wheel';
+  hydraulicStance?: 'three_wheel' | 'lock_up';
   livery?: {
     channelName: string;
     ctaText: string;
@@ -493,6 +495,7 @@ export interface ActiveVehicleHudState {
   slammedStance?: boolean;
   liftHeightInches?: number;
   hydraulicsDanceEnabled?: boolean;
+  hydraulicsDanceAvailable?: boolean;
   hasSubwooferWall?: boolean;
   highClearance: boolean;
   cargoUsed: number;

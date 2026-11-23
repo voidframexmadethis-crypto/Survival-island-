@@ -144,6 +144,10 @@ export interface GarageDanceState {
   enabled: boolean;
   phase: number;
   bassPulse: number;
+  /** Height the tyres leave the ground during a dance hop, in metres. */
+  wheelLift: number;
+  /** Lateral shimmy applied to the whole car during the dance, in metres. */
+  sway: number;
 }
 
 export function createGarageDanceState(): GarageDanceState {
@@ -151,6 +155,8 @@ export function createGarageDanceState(): GarageDanceState {
     enabled: false,
     phase: 0,
     bassPulse: 0,
+    wheelLift: 0,
+    sway: 0,
   };
 }
 
@@ -169,18 +175,26 @@ export function stepGarageHydraulicsDance(
     rig.bodyGroup.position.y = baseBodyY;
     rig.bodyGroup.rotation.z = 0;
     rig.bodyGroup.rotation.x = 0;
+    dance.wheelLift = 0;
+    dance.sway = 0;
     return;
   }
 
   dance.phase += dt * 7.5;
   const boost = Math.max(0.5, Math.min(2.4, bounceBoost));
-  const hop = Math.abs(Math.sin(dance.phase)) * 0.18 * boost;
-  const tilt = Math.sin(dance.phase * 0.5) * 0.11 * Math.min(1.35, boost);
-  const pitch = Math.cos(dance.phase) * 0.08 * Math.min(1.35, boost);
+  const hop = Math.abs(Math.sin(dance.phase)) * 0.22 * boost;
+  const tilt = Math.sin(dance.phase * 0.5) * 0.12 * Math.min(1.35, boost);
+  const pitch = Math.cos(dance.phase) * 0.09 * Math.min(1.35, boost);
 
   rig.bodyGroup.position.y = baseBodyY + hop;
   rig.bodyGroup.rotation.z = tilt;
   rig.bodyGroup.rotation.x = pitch;
+
+  // Only the dancer lifts all four tyres: the axle leaves the pavement at the
+  // top of the stroke while the body pumps higher on its cylinders. The slow
+  // lateral sway is the classic side-to-side shimmy, driven by the same phase.
+  dance.wheelLift = Math.max(0, hop - 0.05) * 0.9;
+  dance.sway = Math.sin(dance.phase * 0.5) * 0.09 * Math.min(1.35, boost);
 
   // Pulse behind-driver subwoofer cones when bass is playing
   dance.bassPulse = Math.sin(dance.phase * 2) * 0.5 + 0.5;

@@ -122,11 +122,31 @@ test('the dancing Impala is display-only and its hydraulic dance has extra trave
     subCones: [],
   };
   let maxY = 0;
+  let maxWheelLift = 0;
+  let maxSway = 0;
   for (let i = 0; i < 60; i++) {
     stepGarageHydraulicsDance(body, dance, 1 / 30, 0.25, 1.25);
     maxY = Math.max(maxY, body.bodyGroup.position.y);
+    maxWheelLift = Math.max(maxWheelLift, dance.wheelLift);
+    maxSway = Math.max(maxSway, Math.abs(dance.sway));
   }
   assert.ok(maxY > 0.38, `dance travel was only ${maxY.toFixed(3)}m`);
+  assert.ok(maxWheelLift > 0.02, `dancer tyres never left the ground`);
+  assert.ok(maxSway > 0.01, `dancer never shimmied side to side`);
+
+  dance.enabled = false;
+  stepGarageHydraulicsDance(body, dance, 1 / 30, 0.25, 1.25);
+  assert.equal(dance.wheelLift, 0);
+  assert.equal(dance.sway, 0);
+  assert.equal(body.bodyGroup.position.y, 0.25);
+});
+
+test('only purpose-built dancer builds can hop all four wheels', () => {
+  const dancers = ELEVATOR_EXOTIC_LIFT.cars
+    .filter((car) => car.hydraulicsDance)
+    .map((car) => car.id)
+    .sort();
+  assert.deepEqual(dancers, ['impala-ss-dancer', 'nissan-mini-truck']);
 });
 
 test('Town Car, mini truck and El Camino support the three-wheel stance', () => {

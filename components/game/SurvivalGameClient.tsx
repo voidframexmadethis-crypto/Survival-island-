@@ -3390,19 +3390,22 @@ export function SurvivalGameClient() {
                           >
                             Coil Bounce
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => engineRef.current?.toggleVehicleHydraulicsDance()}
-                            className={`min-h-[30px] px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
-                              hud.activeVehicle.hydraulicsDanceEnabled
-                                ? 'bg-pink-500 border-pink-200 text-white'
-                                : 'bg-stone-900 border-pink-400/50 text-pink-200 hover:bg-pink-950/60'
-                            }`}
-                          >
-                            {hud.activeVehicle.hydraulicsDanceEnabled
-                              ? 'Dance Mode ON'
-                              : 'Dance Mode'}
-                          </button>
+                          {(hud.activeVehicle.hydraulicsDanceAvailable ||
+                            hud.activeVehicle.hydraulicsDanceEnabled) && (
+                            <button
+                              type="button"
+                              onClick={() => engineRef.current?.toggleVehicleHydraulicsDance()}
+                              className={`min-h-[30px] px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
+                                hud.activeVehicle.hydraulicsDanceEnabled
+                                  ? 'bg-pink-500 border-pink-200 text-white'
+                                  : 'bg-stone-900 border-pink-400/50 text-pink-200 hover:bg-pink-950/60'
+                              }`}
+                            >
+                              {hud.activeVehicle.hydraulicsDanceEnabled
+                                ? 'Dance Mode ON'
+                                : 'Dance Mode'}
+                            </button>
+                          )}
                         </>
                       ) : hud.activeVehicle.hydraulicStyle === 'up_down_side' ? (
                         <>
@@ -3517,19 +3520,22 @@ export function SurvivalGameClient() {
                           >
                             3-Wheel [H]
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => engineRef.current?.toggleVehicleHydraulicsDance()}
-                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
-                              hud.activeVehicle.hydraulicsDanceEnabled
-                                ? 'bg-pink-500 border-pink-200 text-white'
-                                : 'bg-stone-900 border-pink-400/50 text-pink-200 hover:bg-pink-950/60'
-                            }`}
-                          >
-                            {hud.activeVehicle.hydraulicsDanceEnabled
-                              ? 'Dance Mode ON'
-                              : 'Dance Mode'}
-                          </button>
+                          {(hud.activeVehicle.hydraulicsDanceAvailable ||
+                            hud.activeVehicle.hydraulicsDanceEnabled) && (
+                            <button
+                              type="button"
+                              onClick={() => engineRef.current?.toggleVehicleHydraulicsDance()}
+                              className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
+                                hud.activeVehicle.hydraulicsDanceEnabled
+                                  ? 'bg-pink-500 border-pink-200 text-white'
+                                  : 'bg-stone-900 border-pink-400/50 text-pink-200 hover:bg-pink-950/60'
+                              }`}
+                            >
+                              {hud.activeVehicle.hydraulicsDanceEnabled
+                                ? 'Dance Mode ON'
+                                : 'Dance Mode'}
+                            </button>
+                          )}
                         </>
                       )}
                     </div>
