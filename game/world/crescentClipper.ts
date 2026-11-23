@@ -7,6 +7,9 @@ export interface CrescentClipperHandles {
   propellers: THREE.Object3D[];
   engineGlowMat: THREE.MeshStandardMaterial;
   beaconMat: THREE.MeshStandardMaterial;
+  cabinSeats: THREE.Object3D[];
+  maid: THREE.Object3D;
+  cabinTvMat: THREE.MeshStandardMaterial;
 }
 
 function makeNameTexture(): THREE.CanvasTexture | null {
@@ -69,6 +72,28 @@ export function buildCrescentClipper(): CrescentClipperHandles {
   });
   const interiorMat = new THREE.MeshStandardMaterial({ color: 0x9c7a52, roughness: 0.88 });
   const seatMat = new THREE.MeshStandardMaterial({ color: 0x7c2c2c, roughness: 0.94 });
+  const bedMat = new THREE.MeshStandardMaterial({ color: 0xe8eef2, roughness: 0.94 });
+  const blanketMat = new THREE.MeshStandardMaterial({ color: 0x2f6f69, roughness: 0.92 });
+  const carpetMat = new THREE.MeshStandardMaterial({ color: 0x5b4636, roughness: 0.98 });
+  const bathMat = new THREE.MeshStandardMaterial({ color: 0xeef2f4, roughness: 0.24 });
+  const whiteMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.38 });
+  const woodMat = new THREE.MeshStandardMaterial({ color: 0x7b4f31, roughness: 0.85 });
+  const frostedMat = new THREE.MeshStandardMaterial({
+    color: 0xbfe8ef,
+    transparent: true,
+    opacity: 0.38,
+    roughness: 0.16,
+  });
+  const maidDressMat = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.92 });
+  const maidApronMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.88 });
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0x8d5a3b, roughness: 0.86 });
+  const hairMat = new THREE.MeshStandardMaterial({ color: 0x2b1b12, roughness: 0.9 });
+  const cabinTvMat = new THREE.MeshStandardMaterial({
+    color: 0x071523,
+    emissive: 0x38bdf8,
+    emissiveIntensity: 0.9,
+    roughness: 0.2,
+  });
   const floatMat = new THREE.MeshStandardMaterial({
     color: 0x23555c,
     roughness: 0.6,
@@ -226,7 +251,9 @@ export function buildCrescentClipper(): CrescentClipperHandles {
   }
 
   // ---- Cabin, cockpit and gull-wing door ---------------------------------
+  const cabinSeats: THREE.Object3D[] = [];
   addBox(2.55, 0.08, 9.6, 0, 2.02, 1.3, interiorMat);
+  addBox(2.45, 0.025, 9.2, 0, 2.08, 1.2, carpetMat);
   addBox(2.55, 0.08, 9.6, 0, 3.72, 1.3, hullTrimMat);
   for (const side of [-1, 1]) {
     for (let i = 0; i < 5; i++) {
@@ -253,13 +280,124 @@ export function buildCrescentClipper(): CrescentClipperHandles {
     addBox(0.65, 0.8, 0.7, side * 0.55, 2.55, 4.35, seatMat);
     addBox(0.65, 0.95, 0.18, side * 0.55, 2.95, 4.02, seatMat);
   }
-  // Rear cabin seats.
-  for (const side of [-1, 1]) {
-    addBox(0.7, 0.7, 0.75, side * 0.62, 2.45, 0.6, seatMat);
-    addBox(0.7, 0.9, 0.16, side * 0.62, 2.85, 0.24, seatMat);
-    addBox(0.7, 0.7, 0.75, side * 0.62, 2.45, -1.6, seatMat);
-    addBox(0.7, 0.9, 0.16, side * 0.62, 2.85, -1.96, seatMat);
+  // ---- Private lounge: six club chairs around two tables -----------------
+  const clubRows = [2.55, 1.15, -0.25];
+  for (const rowZ of clubRows) {
+    for (const side of [-1, 1]) {
+      const seat = addBox(0.56, 0.16, 0.64, side * 0.72, 2.36, rowZ, seatMat);
+      addBox(0.13, 0.78, 0.64, side * 1.03, 2.72, rowZ, seatMat);
+      addBox(0.5, 0.22, 0.46, side * 0.72, 2.17, rowZ, frameMat);
+      addBox(0.08, 0.28, 0.64, side * 0.44, 2.52, rowZ, frameMat);
+      cabinSeats.push(seat);
+    }
   }
+  for (const tableZ of [1.85, 0.45]) {
+    const tableTop = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.32, 0.32, 0.055, 18),
+      goldMat,
+    );
+    tableTop.position.set(0, 2.52, tableZ);
+    root.add(tableTop);
+    const pedestal = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.055, 0.1, 0.38, 10),
+      frameMat,
+    );
+    pedestal.position.set(0, 2.3, tableZ);
+    root.add(pedestal);
+  }
+
+  // ---- Couch and live cabin TV -------------------------------------------
+  addBox(0.64, 0.22, 1.9, 0.9, 2.36, -1.95, seatMat);
+  addBox(0.18, 0.9, 1.9, 1.18, 2.82, -1.95, seatMat);
+  addBox(0.55, 0.12, 0.55, 0.88, 2.5, -2.55, goldMat);
+  addBox(0.55, 0.12, 0.55, 0.88, 2.5, -1.45, goldMat);
+  addBox(0.08, 0.92, 1.62, -1.3, 3.06, -1.95, frameMat);
+  const cabinTv = new THREE.Mesh(new THREE.PlaneGeometry(1.48, 0.78), cabinTvMat);
+  cabinTv.position.set(-1.345, 3.06, -1.95);
+  cabinTv.rotation.y = Math.PI / 2;
+  root.add(cabinTv);
+  addBox(0.12, 0.12, 1.2, -1.16, 2.5, -1.95, frameMat);
+
+  // ---- Rear partition, private bedroom and bathroom ---------------------
+  addBox(1.08, 1.58, 0.1, -0.73, 2.9, -2.9, hullTrimMat);
+  addBox(0.62, 1.58, 0.1, 0.96, 2.9, -2.9, hullTrimMat);
+  addBox(1.35, 0.2, 0.1, 0.05, 3.72, -2.9, hullTrimMat);
+  addBox(2.6, 0.08, 3.55, 0, 2.08, -4.7, carpetMat);
+  addBox(0.1, 1.58, 3.55, 0.28, 2.9, -4.7, hullTrimMat);
+  addBox(0.5, 1.5, 0.08, 0.28, 2.9, -3.05, frameMat);
+
+  // Bedroom: bed, pillows, blanket, nightstand and lamp.
+  addBox(1.14, 0.22, 2.0, -0.55, 2.2, -5.0, frameMat);
+  addBox(1.08, 0.28, 1.9, -0.55, 2.4, -5.0, bedMat);
+  addBox(1.08, 0.1, 1.0, -0.55, 2.57, -5.45, blanketMat);
+  addBox(0.45, 0.16, 0.32, -0.85, 2.61, -4.25, whiteMat);
+  addBox(0.45, 0.16, 0.32, -0.3, 2.61, -4.25, whiteMat);
+  addBox(1.2, 0.75, 0.1, -0.55, 2.85, -6.02, woodMat);
+  addBox(0.36, 0.38, 0.36, 0.08, 2.28, -5.1, woodMat);
+  const bedLamp = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 0.3, 8), goldMat);
+  bedLamp.position.set(0.08, 2.62, -5.1);
+  root.add(bedLamp);
+  addBox(1.15, 0.035, 1.6, -0.58, 2.11, -4.9, carpetMat);
+
+  // Bathroom: toilet, sink, mirror and shower screen.
+  addBox(0.52, 0.38, 0.62, 0.82, 2.26, -5.55, bathMat);
+  addBox(0.54, 0.55, 0.24, 0.82, 2.48, -5.92, bathMat);
+  addBox(0.56, 0.08, 0.6, 0.82, 2.47, -5.55, whiteMat);
+  addBox(0.78, 0.18, 0.58, 0.83, 2.82, -4.25, bathMat);
+  const basin = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.16, 0.12, 12), whiteMat);
+  basin.position.set(0.83, 2.93, -4.25);
+  root.add(basin);
+  const mirror = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.72), glassMat);
+  mirror.position.set(1.26, 3.28, -4.25);
+  mirror.rotation.y = -Math.PI / 2;
+  root.add(mirror);
+  addBox(0.08, 1.9, 0.76, 0.35, 3.05, -4.0, frostedMat);
+  addBox(0.06, 0.9, 0.55, 0.82, 2.15, -3.45, bathMat);
+
+  // ---- Maid service -------------------------------------------------------
+  const maid = new THREE.Group();
+  maid.position.set(0.03, 2.09, 0.55);
+  const maidSkirt = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.18, 0.31, 0.68, 10),
+    maidDressMat,
+  );
+  maidSkirt.position.y = 0.34;
+  maid.add(maidSkirt);
+  const maidTorso = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.17, 0.2, 0.44, 10),
+    maidApronMat,
+  );
+  maidTorso.position.y = 0.9;
+  maid.add(maidTorso);
+  addBox(0.3, 0.55, 0.08, 0, 0.72, 0.2, maidApronMat, maid);
+  const maidHead = new THREE.Mesh(new THREE.SphereGeometry(0.145, 12, 10), skinMat);
+  maidHead.position.y = 1.3;
+  maid.add(maidHead);
+  const maidHair = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), hairMat);
+  maidHair.position.set(0, 1.35, -0.03);
+  maidHair.scale.set(1, 0.8, 1);
+  maid.add(maidHair);
+  for (const side of [-1, 1]) {
+    const arm = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.045, 0.05, 0.5, 6),
+      skinMat,
+    );
+    arm.position.set(side * 0.22, 0.95, 0.02);
+    arm.rotation.z = side * 0.35;
+    maid.add(arm);
+  }
+  const tray = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.26, 0.26, 0.035, 14),
+    goldMat,
+  );
+  tray.position.set(0, 1.03, 0.28);
+  maid.add(tray);
+  for (const side of [-1, 1]) {
+    const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.02, 12), whiteMat);
+    plate.position.set(side * 0.1, 1.06, 0.28);
+    maid.add(plate);
+  }
+  root.add(maid);
 
   // The port-side gull wing door hinges at the roof and lifts outward/up.
   const door = new THREE.Group();
@@ -302,5 +440,8 @@ export function buildCrescentClipper(): CrescentClipperHandles {
     propellers,
     engineGlowMat,
     beaconMat,
+    cabinSeats,
+    maid,
+    cabinTvMat,
   };
 }

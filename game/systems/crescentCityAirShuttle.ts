@@ -83,7 +83,7 @@ export const ISLAND_SEAPLANE_BASE: AirShuttleBase = {
   id: 'island',
   label: 'Driftwood Seaplane Base',
   parkingX: 88,
-  parkingZ: 680,
+  parkingZ: 690,
   outboundYaw: 0,
   runwayStartX: 88,
   runwayStartZ: 912,
@@ -99,11 +99,11 @@ export const ISLAND_SEAPLANE_BASE: AirShuttleBase = {
   runwayWidth: 26,
   runwayAxis: 'z',
   hangarX: 88,
-  hangarZ: 676,
+  hangarZ: 670,
   waterY: 0,
-  boardingRadius: 18,
+  boardingRadius: 28,
   disembarkX: 88,
-  disembarkZ: 666,
+  disembarkZ: 668,
 };
 
 /**
@@ -129,10 +129,10 @@ export const CRESCENT_CITY_SEAPLANE_BASE: AirShuttleBase = {
   runwayLength: 260,
   runwayWidth: 26,
   runwayAxis: 'x',
-  hangarX: -108,
+  hangarX: -128,
   hangarZ: 1164,
   waterY: 1.35,
-  boardingRadius: 28,
+  boardingRadius: 26,
   disembarkX: -106,
   disembarkZ: 1190,
 };
@@ -587,6 +587,10 @@ export class AirShuttleVoyageSystem {
         this.doorOpen = 1;
         this.engineOn = false;
         this.speedMps = 0;
+        // A gentle water bob keeps the parked aircraft from reading as a
+        // frozen prop, even before the player steps aboard.
+        this.planeY = this.currentBase.waterY + 0.1 + Math.sin(now / 900) * 0.025;
+        this.planeRoll = Math.sin(now / 1700) * 0.005;
         break;
       }
       case 'doors_closing': {
@@ -673,7 +677,12 @@ export class AirShuttleVoyageSystem {
         this.planeY = waterLine + 0.1 + this.altitudeM;
         this.planeYaw = routeHeadingAt(route, meters);
         this.planePitch = -0.035 * smoothstep(descentT);
-        this.planeRoll = Math.sin(this.elapsedMs / 9000) * 0.018;
+        const bankTurn = shortestAngleDelta(
+          routeHeadingAt(route, Math.max(0, meters - 2000)),
+          routeHeadingAt(route, Math.min(route.length, meters + 2000)),
+        );
+        const bankTarget = Math.max(-0.36, Math.min(0.36, -bankTurn * 2.4));
+        this.planeRoll += (bankTarget - this.planeRoll) * 0.06;
         this.speedMps = route.length / AIR_SHUTTLE_LEG_SECONDS;
         if (this.elapsedMs >= AIR_SHUTTLE_LEG_MS) {
           startPhase('landing');

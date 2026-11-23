@@ -793,6 +793,9 @@ export class GameEngine {
   private airShuttleLastPersistMs = 0;
   private airShuttleHudAccum = 0;
   private airShuttleSprayAccum = 0;
+  /** 0 cockpit, 1 lounge, 2 bedroom, 3 bathroom. */
+  private airShuttleCabinView = 0;
+  private airShuttleMealServed = false;
   private mainlandStuntCooldown = 0;
   private beeGate: BeeGateHandle | null = null;
   private beeGateAnchor: THREE.Group | null = null;
@@ -7970,6 +7973,8 @@ export class GameEngine {
     if (near && near.kind === 'air_shuttle') {
       if (near.id === 'air_shuttle_disembark') {
         this.handleAirShuttleDisembark();
+      } else if (near.id === 'air_shuttle_cabin_view') {
+        this.handleAirShuttleCabinView();
       } else {
         this.handleAirShuttleBoarding();
       }
@@ -12956,9 +12961,9 @@ export class GameEngine {
     // player is inside, the doors close and the automatic flight starts.
     if (this.worldType === 'island' && this.currentDimension === 'overworld') {
       if (this.airShuttle.aboard) {
+        const base = this.airShuttle.currentBase;
+        const door = this.airShuttle.getBoardingPoint();
         if (this.airShuttle.canDisembark) {
-          const base = this.airShuttle.currentBase;
-          const door = this.airShuttle.getBoardingPoint();
           return {
             id: 'air_shuttle_disembark',
             label: 'Step Out of the Crescent Clipper',
@@ -12971,6 +12976,23 @@ export class GameEngine {
             targetZ: door.z,
           };
         }
+        const viewLabels = [
+          'Tour the Private Jet Cabin',
+          'View the Six-Seat Lounge & Maid',
+          'View the Private Bedroom',
+          'View the Marble Bathroom',
+        ];
+        return {
+          id: 'air_shuttle_cabin_view',
+          label: viewLabels[this.airShuttleCabinView % viewLabels.length],
+          sublabel: 'Full cabin service · TV · couch · bed · bath · maid with hot food',
+          kind: 'air_shuttle',
+          actionCategory: 'use',
+          distance: 0,
+          targetX: door.x,
+          targetY: base.waterY + 2.4,
+          targetZ: door.z,
+        };
       } else if (this.airShuttle.canBoard) {
         const base = this.airShuttle.currentBase;
         const door = this.airShuttle.getBoardingPoint();
@@ -15869,16 +15891,33 @@ export class GameEngine {
       const rig = this.world?.crescentClipper;
       if (rig) {
         rig.root.updateMatrixWorld(true);
-        _vec3A.set(0, 3.28, 5.0);
+        const view = this.airShuttleCabinView;
+        if (view === 1) {
+          _vec3A.set(0, 3.3, 3.2);
+          _vec3C.set(0, 2.8, -6.2);
+        } else if (view === 2) {
+          _vec3A.set(0.15, 3.25, -3.15);
+          _vec3C.set(-0.55, 2.45, -6.05);
+        } else if (view === 3) {
+          _vec3A.set(0.4, 3.25, -3.1);
+          _vec3C.set(0.86, 2.42, -5.8);
+        } else {
+          _vec3A.set(0, 3.28, 5.0);
+        }
         rig.root.localToWorld(_vec3A);
         this.camera.position.copy(_vec3A);
         this.camera.up.set(0, 1, 0).transformDirection(rig.root.matrixWorld).normalize();
-        const lookPitch = THREE.MathUtils.clamp(this.camPitch, -1.05, 0.8);
-        _vec3B.set(
-          _vec3A.x - Math.sin(this.camYaw) * Math.cos(lookPitch) * 30,
-          _vec3A.y + Math.sin(lookPitch) * 30,
-          _vec3A.z - Math.cos(this.camYaw) * Math.cos(lookPitch) * 30,
-        );
+        if (view === 0) {
+          const lookPitch = THREE.MathUtils.clamp(this.camPitch, -1.05, 0.8);
+          _vec3B.set(
+            _vec3A.x - Math.sin(this.camYaw) * Math.cos(lookPitch) * 30,
+            _vec3A.y + Math.sin(lookPitch) * 30,
+            _vec3A.z - Math.cos(this.camYaw) * Math.cos(lookPitch) * 30,
+          );
+        } else {
+          rig.root.localToWorld(_vec3C);
+          _vec3B.copy(_vec3C);
+        }
         this.camera.lookAt(_vec3B);
       }
       return;
@@ -16992,6 +17031,8 @@ export class GameEngine {
     this.airShuttleLastPersistMs = 0;
     this.airShuttleHudAccum = 0;
     this.airShuttleSprayAccum = 0;
+    this.airShuttleCabinView = 0;
+    this.airShuttleMealServed = false;
     this.syncAirShuttleVisual(0);
   }
 
@@ -17022,6 +17063,8 @@ export class GameEngine {
     this.airShuttleLastPersistMs = 0;
     this.airShuttleHudAccum = 0;
     this.airShuttleSprayAccum = 0;
+    this.airShuttleCabinView = 0;
+    this.airShuttleMealServed = false;
     this.syncAirShuttleVisual(0);
 
     if (this.airShuttle.aboard) {
@@ -17171,6 +17214,8 @@ export class GameEngine {
       this.toast(result.message, 'warning');
       return;
     }
+    this.airShuttleCabinView = 0;
+    this.airShuttleMealServed = false;
     const status = this.airShuttle.getStatus();
     const seat = this.airShuttle.getSeatWorldPoint();
     this.playerX = seat.x;
@@ -17186,8 +17231,77 @@ export class GameEngine {
     this.syncAirShuttleVisual(0);
     this.persistAirShuttle(true);
     this.toast(result.message, 'discovery');
+    this.speakAirShuttleVoice(
+      "Welcome aboard the Crescent Clipper. I'm your cabin attendant. Would you like something from the galley, or shall I show you the lounge?",
+    );
     this.nearbyInteraction = this.findNearbyInteraction();
     this.emitHud();
+  }
+
+  private handleAirShuttleCabinView(): void {
+    if (!this.airShuttle.aboard) return;
+    this.airShuttleCabinView = (this.airShuttleCabinView + 1) % 4;
+    if (this.airShuttleCabinView === 1) {
+      if (!this.airShuttleMealServed) {
+        this.serveAirShuttleMeal();
+      } else {
+        this.speakAirShuttleVoice(
+          'The lounge is yours. The television is live, the couch is made up, and I can bring another plate whenever you like.',
+        );
+      }
+    } else if (this.airShuttleCabinView === 2) {
+      this.speakAirShuttleVoice(
+        'Your private bedroom is ready. The bed is turned down and the reading lamp is on.',
+      );
+    } else if (this.airShuttleCabinView === 3) {
+      this.speakAirShuttleVoice(
+        'The bathroom is fully stocked with warm towels, hot water and a marble sink.',
+      );
+    } else {
+      this.speakAirShuttleVoice('Back in the cockpit. We are cruising smoothly.');
+    }
+    this.nearbyInteraction = this.findNearbyInteraction();
+    this.emitHud();
+  }
+
+  private serveAirShuttleMeal(): void {
+    if (this.airShuttleMealServed) return;
+    this.airShuttleMealServed = true;
+    this.addItem('coconut_fish_curry', 1, true);
+    this.addItem('coconut', 1, true);
+    this.spawnParticles(this.playerX, this.playerY + 1.0, this.playerZ, 0xf8f3e6, 8);
+    this.speakAirShuttleVoice(
+      'Here you are: coconut fish curry, freshly plated, with chilled coconut water. If you would like anything else, just say the word and I will bring it.',
+    );
+    this.toast('The maid serves coconut fish curry and chilled coconut water.', 'craft');
+  }
+
+  /**
+   * The maid's lines use the browser's installed speech voices, so they sound
+   * like a real person rather than a synthesized beep. Text still appears when
+   * speech synthesis is unavailable or muted.
+   */
+  private speakAirShuttleVoice(line: string): void {
+    this.toast(line, 'info');
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(line);
+      utterance.rate = 0.98;
+      utterance.pitch = 1.08;
+      utterance.volume = 0.95;
+      const voices = window.speechSynthesis.getVoices();
+      const preferred =
+        voices.find(
+          (voice) =>
+            /^en/i.test(voice.lang) &&
+            /Samantha|Victoria|Karen|Zira|Aria|Jenny|Female|Natural/i.test(voice.name),
+        ) ?? voices.find((voice) => /^en/i.test(voice.lang));
+      if (preferred) utterance.voice = preferred;
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      // Text fallback is already shown above.
+    }
   }
 
   private handleAirShuttleDisembark(): void {
@@ -17208,6 +17322,8 @@ export class GameEngine {
     this.grounded = true;
     this.isSwimming = false;
     this.isUnderwater = false;
+    this.airShuttleCabinView = 0;
+    this.airShuttleMealServed = false;
     this.sound.playCarDoorLatch(true);
     this.syncAirShuttleVisual(0);
     this.persistAirShuttle(true);
