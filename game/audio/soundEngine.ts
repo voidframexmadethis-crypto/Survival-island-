@@ -330,24 +330,84 @@ export class SoundEngine {
 
   public playFootstep(surface: 'sand' | 'grass' | 'rock' | 'water'): void {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    if (!this.whiteNoiseBuf || !this.brownNoiseBuf) this.ensureNoiseBuffers();
+    const buffer = this.whiteNoiseBuf;
+    if (!buffer) return;
     const now = this.ctx.currentTime;
-    const dur = surface === 'water' ? 0.14 : 0.075;
-    const src = this.createNoiseSource('white');
-    if (!src) return;
 
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = surface === 'water' ? 'bandpass' : 'lowpass';
-    filter.frequency.value =
-      surface === 'rock' ? 950 : surface === 'water' ? 1200 : surface === 'sand' ? 520 : 650;
+    // Each step is built from cached noise, so walking never allocates buffers
+    // or hits the network. Only the short-lived filter/gain nodes are new.
+    const bus = this.ctx.createGain();
+    bus.gain.value = 1;
+    bus.connect(this.masterGain);
 
-    const g = this.ctx.createGain();
-    g.gain.setValueAtTime(surface === 'water' ? 0.14 : 0.08, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    const burst = (
+      frequency: number,
+      type: BiquadFilterType,
+      q: number,
+      peak: number,
+      duration: number,
+      delay = 0,
+    ): void => {
+      if (!this.ctx) return;
+      const noise = this.ctx.createBufferSource();
+      noise.buffer = buffer;
+      noise.loop = true;
+      // Slight per-step pitch variation keeps repeated steps from sounding looped.
+      noise.playbackRate.value = 0.92 + Math.random() * 0.18;
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = type;
+      filter.frequency.value = frequency;
+      filter.Q.value = q;
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, now + delay);
+      gain.gain.exponentialRampToValueAtTime(peak, now + delay + 0.006);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + delay + duration);
+      noise.connect(filter);
+      filter.connect(gain);
+      gain.connect(bus);
+      noise.start(now + delay, Math.random() * 2.2, duration + 0.02);
+    };
 
-    src.connect(filter);
-    filter.connect(g);
-    g.connect(this.masterGain);
-    src.start(now, Math.random() * 2.5, dur + 0.01);
+    const thump = (frequency: number, peak: number, duration: number): void => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(frequency, now);
+      osc.frequency.exponentialRampToValueAtTime(
+        Math.max(35, frequency * 0.5),
+        now + duration,
+      );
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(peak, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+      osc.connect(gain);
+      gain.connect(bus);
+      osc.start(now);
+      osc.stop(now + duration + 0.01);
+    };
+
+    switch (surface) {
+      case 'grass':
+        // Soft heel rustle with a second leaf-drag behind it.
+        burst(720, 'lowpass', 0.7, 0.075, 0.075);
+        burst(980, 'bandpass', 0.8, 0.035, 0.06, 0.035);
+        break;
+      case 'sand':
+        // Bright, dry crunch with a little low settling weight.
+        burst(1650, 'bandpass', 0.65, 0.085, 0.07);
+        burst(950, 'lowpass', 0.7, 0.03, 0.09, 0.015);
+        break;
+      case 'rock':
+        // Hard grit click plus a short heel thump.
+        burst(1300, 'bandpass', 1.4, 0.1, 0.045);
+        thump(120, 0.09, 0.07);
+        break;
+      case 'water':
+        burst(1100, 'bandpass', 0.55, 0.12, 0.16);
+        burst(700, 'lowpass', 0.6, 0.05, 0.2, 0.03);
+        break;
+    }
   }
 
   public playGather(kind: 'wood' | 'stone' | 'plant', progress = 0): void {

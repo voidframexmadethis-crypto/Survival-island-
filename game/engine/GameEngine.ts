@@ -456,6 +456,10 @@ import {
 import { buildFlatWorld, FlatWorldHandles } from '../world/flatWorldBuilder';
 import type { LouisianaMainlandHandles } from '../world/louisianaMainland';
 import {
+  footstepStrideMeters,
+  resolveFootstepSurface,
+} from '../systems/playerFootstepSurface';
+import {
   CoasterPiecePresetKey,
   RollerCoasterRuntime,
 } from '../systems/rollerCoasterRuntime';
@@ -12013,26 +12017,21 @@ export class GameEngine {
         actualMoveDist > 0.0005 ? Math.min(1.2, this.currentSpeedMps / 7.6) : 0;
       this.walkBobPhase += dt * (this.isSprinting ? 13.5 : 9.6) * activeMoveRatio;
       this.footstepAccum += actualMoveDist;
-      if (this.grounded && actualMoveDist > 0.001 && this.footstepAccum > (this.isSprinting ? 2.85 : 2.3)) {
+      if (
+        this.grounded &&
+        actualMoveDist > 0.001 &&
+        this.footstepAccum > footstepStrideMeters(this.isSprinting)
+      ) {
         this.footstepAccum = 0;
-        if (isFlat) {
-          this.sound.playFootstep(
-            this.flatSurfaceStyle === 'concrete_plaza' ? 'rock' : 'grass',
-          );
-        } else {
-          const b = getBiomeAt(this.playerX, this.playerZ);
-          if (deckY > terrainY + 0.1) {
-            this.sound.playFootstep('rock');
-          } else if (this.isSwimming || terrainY < waterLevel) {
-            this.sound.playFootstep('water');
-          } else if (b === 'beach') {
-            this.sound.playFootstep('sand');
-          } else if (b === 'mountain' || b === 'cave') {
-            this.sound.playFootstep('rock');
-          } else {
-            this.sound.playFootstep('grass');
-          }
-        }
+        this.sound.playFootstep(
+          resolveFootstepSurface({
+            biome: getBiomeAt(this.playerX, this.playerZ),
+            onStructure: !isFlat && deckY > terrainY + 0.1,
+            swimming: this.isSwimming || terrainY < waterLevel,
+            flat: isFlat,
+            flatSurfaceStyle: this.flatSurfaceStyle,
+          }),
+        );
       }
     } else {
       this.currentSpeedMps = 0;
