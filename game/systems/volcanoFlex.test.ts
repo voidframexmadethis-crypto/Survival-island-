@@ -26,11 +26,11 @@ function assertClose(actual: number, expected: number, tolerance = 0.01): void {
   );
 }
 
-test('Volcano Flex sits exactly 10 feet from the waterpark and is 900 feet tall', () => {
+test('Volcano Flex sits exactly 100 feet from the waterpark and is 900 feet tall', () => {
   const site = getVolcanoFlexSite();
   const deckEdge = WATERPARK_SITE.x + WATERPARK_DECK_HALF_W;
   assertClose(site.station.x - deckEdge, VOLCANO_FLEX_CLEARANCE_M, 0.001);
-  assertClose(VOLCANO_FLEX_CLEARANCE_M, 3.048, 0.0001);
+  assertClose(VOLCANO_FLEX_CLEARANCE_M, 30.48, 0.0001);
   assertClose(VOLCANO_FLEX_HEIGHT_M, 274.32, 0.001);
   assertClose(VOLCANO_FLEX_HEIGHT_M / 0.3048, 900, 0.01);
   assertClose(site.station.z, WATERPARK_SITE.z, 0.001);
@@ -154,22 +154,28 @@ test('the train launches, completes every inversion, brakes and returns to the s
   runtime.dispose();
 });
 
-test('the volcano environment, animated lava and armored lead car are fully modeled', () => {
+test('the lattice observation tower, animated elevator and armored lead car are fully modeled', () => {
   const environment = buildVolcanoFlexEnvironment();
   for (const name of [
-    'volcano-outer-shell',
-    'volcano-inner-chamber',
-    'volcano-lava-pool',
-    'volcano-lava-river',
-    'volcano-lava-fall',
-    'volcano-glowing-cracks',
-    'volcano-embers',
-    'volcano-smoke',
-    'volcano-eruption-bombs',
-    'volcano-launch-portal',
+    'tower-foundation',
+    'tower-glass-core',
+    'tower-lattice',
+    'tower-lattice-columns',
+    'tower-lattice-braces',
+    'tower-lattice-rings',
+    'tower-elevator-car',
+    'tower-launch-portal',
+    'tower-launch-ring',
+    'tower-observation-crown',
+    'tower-crown-glass',
+    'tower-crown-ring',
+    'tower-crown-glow',
+    'tower-top-mast',
+    'tower-top-beacon',
+    'tower-station-canopy',
     'volcano-flex-station',
-    'volcano-chamber-glow',
-    'volcano-crater-glow',
+    'tower-palms',
+    'tower-plaza-lights',
   ]) {
     assert.ok(environment.root.getObjectByName(name), `missing ${name}`);
   }

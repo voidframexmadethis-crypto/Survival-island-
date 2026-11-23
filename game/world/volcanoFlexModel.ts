@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {
   VOLCANO_FLEX_HEIGHT_M,
+  VOLCANO_FLEX_LOCAL_CHAMBER,
   VOLCANO_FLEX_NAME,
   getVolcanoFlexSite,
 } from './volcanoFlexLayout';
@@ -8,82 +9,93 @@ import {
 export interface VolcanoFlexEnvironment {
   root: THREE.Group;
   update: (dt: number, elapsed: number, speedKmh: number) => void;
-  /** Hides the costly chamber, lava and particle detail at long range. */
+  /** Hides the costly palms, elevator and detail lighting at long range. */
   setDetailVisible: (visible: boolean) => void;
   dispose: () => void;
 }
-
-const rockPalette = [0x1c1917, 0x292524, 0x3f2d28, 0x231815, 0x4a2c24];
 
 function seeded(index: number): number {
   const x = Math.sin(index * 127.1 + 311.7) * 43758.5453;
   return x - Math.floor(x);
 }
 
-function buildOuterShell(
+interface BeamSpec {
+  start: THREE.Vector3;
+  end: THREE.Vector3;
+  radius: number;
+}
+
+const UP = new THREE.Vector3(0, 1, 0);
+
+function makeBeamInstances(
+  beams: BeamSpec[],
+  material: THREE.Material,
+  name: string,
+): THREE.InstancedMesh {
+  const geometry = new THREE.CylinderGeometry(1, 1, 1, 6);
+  const mesh = new THREE.InstancedMesh(geometry, material, beams.length);
+  mesh.name = name;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  const midpoint = new THREE.Vector3();
+  const direction = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  const matrix = new THREE.Matrix4();
+  beams.forEach((beam, index) => {
+    direction.subVectors(beam.end, beam.start);
+    const length = direction.length();
+    if (length < 0.001) return;
+    midpoint.addVectors(beam.start, beam.end).multiplyScalar(0.5);
+    quaternion.setFromUnitVectors(UP, direction.normalize());
+    scale.set(beam.radius, length, beam.radius);
+    matrix.compose(midpoint, quaternion, scale);
+    mesh.setMatrixAt(index, matrix);
+  });
+  mesh.instanceMatrix.needsUpdate = true;
+  return mesh;
+}
+
+function buildPalmTree(
+  index: number,
   height: number,
-  baseRadius: number,
-  topRadius: number,
-  gapAngle: number,
-  gapHalf: number,
-): THREE.BufferGeometry {
-  const segments = 64;
-  const rings = 26;
-  const positions: number[] = [];
-  const colors: number[] = [];
-  const indices: number[] = [];
-  const color = new THREE.Color();
+  trunkMaterial: THREE.Material,
+  frondMaterial: THREE.Material,
+): THREE.Group {
+  const palm = new THREE.Group();
+  palm.name = `tower-palm-${index}`;
+  const lean = (seeded(index + 41) - 0.5) * 0.16;
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.11, 0.26, height, 7),
+    trunkMaterial,
+  );
+  trunk.position.y = height * 0.5;
+  trunk.rotation.z = lean;
+  trunk.castShadow = true;
+  palm.add(trunk);
 
-  const buriedBase = -30;
-  for (let ring = 0; ring <= rings; ring++) {
-    const t = ring / rings;
-    const y = buriedBase + t * (height - buriedBase);
-    const coneR = THREE.MathUtils.lerp(baseRadius, topRadius, t);
-    for (let seg = 0; seg < segments; seg++) {
-      const angle = (seg / segments) * Math.PI * 2;
-      const angularDistance = Math.abs(
-        Math.atan2(Math.sin(angle - gapAngle), Math.cos(angle - gapAngle)),
-      );
-      const gap = y < 17.5 && angularDistance < gapHalf;
-      const jag =
-        1 +
-        Math.sin(angle * 4.0 + y * 0.045) * 0.055 +
-        Math.sin(angle * 9.0 - y * 0.018) * 0.035 +
-        (seeded(ring * segments + seg) - 0.5) * 0.024;
-      const radius = gap ? coneR * 0.9 : coneR * jag;
-      positions.push(Math.cos(angle) * radius, y, Math.sin(angle) * radius);
-      color.setHex(rockPalette[(ring + seg) % rockPalette.length]);
-      colors.push(color.r, color.g, color.b);
-    }
+  const crown = new THREE.Group();
+  crown.position.set(Math.sin(lean) * -height * 0.5, height, 0);
+  palm.add(crown);
+  const frondGeometry = new THREE.ConeGeometry(0.38, 4.1 + seeded(index) * 1.2, 3);
+  for (let i = 0; i < 9; i++) {
+    const frond = new THREE.Mesh(frondGeometry, frondMaterial);
+    const angle = (i / 9) * Math.PI * 2 + seeded(index + 70) * 0.5;
+    frond.position.set(Math.cos(angle) * 1.45, 0.12 - (i % 2) * 0.18, Math.sin(angle) * 1.45);
+    frond.rotation.order = 'YXZ';
+    frond.rotation.y = -angle;
+    frond.rotation.z = -Math.PI * 0.43 - (i % 3) * 0.08;
+    frond.scale.z = 0.34;
+    frond.castShadow = true;
+    crown.add(frond);
   }
-
-  for (let ring = 0; ring < rings; ring++) {
-    const t = (ring + 0.5) / rings;
-    const y = t * height;
-    for (let seg = 0; seg < segments; seg++) {
-      const angle = (seg / segments) * Math.PI * 2;
-      const angularDistance = Math.abs(
-        Math.atan2(Math.sin(angle - gapAngle), Math.cos(angle - gapAngle)),
-      );
-      const nextAngle = ((seg + 1) / segments) * Math.PI * 2;
-      const nextDistance = Math.abs(
-        Math.atan2(Math.sin(nextAngle - gapAngle), Math.cos(nextAngle - gapAngle)),
-      );
-      if (y < 17.5 && angularDistance < gapHalf && nextDistance < gapHalf) continue;
-      const a = ring * segments + seg;
-      const b = ring * segments + ((seg + 1) % segments);
-      const c = (ring + 1) * segments + seg;
-      const d = (ring + 1) * segments + ((seg + 1) % segments);
-      indices.push(a, c, b, b, c, d);
-    }
-  }
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  geometry.setIndex(indices);
-  geometry.computeVertexNormals();
-  return geometry;
+  const coconuts = new THREE.Mesh(
+    new THREE.SphereGeometry(0.16, 7, 6),
+    trunkMaterial,
+  );
+  coconuts.position.y = -0.2;
+  crown.add(coconuts);
+  return palm;
 }
 
 function stationSignTexture(): THREE.Texture | null {
@@ -94,11 +106,11 @@ function stationSignTexture(): THREE.Texture | null {
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
   const grad = ctx.createLinearGradient(0, 0, 0, 256);
-  grad.addColorStop(0, '#250b07');
-  grad.addColorStop(1, '#090605');
+  grad.addColorStop(0, '#1b0b0b');
+  grad.addColorStop(1, '#05070b');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, 1024, 256);
-  ctx.strokeStyle = '#f97316';
+  ctx.strokeStyle = '#e11d2f';
   ctx.lineWidth = 9;
   ctx.strokeRect(8, 8, 1008, 240);
   ctx.fillStyle = '#fff7ed';
@@ -115,437 +127,643 @@ function stationSignTexture(): THREE.Texture | null {
 }
 
 /**
- * The complete volcano, artificial lava system, smoke/ember effects and
- * station canopy. The lava is purely visual and never participates in the
- * coaster collision or physics.
+ * A 900-ft steel-and-glass observation tower with a blue-lit crown. The
+ * existing coaster spiral wraps the outside of the slim central core, so the
+ * red track is the dominant silhouette. Everything here is decorative and
+ * never participates in the coaster collision or physics.
  */
 export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
   const site = getVolcanoFlexSite();
   const root = new THREE.Group();
   root.name = 'volcano-flex-environment';
   root.position.set(site.mountain.x, site.mountain.y, site.mountain.z);
-  const interior = new THREE.Group();
-  interior.name = 'volcano-interior-detail';
-  root.add(interior);
+  const detail = new THREE.Group();
+  detail.name = 'tower-detail';
+  root.add(detail);
 
   const height = VOLCANO_FLEX_HEIGHT_M;
-  const stationDirection = new THREE.Vector3(
+  const crownFloorY = VOLCANO_FLEX_LOCAL_CHAMBER.ascentTop + 3.2;
+  const crownTopY = crownFloorY + 9.2;
+  const stationLocal = new THREE.Vector3(
     site.station.x - site.mountain.x,
-    0,
-    site.station.z - site.mountain.z,
-  );
-  const gapAngle = Math.atan2(stationDirection.z, stationDirection.x);
-
-  const rockMat = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    roughness: 0.96,
-    metalness: 0.03,
-    flatShading: true,
-    side: THREE.DoubleSide,
-  });
-  const outer = new THREE.Mesh(
-    buildOuterShell(height, 55, 19, gapAngle, 0.18),
-    rockMat,
-  );
-  outer.name = 'volcano-outer-shell';
-  outer.castShadow = true;
-  outer.receiveShadow = true;
-  root.add(outer);
-
-  const chamberMat = new THREE.MeshStandardMaterial({
-    color: 0x2a1712,
-    emissive: 0x180603,
-    emissiveIntensity: 0.38,
-    roughness: 0.88,
-    metalness: 0.06,
-    side: THREE.BackSide,
-  });
-  const chamber = new THREE.Mesh(
-    new THREE.CylinderGeometry(18, 52, height + 29, 64, 18, true),
-    chamberMat,
-  );
-  chamber.name = 'volcano-inner-chamber';
-  chamber.position.y = (height - 30) * 0.5;
-  interior.add(chamber);
-
-  // Jagged interior buttresses make the chamber read as volcanic rock rather
-  // than a smooth cylinder when the train passes close to the wall.
-  const buttressMat = new THREE.MeshStandardMaterial({
-    color: 0x3a211b,
-    roughness: 0.93,
-    flatShading: true,
-  });
-  for (let i = 0; i < 18; i++) {
-    const angle = (i / 18) * Math.PI * 2 + 0.14;
-    const buttress = new THREE.Mesh(
-      new THREE.ConeGeometry(3.2 + seeded(i) * 2.1, 36 + seeded(i + 20) * 55, 5),
-      buttressMat,
-    );
-    const radius = 39 - (i % 3) * 2.5;
-    buttress.position.set(
-      Math.cos(angle) * radius,
-      22 + seeded(i + 9) * 150,
-      Math.sin(angle) * radius,
-    );
-    buttress.rotation.z = (seeded(i + 4) - 0.5) * 0.28;
-    interior.add(buttress);
-  }
-
-  const craterRim = new THREE.Mesh(
-    new THREE.TorusGeometry(19.2, 2.4, 8, 48),
-    new THREE.MeshStandardMaterial({
-      color: 0x2c1914,
-      emissive: 0x7c2d12,
-      emissiveIntensity: 0.55,
-      roughness: 0.8,
-    }),
-  );
-  craterRim.name = 'volcano-crater-rim';
-  craterRim.rotation.x = Math.PI / 2;
-  craterRim.position.y = height - 0.4;
-  root.add(craterRim);
-
-  const lavaMat = new THREE.MeshStandardMaterial({
-    color: 0xff6a00,
-    emissive: 0xff3d00,
-    emissiveIntensity: 2.1,
-    roughness: 0.22,
-    metalness: 0.04,
-  });
-  lavaMat.name = 'volcano-lava-material';
-  const lavaPool = new THREE.Mesh(new THREE.CircleGeometry(25, 48), lavaMat);
-  lavaPool.name = 'volcano-lava-pool';
-  lavaPool.rotation.x = -Math.PI / 2;
-  lavaPool.position.y = 0.55;
-  interior.add(lavaPool);
-
-  const lavaRiverPoints = [
-    new THREE.Vector3(-24, 1.1, 2),
-    new THREE.Vector3(-8, 1.2, 14),
-    new THREE.Vector3(15, 1.05, 8),
-    new THREE.Vector3(34, 0.9, 24),
-  ];
-  const lavaRiver = new THREE.Mesh(
-    new THREE.TubeGeometry(
-      new THREE.CatmullRomCurve3(lavaRiverPoints),
-      52,
-      1.15,
-      8,
-      false,
-    ),
-    lavaMat,
-  );
-  lavaRiver.name = 'volcano-lava-river';
-  interior.add(lavaRiver);
-
-  const lavaFallCurve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(25, height - 30, -10),
-    new THREE.Vector3(31, 170, -5),
-    new THREE.Vector3(27, 90, 3),
-    new THREE.Vector3(21, 2, 7),
-  ]);
-  const lavaFallMat = new THREE.MeshStandardMaterial({
-    color: 0xff7a18,
-    emissive: 0xff3100,
-    emissiveIntensity: 2.6,
-    roughness: 0.25,
-  });
-  const lavaFall = new THREE.Mesh(
-    new THREE.TubeGeometry(lavaFallCurve, 72, 1.05, 8, false),
-    lavaFallMat,
-  );
-  lavaFall.name = 'volcano-lava-fall';
-  interior.add(lavaFall);
-
-  // Glowing fissures crawl up the chamber walls.
-  const crackPositions: number[] = [];
-  for (let i = 0; i < 90; i++) {
-    const angle = seeded(i + 100) * Math.PI * 2;
-    const y = 5 + seeded(i + 300) * (height - 24);
-    const innerRadius = THREE.MathUtils.lerp(51, 18.6, y / height) - 0.2;
-    const len = 2.5 + seeded(i + 500) * 8;
-    crackPositions.push(
-      Math.cos(angle) * innerRadius,
-      y,
-      Math.sin(angle) * innerRadius,
-      Math.cos(angle + 0.018) * innerRadius + Math.cos(angle) * len * 0.18,
-      Math.min(height - 8, y + len),
-      Math.sin(angle + 0.018) * innerRadius + Math.sin(angle) * len * 0.18,
-    );
-  }
-  const crackGeo = new THREE.BufferGeometry();
-  crackGeo.setAttribute('position', new THREE.Float32BufferAttribute(crackPositions, 3));
-  const cracks = new THREE.LineSegments(
-    crackGeo,
-    new THREE.LineBasicMaterial({
-      color: 0xff7a18,
-      transparent: true,
-      opacity: 0.9,
-    }),
-  );
-  cracks.name = 'volcano-glowing-cracks';
-  interior.add(cracks);
-
-  // Embers swirl inside the chamber and stream from the crater.
-  const emberCount = 520;
-  const emberPositions = new Float32Array(emberCount * 3);
-  const emberSpeed = new Float32Array(emberCount);
-  for (let i = 0; i < emberCount; i++) {
-    const angle = seeded(i + 900) * Math.PI * 2;
-    const radius = 8 + seeded(i + 1100) * 42;
-    emberPositions[i * 3] = Math.cos(angle) * radius;
-    emberPositions[i * 3 + 1] = seeded(i + 1300) * height;
-    emberPositions[i * 3 + 2] = Math.sin(angle) * radius;
-    emberSpeed[i] = 1.2 + seeded(i + 1500) * 4.4;
-  }
-  const emberGeo = new THREE.BufferGeometry();
-  emberGeo.setAttribute('position', new THREE.BufferAttribute(emberPositions, 3));
-  const embers = new THREE.Points(
-    emberGeo,
-    new THREE.PointsMaterial({
-      color: 0xffb066,
-      size: 0.72,
-      transparent: true,
-      opacity: 0.92,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      sizeAttenuation: true,
-    }),
-  );
-  embers.name = 'volcano-embers';
-  interior.add(embers);
-
-  const smokeCount = 180;
-  const smokePositions = new Float32Array(smokeCount * 3);
-  for (let i = 0; i < smokeCount; i++) {
-    smokePositions[i * 3] = (seeded(i + 2100) - 0.5) * 56;
-    smokePositions[i * 3 + 1] = height + seeded(i + 2200) * 58;
-    smokePositions[i * 3 + 2] = (seeded(i + 2300) - 0.5) * 56;
-  }
-  const smokeGeo = new THREE.BufferGeometry();
-  smokeGeo.setAttribute('position', new THREE.BufferAttribute(smokePositions, 3));
-  const smoke = new THREE.Points(
-    smokeGeo,
-    new THREE.PointsMaterial({
-      color: 0x57534e,
-      size: 9.5,
-      transparent: true,
-      opacity: 0.19,
-      depthWrite: false,
-      sizeAttenuation: true,
-    }),
-  );
-  smoke.name = 'volcano-smoke';
-  root.add(smoke);
-
-  // Simulated eruptions: physical-looking lava bombs launched from the crater.
-  const bombCount = 28;
-  const bombs = new THREE.InstancedMesh(
-    new THREE.DodecahedronGeometry(1.4, 0),
-    new THREE.MeshBasicMaterial({ color: 0xff5a12 }),
-    bombCount,
-  );
-  bombs.name = 'volcano-eruption-bombs';
-  bombs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  root.add(bombs);
-  const bombState = Array.from({ length: bombCount }, (_, i) => ({
-    x: (seeded(i + 3000) - 0.5) * 18,
-    y: -999,
-    z: (seeded(i + 3100) - 0.5) * 18,
-    vx: 0,
-    vy: 0,
-    vz: 0,
-    life: 0,
-  }));
-  let eruptionTimer = 5.5;
-  let eruptionFlash = 0;
-  const dummy = new THREE.Object3D();
-
-  const chamberGlow = new THREE.PointLight(0xff4d00, 4.2, 115, 1.8);
-  chamberGlow.name = 'volcano-chamber-glow';
-  chamberGlow.position.set(0, 24, 0);
-  interior.add(chamberGlow);
-  const craterGlow = new THREE.PointLight(0xff7a18, 5.6, 170, 1.7);
-  craterGlow.name = 'volcano-crater-glow';
-  craterGlow.position.set(0, height + 3, 0);
-  root.add(craterGlow);
-  const lavaGlow = new THREE.PointLight(0xff9a3c, 3.1, 52, 1.8);
-  lavaGlow.name = 'volcano-lava-glow';
-  lavaGlow.position.set(0, 2.5, 0);
-  interior.add(lavaGlow);
-
-  // Blacked-out tunnel mouth and an outward-facing arch at the launch portal.
-  const portal = new THREE.Group();
-  portal.name = 'volcano-launch-portal';
-  const portalX = site.station.x - site.mountain.x;
-  const portalZ = site.station.z - site.mountain.z;
-  portal.position.set(portalX * 0.84, 5.4, portalZ * 0.84);
-  portal.lookAt(
-    site.station.x - site.mountain.x,
-    portal.position.y,
-    site.station.z - site.mountain.z,
-  );
-  const tunnel = new THREE.Mesh(
-    new THREE.CylinderGeometry(6.2, 6.2, 34, 22, 1, true),
-    new THREE.MeshStandardMaterial({
-      color: 0x090707,
-      roughness: 1,
-      metalness: 0,
-      side: THREE.BackSide,
-    }),
-  );
-  tunnel.rotation.x = Math.PI / 2;
-  tunnel.position.z = -12;
-  portal.add(tunnel);
-  const arch = new THREE.Mesh(
-    new THREE.TorusGeometry(6.6, 0.8, 8, 28, Math.PI),
-    new THREE.MeshStandardMaterial({
-      color: 0x44403c,
-      emissive: 0x3b1108,
-      emissiveIntensity: 0.5,
-      roughness: 0.72,
-      metalness: 0.5,
-    }),
-  );
-  arch.rotation.z = Math.PI;
-  arch.position.z = 2;
-  portal.add(arch);
-  root.add(portal);
-
-  // Queue canopy and VOLCANO FLEX marquee at the boarding station.
-  const stationGroup = new THREE.Group();
-  stationGroup.name = 'volcano-flex-station';
-  // The train leaves the 10-ft survey point heading east. Centre the canopy
-  // over that boarding spur so no roof or post overhangs the waterpark deck.
-  stationGroup.position.set(
-    site.station.x - site.mountain.x + 8,
     site.station.y - site.mountain.y,
     site.station.z - site.mountain.z,
   );
-  const ironMat = new THREE.MeshStandardMaterial({
-    color: 0x1c1917,
-    roughness: 0.4,
-    metalness: 0.8,
+
+  const whiteSteel = new THREE.MeshStandardMaterial({
+    color: 0xe9eef3,
+    roughness: 0.32,
+    metalness: 0.72,
   });
-  // The coaster-station structure supplies the roof, deck and air gates. The
-  // themed group adds the oversized marquee and its support masts so the
-  // attraction reads from across the waterpark without a second roof.
-  // A gantry straddles the boarding spur. Every leg is at least 6 m off the
-  // centreline, so the train and its over-shoulder restraints never clip them.
-  for (const mx of [-6.2, 6.2]) {
-    for (const mz of [-6.6, 6.6]) {
-      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.17, 8.8, 8), ironMat);
-      mast.position.set(mx, 4.4, mz);
-      mast.castShadow = true;
-      stationGroup.add(mast);
-    }
-    const crossbar = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 13.4), ironMat);
-    crossbar.position.set(mx, 8.72, 0);
-    stationGroup.add(crossbar);
+  const paleSteel = new THREE.MeshStandardMaterial({
+    color: 0xb9c6d2,
+    roughness: 0.42,
+    metalness: 0.62,
+  });
+  const redSteel = new THREE.MeshStandardMaterial({
+    color: 0xd21f2b,
+    roughness: 0.3,
+    metalness: 0.62,
+  });
+  const darkSteel = new THREE.MeshStandardMaterial({
+    color: 0x25303c,
+    roughness: 0.38,
+    metalness: 0.78,
+  });
+  const concrete = new THREE.MeshStandardMaterial({
+    color: 0xd4dae0,
+    roughness: 0.86,
+    metalness: 0.05,
+  });
+  const coreGlass = new THREE.MeshPhysicalMaterial({
+    color: 0xa8c7dc,
+    metalness: 0.08,
+    roughness: 0.08,
+    transmission: 0.52,
+    transparent: true,
+    opacity: 0.58,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const crownGlass = new THREE.MeshPhysicalMaterial({
+    color: 0x172b46,
+    emissive: 0x2f6fa8,
+    emissiveIntensity: 0.45,
+    metalness: 0.24,
+    roughness: 0.12,
+    transmission: 0.28,
+    transparent: true,
+    opacity: 0.76,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const blueGlow = new THREE.MeshStandardMaterial({
+    color: 0x7dc8ff,
+    emissive: 0x3b9cff,
+    emissiveIntensity: 1.9,
+    roughness: 0.22,
+    metalness: 0.18,
+  });
+  const warmGlow = new THREE.MeshStandardMaterial({
+    color: 0xffc181,
+    emissive: 0xff7a2f,
+    emissiveIntensity: 1.45,
+    roughness: 0.3,
+  });
+  const beaconGlow = new THREE.MeshStandardMaterial({
+    color: 0xff6b6b,
+    emissive: 0xff1f2d,
+    emissiveIntensity: 2.8,
+    roughness: 0.2,
+  });
+  const canopyGlass = new THREE.MeshPhysicalMaterial({
+    color: 0x162638,
+    emissive: 0x154d70,
+    emissiveIntensity: 0.25,
+    metalness: 0.2,
+    roughness: 0.16,
+    transparent: true,
+    opacity: 0.62,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+
+  // Broad plaza and a low glass lobby anchor the tower in the island.
+  const foundation = new THREE.Mesh(
+    new THREE.CylinderGeometry(25, 27, 1.4, 64),
+    concrete,
+  );
+  foundation.name = 'tower-foundation';
+  foundation.position.y = -0.2;
+  foundation.receiveShadow = true;
+  root.add(foundation);
+
+  const plazaRim = new THREE.Mesh(
+    new THREE.TorusGeometry(24.3, 0.28, 8, 72),
+    redSteel,
+  );
+  plazaRim.name = 'tower-plaza-rim';
+  plazaRim.rotation.x = Math.PI / 2;
+  plazaRim.position.y = 0.52;
+  root.add(plazaRim);
+
+  const lobby = new THREE.Mesh(
+    new THREE.CylinderGeometry(11.2, 11.8, 10.5, 48, 1, true),
+    coreGlass,
+  );
+  lobby.name = 'tower-lobby-glass';
+  lobby.position.y = 5.3;
+  root.add(lobby);
+  const lobbyLamp = new THREE.PointLight(0xffc18f, 2.4, 34, 1.8);
+  lobbyLamp.name = 'tower-lobby-glow';
+  lobbyLamp.position.set(0, 6, 0);
+  root.add(lobbyLamp);
+  const lobbyBand = new THREE.Mesh(
+    new THREE.TorusGeometry(10.6, 0.16, 6, 48),
+    warmGlow,
+  );
+  lobbyBand.rotation.x = Math.PI / 2;
+  lobbyBand.position.y = 9.6;
+  root.add(lobbyBand);
+
+  // Slim central lift shaft. The elevator cab travels inside the glass.
+  const elevatorShaft = new THREE.Mesh(
+    new THREE.CylinderGeometry(3.15, 3.15, crownFloorY - 8, 28, 1, true),
+    coreGlass,
+  );
+  elevatorShaft.name = 'tower-glass-core';
+  elevatorShaft.position.y = 8 + (crownFloorY - 8) * 0.5;
+  root.add(elevatorShaft);
+
+  const guideBeams: BeamSpec[] = [];
+  for (let i = 0; i < 4; i++) {
+    const angle = (i / 4) * Math.PI * 2 + Math.PI / 4;
+    guideBeams.push({
+      start: new THREE.Vector3(Math.cos(angle) * 3.55, 4, Math.sin(angle) * 3.55),
+      end: new THREE.Vector3(Math.cos(angle) * 3.55, crownFloorY, Math.sin(angle) * 3.55),
+      radius: 0.1,
+    });
   }
+  const guides = makeBeamInstances(guideBeams, whiteSteel, 'tower-elevator-guides');
+  detail.add(guides);
+
+  const elevator = new THREE.Group();
+  elevator.name = 'tower-elevator-car';
+  const cab = new THREE.Mesh(
+    new THREE.CylinderGeometry(2.2, 2.2, 4.5, 16),
+    paleSteel,
+  );
+  elevator.add(cab);
+  const cabBand = new THREE.Mesh(
+    new THREE.CylinderGeometry(2.24, 2.24, 1.25, 16, 1, true),
+    blueGlow,
+  );
+  cabBand.position.y = 0.8;
+  elevator.add(cabBand);
+  const cabRoof = new THREE.Mesh(
+    new THREE.CylinderGeometry(2.35, 2.25, 0.28, 16),
+    redSteel,
+  );
+  cabRoof.position.y = 2.38;
+  elevator.add(cabRoof);
+  elevator.position.set(0, 9, 0);
+  detail.add(elevator);
+
+  // White space-frame cage: tapered columns, rings and alternating X braces.
+  const lattice = new THREE.Group();
+  lattice.name = 'tower-lattice';
+  root.add(lattice);
+  const latticeBottom = 3;
+  const latticeTop = crownFloorY - 4;
+  const baseRadius = 9.6;
+  const topRadius = 7.1;
+  const levels = 14;
+  const sides = 12;
+  const columnBeams: BeamSpec[] = [];
+  const braceBeams: BeamSpec[] = [];
+  for (let i = 0; i < sides; i++) {
+    const angle = (i / sides) * Math.PI * 2;
+    columnBeams.push({
+      start: new THREE.Vector3(
+        Math.cos(angle) * baseRadius,
+        latticeBottom,
+        Math.sin(angle) * baseRadius,
+      ),
+      end: new THREE.Vector3(
+        Math.cos(angle) * topRadius,
+        latticeTop,
+        Math.sin(angle) * topRadius,
+      ),
+      radius: 0.11,
+    });
+  }
+  for (let level = 0; level < levels; level++) {
+    const t0 = level / levels;
+    const t1 = (level + 1) / levels;
+    const y0 = THREE.MathUtils.lerp(latticeBottom, latticeTop, t0);
+    const y1 = THREE.MathUtils.lerp(latticeBottom, latticeTop, t1);
+    const r0 = THREE.MathUtils.lerp(baseRadius, topRadius, t0);
+    const r1 = THREE.MathUtils.lerp(baseRadius, topRadius, t1);
+    for (let i = 0; i < sides; i++) {
+      const a0 = (i / sides) * Math.PI * 2;
+      const a1 = ((i + 1) / sides) * Math.PI * 2;
+      braceBeams.push({
+        start: new THREE.Vector3(Math.cos(a0) * r0, y0, Math.sin(a0) * r0),
+        end: new THREE.Vector3(Math.cos(a1) * r1, y1, Math.sin(a1) * r1),
+        radius: 0.055,
+      });
+      braceBeams.push({
+        start: new THREE.Vector3(Math.cos(a1) * r0, y0, Math.sin(a1) * r0),
+        end: new THREE.Vector3(Math.cos(a0) * r1, y1, Math.sin(a0) * r1),
+        radius: 0.055,
+      });
+    }
+  }
+  lattice.add(makeBeamInstances(columnBeams, whiteSteel, 'tower-lattice-columns'));
+  lattice.add(makeBeamInstances(braceBeams, paleSteel, 'tower-lattice-braces'));
+
+  const ringGeometry = new THREE.TorusGeometry(1, 0.009, 6, 64);
+  const ringInstances = new THREE.InstancedMesh(
+    ringGeometry,
+    whiteSteel,
+    levels + 1,
+  );
+  ringInstances.name = 'tower-lattice-rings';
+  const ringMatrix = new THREE.Matrix4();
+  const ringQuaternion = new THREE.Quaternion().setFromEuler(
+    new THREE.Euler(Math.PI / 2, 0, 0),
+  );
+  for (let level = 0; level <= levels; level++) {
+    const t = level / levels;
+    const radius = THREE.MathUtils.lerp(baseRadius, topRadius, t);
+    ringMatrix.compose(
+      new THREE.Vector3(0, THREE.MathUtils.lerp(latticeBottom, latticeTop, t), 0),
+      ringQuaternion,
+      new THREE.Vector3(radius, radius, radius),
+    );
+    ringInstances.setMatrixAt(level, ringMatrix);
+  }
+  ringInstances.instanceMatrix.needsUpdate = true;
+  lattice.add(ringInstances);
+
+  // Red pylons echo the coaster structure where the tower meets the plaza.
+  const pylonBeams: BeamSpec[] = [];
+  for (let i = 0; i < 6; i++) {
+    const angle = (i / 6) * Math.PI * 2 + Math.PI / 12;
+    pylonBeams.push({
+      start: new THREE.Vector3(Math.cos(angle) * 16, 0.4, Math.sin(angle) * 16),
+      end: new THREE.Vector3(Math.cos(angle) * 8.4, 38, Math.sin(angle) * 8.4),
+      radius: 0.34,
+    });
+  }
+  const pylons = makeBeamInstances(pylonBeams, redSteel, 'tower-base-pylons');
+  root.add(pylons);
+
+  // Blue-lit circular observation deck with a white picket crown.
+  const crown = new THREE.Group();
+  crown.name = 'tower-observation-crown';
+  root.add(crown);
+  const supportBeams: BeamSpec[] = [];
+  for (let i = 0; i < sides; i++) {
+    const angle = (i / sides) * Math.PI * 2;
+    supportBeams.push({
+      start: new THREE.Vector3(Math.cos(angle) * 7.3, crownFloorY - 10, Math.sin(angle) * 7.3),
+      end: new THREE.Vector3(Math.cos(angle) * 13.4, crownFloorY, Math.sin(angle) * 13.4),
+      radius: 0.15,
+    });
+  }
+  crown.add(makeBeamInstances(supportBeams, whiteSteel, 'tower-crown-supports'));
+
+  const deck = new THREE.Mesh(
+    new THREE.CylinderGeometry(15.2, 13.6, 1.2, 64),
+    whiteSteel,
+  );
+  deck.position.y = crownFloorY - 0.4;
+  deck.castShadow = true;
+  deck.receiveShadow = true;
+  crown.add(deck);
+  const deckUnderside = new THREE.Mesh(
+    new THREE.TorusGeometry(14.4, 0.24, 8, 72),
+    blueGlow,
+  );
+  deckUnderside.name = 'tower-crown-ring';
+  deckUnderside.rotation.x = Math.PI / 2;
+  deckUnderside.position.y = crownFloorY - 1.0;
+  crown.add(deckUnderside);
+
+  const observationGlass = new THREE.Mesh(
+    new THREE.CylinderGeometry(12.8, 12.4, 6, 48, 1, true),
+    crownGlass,
+  );
+  observationGlass.name = 'tower-crown-glass';
+  observationGlass.position.y = crownFloorY + 3;
+  crown.add(observationGlass);
+
+  const mullionBeams: BeamSpec[] = [];
+  for (let i = 0; i < 28; i++) {
+    const angle = (i / 28) * Math.PI * 2;
+    mullionBeams.push({
+      start: new THREE.Vector3(Math.cos(angle) * 12.95, crownFloorY + 0.1, Math.sin(angle) * 12.95),
+      end: new THREE.Vector3(Math.cos(angle) * 12.55, crownFloorY + 5.9, Math.sin(angle) * 12.55),
+      radius: 0.07,
+    });
+  }
+  crown.add(makeBeamInstances(mullionBeams, whiteSteel, 'tower-crown-mullions'));
+
+  const crownFloorLight = new THREE.Mesh(
+    new THREE.CylinderGeometry(12.2, 12.2, 0.08, 48),
+    blueGlow,
+  );
+  crownFloorLight.name = 'tower-crown-floor-light';
+  crownFloorLight.position.y = crownFloorY + 0.08;
+  crown.add(crownFloorLight);
+
+  const crownRoof = new THREE.Mesh(
+    new THREE.CylinderGeometry(14.8, 14.6, 0.72, 64),
+    whiteSteel,
+  );
+  crownRoof.position.y = crownFloorY + 6.35;
+  crownRoof.castShadow = true;
+  crown.add(crownRoof);
+  const crownCap = new THREE.Mesh(
+    new THREE.ConeGeometry(14.1, 2.9, 64),
+    whiteSteel,
+  );
+  crownCap.position.y = crownFloorY + 8.15;
+  crownCap.castShadow = true;
+  crown.add(crownCap);
+  const crownCapRim = new THREE.Mesh(
+    new THREE.TorusGeometry(14.55, 0.18, 8, 72),
+    blueGlow,
+  );
+  crownCapRim.rotation.x = Math.PI / 2;
+  crownCapRim.position.y = crownFloorY + 6.68;
+  crown.add(crownCapRim);
+
+  const crownGlow = new THREE.PointLight(0x72b8ff, 8, 170, 1.7);
+  crownGlow.name = 'tower-crown-glow';
+  crownGlow.position.set(0, crownFloorY + 3.2, 0);
+  crown.add(crownGlow);
+
+  // A slender mast carries the structure to the original 900-ft height.
+  const mastHeight = height - crownTopY;
+  const mast = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.32, 0.62, mastHeight, 10),
+    whiteSteel,
+  );
+  mast.name = 'tower-top-mast';
+  mast.position.y = crownTopY + mastHeight * 0.5;
+  mast.castShadow = true;
+  root.add(mast);
+  const mastRings = new THREE.Group();
+  mastRings.name = 'tower-mast-rings';
+  detail.add(mastRings);
+  for (let i = 1; i <= 7; i++) {
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.8 - i * 0.045, 0.045, 5, 20),
+      paleSteel,
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = crownTopY + (mastHeight * i) / 8;
+    mastRings.add(ring);
+  }
+  const beacon = new THREE.Mesh(
+    new THREE.SphereGeometry(0.34, 10, 8),
+    beaconGlow,
+  );
+  beacon.name = 'tower-top-beacon';
+  beacon.position.y = height;
+  root.add(beacon);
+  const beaconLight = new THREE.PointLight(0xff3040, 3.2, 46, 1.8);
+  beaconLight.name = 'tower-beacon-light';
+  beaconLight.position.y = height;
+  detail.add(beaconLight);
+
+  // Red launch arch where the train leaves the station spur and enters the
+  // tower's spiral. Its opening matches the launch track height and clearance.
+  const portal = new THREE.Group();
+  portal.name = 'tower-launch-portal';
+  const tunnel = new THREE.Mesh(
+    new THREE.CylinderGeometry(5.7, 5.7, 18, 28, 1, true),
+    new THREE.MeshStandardMaterial({
+      color: 0x080b10,
+      roughness: 0.94,
+      metalness: 0.04,
+      side: THREE.BackSide,
+    }),
+  );
+  tunnel.rotation.z = Math.PI / 2;
+  tunnel.position.set(-10.5, 4.1, -20);
+  portal.add(tunnel);
+  const portalRing = new THREE.Mesh(
+    new THREE.TorusGeometry(6.15, 0.52, 10, 42),
+    redSteel,
+  );
+  portalRing.name = 'tower-launch-ring';
+  portalRing.rotation.y = Math.PI / 2;
+  portalRing.position.set(-19.2, 4.4, -20);
+  portal.add(portalRing);
+  const portalGlowMat = new THREE.MeshStandardMaterial({
+    color: 0xff9b83,
+    emissive: 0xff3b2f,
+    emissiveIntensity: 1.6,
+    roughness: 0.24,
+  });
+  const portalLightRing = new THREE.Mesh(
+    new THREE.TorusGeometry(5.45, 0.12, 6, 42),
+    portalGlowMat,
+  );
+  portalLightRing.rotation.y = Math.PI / 2;
+  portalLightRing.position.set(-19.28, 4.4, -20);
+  portal.add(portalLightRing);
+  const portalLight = new THREE.PointLight(0xff5a43, 2.6, 30, 1.8);
+  portalLight.position.set(-18, 5, -20);
+  portal.add(portalLight);
+  root.add(portal);
+
+  // Curved red station canopy over the boarding spur.
+  const stationGroup = new THREE.Group();
+  stationGroup.name = 'volcano-flex-station';
+  stationGroup.position.set(stationLocal.x + 8, stationLocal.y, stationLocal.z);
+  const canopyPositions: number[] = [];
+  const canopyIndices: number[] = [];
+  const canopyCols = 12;
+  const canopyRows = 12;
+  const canopyHalfX = 9.5;
+  const canopyHalfZ = 10.5;
+  for (let xi = 0; xi <= canopyCols; xi++) {
+    const x = THREE.MathUtils.lerp(-canopyHalfX, canopyHalfX, xi / canopyCols);
+    for (let zi = 0; zi <= canopyRows; zi++) {
+      const z = THREE.MathUtils.lerp(-canopyHalfZ, canopyHalfZ, zi / canopyRows);
+      const y = 8.25 + Math.cos((z / canopyHalfZ) * Math.PI * 0.5) * 1.55;
+      canopyPositions.push(x, y, z);
+    }
+  }
+  for (let xi = 0; xi < canopyCols; xi++) {
+    for (let zi = 0; zi < canopyRows; zi++) {
+      const a = xi * (canopyRows + 1) + zi;
+      const b = a + canopyRows + 1;
+      canopyIndices.push(a, b, a + 1, b, b + 1, a + 1);
+    }
+  }
+  const canopyGeometry = new THREE.BufferGeometry();
+  canopyGeometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(canopyPositions, 3),
+  );
+  canopyGeometry.setIndex(canopyIndices);
+  canopyGeometry.computeVertexNormals();
+  const canopy = new THREE.Mesh(canopyGeometry, canopyGlass);
+  canopy.name = 'tower-station-canopy';
+  canopy.castShadow = true;
+  stationGroup.add(canopy);
+
+  for (const ribX of [-9.5, -6.4, -3.2, 0, 3.2, 6.4, 9.5]) {
+    const points: THREE.Vector3[] = [];
+    for (let i = 0; i <= 12; i++) {
+      const z = THREE.MathUtils.lerp(-canopyHalfZ, canopyHalfZ, i / 12);
+      points.push(
+        new THREE.Vector3(
+          ribX,
+          8.25 + Math.cos((z / canopyHalfZ) * Math.PI * 0.5) * 1.55 + 0.06,
+          z,
+        ),
+      );
+    }
+    const rib = new THREE.Mesh(
+      new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points), 18, 0.17, 6, false),
+      redSteel,
+    );
+    stationGroup.add(rib);
+  }
+  for (const edgeZ of [-canopyHalfZ, canopyHalfZ]) {
+    const edge = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.19, 0.19, canopyHalfX * 2, 8),
+      redSteel,
+    );
+    edge.rotation.z = Math.PI / 2;
+    edge.position.set(0, 8.32, edgeZ);
+    stationGroup.add(edge);
+    const led = new THREE.Mesh(
+      new THREE.BoxGeometry(canopyHalfX * 2, 0.12, 0.08),
+      blueGlow,
+    );
+    led.position.set(0, 8.05, edgeZ);
+    stationGroup.add(led);
+  }
+  for (const sx of [-9.1, 9.1]) {
+    for (const sz of [-8.2, 8.2]) {
+      const post = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.14, 0.22, 8.3, 8),
+        whiteSteel,
+      );
+      post.position.set(sx, 4.15, sz);
+      post.castShadow = true;
+      stationGroup.add(post);
+    }
+  }
+
   const signTexture = stationSignTexture();
   if (signTexture) {
     const sign = new THREE.Mesh(
       new THREE.PlaneGeometry(14, 3.5),
-      new THREE.MeshBasicMaterial({ map: signTexture, toneMapped: false }),
+      new THREE.MeshBasicMaterial({
+        map: signTexture,
+        toneMapped: false,
+        side: THREE.DoubleSide,
+      }),
     );
     sign.name = 'volcano-flex-sign';
-    sign.position.set(0, 6.9, 0);
+    sign.position.set(0, 6.35, canopyHalfZ + 0.35);
     stationGroup.add(sign);
     const signBack = new THREE.Mesh(
       new THREE.BoxGeometry(14.5, 4, 0.18),
-      ironMat,
+      darkSteel,
     );
-    signBack.position.set(0, 6.9, -0.12);
+    signBack.position.set(0, 6.35, canopyHalfZ + 0.18);
     stationGroup.add(signBack);
   }
-  const stationLamp = new THREE.PointLight(0xff8a3d, 1.8, 26, 1.8);
-  stationLamp.position.set(0, 4.4, 0);
+  const stationLamp = new THREE.PointLight(0xffb377, 2.2, 30, 1.8);
+  stationLamp.position.set(0, 5.2, 0);
   stationGroup.add(stationLamp);
   root.add(stationGroup);
 
-  const dummyMatrix = new THREE.Matrix4();
-  const resetEruption = () => {
-    for (const bomb of bombState) {
-      const angle = Math.random() * Math.PI * 2;
-      const speed = 8 + Math.random() * 14;
-      bomb.x = Math.cos(angle) * (3 + Math.random() * 10);
-      bomb.z = Math.sin(angle) * (3 + Math.random() * 10);
-      bomb.y = height + 2;
-      bomb.vx = Math.cos(angle) * speed;
-      bomb.vz = Math.sin(angle) * speed;
-      bomb.vy = 18 + Math.random() * 24;
-      bomb.life = 3.4 + Math.random() * 2.8;
-    }
-    eruptionFlash = 1;
-  };
+  // Palms and low blue plaza lights soften the base of the steel structure.
+  const palms = new THREE.Group();
+  palms.name = 'tower-palms';
+  detail.add(palms);
+  const trunkMaterial = new THREE.MeshStandardMaterial({
+    color: 0x765239,
+    roughness: 0.9,
+  });
+  const frondMaterial = new THREE.MeshStandardMaterial({
+    color: 0x2d6b3b,
+    roughness: 0.82,
+    side: THREE.DoubleSide,
+  });
+  const palmCrowns: THREE.Group[] = [];
+  const palmAngles = [0.25, 0.95, 1.7, 2.4, 3.15, 3.85, 4.55, 5.3];
+  palmAngles.forEach((angle, index) => {
+    const radius = 29.5 + seeded(index + 8) * 4;
+    const palm = buildPalmTree(
+      index,
+      10.5 + seeded(index + 4) * 4.4,
+      trunkMaterial,
+      frondMaterial,
+    );
+    palm.position.set(
+      Math.cos(angle) * radius,
+      0,
+      Math.sin(angle) * radius,
+    );
+    palm.rotation.y = seeded(index + 19) * Math.PI * 2;
+    palms.add(palm);
+    const crown = palm.children.find((child) => child.type === 'Group');
+    if (crown instanceof THREE.Group) palmCrowns.push(crown);
+  });
+  for (let i = 0; i < 2; i++) {
+    const palm = buildPalmTree(
+      20 + i,
+      9.5 + i * 2.2,
+      trunkMaterial,
+      frondMaterial,
+    );
+    palm.position.set(
+      stationLocal.x + (i === 0 ? 18 : -12),
+      0,
+      stationLocal.z + (i === 0 ? 18 : -17),
+    );
+    palms.add(palm);
+  }
+
+  const plazaLights = new THREE.Group();
+  plazaLights.name = 'tower-plaza-lights';
+  detail.add(plazaLights);
+  for (let i = 0; i < 10; i++) {
+    const angle = (i / 10) * Math.PI * 2 + 0.18;
+    const lampGroup = new THREE.Group();
+    lampGroup.position.set(Math.cos(angle) * 22.6, 0, Math.sin(angle) * 22.6);
+    const pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.07, 0.1, 1.65, 6),
+      whiteSteel,
+    );
+    pole.position.y = 0.82;
+    lampGroup.add(pole);
+    const lamp = new THREE.Mesh(
+      new THREE.SphereGeometry(0.2, 8, 6),
+      blueGlow,
+    );
+    lamp.position.y = 1.72;
+    lampGroup.add(lamp);
+    plazaLights.add(lampGroup);
+  }
 
   const update = (dt: number, elapsed: number, speedKmh: number) => {
-    const pulse = 1.8 + Math.sin(elapsed * 1.7) * 0.25 + Math.sin(elapsed * 5.3) * 0.08;
-    lavaMat.emissiveIntensity = pulse + eruptionFlash * 2.2;
-    lavaFallMat.emissiveIntensity = pulse + 0.5;
-    chamberMat.emissiveIntensity = 0.28 + Math.sin(elapsed * 0.9) * 0.06;
-    chamberGlow.intensity = 3.5 + Math.sin(elapsed * 1.4) * 0.5 + eruptionFlash * 6;
-    lavaGlow.intensity = 2.5 + Math.sin(elapsed * 2.1) * 0.3;
-    craterGlow.intensity = 5 + eruptionFlash * 14;
-    stationLamp.intensity = 1.45 + Math.sin(elapsed * 2.5) * 0.15;
-    eruptionFlash = Math.max(0, eruptionFlash - dt * 0.65);
+    const pulse = 0.5 + 0.5 * Math.sin(elapsed * 1.35);
+    crownGlass.emissiveIntensity = 0.32 + pulse * 0.22;
+    blueGlow.emissiveIntensity = 1.55 + pulse * 1.1;
+    crownGlow.intensity = 6.5 + pulse * 2.4;
+    lobbyLamp.intensity = 2.1 + Math.sin(elapsed * 2.1) * 0.24;
+    stationLamp.intensity = 1.9 + Math.sin(elapsed * 2.5) * 0.16;
+    portalGlowMat.emissiveIntensity =
+      1.25 + Math.min(1.6, speedKmh * 0.005) + pulse * 0.45;
+    portalLight.intensity = 2.2 + Math.min(2.6, speedKmh * 0.009);
+    const beaconPulse = Math.max(0, Math.sin(elapsed * 2.4)) ** 8;
+    beaconGlow.emissiveIntensity = 1.4 + beaconPulse * 5.5;
+    beaconLight.intensity = 1.2 + beaconPulse * 7;
 
-    const emberAttr = embers.geometry.getAttribute('position') as THREE.BufferAttribute;
-    for (let i = 0; i < emberCount; i++) {
-      const idx = i * 3;
-      emberAttr.array[idx + 1] += emberSpeed[i] * dt;
-      emberAttr.array[idx] += Math.sin(elapsed * 2 + i) * dt * 0.65;
-      emberAttr.array[idx + 2] += Math.cos(elapsed * 1.7 + i * 0.7) * dt * 0.65;
-      if (emberAttr.array[idx + 1] > height + 8) {
-        emberAttr.array[idx + 1] = 2 + seeded(i + Math.floor(elapsed)) * 14;
-      }
-    }
-    emberAttr.needsUpdate = true;
+    const cycle = (elapsed % 34) / 34;
+    const lift = 1 - Math.abs(cycle * 2 - 1);
+    elevator.position.y = 9 + lift * (crownFloorY - 18);
+    elevator.rotation.y += dt * 0.16;
 
-    const smokeAttr = smoke.geometry.getAttribute('position') as THREE.BufferAttribute;
-    for (let i = 0; i < smokeCount; i++) {
-      const idx = i * 3;
-      smokeAttr.array[idx + 1] += dt * (1.4 + (i % 7) * 0.16);
-      smokeAttr.array[idx] += Math.sin(elapsed * 0.3 + i) * dt * 1.6;
-      if (smokeAttr.array[idx + 1] > height + 96) {
-        smokeAttr.array[idx + 1] = height + 4;
-      }
-    }
-    smokeAttr.needsUpdate = true;
-    smoke.rotation.y = elapsed * 0.014;
-    smoke.material.opacity = 0.16 + Math.min(0.08, speedKmh * 0.00012);
-
-    eruptionTimer -= dt;
-    if (eruptionTimer <= 0) {
-      resetEruption();
-      eruptionTimer = 11.5 + Math.random() * 7;
-    }
-
-    let bombWrite = 0;
-    for (const bomb of bombState) {
-      if (bomb.life > 0) {
-        bomb.life -= dt;
-        bomb.vy -= 9.81 * dt;
-        bomb.x += bomb.vx * dt;
-        bomb.y += bomb.vy * dt;
-        bomb.z += bomb.vz * dt;
-        if (bomb.y < 1.4) {
-          bomb.life = 0;
-          bomb.y = -999;
-        }
-      }
-      dummy.position.set(bomb.x, bomb.y, bomb.z);
-      dummy.scale.setScalar(bomb.life > 0 ? 1 + Math.sin(elapsed * 14 + bombWrite) * 0.12 : 0.001);
-      dummy.updateMatrix();
-      dummyMatrix.copy(dummy.matrix);
-      bombs.setMatrixAt(bombWrite++, dummyMatrix);
-    }
-    bombs.instanceMatrix.needsUpdate = true;
+    palmCrowns.forEach((crownGroup, index) => {
+      crownGroup.rotation.z = Math.sin(elapsed * 0.55 + index * 1.4) * 0.035;
+    });
   };
 
   const setDetailVisible = (visible: boolean) => {
-    interior.visible = visible;
+    detail.visible = visible;
   };
 
   const dispose = () => {

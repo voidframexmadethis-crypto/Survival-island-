@@ -14857,7 +14857,7 @@ export class GameEngine {
           id: st.id,
           label: isVolcanoStation ? 'Board VOLCANO FLEX' : labels[st.type],
           sublabel: isVolcanoStation
-            ? 'Lead seat · 900-ft volcanic launch · 15 inversions'
+            ? 'Lead seat · 900-ft tower launch · 15 inversions'
             : undefined,
           kind: st.type,
           actionCategory: isVolcanoStation ? 'use' : catMap[st.type],
@@ -27195,9 +27195,9 @@ export class GameEngine {
 
   /**
    * Volcano Flex is part of the island itself, not a demo spawned from the
-   * editor. Its station is surveyed exactly 10 ft from the Bayou Thunder deck
-   * and the coaster/environment are rebuilt from the saved themed coaster on
-   * every load. Older saves receive the attraction automatically.
+   * editor. Its station is surveyed 100 ft from the Bayou Thunder deck and the
+   * coaster/environment are rebuilt from the saved themed coaster on every
+   * load. Older saves receive the attraction automatically.
    */
   private ensureVolcanoFlexAttraction(): void {
     if (this.worldType !== 'island') return;
@@ -27207,7 +27207,7 @@ export class GameEngine {
         id: 'volcano_flex_station',
         type: 'coaster_station',
         // The structure footprint sits on the boarding spur east of the
-        // surveyed 10-ft gap, so no deck or roof overhangs the waterpark. The
+        // surveyed 100-ft gap, so no deck or roof overhangs the waterpark. The
         // south offset keeps its platform posts clear of the custom train.
         x: site.station.x + 2.8,
         y: site.station.y,

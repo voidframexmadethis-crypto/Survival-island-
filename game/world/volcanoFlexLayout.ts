@@ -6,8 +6,8 @@ import {
   WATERPARK_SITE,
 } from './waterparkLayout';
 
-/** 10 imperial feet — the surveyed gap between the station and the waterpark deck. */
-export const VOLCANO_FLEX_CLEARANCE_M = 3.048;
+/** 100 imperial feet — the surveyed gap between the station and the waterpark deck. */
+export const VOLCANO_FLEX_CLEARANCE_M = 30.48;
 export const VOLCANO_FLEX_ID = 'volcano_flex';
 export const VOLCANO_FLEX_NAME = 'VOLCANO FLEX';
 export const VOLCANO_FLEX_INVERSIONS = 15;
@@ -16,7 +16,7 @@ export const VOLCANO_FLEX_HEIGHT_M = 274.32; // 900 ft
 const STATION_X = WATERPARK_SITE.x + WATERPARK_DECK_HALF_W + VOLCANO_FLEX_CLEARANCE_M;
 const STATION_Z = WATERPARK_SITE.z;
 
-/** The mountain centre in the coaster's local frame. */
+/** The observation-tower centre in the coaster's local frame. */
 const VOLCANO_LOCAL_X = -20;
 const VOLCANO_LOCAL_Z = 58;
 const TOWER_RADIUS = 20;
@@ -32,8 +32,8 @@ export interface VolcanoFlexSite {
 export function getVolcanoFlexSite(): VolcanoFlexSite {
   const stationGround = getTerrainSurfaceHeight(STATION_X, STATION_Z);
   // Track local +Z maps to world east and local +X maps to world south
-  // (see buildVolcanoFlexNodes). Keep the shell on that same transform so the
-  // 900-ft mountain encloses the actual spiral rather than sitting beside it.
+  // (see buildVolcanoFlexNodes). Keep the tower on that same transform so the
+  // 900-ft structure encloses the actual spiral rather than sitting beside it.
   const mountainX = STATION_X + VOLCANO_LOCAL_Z;
   const mountainZ = STATION_Z - VOLCANO_LOCAL_X;
   return {
@@ -97,9 +97,9 @@ function rollBankAt(t: number): number {
 /**
  * The complete Volcano Flex circuit. Distances and heights are in metres at
  * world scale; the 900-ft tower translates to 274.32 m. The ascent and the
- * inversion descent spiral inside the volcanic chamber. Ten barrel-roll
- * inversions are stacked through the descent, followed by one upside-down
- * launch block and four return inversions.
+ * inversion descent spiral tightly around the observation tower. Ten
+ * barrel-roll inversions are stacked through the descent, followed by one
+ * upside-down launch block and four return inversions.
  */
 export function buildVolcanoFlexNodes(): SavedCoasterNode[] {
   const nodes: SavedCoasterNode[] = [];
@@ -136,7 +136,7 @@ export function buildVolcanoFlexNodes(): SavedCoasterNode[] {
     });
   }
 
-  // Three powered spiral laps up the inside of the volcanic chamber.
+  // Three powered spiral laps up and around the observation tower.
   for (let i = 1; i <= 104; i++) {
     const t = i / 104;
     const theta = t * Math.PI * 6;
@@ -153,7 +153,7 @@ export function buildVolcanoFlexNodes(): SavedCoasterNode[] {
     });
   }
 
-  // Ten inversions on the initial descent, spiralling down inside the tower.
+  // Ten inversions on the initial descent, spiralling down around the tower.
   for (let i = 1; i <= 108; i++) {
     const t = i / 108;
     const theta = t * Math.PI * 6;
@@ -267,7 +267,8 @@ export function buildVolcanoFlexNodes(): SavedCoasterNode[] {
 
   // Custom return leg: stays south and east of the waterpark, climbs over the
   // boundary fence, then descends into the station from behind. Building this
-  // explicitly avoids a ground support run through the waterpark.
+  // explicitly avoids a ground support run through the waterpark and keeps the
+  // attraction's 100-ft buffer clear.
   const closureCurve = new THREE.CatmullRomCurve3([
     new THREE.Vector3(elementStart.x, elementStart.y, elementStart.z),
     new THREE.Vector3(elementStart.x, elementStart.y + 1, elementStart.z - 24),
@@ -315,7 +316,7 @@ export function buildVolcanoFlexCoasterData(): SavedCoasterData {
   return {
     id: VOLCANO_FLEX_ID,
     name: VOLCANO_FLEX_NAME,
-    trackColor: '#ff5a1f',
+    trackColor: '#d21f2b',
     trainCarCount: 5,
     stationPos: {
       x: site.station.x,
@@ -329,7 +330,7 @@ export function buildVolcanoFlexCoasterData(): SavedCoasterData {
   };
 }
 
-/** Local coordinates of the chamber, exposed for the visual model. */
+/** Local coordinates of the spiral chamber, exposed for the visual model. */
 export const VOLCANO_FLEX_LOCAL_CHAMBER = {
   x: VOLCANO_LOCAL_X,
   z: VOLCANO_LOCAL_Z,
