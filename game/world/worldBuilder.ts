@@ -148,6 +148,7 @@ import {
   createFerryWorkerNpcModel,
   createHilltopHouse,
 } from './models';
+import { createPremadeMansion } from './premadeMansion';
 import {
   applySafeStandardMaps,
   enhanceSurfaceMaterial,
@@ -276,6 +277,7 @@ export interface WorldHandles {
   saturnRocket: SaturnVRocketHandles;
   undergroundElevator: UndergroundElevatorHandles;
   crescentCity: LouisianaMainlandHandles;
+  premadeMansion: import('./premadeMansion').PremadeMansionHandles;
   overworldGroup: THREE.Group;
   worldChunks: WorldChunk[];
   foliageChunks: WorldChunk[];
@@ -4023,6 +4025,13 @@ export function buildIslandWorld(
     protectedObjs: [hillHouse.tvScreenMesh],
   });
   hillHouse.colliders.forEach((hc) => colliders.push(hc));
+
+  // D1. Three-storey premade mansion on the hilltop lawn north of the shelter.
+  const premadeMansion = createPremadeMansion();
+  overworldGroup.add(premadeMansion.group);
+  staticMergeTargets.push({ group: premadeMansion.group });
+  premadeMansion.colliders.forEach((mc) => colliders.push(mc));
+  hillHouse.stations.push(...premadeMansion.stations);
 
   // D2. Covered regulation bowling shelter on the level shelf west of the house.
   const bowlingAlley = new HilltopBowlingAlley();
@@ -7962,6 +7971,7 @@ gl_Position = projectionMatrix * mvPosition;`,
     citySeaplaneBase,
     soilPlots,
     houseStations: hillHouse.stations,
+    premadeMansion,
     tvScreenMat: hillHouse.tvScreenMat,
     tvScreenMesh: hillHouse.tvScreenMesh,
     tvWorldPos: new THREE.Vector3(HILL_HOUSE_POS.x + 0.75, HILL_HOUSE_Y + 1.24, HILL_HOUSE_POS.z + 0.41),

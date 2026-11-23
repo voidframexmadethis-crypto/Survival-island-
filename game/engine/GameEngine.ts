@@ -460,6 +460,12 @@ import {
   resolveFootstepSurface,
 } from '../systems/playerFootstepSurface';
 import {
+  COASTER_RELOCATION_METERS,
+  createMaidPatrolState,
+  stepMaidPatrol,
+  type MaidPatrolState,
+} from '../systems/mansionMaids';
+import {
   CoasterPiecePresetKey,
   RollerCoasterRuntime,
 } from '../systems/rollerCoasterRuntime';
@@ -1531,6 +1537,9 @@ export class GameEngine {
   private trunkBassPressure = 0;
   private chestThumpPulse = 0;
   private vehicleDanceStates = new Map<string, GarageDanceState>();
+  private mansionMaidStates = new Map<string, MaidPatrolState>();
+  private mansionCoasterShift = 0;
+  private mansionCoasterToastShown = false;
 
   // Creature Taming & Mounting & Sandbox
   private mountedCreatureId: string | null = null;
@@ -17245,6 +17254,89 @@ export class GameEngine {
 
   // ---- Louisiana mainland / Crescent City ---------------------------------
 
+  /** Walks the five mansion maids through their duties and the coaster feat. */
+  private updateMansionMaids(dt: number): void {
+    const mansion = this.world?.premadeMansion;
+    if (!mansion) return;
+    const origin = mansion.group.position;
+    const dx = this.playerX - origin.x;
+    const dz = this.playerZ - origin.z;
+    if (dx * dx + dz * dz > 240 * 240) return;
+
+    for (const maid of mansion.maids) {
+      let patrol = this.mansionMaidStates.get(maid.definition.id);
+      if (!patrol) {
+        patrol = createMaidPatrolState(maid.definition);
+        this.mansionMaidStates.set(maid.definition.id, patrol);
+      }
+      const pose = stepMaidPatrol(maid.definition, patrol, dt);
+      const route = maid.definition.route;
+      const target = route[pose.waypoint % route.length];
+      const targetDx = target.x - pose.x;
+      const targetDz = target.z - pose.z;
+      const group = maid.group;
+      group.position.set(pose.x, pose.y, pose.z);
+
+      if (pose.moving) {
+        if (Math.hypot(targetDx, targetDz) > 0.05) {
+          group.rotation.y = Math.atan2(targetDx, targetDz);
+        }
+        group.position.y += Math.abs(Math.sin(patrol.walkPhase)) * 0.04;
+        const swing = Math.sin(patrol.walkPhase) * 0.55;
+        maid.armL.rotation.x = swing;
+        maid.armR.rotation.x = -swing;
+      } else {
+        // Working animation: dusting, scrubbing, serving and wrenching.
+        const work = pose.working;
+        const speed = work === 'coaster_feat' ? 1.4 : work === 'clean_bath' ? 7.5 : 5.4;
+        const wave = Math.sin(
+          this.elapsed * speed + (maid.definition.id.length % 7) * 0.9,
+        );
+        if (work === 'coaster_feat') {
+          // One hand under the coaster, the other relaxed at her side.
+          maid.armR.rotation.x = -1.42 + wave * 0.06;
+          maid.armL.rotation.x = 0.12;
+          group.rotation.y = Math.atan2(-1, -1);
+        } else {
+          maid.armL.rotation.x = 0.35 + wave * 0.38;
+          maid.armR.rotation.x = 0.15 - wave * 0.5;
+        }
+      }
+    }
+
+    // Bianca's superhuman party trick: the coaster display rises and is set
+    // down 100 ft farther from the waterpark, one-handed.
+    const biancaPatrol = this.mansionMaidStates.get('maid_bianca');
+    const bianca = mansion.maids.find((maid) => maid.definition.id === 'maid_bianca');
+    const targetShift =
+      bianca && biancaPatrol
+        ? Number(
+            bianca.definition.route[biancaPatrol.waypoint % bianca.definition.route.length]
+              .work === 'coaster_feat' && biancaPatrol.pauseLeft > 0,
+          )
+        : 0;
+    this.mansionCoasterShift = THREE.MathUtils.damp(
+      this.mansionCoasterShift,
+      targetShift,
+      1.8,
+      dt,
+    );
+    const shift = this.mansionCoasterShift;
+    mansion.coasterDisplay.position.set(
+      mansion.coasterBase.x,
+      mansion.coasterBase.y + shift * 0.5,
+      mansion.coasterBase.z - shift * COASTER_RELOCATION_METERS,
+    );
+    mansion.coasterDisplay.rotation.z = shift * 0.08;
+    if (!this.mansionCoasterToastShown && shift > 0.55) {
+      this.mansionCoasterToastShown = true;
+      this.toast(
+        'Bianca moved the waterpark coaster 100 ft with one hand.',
+        'discovery',
+      );
+    }
+  }
+
   private updateMainland(dt: number): void {
     const city = this.world?.crescentCity;
     if (city?.streetcarGroup && city.streetcarRoute.length >= 2) {
@@ -20339,6 +20431,15 @@ export class GameEngine {
         this.world.farmerArmR.rotation.z = Math.sin(this.elapsed * 1.6) * 0.05;
         this.world.farmerHead.rotation.y = Math.sin(this.elapsed * 0.8) * 0.22;
       }
+    }
+
+    if (
+      this.mode === 'playing' &&
+      !this.cinematicActive &&
+      this.worldType === 'island' &&
+      this.currentDimension === 'overworld'
+    ) {
+      this.updateMansionMaids(dt);
     }
 
     // Autonomous Ship Navigator Companion AI on Survival Island

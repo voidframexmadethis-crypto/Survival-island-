@@ -30,6 +30,30 @@ export const HILLTOP_HOUSE_STAIR = {
   bottomY: HILL_HOUSE_Y + 0.08,
   topY: HILLTOP_UPPER_FLOOR_Y,
 } as const;
+// Three-storey premade mansion on the hilltop lawn north of the old shelter.
+export const PREMADE_MANSION_POS = { x: -78, z: 96 };
+export const PREMADE_MANSION_FLOOR_Y = HILL_HOUSE_Y + 0.08;
+export const PREMADE_MANSION_UPPER_FLOOR_Y = PREMADE_MANSION_FLOOR_Y + 3.6;
+export const PREMADE_MANSION_TOP_FLOOR_Y = PREMADE_MANSION_FLOOR_Y + 7.2;
+export const PREMADE_MANSION_BOUNDS = {
+  minX: PREMADE_MANSION_POS.x - 13.2,
+  maxX: PREMADE_MANSION_POS.x + 13.2,
+  minZ: PREMADE_MANSION_POS.z - 9.2,
+  maxZ: PREMADE_MANSION_POS.z + 9.2,
+} as const;
+export const MANSION_WEST_STAIR = {
+  minX: PREMADE_MANSION_POS.x - 16.8,
+  maxX: PREMADE_MANSION_POS.x - 13.2,
+  minZ: PREMADE_MANSION_POS.z - 9.2,
+  maxZ: PREMADE_MANSION_POS.z + 6.2,
+} as const;
+export const MANSION_EAST_STAIR = {
+  minX: PREMADE_MANSION_POS.x + 13.2,
+  maxX: PREMADE_MANSION_POS.x + 16.8,
+  minZ: PREMADE_MANSION_POS.z - 9.2,
+  maxZ: PREMADE_MANSION_POS.z + 6.2,
+} as const;
+
 export const BOWLING_ALLEY_POS = { x: -107, z: 128 };
 export const BOWLING_ALLEY_FLOOR_Y = HILL_HOUSE_Y + 0.16;
 export const BOWLING_ALLEY_CLEAR_ZONE = {
@@ -196,6 +220,13 @@ export function isTerrainProtectedAt(x: number, z: number): boolean {
   ) {
     return true;
   }
+  // Premade mansion footprint, exterior stairs and motor court.
+  if (
+    Math.abs(x - PREMADE_MANSION_POS.x) < 25 &&
+    Math.abs(z - PREMADE_MANSION_POS.z) < 16
+  ) {
+    return true;
+  }
   const fdx = x - FARMER_POS.x;
   const fdz = z - FARMER_POS.z;
   if (fdx * fdx + fdz * fdz < 20.25) return true;
@@ -268,6 +299,65 @@ export function getHilltopBaseFloorY(
       HILLTOP_HOUSE_STAIR.bottomY +
       t * (HILLTOP_HOUSE_STAIR.topY - HILLTOP_HOUSE_STAIR.bottomY);
     if (sweepFootY >= stairY - 0.55 && stairY > bestY) {
+      bestY = stairY;
+    }
+  }
+
+  // Three-storey premade mansion: walkable floors on all three storeys.
+  const mdx = x - PREMADE_MANSION_POS.x;
+  const mdz = z - PREMADE_MANSION_POS.z;
+  if (Math.abs(mdx) <= 13.2 && Math.abs(mdz) <= 9.2) {
+    if (
+      sweepFootY >= PREMADE_MANSION_UPPER_FLOOR_Y - 1.35 &&
+      PREMADE_MANSION_UPPER_FLOOR_Y > bestY
+    ) {
+      bestY = PREMADE_MANSION_UPPER_FLOOR_Y;
+    }
+    if (
+      sweepFootY >= PREMADE_MANSION_TOP_FLOOR_Y - 1.35 &&
+      PREMADE_MANSION_TOP_FLOOR_Y > bestY
+    ) {
+      bestY = PREMADE_MANSION_TOP_FLOOR_Y;
+    }
+    if (
+      sweepFootY >= PREMADE_MANSION_FLOOR_Y - 1.65 &&
+      PREMADE_MANSION_FLOOR_Y > bestY &&
+      bestY < PREMADE_MANSION_UPPER_FLOOR_Y - 0.6
+    ) {
+      bestY = PREMADE_MANSION_FLOOR_Y;
+    }
+  }
+
+  // West exterior stair: ground floor up to the second suite level.
+  if (
+    x >= MANSION_WEST_STAIR.minX &&
+    x <= MANSION_WEST_STAIR.maxX &&
+    z >= MANSION_WEST_STAIR.minZ &&
+    z <= MANSION_WEST_STAIR.maxZ
+  ) {
+    const t = (MANSION_WEST_STAIR.maxZ - z) /
+      (MANSION_WEST_STAIR.maxZ - MANSION_WEST_STAIR.minZ);
+    const stairY =
+      PREMADE_MANSION_FLOOR_Y +
+      t * (PREMADE_MANSION_UPPER_FLOOR_Y - PREMADE_MANSION_FLOOR_Y);
+    if (sweepFootY >= stairY - 0.6 && stairY > bestY) {
+      bestY = stairY;
+    }
+  }
+
+  // East exterior stair: second suite level up to the third storey.
+  if (
+    x >= MANSION_EAST_STAIR.minX &&
+    x <= MANSION_EAST_STAIR.maxX &&
+    z >= MANSION_EAST_STAIR.minZ &&
+    z <= MANSION_EAST_STAIR.maxZ
+  ) {
+    const t = (MANSION_EAST_STAIR.maxZ - z) /
+      (MANSION_EAST_STAIR.maxZ - MANSION_EAST_STAIR.minZ);
+    const stairY =
+      PREMADE_MANSION_UPPER_FLOOR_Y +
+      t * (PREMADE_MANSION_TOP_FLOOR_Y - PREMADE_MANSION_UPPER_FLOOR_Y);
+    if (sweepFootY >= stairY - 0.6 && stairY > bestY) {
       bestY = stairY;
     }
   }
@@ -1212,6 +1302,7 @@ export function getTerrainSurfaceHeight(x: number, z: number): number {
 }
 
 const FLAT_PADS: readonly [number, number, number, number, number, number][] = [
+  [PREMADE_MANSION_POS.x, PREMADE_MANSION_POS.z, 22, 32, 32 * 32, HILL_HOUSE_Y],
   [TRIAL_CHAMBERS_POS.x, TRIAL_CHAMBERS_POS.z, 6.5, 13.5, 13.5 * 13.5, 3.6],
   [WOODLAND_MANSION_POS.x, WOODLAND_MANSION_POS.z, 10.5, 17.5, 17.5 * 17.5, 4.1],
   [TAIGA_VILLAGE_POS.x, TAIGA_VILLAGE_POS.z, 11.5, 18.0, 18.0 * 18.0, 5.2],
