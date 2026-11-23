@@ -9,6 +9,7 @@ import { buildLouisianaBusinesses } from './louisianaBusinesses';
 import { buildLouisianaNeighborhoods } from './louisianaNeighborhoods';
 import { buildIslandFerryDock } from './ferryDock';
 import { buildLouisianaFerry, type LouisianaFerryHandles } from './louisianaFerry';
+import { isAlwaysVisibleWorldObject } from './worldCullPolicy';
 import { buildTransitCauseway } from './transitCauseway';
 import {
   buildLouisianaWaterMeshes,
@@ -7452,6 +7453,9 @@ gl_Position = projectionMatrix * mvPosition;`,
   for (let i = 0; i < overworldGroup.children.length; i++) {
     const child = overworldGroup.children[i];
     if (skipCullSet.has(child)) continue;
+    // Gameplay-moved roots (the Crescent Star) must stay direct scene children
+    // so distance culling can never hide or freeze the hull under the player.
+    if (isAlwaysVisibleWorldObject(child)) continue;
     tmpCullBox.setFromObject(child);
     if (tmpCullBox.isEmpty()) continue;
     tmpCullBox.getCenter(tmpCullCenter);

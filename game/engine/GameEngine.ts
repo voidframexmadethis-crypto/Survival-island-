@@ -107,10 +107,13 @@ import {
 } from '../systems/ferryPickup';
 import {
   FERRY_DECK_Y,
+  FERRY_STERN_Z,
   LOUISIANA_FERRY_DAYS,
-  LOUISIANA_FERRY_GATE_LIFT_HEIGHT,
+  LOUISIANA_FERRY_DAYS_PER_MONTH,
+  LOUISIANA_FERRY_MONTHS,
   LouisianaFerryVoyageSystem,
 } from '../systems/louisianaFerryVoyage';
+import { applyLouisianaFerryVisual } from '../systems/louisianaFerryVisual';
 import { getCausewaySurfaceY } from '../systems/islandMainlandTransit';
 import {
   MAINLAND_BUSINESSES,
@@ -757,6 +760,10 @@ export class GameEngine {
   private ferryDepartureHintShown = false;
   private ferryDockedNoticeShown = false;
   private ferryVoyageCarId: string | null = null;
+  private ferryMonthNotice = 0;
+  private ferryWakeAccum = 0;
+  private ferrySmokeAccum = 0;
+  private ferryHornCooldown = 0;
   private mainlandStuntCooldown = 0;
   private beeGate: BeeGateHandle | null = null;
   private beeGateAnchor: THREE.Group | null = null;
@@ -11528,7 +11535,10 @@ export class GameEngine {
     const deckY = this.inSpacePlanet
       ? -999
       : this.getStructuralSurfaceY(this.playerX, this.playerZ, this.playerY);
-    const standingSurfaceY = Math.max(terrainY, deckY);
+    const ferryDeckY = this.inSpacePlanet
+      ? -999
+      : this.getFerryWalkSurfaceY(this.playerX, this.playerZ, this.playerY);
+    const standingSurfaceY = Math.max(terrainY, deckY, ferryDeckY);
     this.isSwimming = !this.inSpacePlanet && !isFlat && standingSurfaceY < waterLevel - 0.45;
 
     const prevPlayerY = this.playerY;
@@ -11917,7 +11927,10 @@ export class GameEngine {
     const newDeckY = this.inSpacePlanet
       ? -999
       : this.getStructuralSurfaceY(this.playerX, this.playerZ, this.playerY);
-    const newSurfaceY = Math.max(newTerrainY, newDeckY);
+    const newFerryDeckY = this.inSpacePlanet
+      ? -999
+      : this.getFerryWalkSurfaceY(this.playerX, this.playerZ, this.playerY);
+    const newSurfaceY = Math.max(newTerrainY, newDeckY, newFerryDeckY);
     if (this.worldType === 'island' && this.currentDimension === 'overworld') {
       const currentCave = this.islandCaveSystem.getWalkSurface(
         this.playerX,
@@ -12951,7 +12964,7 @@ export class GameEngine {
           {
             id: 'ferry_bed',
             label: 'Sleep in the Ferry Bedroom',
-            sublabel: 'Bed · private cabin · skip to the next voyage day',
+            sublabel: 'Bed · private cabin · sleep through a month of the crossing',
             x: -2.15,
             z: 8.8,
           },
@@ -12965,7 +12978,7 @@ export class GameEngine {
           {
             id: 'ferry_sofa',
             label: 'Relax in the Ferry Living Room',
-            sublabel: 'Sofa · coffee table · 18-day crossing',
+            sublabel: 'Sofa · coffee table · 18-month crossing',
             x: 1.15,
             z: -1.9,
           },
@@ -12982,6 +12995,13 @@ export class GameEngine {
             sublabel: 'Louisiana travelogue · live crossing map',
             x: -4.19,
             z: 0.3,
+          },
+          {
+            id: 'ferry_horn',
+            label: 'Sound the Crescent Star Horn',
+            sublabel: 'Two-tone ship horn · let the channel know you are coming',
+            x: 0,
+            z: 14.2,
           },
         ];
         let bestRoom: (typeof roomSpots)[number] | null = null;
@@ -16613,11 +16633,11 @@ export class GameEngine {
     this.ferryDepartureHintShown = false;
     this.ferryDockedNoticeShown = false;
     this.ferryVoyageCarId = null;
-    const ferry = this.world?.louisianaFerry;
-    if (!ferry) return;
-    ferry.root.position.set(this.ferryVoyage.boatX, this.ferryVoyage.boatY, this.ferryVoyage.boatZ);
-    ferry.gate.position.y = FERRY_DECK_Y;
-    ferry.gate.visible = true;
+    this.ferryMonthNotice = 0;
+    this.ferryWakeAccum = 0;
+    this.ferrySmokeAccum = 0;
+    this.ferryHornCooldown = 0;
+    this.syncLouisianaFerryVisual(0);
     const tv = this.world?.ferryTvScreenMat;
     if (tv) tv.emissiveIntensity = 0.85;
   }
@@ -16625,12 +16645,9 @@ export class GameEngine {
   private syncLouisianaFerryVisual(dt: number): void {
     const ferry = this.world?.louisianaFerry;
     if (!ferry) return;
-    ferry.root.position.set(this.ferryVoyage.boatX, this.ferryVoyage.boatY, this.ferryVoyage.boatZ);
-    // The gate must be seen sliding up, not toggled invisible. Keep it mounted
-    // in the stern frame and drive it continuously from the voyage system.
-    ferry.gate.visible = true;
-    ferry.gate.position.y =
-      FERRY_DECK_Y + this.ferryVoyage.gateLift * LOUISIANA_FERRY_GATE_LIFT_HEIGHT;
+    // Same helper the ferry integration tests exercise: position, heading and
+    // the stern gate all come straight from the voyage state machine.
+    applyLouisianaFerryVisual(ferry, this.ferryVoyage);
     const tv = this.world?.ferryTvScreenMat;
     if (tv) {
       this.ferryTvPulse += dt;
@@ -16640,6 +16657,9 @@ export class GameEngine {
   }
 
   private updateLouisianaFerryVoyage(dt: number): void {
+    if (this.ferryHornCooldown > 0) {
+      this.ferryHornCooldown = Math.max(0, this.ferryHornCooldown - dt);
+    }
     const events = this.ferryVoyage.update(
       dt,
       this.playerX,
@@ -16649,22 +16669,26 @@ export class GameEngine {
     if (this.ferryVoyage.aboard && (events.carryX !== 0 || events.carryZ !== 0)) {
       this.playerX += events.carryX;
       this.playerZ += events.carryZ;
+    }
+    if (this.ferryVoyage.aboard) {
+      // The deck is a real moving floor. Keep the rider glued to it (including
+      // the hull's bob) and inside the railings for the whole crossing.
       const constrained = this.ferryVoyage.constrainPlayer(this.playerX, this.playerZ);
       this.playerX = constrained.x;
       this.playerZ = constrained.z;
-    }
-    if (this.ferryVoyage.aboard) {
       const deckY = this.ferryVoyage.getWalkSurfaceY(this.playerX, this.playerZ);
-      if (deckY !== null && this.playerY < deckY - 0.18) {
+      if (deckY !== null && this.playerY < deckY - 0.05) {
         this.playerY = deckY;
         this.playerVelY = 0;
         this.grounded = true;
+        this.isSwimming = false;
       }
-      const constrained = this.ferryVoyage.constrainPlayer(this.playerX, this.playerZ);
-      this.playerX = constrained.x;
-      this.playerZ = constrained.z;
     }
     this.syncLouisianaFerryVisual(dt);
+
+    if (this.ferryVoyage.phase === 'at_sea') {
+      this.spawnFerryWake(dt);
+    }
 
     if (events.boarded) {
       this.toast('Aboard the Crescent Star. The stern gate is lifting clear.', 'discovery');
@@ -16679,30 +16703,71 @@ export class GameEngine {
         'info',
       );
       this.sound.playSteamHiss();
+      this.sound.playFerryEngineStart();
       this.emitHud();
     }
     if (events.departed) {
       this.ferryDepartureHintShown = true;
       this.toast(
-        'Lines cast off. The Crescent Star is underway — 18 island days to Louisiana.',
+        `Lines cast off. The Crescent Star is underway — ${LOUISIANA_FERRY_MONTHS} months to Louisiana.`,
         'discovery',
       );
-      this.sound.playSteamHiss();
+      this.sound.playFerryHorn();
       this.markExploredAroundPlayer();
     }
     if (events.daysAdvanced > 0) {
       this.dayCount += events.daysAdvanced;
       this.stats.daysSurvived = this.dayCount;
-      this.toast(
-        `Day ${this.ferryVoyage.voyageDay} of ${LOUISIANA_FERRY_DAYS} at sea. The cabin, bathroom and living room are open.`,
-        'info',
-      );
+      const month = this.ferryVoyage.voyageMonth;
+      if (month > this.ferryMonthNotice) {
+        this.ferryMonthNotice = month;
+        this.toast(
+          `Month ${month} of ${LOUISIANA_FERRY_MONTHS} at sea · day ${this.ferryVoyage.voyageDay} of ${LOUISIANA_FERRY_DAYS}. The cabin, bathroom and living room are open.`,
+          'info',
+        );
+      }
       this.emitHud();
     }
     if (events.arrived) {
       this.handleLouisianaFerryDocked();
     }
     this.syncFerryDepartureHint();
+  }
+
+  /** Foam and funnel smoke make the hull's true speed readable from the deck. */
+  private spawnFerryWake(dt: number): void {
+    const ferry = this.ferryVoyage;
+    if (ferry.speedMps <= 0.05) return;
+    const c = Math.cos(ferry.boatYaw);
+    const s = Math.sin(ferry.boatYaw);
+    this.ferryWakeAccum += dt;
+    if (this.ferryWakeAccum >= 0.1) {
+      this.ferryWakeAccum = 0;
+      const localZ = FERRY_STERN_Z + 0.4;
+      const wx = ferry.boatX + localZ * s;
+      const wz = ferry.boatZ + localZ * c;
+      this.spawnParticles(wx, ferry.boatY + 0.12, wz, 0xcfefff, 3);
+      const bowZ = 16.6;
+      this.spawnParticles(
+        ferry.boatX + bowZ * s,
+        ferry.boatY + 0.35,
+        ferry.boatZ + bowZ * c,
+        0xe0f2fe,
+        1,
+      );
+    }
+    this.ferrySmokeAccum += dt;
+    if (this.ferrySmokeAccum >= 0.34) {
+      this.ferrySmokeAccum = 0;
+      const funnelZ = 7.2;
+      this.spawnParticles(
+        ferry.boatX + funnelZ * s,
+        ferry.boatY + 6.9,
+        ferry.boatZ + funnelZ * c,
+        0x9ca3af,
+        1,
+      );
+    }
   }
 
   private handleLouisianaFerryDocked(): void {
@@ -16714,6 +16779,7 @@ export class GameEngine {
     this.nearbyInteraction = this.findNearbyInteraction();
     this.updateCamera();
     this.sound.playSteamHiss();
+    this.sound.playFerryHorn();
     this.toast(
       'The Crescent Star is secured in Crescent City. The stern gate is open — head aft and press E to disembark.',
       'discovery',
@@ -16743,6 +16809,9 @@ export class GameEngine {
     this.ferryVoyageCarId = null;
     this.ferryDepartureHintShown = false;
     this.ferryDockedNoticeShown = false;
+    this.ferryMonthNotice = 0;
+    this.ferryWakeAccum = 0;
+    this.ferrySmokeAccum = 0;
     this.syncLouisianaFerryVisual(0);
     this.playerX = cityX;
     this.playerY = cityY + 0.05;
@@ -16765,7 +16834,7 @@ export class GameEngine {
     this.updateCamera();
     this.sound.playSteamHiss();
     this.toast(
-      'Eighteen island days later, the Crescent Star docks in Crescent City, Louisiana.',
+      'Eighteen months later, the Crescent Star docks in Crescent City, Louisiana.',
       'discovery',
     );
     this.emitHud();
@@ -16830,7 +16899,10 @@ export class GameEngine {
       case 'ferry_bed': {
         const bedBoatX = this.ferryVoyage.boatX;
         const bedBoatZ = this.ferryVoyage.boatZ;
-        if (this.ferryVoyage.restForOneDay()) {
+        // Sleeping through a month of the crossing still moves the hull, and
+        // the rider is carried by the exact same delta the voyage produced.
+        const sleptDays = this.ferryVoyage.restForDays(LOUISIANA_FERRY_DAYS_PER_MONTH);
+        if (sleptDays > 0) {
           this.playerX += this.ferryVoyage.boatX - bedBoatX;
           this.playerZ += this.ferryVoyage.boatZ - bedBoatZ;
           const bedClamp = this.ferryVoyage.constrainPlayer(this.playerX, this.playerZ);
@@ -16838,20 +16910,31 @@ export class GameEngine {
           this.playerZ = bedClamp.z;
           const bedDeck = this.ferryVoyage.getWalkSurfaceY(this.playerX, this.playerZ);
           if (bedDeck !== null) this.playerY = bedDeck;
-          this.dayCount += 1;
+          this.dayCount += sleptDays;
           this.stats.daysSurvived = this.dayCount;
           this.vitals.health = this.vitals.maxHealth;
           this.vitals.stamina = this.vitals.maxStamina;
           this.vitals.temperatureC = 37.0;
           this.syncLouisianaFerryVisual(0);
+          this.ferryMonthNotice = this.ferryVoyage.voyageMonth;
           this.toast(
-            `Slept through a night aboard. Day ${this.ferryVoyage.voyageDay} of ${LOUISIANA_FERRY_DAYS}.`,
+            `Slept through a month aboard. Month ${this.ferryVoyage.voyageMonth} of ${LOUISIANA_FERRY_MONTHS} · day ${this.ferryVoyage.voyageDay} of ${LOUISIANA_FERRY_DAYS}.`,
             'discovery',
           );
           this.emitHud();
         } else {
           this.toast('The cabin bed is made up, but the crossing is nearly over.', 'info');
         }
+        break;
+      }
+      case 'ferry_horn': {
+        if (this.ferryHornCooldown > 0) {
+          this.toast('The horn is still echoing across the water.', 'info');
+          break;
+        }
+        this.ferryHornCooldown = 2.8;
+        this.sound.playFerryHorn();
+        this.toast('The Crescent Star sounds a deep two-tone horn across the channel.', 'info');
         break;
       }
       case 'ferry_bathroom': {
@@ -16876,7 +16959,7 @@ export class GameEngine {
         break;
       }
       case 'ferry_living_tv': {
-        this.toast('The ferry TV is playing a Louisiana travelogue for the 18-day crossing.', 'info');
+        this.toast('The ferry TV is playing a Louisiana travelogue for the 18-month crossing.', 'info');
         break;
       }
       default:
@@ -17015,7 +17098,7 @@ export class GameEngine {
   /**
    * The worker-driven car reaches the pier, then the player leaves it with the
    * dock crew and boards the physical Crescent Star. The car is delivered to
-   * Crescent City when the 18-day crossing finishes.
+   * Crescent City when the 18-month crossing finishes.
    */
   private startCrescentStarFromCar(car: ModularVehicleData): void {
     if (this.activeVehicleId === car.id) this.exitVehicle();
@@ -17056,7 +17139,7 @@ export class GameEngine {
     this.updateCamera();
     this.sound.playSteamHiss();
     this.toast(
-      `The dock crew loads ${car.name}. You walk up the Crescent Star ramp for the 18-day crossing.`,
+      `The dock crew loads ${car.name}. You walk up the Crescent Star ramp for the 18-month crossing.`,
       'discovery',
     );
     this.emitHud();
@@ -18819,7 +18902,23 @@ export class GameEngine {
       this.worldType === 'island'
         ? getWaterparkSurfaceY(x, z, footY)
         : -9999;
-    return Math.max(terrainY, deckY, waterparkY);
+    const ferryDeckY = this.inSpacePlanet
+      ? -999
+      : this.getFerryWalkSurfaceY(x, z, footY);
+    return Math.max(terrainY, deckY, waterparkY, ferryDeckY);
+  }
+
+  /**
+   * The Crescent Star's deck is a moving floor, not baked scenery. Feeding it
+   * into normal ground sampling keeps a rider standing on the hull (instead of
+   * dropping into the sea inside it) and lets them walk the cabin during the
+   * crossing. Only surfaces at or just below the feet count, so swimming under
+   * a moored hull still works.
+   */
+  private getFerryWalkSurfaceY(x: number, z: number, footY: number): number {
+    const surface = this.ferryVoyage.getWalkSurfaceY(x, z);
+    if (surface === null) return -999;
+    return footY >= surface - 1.65 ? surface : -999;
   }
 
   private applyPlayerGroundCollision(

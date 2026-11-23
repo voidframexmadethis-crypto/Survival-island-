@@ -1994,6 +1994,81 @@ export class SoundEngine {
     src.start(now, Math.random() * 2.2, dur + 0.02);
   }
 
+  /** Deep marine horn for the Crescent Star: two detuned reeds under a low-pass. */
+  public playFerryHorn(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const duration = 1.6;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(760, now);
+    filter.frequency.exponentialRampToValueAtTime(420, now + duration);
+    filter.Q.value = 1.4;
+    const hornGain = this.ctx.createGain();
+    hornGain.gain.setValueAtTime(0.0001, now);
+    hornGain.gain.exponentialRampToValueAtTime(0.3, now + 0.14);
+    hornGain.gain.setValueAtTime(0.3, now + 1.05);
+    hornGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    filter.connect(hornGain);
+    hornGain.connect(this.masterGain);
+
+    const voices: readonly [number, OscillatorType][] = [
+      [98, 'sawtooth'],
+      [123.5, 'sawtooth'],
+      [196, 'square'],
+    ];
+    for (let i = 0; i < voices.length; i++) {
+      const [freq, type] = voices[i];
+      const osc = this.ctx.createOscillator();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, now);
+      osc.frequency.linearRampToValueAtTime(freq * 1.012, now + 0.9);
+      osc.frequency.linearRampToValueAtTime(freq * 0.995, now + duration);
+      const voiceGain = this.ctx.createGain();
+      voiceGain.gain.value = i === 2 ? 0.45 : 0.8;
+      osc.connect(voiceGain);
+      voiceGain.connect(filter);
+      osc.start(now);
+      osc.stop(now + duration + 0.05);
+    }
+  }
+
+  /** Low diesel rumble and starter whine when the Crescent Star's engines turn over. */
+  public playFerryEngineStart(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const duration = 2.4;
+    const rumble = this.ctx.createOscillator();
+    const rumbleGain = this.ctx.createGain();
+    rumble.type = 'sawtooth';
+    rumble.frequency.setValueAtTime(28, now);
+    rumble.frequency.linearRampToValueAtTime(44, now + 0.9);
+    rumble.frequency.linearRampToValueAtTime(38, now + duration);
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 180;
+    rumbleGain.gain.setValueAtTime(0.0001, now);
+    rumbleGain.gain.exponentialRampToValueAtTime(0.26, now + 0.7);
+    rumbleGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    rumble.connect(lp);
+    lp.connect(rumbleGain);
+    rumbleGain.connect(this.masterGain);
+    rumble.start(now);
+    rumble.stop(now + duration + 0.05);
+
+    const starter = this.ctx.createOscillator();
+    const starterGain = this.ctx.createGain();
+    starter.type = 'square';
+    starter.frequency.setValueAtTime(150, now);
+    starter.frequency.exponentialRampToValueAtTime(62, now + 0.85);
+    starterGain.gain.setValueAtTime(0.07, now);
+    starterGain.gain.exponentialRampToValueAtTime(0.0005, now + 0.9);
+    starter.connect(starterGain);
+    starterGain.connect(this.masterGain);
+    starter.start(now);
+    starter.stop(now + 0.95);
+  }
+
   public playHydraulicHop(kind: 'hop' | 'tilt' | 'lock'): void {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;

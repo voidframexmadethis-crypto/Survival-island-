@@ -1790,7 +1790,7 @@ export function SurvivalGameClient() {
                     </span>
                     <span className="font-mono-tabular text-amber-300 shrink-0">
                       {hud.ferryVoyage.aboard
-                        ? `D${hud.ferryVoyage.voyageDay}/${hud.ferryVoyage.voyageDays}`
+                        ? `M${hud.ferryVoyage.voyageMonth}/${hud.ferryVoyage.voyageMonths}`
                         : 'BOARD'}
                     </span>
                   </div>
@@ -1806,6 +1806,16 @@ export function SurvivalGameClient() {
                       {hud.ferryVoyage.room?.replace('_', ' ') ?? 'deck'}
                     </span>
                   </div>
+                  {hud.ferryVoyage.aboard && hud.ferryVoyage.phase === 'at_sea' && (
+                    <div className="flex items-center justify-between gap-1 text-[9px] text-teal-300/80 font-mono-tabular">
+                      <span>
+                        {hud.ferryVoyage.speedMps.toFixed(1)} m/s · underway
+                      </span>
+                      <span>
+                        {hud.ferryVoyage.boatX.toFixed(0)}, {hud.ferryVoyage.boatZ.toFixed(0)}
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
 

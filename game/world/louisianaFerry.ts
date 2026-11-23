@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { markAlwaysVisibleWorldObject } from './worldCullPolicy';
 import {
   FERRY_BOW_Z,
   FERRY_CABIN_FRONT_Z,
@@ -44,6 +45,9 @@ export function buildLouisianaFerry(): LouisianaFerryHandles {
   const root = new THREE.Group();
   root.name = 'louisiana-ferry';
   root.position.set(LOUISIANA_FERRY_DOCK_POS.x, FERRY_ROOT_Y, LOUISIANA_FERRY_DOCK_POS.z);
+  // The voyage system moves this root every simulation step; keep it out of
+  // the world chunk culler so the hull is always rendered where it really is.
+  markAlwaysVisibleWorldObject(root);
 
   const hullMat = new THREE.MeshStandardMaterial({ color: 0x123f3b, roughness: 0.62 });
   const hullDarkMat = new THREE.MeshStandardMaterial({ color: 0x0b2b29, roughness: 0.85 });

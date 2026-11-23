@@ -1570,7 +1570,16 @@ export interface HUDStateSnapshot {
     label: string;
     voyageDay: number;
     voyageDays: number;
+    voyageMonth: number;
+    voyageMonths: number;
     routeProgress: number;
+    secondsToDeparture: number;
+    gateLift: number;
+    boatX: number;
+    boatY: number;
+    boatZ: number;
+    boatYaw: number;
+    speedMps: number;
     room: string | null;
     aboard: boolean;
     boardingCleared: boolean;
