@@ -32,6 +32,22 @@ export const AIR_SHUTTLE_LEG_MINUTES = 55;
 export const AIR_SHUTTLE_LEG_MS = AIR_SHUTTLE_LEG_MINUTES * 60 * 1000;
 export const AIR_SHUTTLE_LEG_SECONDS = AIR_SHUTTLE_LEG_MS / 1000;
 
+/** Express cabin service: the whole hop to Crescent City takes 30 seconds. */
+export const AIR_SHUTTLE_EXPRESS_SECONDS = 30;
+export const AIR_SHUTTLE_EXPRESS_AIRBORNE_SECONDS = 18;
+
+/** Express phase budget; the pieces add up to exactly 30 seconds. */
+const EXPRESS_PHASE_MS = {
+  doorsClosing: 700,
+  engineStart: 700,
+  taxiOut: 2_200,
+  takeoff: 2_200,
+  airborne: AIR_SHUTTLE_EXPRESS_AIRBORNE_SECONDS * 1000,
+  landing: 2_200,
+  taxiIn: 2_200,
+  turnaround: 1_800,
+} as const;
+
 export const AIR_SHUTTLE_DOOR_SECONDS = 1.4;
 export const AIR_SHUTTLE_ENGINE_START_SECONDS = 2.4;
 export const AIR_SHUTTLE_TAXI_OUT_SECONDS = 18;
@@ -153,6 +169,11 @@ export interface AirShuttleStatus {
   elapsedMs: number;
   remainingMs: number;
   durationMs: number;
+  /** True while the aircraft is flying the 30-second express hop. */
+  express: boolean;
+  /** True when the player is aboard and may still call for express service. */
+  expressAvailable: boolean;
+  expressSeconds: number;
   planeX: number;
   planeY: number;
   planeZ: number;
@@ -185,6 +206,8 @@ export interface AirShuttleSaveState {
   savedAtMs: number;
   elapsedMs: number;
   aboard: boolean;
+  /** Present on saves written after express service shipped. */
+  express?: boolean;
 }
 
 export interface AirShuttleRestoreResult {
@@ -349,10 +372,18 @@ export function formatAirShuttleDuration(ms: number): string {
   return `${hours}h ${String(minutes).padStart(2, '0')}m`;
 }
 
+/** Second-by-second countdown for the express hop. */
+export function formatAirShuttleCountdown(ms: number): string {
+  const seconds = Math.max(0, Math.ceil(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return formatAirShuttleDuration(ms);
+}
+
 export class AirShuttleVoyageSystem {
   phase: AirShuttlePhase = 'idle';
   direction: AirShuttleDirection = 'outbound';
   aboard = false;
+  express = false;
 
   planeX = ISLAND_SEAPLANE_BASE.parkingX;
   planeY = ISLAND_SEAPLANE_BASE.waterY + 0.1;
@@ -387,12 +418,31 @@ export class AirShuttleVoyageSystem {
     return destinationBaseFor(this.direction);
   }
 
+  /** Airborne budget for the leg currently being flown. */
+  get legDurationMs(): number {
+    return this.express
+      ? AIR_SHUTTLE_EXPRESS_AIRBORNE_SECONDS * 1000
+      : AIR_SHUTTLE_LEG_MS;
+  }
+
   get remainingMs(): number {
-    return Math.max(0, AIR_SHUTTLE_LEG_MS - this.elapsedMs);
+    return Math.max(0, this.legDurationMs - this.elapsedMs);
   }
 
   get canBoard(): boolean {
     return this.phase === 'idle' && !this.aboard;
+  }
+
+  /** Express is offered to Crescent City only, before the wheels leave the water. */
+  get expressAvailable(): boolean {
+    return (
+      this.aboard &&
+      !this.express &&
+      this.direction === 'outbound' &&
+      (this.phase === 'doors_closing' ||
+        this.phase === 'engine_start' ||
+        this.phase === 'taxi_out')
+    );
   }
 
   get canDisembark(): boolean {
@@ -411,6 +461,7 @@ export class AirShuttleVoyageSystem {
     this.phase = 'idle';
     this.direction = 'outbound';
     this.aboard = false;
+    this.express = false;
     this.phaseStartedAtMs = null;
     this.departureAtMs = null;
     this.elapsedMs = 0;
@@ -448,6 +499,7 @@ export class AirShuttleVoyageSystem {
       return { ok: false, message: 'The Crescent Clipper is already moving. Wait for it to park.' };
     }
     this.aboard = true;
+    this.express = false;
     this.phase = 'doors_closing';
     this.phaseStartedAtMs = this.now();
     this.doorOpen = 1;
@@ -456,6 +508,39 @@ export class AirShuttleVoyageSystem {
     return {
       ok: true,
       message: `The Crescent Clipper's gull-wing door lifts shut. Engines starting for the fifty-five-minute flight to ${destination}.`,
+    };
+  }
+
+  /**
+   * Switches the current boarding to express service: a thirty-second hop to
+   * Crescent City with every ground and airborne phase compressed to fit.
+   */
+  requestExpress(): { ok: boolean; message: string } {
+    if (!this.aboard) {
+      return {
+        ok: false,
+        message: 'Board the Crescent Clipper first, then call for express service.',
+      };
+    }
+    if (this.express) {
+      return { ok: false, message: 'Express service is already confirmed.' };
+    }
+    if (this.direction !== 'outbound') {
+      return {
+        ok: false,
+        message: 'Express service runs to Crescent City only.',
+      };
+    }
+    if (!this.expressAvailable) {
+      return {
+        ok: false,
+        message: 'The Crescent Clipper has already left the water runway.',
+      };
+    }
+    this.express = true;
+    return {
+      ok: true,
+      message: 'Express service confirmed — Crescent City in thirty seconds.',
     };
   }
 
@@ -468,6 +553,7 @@ export class AirShuttleVoyageSystem {
       return { ok: false, message: 'The Crescent Clipper is still moving. Wait until it parks.' };
     }
     this.aboard = false;
+    this.express = false;
     this.phase = 'idle';
     this.doorOpen = 1;
     this.engineOn = false;
@@ -521,8 +607,11 @@ export class AirShuttleVoyageSystem {
       engineOn: this.engineOn,
       routeProgress: this.routeProgress,
       elapsedMs: this.elapsedMs,
-      remainingMs: Math.max(0, AIR_SHUTTLE_LEG_MS - this.elapsedMs),
-      durationMs: AIR_SHUTTLE_LEG_MS,
+      remainingMs: this.remainingMs,
+      durationMs: this.legDurationMs,
+      express: this.express,
+      expressAvailable: this.expressAvailable,
+      expressSeconds: AIR_SHUTTLE_EXPRESS_SECONDS,
       planeX: this.planeX,
       planeY: this.planeY,
       planeZ: this.planeZ,
@@ -551,7 +640,9 @@ export class AirShuttleVoyageSystem {
       case 'takeoff':
         return `Taking off for ${destination}`;
       case 'airborne':
-        return `${formatAirShuttleDuration(Math.max(0, AIR_SHUTTLE_LEG_MS - this.elapsedMs))} to ${destination}`;
+        return this.express
+          ? `${formatAirShuttleCountdown(this.remainingMs)} to ${destination} · EXPRESS`
+          : `${formatAirShuttleDuration(this.remainingMs)} to ${destination}`;
       case 'landing':
         return `Landing at ${this.destination.label}`;
       case 'taxi_in':
@@ -596,7 +687,13 @@ export class AirShuttleVoyageSystem {
         break;
       }
       case 'doors_closing': {
-        const t = Math.min(1, elapsedMs / (AIR_SHUTTLE_DOOR_SECONDS * 1000));
+        const t = Math.min(
+          1,
+          elapsedMs /
+            (this.express
+              ? EXPRESS_PHASE_MS.doorsClosing
+              : AIR_SHUTTLE_DOOR_SECONDS * 1000),
+        );
         this.doorOpen = 1 - smoothstep(t);
         this.speedMps = 0;
         if (t >= 1) {
@@ -610,7 +707,12 @@ export class AirShuttleVoyageSystem {
         this.doorOpen = 0;
         this.engineOn = true;
         this.speedMps = 0;
-        if (elapsedMs >= AIR_SHUTTLE_ENGINE_START_SECONDS * 1000) {
+        if (
+          elapsedMs >=
+          (this.express
+            ? EXPRESS_PHASE_MS.engineStart
+            : AIR_SHUTTLE_ENGINE_START_SECONDS * 1000)
+        ) {
           startPhase('taxi_out');
           events.engineStarted = true;
         }
@@ -618,7 +720,13 @@ export class AirShuttleVoyageSystem {
       }
       case 'taxi_out': {
         const base = this.currentBase;
-        const t = Math.min(1, elapsedMs / (AIR_SHUTTLE_TAXI_OUT_SECONDS * 1000));
+        const t = Math.min(
+          1,
+          elapsedMs /
+            (this.express
+              ? EXPRESS_PHASE_MS.taxiOut
+              : AIR_SHUTTLE_TAXI_OUT_SECONDS * 1000),
+        );
         this.planeX = lerp(base.parkingX, base.runwayStartX, t);
         this.planeZ = lerp(base.parkingZ, base.runwayStartZ, t);
         this.planeY = base.waterY + 0.1;
@@ -633,7 +741,13 @@ export class AirShuttleVoyageSystem {
       }
       case 'takeoff': {
         const base = this.currentBase;
-        const t = Math.min(1, elapsedMs / (AIR_SHUTTLE_TAKEOFF_SECONDS * 1000));
+        const t = Math.min(
+          1,
+          elapsedMs /
+            (this.express
+              ? EXPRESS_PHASE_MS.takeoff
+              : AIR_SHUTTLE_TAKEOFF_SECONDS * 1000),
+        );
         const eased = t * t;
         this.planeX = lerp(base.runwayStartX, base.takeoffEndX, eased);
         this.planeZ = lerp(base.runwayStartZ, base.takeoffEndZ, eased);
@@ -658,8 +772,9 @@ export class AirShuttleVoyageSystem {
           this.departureAtMs === null
             ? this.elapsedMs + dt * 1000
             : Math.max(0, now - this.departureAtMs);
-        this.elapsedMs = Math.min(AIR_SHUTTLE_LEG_MS, elapsed);
-        this.routeProgress = this.elapsedMs / AIR_SHUTTLE_LEG_MS;
+        const legMs = this.legDurationMs;
+        this.elapsedMs = Math.min(legMs, elapsed);
+        this.routeProgress = this.elapsedMs / legMs;
         const meters = route.length * this.routeProgress;
         const point = routePositionAt(route, meters);
         this.planeX = point.x;
@@ -685,8 +800,8 @@ export class AirShuttleVoyageSystem {
         );
         const bankTarget = Math.max(-0.36, Math.min(0.36, -bankTurn * 2.4));
         this.planeRoll += (bankTarget - this.planeRoll) * 0.06;
-        this.speedMps = route.length / AIR_SHUTTLE_LEG_SECONDS;
-        if (this.elapsedMs >= AIR_SHUTTLE_LEG_MS) {
+        this.speedMps = route.length / (legMs / 1000);
+        if (this.elapsedMs >= legMs) {
           startPhase('landing');
           this.planeX = destination.landingStartX;
           this.planeZ = destination.landingStartZ;
@@ -701,7 +816,13 @@ export class AirShuttleVoyageSystem {
       }
       case 'landing': {
         const destination = this.destination;
-        const t = Math.min(1, elapsedMs / (AIR_SHUTTLE_LANDING_SECONDS * 1000));
+        const t = Math.min(
+          1,
+          elapsedMs /
+            (this.express
+              ? EXPRESS_PHASE_MS.landing
+              : AIR_SHUTTLE_LANDING_SECONDS * 1000),
+        );
         const eased = 1 - (1 - t) * (1 - t);
         this.planeX = lerp(destination.landingStartX, destination.landingEndX, eased);
         this.planeZ = lerp(destination.landingStartZ, destination.landingEndZ, eased);
@@ -717,7 +838,13 @@ export class AirShuttleVoyageSystem {
       }
       case 'taxi_in': {
         const destination = this.destination;
-        const t = Math.min(1, elapsedMs / (AIR_SHUTTLE_TAXI_IN_SECONDS * 1000));
+        const t = Math.min(
+          1,
+          elapsedMs /
+            (this.express
+              ? EXPRESS_PHASE_MS.taxiIn
+              : AIR_SHUTTLE_TAXI_IN_SECONDS * 1000),
+        );
         this.planeX = lerp(destination.landingEndX, destination.parkingX, t);
         this.planeZ = lerp(destination.landingEndZ, destination.parkingZ, t);
         this.planeY = destination.waterY + 0.1;
@@ -732,7 +859,13 @@ export class AirShuttleVoyageSystem {
       }
       case 'turnaround': {
         const destination = this.destination;
-        const t = Math.min(1, elapsedMs / (AIR_SHUTTLE_TURNAROUND_SECONDS * 1000));
+        const t = Math.min(
+          1,
+          elapsedMs /
+            (this.express
+              ? EXPRESS_PHASE_MS.turnaround
+              : AIR_SHUTTLE_TURNAROUND_SECONDS * 1000),
+        );
         const startYaw = normalizeAngle(destination.outboundYaw + Math.PI);
         const endYaw = destination.outboundYaw;
         this.planeYaw = normalizeAngle(
@@ -748,6 +881,7 @@ export class AirShuttleVoyageSystem {
         this.engineOn = t < 0.82;
         if (t >= 1) {
           startPhase('parked');
+          this.express = false;
           this.direction = opposite(this.direction);
           this.planeYaw = this.currentBase.outboundYaw;
           this.previousYaw = this.planeYaw;
@@ -776,6 +910,7 @@ export class AirShuttleVoyageSystem {
       savedAtMs: nowMs,
       elapsedMs: airborne ? this.elapsedMs : 0,
       aboard: this.aboard,
+      express: this.express,
     };
   }
 
@@ -796,11 +931,15 @@ export class AirShuttleVoyageSystem {
       typeof save.departureAtMs === 'number' &&
       Number.isFinite(save.departureAtMs)
     ) {
+      const express = Boolean(save.express);
+      const legMs = express
+        ? AIR_SHUTTLE_EXPRESS_AIRBORNE_SECONDS * 1000
+        : AIR_SHUTTLE_LEG_MS;
       const elapsed = Math.max(
         0,
-        Math.min(AIR_SHUTTLE_LEG_MS, nowMs - save.departureAtMs),
+        Math.min(legMs, nowMs - save.departureAtMs),
       );
-      if (elapsed >= AIR_SHUTTLE_LEG_MS) {
+      if (elapsed >= legMs) {
         this.direction = opposite(direction);
         this.aboard = false;
         this.setParkedPose(this.direction);
@@ -812,10 +951,11 @@ export class AirShuttleVoyageSystem {
 
       this.direction = direction;
       this.aboard = Boolean(save.aboard);
+      this.express = express;
       this.phase = 'airborne';
       this.departureAtMs = save.departureAtMs;
       this.elapsedMs = elapsed;
-      this.routeProgress = elapsed / AIR_SHUTTLE_LEG_MS;
+      this.routeProgress = elapsed / legMs;
       const route = this.routeFor(direction);
       const point = routePositionAt(route, route.length * this.routeProgress);
       this.planeX = point.x;
@@ -832,7 +972,7 @@ export class AirShuttleVoyageSystem {
       this.planeYaw = routeHeadingAt(route, route.length * this.routeProgress);
       this.previousYaw = this.planeYaw;
       this.planePitch = -0.035 * smoothstep(descentT);
-      this.speedMps = route.length / AIR_SHUTTLE_LEG_SECONDS;
+      this.speedMps = route.length / (legMs / 1000);
       this.doorOpen = 0;
       this.engineOn = true;
       return { completed: false, wasAboard: Boolean(save.aboard) };

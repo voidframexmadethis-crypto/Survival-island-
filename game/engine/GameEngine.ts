@@ -17620,6 +17620,20 @@ export class GameEngine {
     }
   }
 
+  /** Cabin request: express service puts the player in Crescent City in 30 s. */
+  public requestAirShuttleExpress(): void {
+    const result = this.airShuttle.requestExpress();
+    if (!result.ok) {
+      this.toast(result.message, 'warning');
+      return;
+    }
+    this.speakAirShuttleVoice(
+      'Express service confirmed. Doors closing now — Crescent City in thirty seconds.',
+    );
+    this.persistAirShuttle(true);
+    this.emitHud();
+  }
+
   private handleAirShuttleBoarding(): void {
     if (this.activeVehicleId) {
       this.toast('Park and step out of the car to board the seaplane.', 'warning');

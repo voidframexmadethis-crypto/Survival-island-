@@ -3,6 +3,8 @@ import test from 'node:test';
 import {
   AIR_SHUTTLE_CRUISE_ALTITUDE_FT,
   AIR_SHUTTLE_CRUISE_ALTITUDE_M,
+  AIR_SHUTTLE_EXPRESS_AIRBORNE_SECONDS,
+  AIR_SHUTTLE_EXPRESS_SECONDS,
   AIR_SHUTTLE_LEG_MINUTES,
   AIR_SHUTTLE_LEG_MS,
   AirShuttleVoyageSystem,
@@ -133,6 +135,39 @@ test('the plane lands, taxis in, turns around and is ready for the return', () =
   assert.equal(shuttle.aboard, false);
   assert.equal(shuttle.canBoard, true);
   assert.equal(shuttle.getStatus().destination, 'island');
+});
+
+test('express service puts the player in Crescent City in thirty seconds', () => {
+  const harness = makeShuttle();
+  const { shuttle } = harness;
+
+  assert.equal(shuttle.requestExpress().ok, false);
+  shuttle.board();
+  assert.equal(shuttle.expressAvailable, true);
+
+  const startedAt = harness.now();
+  const requested = shuttle.requestExpress();
+  assert.equal(requested.ok, true);
+  assert.equal(shuttle.getStatus().express, true);
+  assert.equal(shuttle.getStatus().expressSeconds, AIR_SHUTTLE_EXPRESS_SECONDS);
+
+  runUntil(harness, (s) => s.phase === 'airborne', 10);
+  assert.ok(
+    shuttle.remainingMs <= AIR_SHUTTLE_EXPRESS_AIRBORNE_SECONDS * 1000,
+    'express airborne leg should be measured in seconds',
+  );
+
+  runUntil(harness, (s) => s.phase === 'parked', 40);
+  const elapsedSeconds = (harness.now() - startedAt) / 1000;
+  assert.equal(shuttle.currentBase.id, 'crescent_city');
+  assert.equal(shuttle.direction, 'return');
+  assert.ok(
+    elapsedSeconds >= AIR_SHUTTLE_EXPRESS_SECONDS - 0.5 &&
+      elapsedSeconds <= AIR_SHUTTLE_EXPRESS_SECONDS + 2,
+    `express hop took ${elapsedSeconds}s`,
+  );
+  assert.equal(shuttle.getStatus().express, false);
+  assert.equal(shuttle.requestExpress().ok, false);
 });
 
 test('a flight in progress resumes on the wall clock and a completed one parks at the destination', () => {

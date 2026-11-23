@@ -79,7 +79,10 @@ import { ITEMS, isActiveWeaponItem, isAmmoItem, isFirearmItem } from '@/game/dat
 import { STAGE_1_MISSIONS } from '@/game/data/missions';
 import { GameEngine } from '@/game/engine/GameEngine';
 import { formatFerryDuration } from '@/game/systems/louisianaFerryVoyage';
-import { formatAirShuttleDuration } from '@/game/systems/crescentCityAirShuttle';
+import {
+  formatAirShuttleCountdown,
+  formatAirShuttleDuration,
+} from '@/game/systems/crescentCityAirShuttle';
 import {
   DEFAULT_SETTINGS,
   createNewSaveSlotId,
@@ -1867,7 +1870,9 @@ export function SurvivalGameClient() {
                     </span>
                     <span className="font-mono-tabular text-amber-300 shrink-0">
                       {hud.airShuttle.phase === 'airborne'
-                        ? formatAirShuttleDuration(hud.airShuttle.remainingMs)
+                        ? hud.airShuttle.express
+                          ? formatAirShuttleCountdown(hud.airShuttle.remainingMs)
+                          : formatAirShuttleDuration(hud.airShuttle.remainingMs)
                         : hud.airShuttle.phase === 'parked'
                           ? 'READY'
                           : 'AUTO'}
@@ -1901,6 +1906,21 @@ export function SurvivalGameClient() {
                       <span>
                         {hud.airShuttle.planeX.toFixed(0)}, {hud.airShuttle.planeZ.toFixed(0)}
                       </span>
+                    </div>
+                  )}
+                  {hud.airShuttle.expressAvailable && (
+                    <button
+                      type="button"
+                      onClick={() => engineRef.current?.requestAirShuttleExpress()}
+                      className="pointer-events-auto w-full rounded border border-amber-400 bg-amber-400 px-2 py-1 text-[9px] font-extrabold uppercase tracking-wide text-stone-950 transition hover:bg-amber-300"
+                    >
+                      Express · {hud.airShuttle.expressSeconds}s to Crescent City
+                    </button>
+                  )}
+                  {hud.airShuttle.express && (
+                    <div className="text-[9px] font-extrabold uppercase tracking-wide text-amber-300">
+                      Express service · Crescent City in{' '}
+                      {hud.airShuttle.expressSeconds} seconds
                     </div>
                   )}
                   {hud.airShuttle.aboard && (
