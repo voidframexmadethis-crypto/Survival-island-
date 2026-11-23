@@ -170,6 +170,37 @@ test('express service puts the player in Crescent City in thirty seconds', () =>
   assert.equal(shuttle.requestExpress().ok, false);
 });
 
+test('an express flight in progress resumes on its thirty-second clock', () => {
+  const harness = makeShuttle();
+  const { shuttle } = harness;
+  shuttle.board();
+  assert.equal(shuttle.requestExpress().ok, true);
+  runUntil(harness, (s) => s.phase === 'airborne', 10);
+  harness.advance(5000);
+  shuttle.update(0.05);
+
+  const saved = shuttle.serialize(harness.now());
+  assert.equal(saved.express, true);
+
+  const resumedHarness = makeShuttle();
+  const resumed = resumedHarness.shuttle;
+  const restored = resumed.restore(saved, harness.now());
+  assert.equal(restored.completed, false);
+  assert.equal(resumed.phase, 'airborne');
+  assert.equal(resumed.express, true);
+  assert.ok(
+    resumed.remainingMs <= (AIR_SHUTTLE_EXPRESS_AIRBORNE_SECONDS - 4) * 1000,
+    'express resume must not fall back to the fifty-five-minute leg',
+  );
+
+  const completed = resumedHarness.shuttle.restore(
+    saved,
+    harness.now() + AIR_SHUTTLE_EXPRESS_AIRBORNE_SECONDS * 1000,
+  );
+  assert.equal(completed.completed, true);
+  assert.equal(resumedHarness.shuttle.currentBase.id, 'crescent_city');
+});
+
 test('a flight in progress resumes on the wall clock and a completed one parks at the destination', () => {
   const harness = makeShuttle();
   const { shuttle } = harness;

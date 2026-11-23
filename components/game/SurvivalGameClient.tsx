@@ -1912,7 +1912,7 @@ export function SurvivalGameClient() {
                     <button
                       type="button"
                       onClick={() => engineRef.current?.requestAirShuttleExpress()}
-                      className="pointer-events-auto w-full rounded border border-amber-400 bg-amber-400 px-2 py-1 text-[9px] font-extrabold uppercase tracking-wide text-stone-950 transition hover:bg-amber-300"
+                      className="pointer-events-auto min-h-[34px] w-full rounded border border-amber-400 bg-amber-400 px-2 py-1.5 text-[10px] font-extrabold uppercase tracking-wide text-stone-950 transition hover:bg-amber-300"
                     >
                       Express · {hud.airShuttle.expressSeconds}s to Crescent City
                     </button>
@@ -2617,7 +2617,7 @@ export function SurvivalGameClient() {
                       type="button"
                       disabled={hud.ferryFuelDrop.coconutCount < 1}
                       onClick={() => engineRef.current?.autoFillFerryCoconuts()}
-                      className="mt-2 w-full rounded-lg border border-lime-400 bg-lime-400 px-2 py-1.5 text-[10px] font-extrabold uppercase tracking-wide text-stone-950 transition hover:bg-lime-300 disabled:cursor-default disabled:border-stone-700 disabled:bg-stone-900 disabled:text-stone-600"
+                      className="mt-2 min-h-[34px] w-full rounded-lg border border-lime-400 bg-lime-400 px-2 py-1.5 text-[10px] font-extrabold uppercase tracking-wide text-stone-950 transition hover:bg-lime-300 disabled:cursor-default disabled:border-stone-700 disabled:bg-stone-900 disabled:text-stone-600"
                     >
                       Auto-fill · drop{' '}
                       {hud.ferryFuelDrop.coconutCount === 1
@@ -2636,7 +2636,7 @@ export function SurvivalGameClient() {
                           onClick={() =>
                             engineRef.current?.dropFerryCoconuts(option.count)
                           }
-                          className="rounded-lg border border-lime-500/60 bg-lime-500/15 px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-lime-200 transition hover:bg-lime-500/30 disabled:cursor-default disabled:border-stone-700 disabled:bg-stone-900 disabled:text-stone-600"
+                          className="min-h-[32px] rounded-lg border border-lime-500/60 bg-lime-500/15 px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-lime-200 transition hover:bg-lime-500/30 disabled:cursor-default disabled:border-stone-700 disabled:bg-stone-900 disabled:text-stone-600"
                         >
                           {option.label}
                         </button>
@@ -2647,7 +2647,7 @@ export function SurvivalGameClient() {
                         <button
                           type="button"
                           onClick={() => engineRef.current?.fillFerryFromOcean()}
-                          className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-sky-500/60 bg-sky-500/15 px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-sky-200 transition hover:bg-sky-500/30"
+                          className="flex min-h-[32px] flex-1 items-center justify-center gap-1 rounded-lg border border-sky-500/60 bg-sky-500/15 px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-sky-200 transition hover:bg-sky-500/30"
                           title="Haul a bucket of seawater over the rail and tip it into the tank"
                         >
                           <Waves className="h-3 w-3" /> Ocean fill · +
@@ -2658,7 +2658,7 @@ export function SurvivalGameClient() {
                         <button
                           type="button"
                           onClick={() => engineRef.current?.dropFerryBiofuelCanister()}
-                          className="flex-1 rounded-lg border border-amber-500/55 bg-amber-500/15 px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-amber-200 transition hover:bg-amber-500/30"
+                          className="min-h-[32px] flex-1 rounded-lg border border-amber-500/55 bg-amber-500/15 px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-amber-200 transition hover:bg-amber-500/30"
                         >
                           Drop Canister · +{hud.ferryFuelDrop.litersPerCanister} L
                         </button>
@@ -2667,7 +2667,7 @@ export function SurvivalGameClient() {
                         <button
                           type="button"
                           onClick={() => engineRef.current?.drawFerryReserveFuel()}
-                          className="flex-1 rounded-lg border border-stone-600 bg-stone-800/70 px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-stone-200 transition hover:bg-stone-700"
+                          className="min-h-[32px] flex-1 rounded-lg border border-stone-600 bg-stone-800/70 px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-stone-200 transition hover:bg-stone-700"
                         >
                           Draw Reserve
                         </button>
