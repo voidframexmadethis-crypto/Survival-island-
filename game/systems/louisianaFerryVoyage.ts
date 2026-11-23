@@ -214,10 +214,15 @@ export function ferryRoomAtLocal(x: number, z: number): FerryRoomId | 'open_deck
   return 'open_deck';
 }
 
-/** Smooth 0..1 acceleration/berthing curve applied to the route progress. */
+/**
+ * Monotonic 0..1 curve for the route progress. Unlike a smoothstep it never
+ * has zero velocity, so the hull is already visibly moving one second after
+ * the countdown ends while still easing into the berth.
+ */
 function ferryEaseInOut(t: number): number {
   const u = Math.max(0, Math.min(1, t));
-  return u * u * (3 - 2 * u);
+  const cruiseMix = 0.35;
+  return u - (cruiseMix / (Math.PI * 2)) * Math.sin(u * Math.PI * 2);
 }
 
 function shortestAngleDelta(from: number, to: number): number {
