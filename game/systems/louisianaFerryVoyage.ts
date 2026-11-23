@@ -708,14 +708,19 @@ export class LouisianaFerryVoyageSystem {
       return { ok: false, message: 'Walk to the foot of the ferry ramp.' };
     }
     this.aboard = true;
-    this.phase = 'gate_raising';
-    this.gateLift = 0;
-    this.departTimer = LOUISIANA_FERRY_DEPART_DELAY;
+    // The gate is already up from the ramp; cast off on this frame. The old
+    // gate-lift + countdown ran on simulation dt, which could leave the hull
+    // frozen at the dock for many real seconds on a slow phone while the
+    // voyage clock appeared to run.
+    this.phase = 'departing';
+    this.gateLift = 1;
+    this.departTimer = 0;
+    this.departureAtMs = this.now();
     return {
       ok: true,
       message: this.direction === 'outbound'
-        ? 'You step aboard the Crescent Star. The stern gate is lifting clear.'
-        : 'You step aboard for the return crossing. The stern gate is lifting clear.',
+        ? 'You step aboard the Crescent Star. The stern gate is open and the lines are cast off.'
+        : 'You step aboard for the return crossing. The stern gate is open and the lines are cast off.',
     };
   }
 
@@ -730,9 +735,12 @@ export class LouisianaFerryVoyageSystem {
     if (this.phase === 'boarding') {
       if (this.isOnDeck(playerX, playerY, playerZ)) {
         this.aboard = true;
-        this.phase = 'gate_raising';
-        this.gateLift = 0;
-        this.departTimer = LOUISIANA_FERRY_DEPART_DELAY;
+        // Step straight from the deck into the crossing. The gate is open and
+        // the wall clock below is the only thing that gates the movement.
+        this.phase = 'departing';
+        this.gateLift = 1;
+        this.departTimer = 0;
+        this.departureAtMs = this.now();
         out.phaseChanged = true;
         out.boarded = true;
       }

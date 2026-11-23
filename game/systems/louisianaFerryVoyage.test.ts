@@ -9,7 +9,6 @@ import {
   LOUISIANA_FERRY_CITY_DOCK_POS,
   LOUISIANA_FERRY_CRUISE_MPS,
   LOUISIANA_FERRY_DOCK_POS,
-  LOUISIANA_FERRY_GATE_LIFT_SECONDS,
   LOUISIANA_FERRY_LEG_HOURS,
   LOUISIANA_FERRY_LEG_MS,
   LOUISIANA_FERRY_ROUND_TRIP_HOURS,
@@ -95,7 +94,7 @@ function runLegToArrival(
   assert.equal(ferry.phase, 'arrived');
 }
 
-test('boarding is still gated by the dock TV, the stern gate and the countdown', () => {
+test('boarding is gated by the dock TV and stern ramp, then casts off immediately', () => {
   const { ferry } = makeFerry();
   assert.equal(ferry.phase, 'idle');
   assert.equal(ferry.direction, 'outbound');
@@ -108,16 +107,16 @@ test('boarding is still gated by the dock TV, the stern gate and the countdown',
   const boarded = ferry.boardFromRamp(ramp.x, ferry.boatY + FERRY_DECK_Y, ramp.z);
   assert.equal(boarded.ok, true);
   assert.equal(ferry.aboard, true);
-  assert.equal(ferry.phase, 'gate_raising');
-
-  const player = deckPlayer(ferry);
-  ferry.update(LOUISIANA_FERRY_GATE_LIFT_SECONDS / 2, player.x, player.y, player.z);
-  assert.ok(ferry.gateLift > 0.2 && ferry.gateLift < 1);
+  // No simulation-time gate/countdown can freeze the hull at the dock.
+  assert.equal(ferry.phase, 'departing');
+  assert.equal(ferry.gateLift, 1);
   assert.equal(ferry.boatX, LOUISIANA_FERRY_DOCK_POS.x);
   assert.equal(ferry.boatZ, LOUISIANA_FERRY_DOCK_POS.z);
-  ferry.update(LOUISIANA_FERRY_GATE_LIFT_SECONDS, player.x, player.y, player.z);
-  assert.equal(ferry.phase, 'departing');
-  assert.equal(ferry.boatZ, LOUISIANA_FERRY_DOCK_POS.z, 'the hull must not drift while moored');
+
+  const player = deckPlayer(ferry);
+  ferry.update(0.05, player.x, player.y, player.z);
+  assert.equal(ferry.phase, 'at_sea');
+  assert.equal(ferry.departureAtMs, CLOCK_START);
 });
 
 test('the official crossing is 48 hours each way and 96 hours round trip', () => {

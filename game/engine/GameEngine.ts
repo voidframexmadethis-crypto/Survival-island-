@@ -16779,6 +16779,20 @@ export class GameEngine {
   }
 
   private updateLouisianaFerryVoyage(dt: number): void {
+    // A passenger on the Crescent Star must be looking at the ship, not at a
+    // lingering intro/farewell shot while the hull sails off-camera. Boarding
+    // always hands the camera back to the rider.
+    if (
+      this.ferryVoyage.aboard &&
+      this.cinematicActive &&
+      !this.navigatorFarewellCinematic
+    ) {
+      // End a lingering intro shot, but leave the one-time navigator farewell
+      // to play (or be skipped) on its own.
+      this.finishCinematic();
+      this.applyPlayingCullImmediate();
+      this.snapPlayerCamera();
+    }
     if (this.ferryHornCooldown > 0) {
       this.ferryHornCooldown = Math.max(0, this.ferryHornCooldown - dt);
     }
@@ -16824,7 +16838,7 @@ export class GameEngine {
       this.ferryVoyage.destination === 'crescent_city' ? 'Crescent City' : 'the island landing';
 
     if (events.boarded) {
-      this.toast('Aboard the Crescent Star. The stern gate is lifting clear.', 'discovery');
+      this.toast('Aboard the Crescent Star. Lines cast off — the hull is underway.', 'discovery');
       this.sound.playSteamHiss();
       this.ferryDepartureHintShown = false;
       this.persistLouisianaFerryVoyage(true);
