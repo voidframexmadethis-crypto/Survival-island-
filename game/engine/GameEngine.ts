@@ -106,7 +106,9 @@ import {
   selectFerryCar,
 } from '../systems/ferryPickup';
 import {
+  FERRY_DECK_Y,
   LOUISIANA_FERRY_DAYS,
+  LOUISIANA_FERRY_GATE_LIFT_HEIGHT,
   LouisianaFerryVoyageSystem,
 } from '../systems/louisianaFerryVoyage';
 import { getCausewaySurfaceY } from '../systems/islandMainlandTransit';
@@ -753,6 +755,7 @@ export class GameEngine {
   private ferryBoardingDoorTimer = 0;
   private ferryTvPulse = 0;
   private ferryDepartureHintShown = false;
+  private ferryDockedNoticeShown = false;
   private ferryVoyageCarId: string | null = null;
   private mainlandStuntCooldown = 0;
   private beeGate: BeeGateHandle | null = null;
@@ -7921,7 +7924,11 @@ export class GameEngine {
       return;
     }
     if (near && near.kind === 'ferry_boarding') {
-      this.handleFerryBoarding();
+      if (near.id === 'ferry_disembark') {
+        this.completeLouisianaFerryVoyage();
+      } else {
+        this.handleFerryBoarding();
+      }
       this.actionCooldown = 0.55;
       return;
     }
@@ -12901,7 +12908,7 @@ export class GameEngine {
           };
         }
       }
-      if (voyage.boardingCleared && (voyage.phase === 'boarding' || voyage.phase === 'departing')) {
+      if (voyage.boardingCleared && voyage.phase === 'boarding') {
         const rampX = this.ferryVoyage.boatX;
         const rampZ = this.ferryVoyage.boatZ - 20.2;
         const rampDist = Math.hypot(rampX - this.playerX, rampZ - this.playerZ);
@@ -12919,7 +12926,25 @@ export class GameEngine {
           };
         }
       }
-      if (voyage.aboard && voyage.phase !== 'idle') {
+      if (voyage.aboard && voyage.phase === 'arrived') {
+        const localX = this.playerX - this.ferryVoyage.boatX;
+        const localZ = this.playerZ - this.ferryVoyage.boatZ;
+        const exitDist = Math.hypot(localX, localZ + 16.4);
+        if (exitDist < 3.1) {
+          return {
+            id: 'ferry_disembark',
+            label: 'Disembark in Crescent City',
+            sublabel: 'Stern gate open · step onto the Louisiana dock',
+            kind: 'ferry_boarding',
+            actionCategory: 'use',
+            distance: exitDist,
+            targetX: this.ferryVoyage.boatX,
+            targetY: this.ferryVoyage.boatY + FERRY_DECK_Y,
+            targetZ: this.ferryVoyage.boatZ - 16.4,
+          };
+        }
+      }
+      if (voyage.aboard && voyage.phase !== 'idle' && voyage.phase !== 'arrived') {
         const localX = this.playerX - this.ferryVoyage.boatX;
         const localZ = this.playerZ - this.ferryVoyage.boatZ;
         const roomSpots = [
@@ -16586,10 +16611,12 @@ export class GameEngine {
   private resetLouisianaFerryVoyage(): void {
     this.ferryVoyage.reset();
     this.ferryDepartureHintShown = false;
+    this.ferryDockedNoticeShown = false;
     this.ferryVoyageCarId = null;
     const ferry = this.world?.louisianaFerry;
     if (!ferry) return;
     ferry.root.position.set(this.ferryVoyage.boatX, this.ferryVoyage.boatY, this.ferryVoyage.boatZ);
+    ferry.gate.position.y = FERRY_DECK_Y;
     ferry.gate.visible = true;
     const tv = this.world?.ferryTvScreenMat;
     if (tv) tv.emissiveIntensity = 0.85;
@@ -16599,7 +16626,11 @@ export class GameEngine {
     const ferry = this.world?.louisianaFerry;
     if (!ferry) return;
     ferry.root.position.set(this.ferryVoyage.boatX, this.ferryVoyage.boatY, this.ferryVoyage.boatZ);
-    ferry.gate.visible = !this.ferryVoyage.boardingCleared;
+    // The gate must be seen sliding up, not toggled invisible. Keep it mounted
+    // in the stern frame and drive it continuously from the voyage system.
+    ferry.gate.visible = true;
+    ferry.gate.position.y =
+      FERRY_DECK_Y + this.ferryVoyage.gateLift * LOUISIANA_FERRY_GATE_LIFT_HEIGHT;
     const tv = this.world?.ferryTvScreenMat;
     if (tv) {
       this.ferryTvPulse += dt;
@@ -16622,12 +16653,32 @@ export class GameEngine {
       this.playerX = constrained.x;
       this.playerZ = constrained.z;
     }
+    if (this.ferryVoyage.aboard) {
+      const deckY = this.ferryVoyage.getWalkSurfaceY(this.playerX, this.playerZ);
+      if (deckY !== null && this.playerY < deckY - 0.18) {
+        this.playerY = deckY;
+        this.playerVelY = 0;
+        this.grounded = true;
+      }
+      const constrained = this.ferryVoyage.constrainPlayer(this.playerX, this.playerZ);
+      this.playerX = constrained.x;
+      this.playerZ = constrained.z;
+    }
     this.syncLouisianaFerryVisual(dt);
 
     if (events.boarded) {
-      this.toast('Aboard the Crescent Star. The dock TV has cleared departure.', 'discovery');
+      this.toast('Aboard the Crescent Star. The stern gate is lifting clear.', 'discovery');
       this.sound.playSteamHiss();
       this.ferryDepartureHintShown = false;
+      this.emitHud();
+    }
+    if (events.gateOpened) {
+      this.ferryDepartureHintShown = true;
+      this.toast(
+        `Stern gate raised. Engines starting — departing in ${Math.ceil(this.ferryVoyage.getStatus().secondsToDeparture)}s.`,
+        'info',
+      );
+      this.sound.playSteamHiss();
       this.emitHud();
     }
     if (events.departed) {
@@ -16649,9 +16700,25 @@ export class GameEngine {
       this.emitHud();
     }
     if (events.arrived) {
-      this.completeLouisianaFerryVoyage();
+      this.handleLouisianaFerryDocked();
     }
     this.syncFerryDepartureHint();
+  }
+
+  private handleLouisianaFerryDocked(): void {
+    if (this.ferryDockedNoticeShown) return;
+    this.ferryDockedNoticeShown = true;
+    this.mainland.recordBoatTrip();
+    this.syncLouisianaFerryVisual(0);
+    this.markExploredAroundPlayer();
+    this.nearbyInteraction = this.findNearbyInteraction();
+    this.updateCamera();
+    this.sound.playSteamHiss();
+    this.toast(
+      'The Crescent Star is secured in Crescent City. The stern gate is open — head aft and press E to disembark.',
+      'discovery',
+    );
+    this.emitHud();
   }
 
   private syncFerryDepartureHint(): void {
@@ -16674,6 +16741,8 @@ export class GameEngine {
     const deliveredCarId = this.ferryVoyageCarId;
     this.ferryVoyage.reset();
     this.ferryVoyageCarId = null;
+    this.ferryDepartureHintShown = false;
+    this.ferryDockedNoticeShown = false;
     this.syncLouisianaFerryVisual(0);
     this.playerX = cityX;
     this.playerY = cityY + 0.05;
@@ -16687,7 +16756,6 @@ export class GameEngine {
     this.isUnderwater = false;
     this.seatedState = null;
     this.activeCaveInteriorId = null;
-    this.mainland.recordBoatTrip();
     const deliveredCar = deliveredCarId
       ? this.vehicles.find((v) => v.id === deliveredCarId)
       : null;

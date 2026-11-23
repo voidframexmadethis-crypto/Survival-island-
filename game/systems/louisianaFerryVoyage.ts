@@ -10,7 +10,10 @@ import { FERRY_DOCK_BOAT_POS } from './ferryPickup';
 
 export const LOUISIANA_FERRY_DAYS = 18;
 export const LOUISIANA_FERRY_SECONDS_PER_DAY = 6;
-export const LOUISIANA_FERRY_DEPART_DELAY = 5;
+export const LOUISIANA_FERRY_DEPART_DELAY = 3.5;
+export const LOUISIANA_FERRY_GATE_LIFT_SECONDS = 1.25;
+export const LOUISIANA_FERRY_GATE_LIFT_HEIGHT = 2.65;
+export const LOUISIANA_FERRY_ARRIVAL_SECONDS = 2.4;
 export const LOUISIANA_FERRY_DOCK_POS = {
   x: FERRY_DOCK_BOAT_POS.x,
   z: 713,
@@ -64,6 +67,7 @@ export type FerryRoomId = (typeof FERRY_ROOMS)[number]['id'];
 export type LouisianaFerryPhase =
   | 'idle'
   | 'boarding'
+  | 'gate_raising'
   | 'departing'
   | 'at_sea'
   | 'arriving'
@@ -77,6 +81,7 @@ export interface LouisianaFerryStatus {
   voyageDays: number;
   routeProgress: number;
   secondsToDeparture: number;
+  gateLift: number;
   room: FerryRoomId | 'open_deck' | 'ramp' | null;
   label: string;
 }
@@ -84,6 +89,7 @@ export interface LouisianaFerryStatus {
 export interface LouisianaFerryUpdate {
   phaseChanged: boolean;
   boarded: boolean;
+  gateOpened: boolean;
   departed: boolean;
   daysAdvanced: number;
   arrived: boolean;
@@ -177,6 +183,7 @@ export class LouisianaFerryVoyageSystem {
   boatX: number = LOUISIANA_FERRY_DOCK_POS.x;
   boatZ: number = LOUISIANA_FERRY_DOCK_POS.z;
   boatY: number = FERRY_ROOT_Y;
+  gateLift = 0;
   private departTimer = 0;
   private arrivalTimer = 0;
   private voyageSeconds = 0;
@@ -192,6 +199,7 @@ export class LouisianaFerryVoyageSystem {
     this.arrivalTimer = 0;
     this.voyageSeconds = 0;
     this.bobTime = 0;
+    this.gateLift = 0;
     this.boatX = LOUISIANA_FERRY_DOCK_POS.x;
     this.boatZ = LOUISIANA_FERRY_DOCK_POS.z;
     this.boatY = FERRY_ROOT_Y;
@@ -214,6 +222,7 @@ export class LouisianaFerryVoyageSystem {
       voyageDays: LOUISIANA_FERRY_DAYS,
       routeProgress: this.routeProgress,
       secondsToDeparture: this.departTimer,
+      gateLift: this.gateLift,
       room: this.roomAtWorld(this.boatX, this.boatZ),
       label: this.label(),
     };
@@ -229,9 +238,13 @@ export class LouisianaFerryVoyageSystem {
   }
 
   isOnDeck(x: number, y: number, z: number): boolean {
-    const surface = this.getWalkSurfaceY(x, z);
-    if (surface === null) return false;
-    return Math.abs(y - surface) <= 1.35;
+    const localX = x - this.boatX;
+    const localZ = z - this.boatZ;
+    // The ramp is how the player reaches the boat; actual boarding only counts
+    // once their feet are on the hull deck beyond the stern opening.
+    if (localZ < FERRY_STERN_Z + 0.35 || localZ > FERRY_BOW_Z) return false;
+    if (Math.abs(localX) > FERRY_HALF_WIDTH - 0.2) return false;
+    return Math.abs(y - (this.boatY + FERRY_DECK_Y)) <= 1.35;
   }
 
   /** Keeps the player inside the hull once the boat is away from the pier. */
@@ -260,11 +273,12 @@ export class LouisianaFerryVoyageSystem {
       return { ok: false, message: 'Walk to the foot of the ferry ramp.' };
     }
     this.aboard = true;
-    this.phase = 'departing';
+    this.phase = 'gate_raising';
+    this.gateLift = 0;
     this.departTimer = LOUISIANA_FERRY_DEPART_DELAY;
     return {
       ok: true,
-      message: 'You step aboard the Crescent Star. The stern gate swings shut.',
+      message: 'You step aboard the Crescent Star. The stern gate is lifting clear.',
     };
   }
 
@@ -285,7 +299,8 @@ export class LouisianaFerryVoyageSystem {
     if (this.phase === 'boarding') {
       if (this.isOnDeck(playerX, playerY, playerZ)) {
         this.aboard = true;
-        this.phase = 'departing';
+        this.phase = 'gate_raising';
+        this.gateLift = 0;
         this.departTimer = LOUISIANA_FERRY_DEPART_DELAY;
         out.phaseChanged = true;
         out.boarded = true;
@@ -293,12 +308,20 @@ export class LouisianaFerryVoyageSystem {
       return out;
     }
 
-    if (this.phase === 'departing') {
-      if (!this.aboard) {
-        this.phase = 'boarding';
+    if (this.phase === 'gate_raising') {
+      this.gateLift = Math.min(1, this.gateLift + dt / LOUISIANA_FERRY_GATE_LIFT_SECONDS);
+      if (this.gateLift >= 1) {
+        this.phase = 'departing';
+        this.departTimer = LOUISIANA_FERRY_DEPART_DELAY;
         out.phaseChanged = true;
-        return out;
+        out.gateOpened = true;
       }
+      return out;
+    }
+
+    if (this.phase === 'departing') {
+      // Once aboard, movement around the cabin can never cancel the sailing.
+      this.aboard = true;
       this.departTimer = Math.max(0, this.departTimer - dt);
       if (this.departTimer <= 0) {
         this.phase = 'at_sea';
@@ -312,9 +335,14 @@ export class LouisianaFerryVoyageSystem {
       this.bobTime += dt;
       const previousDay = this.voyageDay;
       this.voyageSeconds += dt;
+      // Ease off over the last stretch so the boat visibly slows and settles
+      // at the Crescent City berth instead of stopping dead at full speed.
+      const remaining = Math.max(0, 1 - this.routeProgress);
+      const approachScale = remaining < 0.08 ? Math.max(0.18, remaining / 0.08) : 1;
       this.routeProgress = Math.min(
         1,
-        this.routeProgress + dt / (LOUISIANA_FERRY_DAYS * LOUISIANA_FERRY_SECONDS_PER_DAY),
+        this.routeProgress +
+          (dt / (LOUISIANA_FERRY_DAYS * LOUISIANA_FERRY_SECONDS_PER_DAY)) * approachScale,
       );
       const expectedDay = Math.min(
         LOUISIANA_FERRY_DAYS,
@@ -330,7 +358,7 @@ export class LouisianaFerryVoyageSystem {
 
       if (this.routeProgress >= 1) {
         this.phase = 'arriving';
-        this.arrivalTimer = 1.8;
+        this.arrivalTimer = LOUISIANA_FERRY_ARRIVAL_SECONDS;
         out.phaseChanged = true;
       }
       out.carryX = this.boatX - previousX;
@@ -340,10 +368,12 @@ export class LouisianaFerryVoyageSystem {
 
     if (this.phase === 'arriving') {
       this.bobTime += dt;
-      this.boatY = FERRY_ROOT_Y + Math.sin(this.bobTime * 1.35) * 0.025;
+      this.boatY = FERRY_ROOT_Y + Math.sin(this.bobTime * 1.35) * 0.02;
+      this.gateLift = Math.min(1, this.gateLift + dt * 1.8);
       this.arrivalTimer = Math.max(0, this.arrivalTimer - dt);
       if (this.arrivalTimer <= 0) {
         this.phase = 'arrived';
+        this.gateLift = 1;
         out.phaseChanged = true;
         out.arrived = true;
       }
@@ -362,7 +392,7 @@ export class LouisianaFerryVoyageSystem {
     this.boatZ = point.z;
     if (this.routeProgress >= 1) {
       this.phase = 'arriving';
-      this.arrivalTimer = 1.8;
+      this.arrivalTimer = LOUISIANA_FERRY_ARRIVAL_SECONDS;
     }
   }
 
@@ -372,14 +402,16 @@ export class LouisianaFerryVoyageSystem {
         return 'Crescent Star · moored at the island pier';
       case 'boarding':
         return this.aboard ? 'Aboard the Crescent Star' : 'Boarding cleared · walk up the ramp';
+      case 'gate_raising':
+        return 'Raising the stern boarding gate';
       case 'departing':
         return `Casting off in ${Math.ceil(this.departTimer)}s`;
       case 'at_sea':
         return `Day ${Math.max(1, this.voyageDay)} of ${LOUISIANA_FERRY_DAYS} · Louisiana crossing`;
       case 'arriving':
-        return 'Crescent City coming into view';
+        return 'Slowing into the Crescent City berth';
       case 'arrived':
-        return 'Docked in Crescent City';
+        return 'Docked in Crescent City · stern gate open';
       default:
         return '';
     }
@@ -389,6 +421,7 @@ export class LouisianaFerryVoyageSystem {
     return {
       phaseChanged: false,
       boarded: false,
+      gateOpened: false,
       departed: false,
       daysAdvanced: 0,
       arrived: false,
