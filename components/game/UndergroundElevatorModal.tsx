@@ -1,9 +1,11 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowUpFromLine,
   Car,
+  ChevronLeft,
+  ChevronRight,
   Gauge,
   Monitor,
   Search,
@@ -97,6 +99,50 @@ export function UndergroundElevatorModal({
     );
   }, [selectedId]);
 
+  const handleSelectPreview = useCallback(
+    (car: ExoticElevatorCar) => {
+      ELEVATOR_EXOTIC_LIFT.selectForPreview(car.id);
+      setInternalSelectedId(car.id);
+      onSelectElevatorVehicle?.(car.id);
+      ELEVATOR_VOICE_COMPUTER.onPreviewCar(car.name, (line) => setAiMessage(line));
+    },
+    [onSelectElevatorVehicle],
+  );
+
+  /** Left/right arrows walk the vault roster, wrapping at either end. */
+  const stepSelection = useCallback(
+    (delta: number) => {
+      if (filteredCars.length === 0) return;
+      const currentIndex = filteredCars.findIndex((c) => c.id === selectedCar.id);
+      const nextIndex =
+        currentIndex < 0
+          ? 0
+          : (currentIndex + delta + filteredCars.length) % filteredCars.length;
+      handleSelectPreview(filteredCars[nextIndex]);
+    },
+    [filteredCars, selectedCar.id, handleSelectPreview],
+  );
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      stepSelection(event.key === 'ArrowLeft' ? -1 : 1);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, stepSelection]);
+
   const handleChangeHonorific = (nextTitle: PlayerHonorific) => {
     setHonorific(nextTitle);
     ELEVATOR_VOICE_COMPUTER.setHonorific(nextTitle);
@@ -112,13 +158,6 @@ export function UndergroundElevatorModal({
       setAiMessage(line);
       ELEVATOR_VOICE_COMPUTER.speak(line);
     }
-  };
-
-  const handleSelectPreview = (car: ExoticElevatorCar) => {
-    ELEVATOR_EXOTIC_LIFT.selectForPreview(car.id);
-    setInternalSelectedId(car.id);
-    onSelectElevatorVehicle?.(car.id);
-    ELEVATOR_VOICE_COMPUTER.onPreviewCar(car.name, (line) => setAiMessage(line));
   };
 
   const handleSummon = () => {
@@ -249,6 +288,34 @@ export function UndergroundElevatorModal({
                 </span>
               </div>
 
+              {/* Left/right roster browsing — keyboard ← → or these buttons */}
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => stepSelection(-1)}
+                  aria-label="Previous garage car"
+                  className="min-h-[40px] px-3 rounded-xl bg-slate-900 border border-white/15 text-stone-200 hover:border-cyan-400/60 hover:text-white flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wide transition"
+                >
+                  <ChevronLeft className="w-4 h-4" /> Prev
+                </button>
+                <span className="text-[10px] font-mono text-stone-400 text-center">
+                  Car{' '}
+                  {Math.max(
+                    1,
+                    filteredCars.findIndex((c) => c.id === selectedCar.id) + 1,
+                  )}{' '}
+                  / {filteredCars.length} · use ← →
+                </span>
+                <button
+                  type="button"
+                  onClick={() => stepSelection(1)}
+                  aria-label="Next garage car"
+                  className="min-h-[40px] px-3 rounded-xl bg-slate-900 border border-white/15 text-stone-200 hover:border-cyan-400/60 hover:text-white flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wide transition"
+                >
+                  Next <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+
               {/* Showroom Turntable & Live Interactive 3D Vehicle Preview */}
               <div className="relative rounded-xl border border-cyan-500/25 bg-gradient-to-b from-slate-900/90 via-slate-950 to-black overflow-hidden">
                 <ElevatorCarPreview3D car={selectedCar} />
@@ -304,6 +371,11 @@ export function UndergroundElevatorModal({
               {selectedCar.displayOnly && (
                 <div className="mt-1.5 text-[10px] font-black uppercase tracking-wider text-fuchsia-300">
                   Display only · hydraulic dance runs automatically · walk up and press E to push it
+                </div>
+              )}
+              {!selectedCar.displayOnly && selectedCar.hydraulicsDance && (
+                <div className="mt-1.5 text-[10px] font-black uppercase tracking-wider text-fuchsia-300">
+                  Hydraulic dance build · continuous up/down and side-to-side · toggle from the cabin
                 </div>
               )}
             </div>
@@ -426,7 +498,7 @@ export function UndergroundElevatorModal({
                         Surface
                       </span>
                     )}
-                    {car.displayOnly && (
+                    {(car.displayOnly || car.hydraulicsDance) && (
                       <span className="px-2 py-0.5 rounded bg-fuchsia-500/20 border border-fuchsia-400/50 text-[9px] font-black text-fuchsia-200 uppercase shrink-0">
                         Dance
                       </span>

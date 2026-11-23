@@ -137,17 +137,35 @@ test('the plane lands, taxis in, turns around and is ready for the return', () =
   assert.equal(shuttle.getStatus().destination, 'island');
 });
 
-test('express service puts the player in Crescent City in thirty seconds', () => {
+test('the flight menu defaults to the long journey and only accepts a choice at the dock', () => {
+  const harness = makeShuttle();
+  const { shuttle } = harness;
+  assert.equal(shuttle.flightMode, 'long');
+  assert.equal(shuttle.flightModeSelectable, true);
+  assert.equal(shuttle.getStatus().flightMode, 'long');
+  assert.equal(shuttle.getStatus().longJourneyMinutes, AIR_SHUTTLE_LEG_MINUTES);
+
+  const express = shuttle.setFlightMode('express');
+  assert.equal(express.ok, true);
+  assert.equal(shuttle.flightMode, 'express');
+  assert.equal(shuttle.setFlightMode('long').ok, true);
+  assert.equal(shuttle.flightMode, 'long');
+
+  shuttle.board();
+  assert.equal(shuttle.flightModeSelectable, false);
+  assert.equal(shuttle.setFlightMode('express').ok, false);
+  assert.equal(shuttle.express, false, 'boarding the long journey must not fly express');
+});
+
+test('express selection puts the player in Crescent City in thirty seconds', () => {
   const harness = makeShuttle();
   const { shuttle } = harness;
 
-  assert.equal(shuttle.requestExpress().ok, false);
-  shuttle.board();
-  assert.equal(shuttle.expressAvailable, true);
-
+  const selected = shuttle.setFlightMode('express');
+  assert.equal(selected.ok, true);
   const startedAt = harness.now();
-  const requested = shuttle.requestExpress();
-  assert.equal(requested.ok, true);
+  shuttle.board();
+  assert.equal(shuttle.express, true);
   assert.equal(shuttle.getStatus().express, true);
   assert.equal(shuttle.getStatus().expressSeconds, AIR_SHUTTLE_EXPRESS_SECONDS);
 
@@ -155,6 +173,16 @@ test('express service puts the player in Crescent City in thirty seconds', () =>
   assert.ok(
     shuttle.remainingMs <= AIR_SHUTTLE_EXPRESS_AIRBORNE_SECONDS * 1000,
     'express airborne leg should be measured in seconds',
+  );
+  const launchX = shuttle.planeX;
+  const launchZ = shuttle.planeZ;
+  const launchProgress = shuttle.routeProgress;
+  harness.advance(AIR_SHUTTLE_EXPRESS_AIRBORNE_SECONDS * 500);
+  shuttle.update(0.05);
+  assert.ok(shuttle.routeProgress > launchProgress + 0.4, 'express must fly the route');
+  assert.ok(
+    Math.hypot(shuttle.planeX - launchX, shuttle.planeZ - launchZ) > 50_000,
+    'express must visibly cover ground instead of teleporting',
   );
 
   runUntil(harness, (s) => s.phase === 'parked', 40);
@@ -167,14 +195,39 @@ test('express service puts the player in Crescent City in thirty seconds', () =>
     `express hop took ${elapsedSeconds}s`,
   );
   assert.equal(shuttle.getStatus().express, false);
-  assert.equal(shuttle.requestExpress().ok, false);
+  assert.equal(shuttle.flightMode, 'express', 'the return leg keeps the selected mode');
+});
+
+test('the return journey keeps the express experience and then resets to long', () => {
+  const harness = makeShuttle();
+  const { shuttle } = harness;
+  shuttle.setFlightMode('express');
+  shuttle.board();
+  runUntil(harness, (s) => s.phase === 'parked', 40);
+  const disembark = shuttle.disembark();
+  assert.equal(disembark.ok, true);
+  assert.equal(shuttle.flightModeSelectable, true);
+
+  const returnStart = harness.now();
+  shuttle.board();
+  assert.equal(shuttle.express, true);
+  assert.equal(shuttle.direction, 'return');
+  runUntil(harness, (s) => s.phase === 'parked', 40);
+  assert.equal(shuttle.currentBase.id, 'island');
+  assert.equal(shuttle.direction, 'outbound');
+  assert.equal(shuttle.flightMode, 'long');
+  const returnSeconds = (harness.now() - returnStart) / 1000;
+  assert.ok(returnSeconds <= AIR_SHUTTLE_EXPRESS_SECONDS + 2);
+
+  const secondRoute = airShuttleRouteLength('return');
+  assert.ok(secondRoute > 300_000);
 });
 
 test('an express flight in progress resumes on its thirty-second clock', () => {
   const harness = makeShuttle();
   const { shuttle } = harness;
+  shuttle.setFlightMode('express');
   shuttle.board();
-  assert.equal(shuttle.requestExpress().ok, true);
   runUntil(harness, (s) => s.phase === 'airborne', 10);
   harness.advance(5000);
   shuttle.update(0.05);

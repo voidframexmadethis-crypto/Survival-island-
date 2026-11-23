@@ -1908,21 +1908,14 @@ export function SurvivalGameClient() {
                       </span>
                     </div>
                   )}
-                  {hud.airShuttle.expressAvailable && (
-                    <button
-                      type="button"
-                      onClick={() => engineRef.current?.requestAirShuttleExpress()}
-                      className="pointer-events-auto min-h-[34px] w-full rounded border border-amber-400 bg-amber-400 px-2 py-1.5 text-[10px] font-extrabold uppercase tracking-wide text-stone-950 transition hover:bg-amber-300"
-                    >
-                      Express · {hud.airShuttle.expressSeconds}s to Crescent City
-                    </button>
-                  )}
-                  {hud.airShuttle.express && (
-                    <div className="text-[9px] font-extrabold uppercase tracking-wide text-amber-300">
-                      Express service · Crescent City in{' '}
-                      {hud.airShuttle.expressSeconds} seconds
-                    </div>
-                  )}
+                  <div className="flex items-center justify-between gap-1 text-[9px] font-extrabold uppercase tracking-wide text-amber-300">
+                    <span>
+                      {hud.airShuttle.flightMode === 'express'
+                        ? `Express flight · ${hud.airShuttle.expressSeconds}s`
+                        : `Long journey · ${hud.airShuttle.longJourneyMinutes} min`}
+                    </span>
+                    {hud.airShuttle.express && <span>Express service</span>}
+                  </div>
                   {hud.airShuttle.aboard && (
                     <div className="text-[9px] text-emerald-300/80 leading-tight">
                       Walk the aisle · choose any of 6 seats · bed · bath · 2 attendants · weapons stowed
@@ -2563,6 +2556,58 @@ export function SurvivalGameClient() {
                   </span>
                 </button>
               )}
+
+              {hud.airShuttle?.flightModeSelectable &&
+                !activeModal &&
+                hud.nearbyInteraction?.id === 'air_shuttle_board' && (
+                  <div className="pointer-events-auto w-[min(92vw,380px)] rounded-xl border border-sky-400/60 bg-stone-950/95 px-3 py-2 text-left shadow-2xl backdrop-blur-md">
+                    <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-[0.18em] text-sky-300">
+                      <Plane className="h-3.5 w-3.5" /> Select your flight experience
+                    </div>
+                    <div className="mt-1 text-[10px] leading-snug text-stone-300">
+                      Choose before boarding the Crescent Clipper · no fuel required
+                    </div>
+                    <div className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => engineRef.current?.setAirShuttleFlightMode('long')}
+                        className={`min-h-[42px] rounded-lg border px-2 py-1.5 text-left transition ${
+                          hud.airShuttle.flightMode === 'long'
+                            ? 'border-sky-300 bg-sky-400/25 text-sky-100'
+                            : 'border-stone-700 bg-stone-900/80 text-stone-300 hover:border-sky-500/60'
+                        }`}
+                      >
+                        <span className="block text-[10px] font-extrabold uppercase tracking-wide">
+                          Long journey
+                        </span>
+                        <span className="block text-[9px] font-semibold text-stone-400">
+                          {hud.airShuttle.longJourneyMinutes} min · full cabin experience
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => engineRef.current?.setAirShuttleFlightMode('express')}
+                        className={`min-h-[42px] rounded-lg border px-2 py-1.5 text-left transition ${
+                          hud.airShuttle.flightMode === 'express'
+                            ? 'border-amber-300 bg-amber-400/25 text-amber-100'
+                            : 'border-stone-700 bg-stone-900/80 text-stone-300 hover:border-amber-500/60'
+                        }`}
+                      >
+                        <span className="block text-[10px] font-extrabold uppercase tracking-wide">
+                          Express flight
+                        </span>
+                        <span className="block text-[9px] font-semibold text-stone-400">
+                          {hud.airShuttle.expressSeconds} sec · fast hop
+                        </span>
+                      </button>
+                    </div>
+                    <div className="mt-1.5 text-[9px] font-mono-tabular text-stone-400">
+                      Selected: {hud.airShuttle.flightMode === 'express'
+                        ? `Express · ${hud.airShuttle.expressSeconds} seconds`
+                        : `Long Journey · ${hud.airShuttle.longJourneyMinutes} minutes`} · board below
+                    </div>
+                  </div>
+                )}
 
               {hud.ferryFuelDrop?.open &&
                 !activeModal &&

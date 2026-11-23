@@ -15,6 +15,7 @@
 
 export type AirShuttleDirection = 'outbound' | 'return';
 export type AirShuttleBaseId = 'island' | 'crescent_city';
+export type AirShuttleFlightMode = 'long' | 'express';
 export type AirShuttlePhase =
   | 'idle'
   | 'doors_closing'
@@ -171,8 +172,11 @@ export interface AirShuttleStatus {
   durationMs: number;
   /** True while the aircraft is flying the 30-second express hop. */
   express: boolean;
-  /** True when the player is aboard and may still call for express service. */
-  expressAvailable: boolean;
+  /** Selected pre-flight experience; long journey is the default. */
+  flightMode: AirShuttleFlightMode;
+  /** True while the player can still pick a flight experience. */
+  flightModeSelectable: boolean;
+  longJourneyMinutes: number;
   expressSeconds: number;
   planeX: number;
   planeY: number;
@@ -384,6 +388,7 @@ export class AirShuttleVoyageSystem {
   direction: AirShuttleDirection = 'outbound';
   aboard = false;
   express = false;
+  flightMode: AirShuttleFlightMode = 'long';
 
   planeX = ISLAND_SEAPLANE_BASE.parkingX;
   planeY = ISLAND_SEAPLANE_BASE.waterY + 0.1;
@@ -433,16 +438,9 @@ export class AirShuttleVoyageSystem {
     return this.phase === 'idle' && !this.aboard;
   }
 
-  /** Express is offered to Crescent City only, before the wheels leave the water. */
-  get expressAvailable(): boolean {
-    return (
-      this.aboard &&
-      !this.express &&
-      this.direction === 'outbound' &&
-      (this.phase === 'doors_closing' ||
-        this.phase === 'engine_start' ||
-        this.phase === 'taxi_out')
-    );
+  /** The experience can only be changed at the dock, before boarding. */
+  get flightModeSelectable(): boolean {
+    return !this.aboard && this.phase === 'idle';
   }
 
   get canDisembark(): boolean {
@@ -462,6 +460,7 @@ export class AirShuttleVoyageSystem {
     this.direction = 'outbound';
     this.aboard = false;
     this.express = false;
+    this.flightMode = 'long';
     this.phaseStartedAtMs = null;
     this.departureAtMs = null;
     this.elapsedMs = 0;
@@ -499,48 +498,45 @@ export class AirShuttleVoyageSystem {
       return { ok: false, message: 'The Crescent Clipper is already moving. Wait for it to park.' };
     }
     this.aboard = true;
-    this.express = false;
+    this.express = this.flightMode === 'express';
     this.phase = 'doors_closing';
     this.phaseStartedAtMs = this.now();
     this.doorOpen = 1;
     this.engineOn = false;
     const destination = this.destination.label;
+    const duration = this.express
+      ? 'thirty-second express flight'
+      : `${AIR_SHUTTLE_LEG_MINUTES}-minute long journey`;
     return {
       ok: true,
-      message: `The Crescent Clipper's gull-wing door lifts shut. Engines starting for the fifty-five-minute flight to ${destination}.`,
+      message: `The Crescent Clipper's gull-wing door lifts shut. Engines starting for the ${duration} to ${destination}.`,
     };
   }
 
   /**
-   * Switches the current boarding to express service: a thirty-second hop to
-   * Crescent City with every ground and airborne phase compressed to fit.
+   * Pre-flight experience menu choice. The long journey is the default; express
+   * compresses the whole hop into thirty seconds while still flying the route.
    */
-  requestExpress(): { ok: boolean; message: string } {
-    if (!this.aboard) {
+  setFlightMode(mode: AirShuttleFlightMode): { ok: boolean; message: string } {
+    if (this.aboard) {
       return {
         ok: false,
-        message: 'Board the Crescent Clipper first, then call for express service.',
+        message: 'Choose your flight experience before boarding the Crescent Clipper.',
       };
     }
-    if (this.express) {
-      return { ok: false, message: 'Express service is already confirmed.' };
-    }
-    if (this.direction !== 'outbound') {
+    if (this.phase !== 'idle') {
       return {
         ok: false,
-        message: 'Express service runs to Crescent City only.',
+        message: 'The Crescent Clipper is already moving. Wait for it to park.',
       };
     }
-    if (!this.expressAvailable) {
-      return {
-        ok: false,
-        message: 'The Crescent Clipper has already left the water runway.',
-      };
-    }
-    this.express = true;
+    this.flightMode = mode === 'express' ? 'express' : 'long';
     return {
       ok: true,
-      message: 'Express service confirmed — Crescent City in thirty seconds.',
+      message:
+        this.flightMode === 'express'
+          ? 'Express flight selected — Crescent City in thirty seconds.'
+          : `Long journey selected — a full ${AIR_SHUTTLE_LEG_MINUTES}-minute flight with the cabin open.`,
     };
   }
 
@@ -610,7 +606,9 @@ export class AirShuttleVoyageSystem {
       remainingMs: this.remainingMs,
       durationMs: this.legDurationMs,
       express: this.express,
-      expressAvailable: this.expressAvailable,
+      flightMode: this.flightMode,
+      flightModeSelectable: this.flightModeSelectable,
+      longJourneyMinutes: AIR_SHUTTLE_LEG_MINUTES,
       expressSeconds: AIR_SHUTTLE_EXPRESS_SECONDS,
       planeX: this.planeX,
       planeY: this.planeY,
@@ -630,7 +628,11 @@ export class AirShuttleVoyageSystem {
     const destination = this.destination.label;
     switch (this.phase) {
       case 'idle':
-        return `Crescent Clipper parked at ${this.currentBase.label}`;
+        return `Crescent Clipper parked at ${this.currentBase.label} · ${
+          this.flightMode === 'express'
+            ? 'express 30-second flight selected'
+            : `long journey ${AIR_SHUTTLE_LEG_MINUTES}-minute flight selected`
+        }`;
       case 'doors_closing':
         return 'Gull-wing door lifting shut · engines coming online';
       case 'engine_start':
@@ -883,6 +885,8 @@ export class AirShuttleVoyageSystem {
           startPhase('parked');
           this.express = false;
           this.direction = opposite(this.direction);
+          // A fresh outbound trip defaults back to the 55-minute long journey.
+          if (this.direction === 'outbound') this.flightMode = 'long';
           this.planeYaw = this.currentBase.outboundYaw;
           this.previousYaw = this.planeYaw;
           this.doorOpen = 1;

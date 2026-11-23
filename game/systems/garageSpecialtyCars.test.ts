@@ -53,6 +53,27 @@ test('underground garage roster includes the five new specialty cars', () => {
   assert.ok((van?.hydraulicBounceBoost ?? 1) > 1.5);
 });
 
+test('Ford De Soto and Nissan mini truck are in the vault and resolve by name', () => {
+  for (const id of ['ford-de-soto', 'nissan-mini-truck']) {
+    assert.ok(GARAGE_VEHICLES.some((car) => car.id === id), `${id} missing from roster`);
+    assert.ok(ELEVATOR_EXOTIC_LIFT.cars.some((car) => car.id === id), `${id} missing from vault`);
+  }
+
+  const deSoto = resolveGarageVehicleQuery('bring up the ford de soto');
+  assert.equal(deSoto?.id, 'ford-de-soto');
+  assert.equal(deSoto?.supportsHydraulics, true);
+  const nissan = resolveElevatorCarQuery('nissan mini truck');
+  assert.equal(nissan?.id, 'nissan-mini-truck');
+  assert.equal(nissan?.hydraulicsDance, true);
+  assert.equal(nissan?.preset, 'mini_truck');
+
+  const deSotoCar = createVehicleFromPreset('de_soto', 'lowrider', 0, 0, 0);
+  assert.equal(deSotoCar.hydraulicHop, true);
+  const nissanCar = createVehicleFromPreset('nissan', 'mini_truck', 0, 0, 0);
+  assert.equal(nissanCar.hydraulicHop, true);
+  assert.equal(createModularVehicleMesh(nissanCar).wheelCorners.length, 4);
+});
+
 test('natural garage requests resolve every new car', () => {
   assert.equal(resolveGarageVehicleQuery('pull up the red el camino')?.id, 'el-camino-donk');
   assert.equal(resolveGarageVehicleQuery('mini truck')?.id, 'mini-truck');

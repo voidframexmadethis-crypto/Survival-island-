@@ -131,6 +131,7 @@ import {
 } from '../systems/ferryVoyageSave';
 import {
   AirShuttleVoyageSystem,
+  AIR_SHUTTLE_EXPRESS_SECONDS,
   AIR_SHUTTLE_LEG_MINUTES,
 } from '../systems/crescentCityAirShuttle';
 import { applyAirShuttleVisual } from '../systems/airShuttleVisual';
@@ -200,9 +201,11 @@ import {
   VehiclePresetKey,
 } from '../systems/modularVehicle';
 import {
+  REAR_BUMPER_MAX_LEVEL,
   THREE_WHEEL_PARKED_POSE,
   getThreeWheelHydraulicTargets,
   isThreeWheelHydraulicVehicle,
+  rearBumperBounceScale,
 } from '../systems/classicHydraulics';
 import {
   STRUCT_GRID_XZ,
@@ -1552,6 +1555,8 @@ export class GameEngine {
   private p2pVehicleSyncAccum = 0;
   private p2pChatLog: { peerId: string; name: string; text: string; time: number }[] = [];
   private hydraulicBounceTimer = 0;
+  /** Consecutive rear-bumper hits on the El Camino, so each one lands higher. */
+  private rearBounceEscalation = new Map<string, { level: number; lastAtMs: number }>();
   private autoParkJobs = new Map<
     string,
     {
@@ -13346,7 +13351,11 @@ export class GameEngine {
               this.airShuttle.direction === 'outbound'
                 ? 'Board the Crescent Clipper'
                 : 'Board the Crescent Clipper for Driftwood Island',
-            sublabel: `${AIR_SHUTTLE_LEG_MINUTES}-minute automatic flight to ${destination.label} · no fuel required`,
+            sublabel: `${
+              this.airShuttle.flightMode === 'express'
+                ? `Express · ${AIR_SHUTTLE_EXPRESS_SECONDS}-second flight`
+                : `Long journey · ${AIR_SHUTTLE_LEG_MINUTES}-minute flight`
+            } to ${destination.label} · no fuel required · choose your experience at the dock`,
             kind: 'air_shuttle',
             actionCategory: 'use',
             distance,
@@ -17620,16 +17629,14 @@ export class GameEngine {
     }
   }
 
-  /** Cabin request: express service puts the player in Crescent City in 30 s. */
-  public requestAirShuttleExpress(): void {
-    const result = this.airShuttle.requestExpress();
+  /** Pre-flight menu: choose the 55-minute long journey or the 30-second express hop. */
+  public setAirShuttleFlightMode(mode: 'long' | 'express'): void {
+    const result = this.airShuttle.setFlightMode(mode);
     if (!result.ok) {
       this.toast(result.message, 'warning');
       return;
     }
-    this.speakAirShuttleVoice(
-      'Express service confirmed. Doors closing now — Crescent City in thirty seconds.',
-    );
+    this.toast(result.message, 'info');
     this.persistAirShuttle(true);
     this.emitHud();
   }
@@ -22578,6 +22585,21 @@ export class GameEngine {
     return CAR_RADIO_TRUNK_SYSTEM.isOldSchoolCar(this.toRadioCarDescriptor(v));
   }
 
+  /**
+   * The El Camino's rear bumper pumps higher with every hit, then settles back
+   * to its base height after a few seconds without another bounce.
+   */
+  private rearBumperEscalation(av: ModularVehicleData, nowMs: number): number {
+    if (av.preset !== 'el_camino') return 1;
+    const previous = this.rearBounceEscalation.get(av.id);
+    const level =
+      previous && nowMs - previous.lastAtMs < 4000
+        ? Math.min(REAR_BUMPER_MAX_LEVEL, previous.level + 1)
+        : 1;
+    this.rearBounceEscalation.set(av.id, { level, lastAtMs: nowMs });
+    return rearBumperBounceScale(level);
+  }
+
   private isDonkHydraulicVehicle(v?: ModularVehicleData | null): boolean {
     return Boolean(v && v.preset === 'donk');
   }
@@ -22967,14 +22989,21 @@ export class GameEngine {
       this.spawnParticles(av.x, av.y + 0.35, av.z, 0xfbbf24, 9);
     } else if (action === 'rear_hop' || action === 'rear_lock') {
       this.hydraulicMode = 'rear_hop';
-      this.hydVel.rl = 15.5 * bounceBoost;
-      this.hydVel.rr = 15.5 * bounceBoost;
+      const rearEscalation = this.rearBumperEscalation(av, performance.now());
+      this.hydVel.rl = 15.5 * bounceBoost * rearEscalation;
+      this.hydVel.rr = 15.5 * bounceBoost * rearEscalation;
       this.hydVel.fl = Math.min(this.hydVel.fl, -2.4);
       this.hydVel.fr = Math.min(this.hydVel.fr, -2.4);
       // The body squats on the rear axle; those tires never leave the road.
       this.hydraulicBounceTimer = 0.55;
       this.sound.playHydraulicHop('hop');
       this.spawnParticles(av.x, av.y + 0.35, av.z, 0xfbbf24, 9);
+      if (rearEscalation > 1.2) {
+        this.toast(
+          `${av.name}: rear bumper bounce ×${rearEscalation.toFixed(1)}`,
+          'info',
+        );
+      }
     } else if (action === 'left_tilt') {
       this.hydraulicMode = this.hydraulicMode === 'left_tilt' ? 'level' : 'left_tilt';
       if (this.hydraulicMode === 'left_tilt') {

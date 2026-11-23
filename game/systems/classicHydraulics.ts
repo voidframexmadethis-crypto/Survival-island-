@@ -14,6 +14,16 @@ export const THREE_WHEEL_PARKED_POSE = {
   airbagWheelLift: 0.42,
 } as const;
 
+/** El Camino rear-bumper bounce: each consecutive hit lands higher, then resets. */
+export const REAR_BUMPER_MAX_LEVEL = 6;
+export const REAR_BUMPER_ESCALATION_STEP = 0.22;
+
+/** Multiplier applied to a rear bumper hit at the given escalation level. */
+export function rearBumperBounceScale(level: number): number {
+  const clamped = Math.max(1, Math.min(REAR_BUMPER_MAX_LEVEL, Math.floor(level)));
+  return 1 + (clamped - 1) * REAR_BUMPER_ESCALATION_STEP;
+}
+
 /** Full cylinder cars can hold a three-wheel stance; long-travel airbag vans cannot. */
 export function isThreeWheelHydraulicVehicle(preset?: string | null): boolean {
   return (
