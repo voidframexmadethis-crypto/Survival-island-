@@ -24,8 +24,12 @@ export const LOUISIANA_FERRY_LEG_SECONDS = LOUISIANA_FERRY_LEG_MS / 1000;
 /** Passenger-ship cruise target used to size the ocean passage. */
 export const LOUISIANA_FERRY_TARGET_SPEED_MPS = 5;
 export const LOUISIANA_FERRY_TARGET_ROUTE_METERS = 864_000;
-/** Long, gentle run-up to cruise and a proper harbour deceleration. */
-export const LOUISIANA_FERRY_ACCEL_SECONDS = 240;
+/**
+ * Short, smooth run-up to cruise. A four-minute ramp left the hull looking
+ * nearly stationary for the first minute of the crossing; half a minute gets
+ * the ship visibly underway out of the berth while staying gentle.
+ */
+export const LOUISIANA_FERRY_ACCEL_SECONDS = 30;
 export const LOUISIANA_FERRY_DECEL_SECONDS = 600;
 
 export const LOUISIANA_FERRY_DEPART_DELAY = 3.5;

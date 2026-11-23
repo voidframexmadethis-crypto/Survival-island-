@@ -149,14 +149,17 @@ test('the hull accelerates out of the berth, cruises near 5 m/s and slows for ar
   const start = ferryRoutePositionAt(0);
   assert.ok(Math.abs(ferry.boatX - start.x) < 1e-6);
 
-  // Quarter of the way through the run-up to cruise.
+  // Quarter of the way through the 30 s run-up to cruise: already moving.
   const accelStepMs = (LOUISIANA_FERRY_ACCEL_SECONDS / 4) * 1000;
   const harness = makeFerry();
   boardAndDepart(harness.ferry);
   harness.advance(accelStepMs);
   harness.ferry.update(0.05, player.x, player.y, player.z);
   assert.ok(harness.ferry.speedMps > 0.8 && harness.ferry.speedMps < 1.8);
-  assert.ok(harness.ferry.routeDistanceMeters > 30);
+  assert.ok(
+    harness.ferry.routeDistanceMeters > 3,
+    'the hull must cover visible distance during the run-up',
+  );
 
   // Full cruise, measured from the wall clock.
   harness.advance(LOUISIANA_FERRY_ACCEL_SECONDS * 1000);
