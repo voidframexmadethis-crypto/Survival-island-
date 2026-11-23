@@ -115,6 +115,7 @@ import {
   LOUISIANA_FERRY_LITERS_PER_COCONUT,
   LOUISIANA_FERRY_LOW_FUEL_LITERS,
   LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS,
+  LOUISIANA_FERRY_OCEAN_BUCKET_LITERS,
   LOUISIANA_FERRY_RESERVE_LITERS,
   LouisianaFerryVoyageSystem,
   ferryBiofuelFromCoconuts,
@@ -16909,6 +16910,10 @@ export class GameEngine {
         tankCapacityLiters: LOUISIANA_FERRY_FUEL_CAPACITY_LITERS,
         litersPerCoconut: LOUISIANA_FERRY_LITERS_PER_COCONUT,
         litersPerCanister: LOUISIANA_FERRY_BIOFUEL_LITERS,
+        oceanBucketLiters: LOUISIANA_FERRY_OCEAN_BUCKET_LITERS,
+        canFillFromOcean:
+          this.ferryVoyage.fuelLiters <
+          LOUISIANA_FERRY_FUEL_CAPACITY_LITERS - 0.01,
         canDrawReserve:
           !this.ferryVoyage.reserveUsed &&
           this.ferryVoyage.fuelLiters < LOUISIANA_FERRY_FUEL_CAPACITY_LITERS - 0.01,
@@ -18543,6 +18548,33 @@ export class GameEngine {
       added,
       `${used} coconut${used === 1 ? '' : 's'} dropped into the tank`,
     );
+  }
+
+  /**
+   * One tap: automatically drops every coconut in the pack, stopping as soon
+   * as the tank is full so no nuts are wasted.
+   */
+  public autoFillFerryCoconuts(): void {
+    this.dropFerryCoconuts(this.getItemCount('coconut'));
+  }
+
+  /**
+   * Hauls a bucket of ocean water up from the dock and tips it into the tank.
+   * Seawater is free at the berth, so this always tops up what fits.
+   */
+  public fillFerryFromOcean(): void {
+    const voyage = this.ferryVoyage;
+    if (voyage.fuelLiters >= LOUISIANA_FERRY_FUEL_CAPACITY_LITERS - 0.01) {
+      this.toast(
+        `The Crescent Star tank is already full (${LOUISIANA_FERRY_FUEL_CAPACITY_LITERS} L).`,
+        'info',
+      );
+      return;
+    }
+    const added = voyage.addFuel(LOUISIANA_FERRY_OCEAN_BUCKET_LITERS);
+    if (added <= 0) return;
+    this.sound.playWaterRush();
+    this.applyFerryFuel(added, 'a bucket of ocean water');
   }
 
   /** Drops a pressed canister into the tank for the full 25 L. */

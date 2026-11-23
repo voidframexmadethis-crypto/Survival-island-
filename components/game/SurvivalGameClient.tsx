@@ -2546,11 +2546,13 @@ export function SurvivalGameClient() {
 
               {hud.ferryFuelDrop?.open &&
                 !activeModal &&
-                hud.nearbyInteraction?.kind === 'ferry_fuel' && (
+                (hud.nearbyInteraction?.kind === 'ferry_fuel' ||
+                  hud.nearbyInteraction?.id === 'ferry_fuel' ||
+                  hud.nearbyInteraction?.id === 'ferry_stern_fuel') && (
                   <div className="pointer-events-auto w-[min(92vw,340px)] rounded-xl border border-lime-500/55 bg-stone-950/95 px-3 py-2 shadow-2xl backdrop-blur-md text-left">
                     <div className="flex items-center justify-between gap-2">
                       <span className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-[0.2em] text-lime-300">
-                        <Ship className="w-3.5 h-3.5" /> Drop
+                        <Ship className="w-3.5 h-3.5" /> Drop your coconuts
                       </span>
                       <button
                         type="button"
@@ -2591,14 +2593,21 @@ export function SurvivalGameClient() {
                         {hud.ferryFuelDrop.litersPerCoconut.toFixed(1)} L per coconut
                       </span>
                     </div>
-                    <div className="mt-2 grid grid-cols-3 gap-1.5">
+                    <button
+                      type="button"
+                      disabled={hud.ferryFuelDrop.coconutCount < 1}
+                      onClick={() => engineRef.current?.autoFillFerryCoconuts()}
+                      className="mt-2 w-full rounded-lg border border-lime-400 bg-lime-400 px-2 py-1.5 text-[10px] font-extrabold uppercase tracking-wide text-stone-950 transition hover:bg-lime-300 disabled:cursor-default disabled:border-stone-700 disabled:bg-stone-900 disabled:text-stone-600"
+                    >
+                      Auto-fill · drop{' '}
+                      {hud.ferryFuelDrop.coconutCount === 1
+                        ? '1 coconut'
+                        : `${hud.ferryFuelDrop.coconutCount} coconuts`}
+                    </button>
+                    <div className="mt-1.5 grid grid-cols-2 gap-1.5">
                       {[
                         { label: 'DROP 1', count: 1 },
                         { label: 'DROP 3', count: 3 },
-                        {
-                          label: 'DROP ALL',
-                          count: hud.ferryFuelDrop.coconutCount,
-                        },
                       ].map((option) => (
                         <button
                           key={option.label}
@@ -2613,29 +2622,37 @@ export function SurvivalGameClient() {
                         </button>
                       ))}
                     </div>
-                    {(hud.ferryFuelDrop.biofuelCount > 0 ||
-                      hud.ferryFuelDrop.canDrawReserve) && (
-                      <div className="mt-1.5 flex flex-wrap gap-1.5">
-                        {hud.ferryFuelDrop.biofuelCount > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => engineRef.current?.dropFerryBiofuelCanister()}
-                            className="flex-1 rounded-lg border border-amber-500/55 bg-amber-500/15 px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-amber-200 transition hover:bg-amber-500/30"
-                          >
-                            Drop Canister · +{hud.ferryFuelDrop.litersPerCanister} L
-                          </button>
-                        )}
-                        {hud.ferryFuelDrop.canDrawReserve && (
-                          <button
-                            type="button"
-                            onClick={() => engineRef.current?.drawFerryReserveFuel()}
-                            className="flex-1 rounded-lg border border-stone-600 bg-stone-800/70 px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-stone-200 transition hover:bg-stone-700"
-                          >
-                            Draw Reserve
-                          </button>
-                        )}
-                      </div>
-                    )}
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {hud.ferryFuelDrop.canFillFromOcean && (
+                        <button
+                          type="button"
+                          onClick={() => engineRef.current?.fillFerryFromOcean()}
+                          className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-sky-500/60 bg-sky-500/15 px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-sky-200 transition hover:bg-sky-500/30"
+                          title="Haul a bucket of seawater over the rail and tip it into the tank"
+                        >
+                          <Waves className="h-3 w-3" /> Ocean fill · +
+                          {hud.ferryFuelDrop.oceanBucketLiters} L
+                        </button>
+                      )}
+                      {hud.ferryFuelDrop.biofuelCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => engineRef.current?.dropFerryBiofuelCanister()}
+                          className="flex-1 rounded-lg border border-amber-500/55 bg-amber-500/15 px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-amber-200 transition hover:bg-amber-500/30"
+                        >
+                          Drop Canister · +{hud.ferryFuelDrop.litersPerCanister} L
+                        </button>
+                      )}
+                      {hud.ferryFuelDrop.canDrawReserve && (
+                        <button
+                          type="button"
+                          onClick={() => engineRef.current?.drawFerryReserveFuel()}
+                          className="flex-1 rounded-lg border border-stone-600 bg-stone-800/70 px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-stone-200 transition hover:bg-stone-700"
+                        >
+                          Draw Reserve
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
 

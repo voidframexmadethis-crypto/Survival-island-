@@ -1579,6 +1579,8 @@ export interface HUDStateSnapshot {
     tankCapacityLiters: number;
     litersPerCoconut: number;
     litersPerCanister: number;
+    oceanBucketLiters: number;
+    canFillFromOcean: boolean;
     canDrawReserve: boolean;
   };
   ferryVoyage?: {

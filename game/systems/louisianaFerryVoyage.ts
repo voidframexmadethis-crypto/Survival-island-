@@ -378,6 +378,9 @@ export const LOUISIANA_FERRY_LOW_FUEL_LITERS = 50;
 export const LOUISIANA_FERRY_RESERVE_LITERS = 100;
 export const LOUISIANA_FERRY_BIOFUEL_LITERS = 25;
 export const LOUISIANA_FERRY_BIOFUEL_COCONUTS = 3;
+/** Seawater hauled up from the dock and tipped into the tank in one bucket. */
+export const LOUISIANA_FERRY_OCEAN_BUCKET_LITERS = 25;
+
 /** Biofuel one fresh coconut yields when dropped straight into the tank. */
 export const LOUISIANA_FERRY_LITERS_PER_COCONUT =
   LOUISIANA_FERRY_BIOFUEL_LITERS / LOUISIANA_FERRY_BIOFUEL_COCONUTS;
