@@ -73,6 +73,15 @@ export class SoundEngine {
   private activeEngineProfileId: string | null = null;
   private lastBlowOffAt = 0;
 
+  // Continuous turboprop drone for the Crescent Clipper.
+  private jetEngineNodes: {
+    osc1: OscillatorNode;
+    osc2: OscillatorNode;
+    noise: AudioBufferSourceNode | null;
+    filter: BiquadFilterNode;
+    gain: GainNode;
+  } | null = null;
+
   public configure(opts: {
     masterVolume: number;
     sfxEnabled: boolean;
@@ -2091,6 +2100,76 @@ export class SoundEngine {
     g.connect(this.masterGain);
     rumble.start(now);
     rumble.stop(now + duration + 0.05);
+  }
+
+  /** Twin turboprop drone that runs for the whole Crescent Clipper flight. */
+  public startJetEngines(): boolean {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain || this.jetEngineNodes) return false;
+    const now = this.ctx.currentTime;
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.connect(this.masterGain);
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 820;
+    filter.Q.value = 0.7;
+    filter.connect(gain);
+
+    const osc1 = this.ctx.createOscillator();
+    osc1.type = 'sawtooth';
+    osc1.frequency.value = 54;
+    osc1.connect(filter);
+    osc1.start(now);
+
+    const osc2 = this.ctx.createOscillator();
+    osc2.type = 'triangle';
+    osc2.frequency.value = 108;
+    osc2.connect(filter);
+    osc2.start(now);
+
+    const noise = this.createNoiseSource('brown');
+    if (noise) {
+      noise.loop = true;
+      noise.connect(filter);
+      noise.start(now);
+    }
+
+    gain.gain.exponentialRampToValueAtTime(0.12, now + 0.9);
+    this.jetEngineNodes = { osc1, osc2, noise, filter, gain };
+    return true;
+  }
+
+  public updateJetEngines(intensity: number, speedRatio: number): void {
+    const nodes = this.jetEngineNodes;
+    if (!nodes || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    const power = Math.max(0, Math.min(1, intensity));
+    const speed = Math.max(0, Math.min(1, speedRatio));
+    nodes.osc1.frequency.setTargetAtTime(52 + power * 26 + speed * 22, now, 0.1);
+    nodes.osc2.frequency.setTargetAtTime(104 + power * 52 + speed * 44, now, 0.1);
+    nodes.filter.frequency.setTargetAtTime(760 + power * 900 + speed * 700, now, 0.12);
+    nodes.gain.gain.setTargetAtTime(0.055 + power * 0.075, now, 0.14);
+  }
+
+  public stopJetEngines(): void {
+    const nodes = this.jetEngineNodes;
+    if (!nodes || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    nodes.gain.gain.cancelScheduledValues(now);
+    nodes.gain.gain.setTargetAtTime(0.0001, now, 0.1);
+    for (const node of [nodes.osc1, nodes.osc2]) {
+      try {
+        node.stop(now + 0.45);
+      } catch {
+        // Ignore already stopped oscillators.
+      }
+    }
+    try {
+      nodes.noise?.stop(now + 0.45);
+    } catch {
+      // Ignore already stopped noise sources.
+    }
+    this.jetEngineNodes = null;
   }
 
   public playHydraulicHop(kind: 'hop' | 'tilt' | 'lock'): void {

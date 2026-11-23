@@ -9,6 +9,8 @@ export interface CrescentClipperHandles {
   beaconMat: THREE.MeshStandardMaterial;
   cabinSeats: THREE.Object3D[];
   maid: THREE.Object3D;
+  maids: THREE.Object3D[];
+  stairs: THREE.Group;
   cabinTvMat: THREE.MeshStandardMaterial;
 }
 
@@ -51,6 +53,8 @@ export function buildCrescentClipper(): CrescentClipperHandles {
 
   const hullMat = new THREE.MeshStandardMaterial({ color: 0xf3eee0, roughness: 0.48 });
   const hullTrimMat = new THREE.MeshStandardMaterial({ color: 0x0f4c5c, roughness: 0.42 });
+  hullMat.side = THREE.DoubleSide;
+  hullTrimMat.side = THREE.DoubleSide;
   const goldMat = new THREE.MeshStandardMaterial({
     color: 0xc08a2e,
     roughness: 0.35,
@@ -291,18 +295,19 @@ export function buildCrescentClipper(): CrescentClipperHandles {
       cabinSeats.push(seat);
     }
   }
-  for (const tableZ of [1.85, 0.45]) {
+  for (const [tableIndex, tableZ] of [1.85, 0.45].entries()) {
+    const tableX = tableIndex === 0 ? 0.55 : -0.55;
     const tableTop = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.32, 0.32, 0.055, 18),
+      new THREE.CylinderGeometry(0.3, 0.3, 0.055, 18),
       goldMat,
     );
-    tableTop.position.set(0, 2.52, tableZ);
+    tableTop.position.set(tableX, 2.52, tableZ);
     root.add(tableTop);
     const pedestal = new THREE.Mesh(
       new THREE.CylinderGeometry(0.055, 0.1, 0.38, 10),
       frameMat,
     );
-    pedestal.position.set(0, 2.3, tableZ);
+    pedestal.position.set(tableX, 2.3, tableZ);
     root.add(pedestal);
   }
 
@@ -398,6 +403,30 @@ export function buildCrescentClipper(): CrescentClipperHandles {
     maid.add(plate);
   }
   root.add(maid);
+  // A second attendant works the rear cabin, with a distinct voice profile.
+  const maid2 = maid.clone(true);
+  maid2.position.set(0.52, 2.09, -1.2);
+  maid2.rotation.y = Math.PI;
+  maid2.scale.setScalar(0.96);
+  root.add(maid2);
+
+  // ---- Undercarriage luggage pod -----------------------------------------
+  addBox(1.2, 0.5, 2.5, 0, 0.9, -1.8, frameMat);
+  addBox(1.26, 0.08, 2.56, 0, 1.12, -1.8, goldMat);
+  addBox(0.95, 0.34, 0.08, 0, 0.85, -0.52, hullTrimMat);
+  addBox(0.72, 0.18, 0.2, 0, 0.68, -0.5, goldMat);
+
+  // ---- Deployable boarding stairs ---------------------------------------
+  const stairs = new THREE.Group();
+  stairs.position.set(-1.5, 2.02, 2.25);
+  for (let step = 0; step < 4; step++) {
+    addBox(0.7, 0.07, 0.92, -0.3 - step * 0.27, -0.16 - step * 0.28, 0, frameMat, stairs);
+    addBox(0.06, 0.4, 0.06, -0.3 - step * 0.27, 0.06 - step * 0.28, -0.4, goldMat, stairs);
+  }
+  addBox(0.06, 0.06, 1.0, -1.2, -0.98, 0, goldMat, stairs);
+  addBox(0.06, 0.8, 0.06, -1.2, -1.35, -0.45, goldMat, stairs);
+  addBox(0.06, 0.8, 0.06, -1.2, -1.35, 0.45, goldMat, stairs);
+  root.add(stairs);
 
   // The port-side gull wing door hinges at the roof and lifts outward/up.
   const door = new THREE.Group();
@@ -442,6 +471,8 @@ export function buildCrescentClipper(): CrescentClipperHandles {
     beaconMat,
     cabinSeats,
     maid,
+    maids: [maid, maid2],
+    stairs,
     cabinTvMat,
   };
 }

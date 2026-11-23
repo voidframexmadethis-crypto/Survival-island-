@@ -1903,6 +1903,11 @@ export function SurvivalGameClient() {
                       </span>
                     </div>
                   )}
+                  {hud.airShuttle.aboard && (
+                    <div className="text-[9px] text-emerald-300/80 leading-tight">
+                      Walk the aisle · choose any of 6 seats · bed · bath · 2 attendants · weapons stowed
+                    </div>
+                  )}
                 </div>
               )}
 

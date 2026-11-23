@@ -168,8 +168,11 @@ test('the route is a long visible flight and the visual rig follows the door and
   assert.ok(Math.abs(rig.root.position.x - ISLAND_SEAPLANE_BASE.parkingX) < 0.01);
   assert.ok(rig.door.rotation.z < -1);
   assert.equal(rig.cabinSeats.length, 6);
+  assert.equal(rig.maids.length, 2);
   assert.ok(rig.maid);
+  assert.ok(rig.stairs);
   assert.ok(rig.cabinTvMat);
+  assert.ok(Math.abs(rig.stairs.rotation.z) < 0.01);
 
   shuttle.board();
   runUntil(harness, (s) => s.phase === 'airborne');

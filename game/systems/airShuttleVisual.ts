@@ -9,6 +9,8 @@ export interface AirShuttleVisualRig {
   engineGlowMat: { emissiveIntensity: number } | null;
   beaconMat: { emissiveIntensity: number } | null;
   maid?: Object3D | null;
+  maids?: Object3D[] | null;
+  stairs?: Object3D | null;
   cabinTvMat?: { emissiveIntensity: number } | null;
 }
 
@@ -41,8 +43,14 @@ export function applyAirShuttleVisual(
     const pulse = 0.7 + Math.sin(shuttle.elapsedMs / 260) * 0.5;
     rig.beaconMat.emissiveIntensity = pulse;
   }
-  if (rig.maid) {
-    rig.maid.rotation.y = Math.sin(shuttle.elapsedMs / 1400) * 0.06;
+  const maids = rig.maids ?? (rig.maid ? [rig.maid] : []);
+  for (let i = 0; i < maids.length; i++) {
+    maids[i].rotation.y =
+      (i === 0 ? 0 : Math.PI) + Math.sin(shuttle.elapsedMs / (1400 + i * 260) + i) * 0.06;
+  }
+  if (rig.stairs) {
+    rig.stairs.rotation.z = -1.15 * (1 - shuttle.doorOpen);
+    rig.stairs.position.y = 2.02 - 0.55 * (1 - shuttle.doorOpen);
   }
   if (rig.cabinTvMat) {
     // The cabin TV is live for the whole flight: a soft scan-pulse keeps the

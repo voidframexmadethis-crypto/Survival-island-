@@ -793,9 +793,18 @@ export class GameEngine {
   private airShuttleLastPersistMs = 0;
   private airShuttleHudAccum = 0;
   private airShuttleSprayAccum = 0;
-  /** 0 cockpit, 1 lounge, 2 bedroom, 3 bathroom. */
-  private airShuttleCabinView = 0;
+  private airShuttleLocalX = 0;
+  private airShuttleLocalY = 2.1;
+  private airShuttleLocalZ = 3.2;
+  private airShuttleBoardingAnim = 0;
+  private airShuttleSeatedKind: 'seat' | 'couch' | 'bed' | 'bath' | null = null;
+  private airShuttleSeatIndex = 0;
+  private airShuttleTalkIndex = 0;
   private airShuttleMealServed = false;
+  private airShuttleStowedWeapons = new Set<ItemId>();
+  private airShuttleStowedHotbar: { index: number; itemId: ItemId }[] = [];
+  private airShuttleLuggageCount = 0;
+  private airShuttleEngineAudio = false;
   private mainlandStuntCooldown = 0;
   private beeGate: BeeGateHandle | null = null;
   private beeGateAnchor: THREE.Group | null = null;
@@ -7973,8 +7982,20 @@ export class GameEngine {
     if (near && near.kind === 'air_shuttle') {
       if (near.id === 'air_shuttle_disembark') {
         this.handleAirShuttleDisembark();
-      } else if (near.id === 'air_shuttle_cabin_view') {
-        this.handleAirShuttleCabinView();
+      } else if (near.id === 'air_shuttle_stand') {
+        this.handleAirShuttleStand();
+      } else if (near.id.startsWith('air_shuttle_sit_')) {
+        this.handleAirShuttleSit('seat', Number(near.id.slice('air_shuttle_sit_'.length)));
+      } else if (near.id === 'air_shuttle_couch') {
+        this.handleAirShuttleSit('couch');
+      } else if (near.id === 'air_shuttle_bed') {
+        this.handleAirShuttleSit('bed');
+      } else if (near.id === 'air_shuttle_bath') {
+        this.handleAirShuttleSit('bath');
+      } else if (near.id === 'air_shuttle_talk_0') {
+        this.handleAirShuttleTalk(0);
+      } else if (near.id === 'air_shuttle_talk_1') {
+        this.handleAirShuttleTalk(1);
       } else {
         this.handleAirShuttleBoarding();
       }
@@ -9245,7 +9266,17 @@ export class GameEngine {
     }
   }
 
+  private isAirShuttleWeaponStowed(itemId: ItemId): boolean {
+    if (!this.airShuttle.aboard || !this.airShuttleStowedWeapons.has(itemId)) return false;
+    this.toast(
+      'Your weapon is secured in the undercarriage luggage pod until we land.',
+      'warning',
+    );
+    return true;
+  }
+
   private fireArrow(): void {
+    if (this.isAirShuttleWeaponStowed('primitive_bow')) return;
     _probeEuler.set(this.camPitch, this.camYaw, 0, 'YXZ');
     _vec3A.set(0, 0, -1).applyEuler(_probeEuler);
     const sx = this.playerX + _vec3A.x * 0.6;
@@ -9380,6 +9411,7 @@ export class GameEngine {
   }
 
   private fireGun(weaponId: ItemId = 'gun'): void {
+    if (this.isAirShuttleWeaponStowed(weaponId)) return;
     const spec = FIREARM_SPECS[weaponId] ?? FIREARM_SPECS['gun'];
     if (!spec) return;
     if (!this.weaponMagazines.has(weaponId)) {
@@ -12951,6 +12983,123 @@ export class GameEngine {
     };
   }
 
+  private getAirShuttleLocalPosition(): { x: number; z: number } {
+    const c = Math.cos(this.airShuttle.planeYaw);
+    const s = Math.sin(this.airShuttle.planeYaw);
+    const dx = this.playerX - this.airShuttle.planeX;
+    const dz = this.playerZ - this.airShuttle.planeZ;
+    return { x: dx * c - dz * s, z: dx * s + dz * c };
+  }
+
+  private findAirShuttleCabinInteraction(): NearbyInteraction | null {
+    if (this.airShuttleBoardingAnim > 0) return null;
+
+    const local = this.getAirShuttleLocalPosition();
+    const targetWorld = (localX: number, localZ: number): { x: number; y: number; z: number } =>
+      this.airShuttleLocalToWorld(localX, 2.25, localZ);
+
+    if (this.airShuttleSeatedKind) {
+      const world = targetWorld(local.x, local.z);
+      return {
+        id: 'air_shuttle_stand',
+        label: 'Stand Up and Walk the Cabin',
+        sublabel: 'Seat selection · lounge · bedroom · bathroom · attendants',
+        kind: 'air_shuttle',
+        actionCategory: 'use',
+        distance: 0,
+        targetX: world.x,
+        targetY: world.y,
+        targetZ: world.z,
+      };
+    }
+
+    type CabinStop = {
+      id: string;
+      label: string;
+      sublabel: string;
+      localX: number;
+      localZ: number;
+      range: number;
+    };
+    const stops: CabinStop[] = [
+      {
+        id: 'air_shuttle_talk_0',
+        label: 'Talk to Amara',
+        sublabel: 'Cabin attendant · warmer voice · food and luggage service',
+        localX: 0.03,
+        localZ: 0.55,
+        range: 0.95,
+      },
+      {
+        id: 'air_shuttle_talk_1',
+        label: 'Talk to Celeste',
+        sublabel: 'Rear cabin attendant · distinct voice · drinks and towels',
+        localX: 0.52,
+        localZ: -1.2,
+        range: 0.95,
+      },
+      {
+        id: 'air_shuttle_couch',
+        label: 'Relax on the Couch',
+        sublabel: 'Live cabin TV on the port wall',
+        localX: 0.9,
+        localZ: -1.95,
+        range: 0.8,
+      },
+      {
+        id: 'air_shuttle_bed',
+        label: 'Lie on the Private Bed',
+        sublabel: 'Aft bedroom · turned-down bed and reading lamp',
+        localX: -0.55,
+        localZ: -5.0,
+        range: 1.0,
+      },
+      {
+        id: 'air_shuttle_bath',
+        label: 'Use the Marble Bathroom',
+        sublabel: 'Warm towels, marble sink and hot water',
+        localX: 0.82,
+        localZ: -4.8,
+        range: 0.9,
+      },
+    ];
+    const rows = [2.55, 1.15, -0.25];
+    for (let index = 0; index < 6; index++) {
+      const side = index % 2 === 0 ? -1 : 1;
+      stops.push({
+        id: `air_shuttle_sit_${index}`,
+        label: `Sit in Seat ${index + 1}`,
+        sublabel: 'Choose your own seat in the six-seat private lounge',
+        localX: side * 0.72,
+        localZ: rows[Math.floor(index / 2)] ?? 2.55,
+        range: 0.66,
+      });
+    }
+
+    let best: CabinStop | null = null;
+    let bestDistance = Infinity;
+    for (const stop of stops) {
+      const distance = Math.hypot(local.x - stop.localX, local.z - stop.localZ);
+      if (distance <= stop.range && distance < bestDistance) {
+        best = stop;
+        bestDistance = distance;
+      }
+    }
+    if (!best) return null;
+    const world = targetWorld(best.localX, best.localZ);
+    return {
+      id: best.id,
+      label: best.label,
+      sublabel: best.sublabel,
+      kind: 'air_shuttle',
+      actionCategory: 'use',
+      distance: bestDistance,
+      targetX: world.x,
+      targetY: world.y,
+      targetZ: world.z,
+    };
+  }
+
   private findNearbyInteraction(): NearbyInteraction | null {
     const nearHouseStation = this.findNearestHouseStationInteraction();
     if (nearHouseStation) {
@@ -12976,23 +13125,7 @@ export class GameEngine {
             targetZ: door.z,
           };
         }
-        const viewLabels = [
-          'Tour the Private Jet Cabin',
-          'View the Six-Seat Lounge & Maid',
-          'View the Private Bedroom',
-          'View the Marble Bathroom',
-        ];
-        return {
-          id: 'air_shuttle_cabin_view',
-          label: viewLabels[this.airShuttleCabinView % viewLabels.length],
-          sublabel: 'Full cabin service · TV · couch · bed · bath · maid with hot food',
-          kind: 'air_shuttle',
-          actionCategory: 'use',
-          distance: 0,
-          targetX: door.x,
-          targetY: base.waterY + 2.4,
-          targetZ: door.z,
-        };
+        return this.findAirShuttleCabinInteraction();
       } else if (this.airShuttle.canBoard) {
         const base = this.airShuttle.currentBase;
         const door = this.airShuttle.getBoardingPoint();
@@ -15884,39 +16017,53 @@ export class GameEngine {
     }
 
     if (this.airShuttle.aboard) {
-      // Pilot's eye view. The camera rides the aircraft's full pitch and roll
-      // while camYaw/camPitch are kept as a look offset.
+      // The cabin is a real walkable space. The camera rides the aircraft's
+      // pitch and roll, while the player moves in aircraft-local coordinates.
       this.handsRig.root.visible = false;
       if (this.localPlayerHandle) this.localPlayerHandle.group.visible = false;
       const rig = this.world?.crescentClipper;
       if (rig) {
         rig.root.updateMatrixWorld(true);
-        const view = this.airShuttleCabinView;
-        if (view === 1) {
-          _vec3A.set(0, 3.3, 3.2);
-          _vec3C.set(0, 2.8, -6.2);
-        } else if (view === 2) {
-          _vec3A.set(0.15, 3.25, -3.15);
-          _vec3C.set(-0.55, 2.45, -6.05);
-        } else if (view === 3) {
-          _vec3A.set(0.4, 3.25, -3.1);
-          _vec3C.set(0.86, 2.42, -5.8);
+        const seated = this.airShuttleSeatedKind;
+        let lookLocal = false;
+        if (seated === 'seat') {
+          const side = this.airShuttleSeatIndex % 2 === 0 ? -1 : 1;
+          const row = [2.55, 1.15, -0.25][Math.floor(this.airShuttleSeatIndex / 2)] ?? 2.55;
+          _vec3A.set(side * 0.62, 3.24, row + 0.02);
+          _vec3C.set(0, 2.86, -2.0);
+          lookLocal = true;
+        } else if (seated === 'couch') {
+          _vec3A.set(0.86, 3.22, -1.95);
+          _vec3C.set(-1.35, 3.04, -1.95);
+          lookLocal = true;
+        } else if (seated === 'bed') {
+          _vec3A.set(-0.55, 3.2, -5.0);
+          _vec3C.set(0.35, 2.88, -2.8);
+          lookLocal = true;
+        } else if (seated === 'bath') {
+          _vec3A.set(0.82, 3.2, -4.8);
+          _vec3C.set(0.82, 2.82, -5.9);
+          lookLocal = true;
         } else {
-          _vec3A.set(0, 3.28, 5.0);
+          _vec3A.set(
+            this.airShuttleLocalX,
+            this.airShuttleLocalY + 1.42,
+            this.airShuttleLocalZ,
+          );
         }
         rig.root.localToWorld(_vec3A);
         this.camera.position.copy(_vec3A);
         this.camera.up.set(0, 1, 0).transformDirection(rig.root.matrixWorld).normalize();
-        if (view === 0) {
+        if (lookLocal) {
+          rig.root.localToWorld(_vec3C);
+          _vec3B.copy(_vec3C);
+        } else {
           const lookPitch = THREE.MathUtils.clamp(this.camPitch, -1.05, 0.8);
           _vec3B.set(
             _vec3A.x - Math.sin(this.camYaw) * Math.cos(lookPitch) * 30,
             _vec3A.y + Math.sin(lookPitch) * 30,
             _vec3A.z - Math.cos(this.camYaw) * Math.cos(lookPitch) * 30,
           );
-        } else {
-          rig.root.localToWorld(_vec3C);
-          _vec3B.copy(_vec3C);
         }
         this.camera.lookAt(_vec3B);
       }
@@ -17031,8 +17178,21 @@ export class GameEngine {
     this.airShuttleLastPersistMs = 0;
     this.airShuttleHudAccum = 0;
     this.airShuttleSprayAccum = 0;
-    this.airShuttleCabinView = 0;
+    this.airShuttleLocalX = 0;
+    this.airShuttleLocalY = 2.1;
+    this.airShuttleLocalZ = 3.2;
+    this.airShuttleBoardingAnim = 0;
+    this.airShuttleSeatedKind = null;
+    this.airShuttleSeatIndex = 0;
+    this.airShuttleTalkIndex = 0;
     this.airShuttleMealServed = false;
+    this.airShuttleStowedWeapons.clear();
+    this.airShuttleStowedHotbar = [];
+    this.airShuttleLuggageCount = 0;
+    if (this.airShuttleEngineAudio) {
+      this.sound.stopJetEngines();
+      this.airShuttleEngineAudio = false;
+    }
     this.syncAirShuttleVisual(0);
   }
 
@@ -17063,20 +17223,22 @@ export class GameEngine {
     this.airShuttleLastPersistMs = 0;
     this.airShuttleHudAccum = 0;
     this.airShuttleSprayAccum = 0;
-    this.airShuttleCabinView = 0;
+    this.airShuttleLocalX = 0;
+    this.airShuttleLocalY = 2.1;
+    this.airShuttleLocalZ = 3.2;
+    this.airShuttleBoardingAnim = 0;
+    this.airShuttleSeatedKind = null;
+    this.airShuttleSeatIndex = 0;
+    this.airShuttleTalkIndex = 0;
     this.airShuttleMealServed = false;
+    this.airShuttleStowedWeapons.clear();
+    this.airShuttleStowedHotbar = [];
+    this.airShuttleLuggageCount = 0;
     this.syncAirShuttleVisual(0);
 
     if (this.airShuttle.aboard) {
-      const seat = this.airShuttle.getSeatWorldPoint();
-      this.playerX = seat.x;
-      this.playerY = seat.y;
-      this.playerZ = seat.z;
-      this.playerVelY = 0;
-      this.grounded = false;
-      this.isSwimming = false;
-      this.isUnderwater = false;
-      this.camYaw = this.airShuttle.planeYaw + Math.PI;
+      this.confiscateAirShuttleWeapons();
+      this.camYaw = this.airShuttle.planeYaw;
       this.camPitch = -0.03;
     } else if (restored.completed && restored.wasAboard) {
       // The fifty-five minutes elapsed while the app was closed. Put the
@@ -17135,21 +17297,23 @@ export class GameEngine {
     const status = this.airShuttle.getStatus();
 
     if (this.airShuttle.aboard) {
-      const seat = this.airShuttle.getSeatWorldPoint();
-      this.playerX = seat.x;
-      this.playerY = seat.y;
-      this.playerZ = seat.z;
-      this.playerVelY = 0;
-      this.grounded = false;
-      this.isSwimming = false;
-      this.isUnderwater = false;
+      this.updateAirShuttleCabinWalk(dt);
       this.seatedState = null;
-      // Keep the pilot's look direction locked to the aircraft while still
-      // honouring any mouse look applied this frame.
+      // Keep the whole cabin moving with the aircraft while still honouring
+      // any mouse look applied this frame.
       this.camYaw = Math.atan2(
         Math.sin(this.camYaw + events.yawDelta),
         Math.cos(this.camYaw + events.yawDelta),
       );
+      if (this.airShuttle.engineOn) {
+        this.startAirShuttleEngineAudio();
+        this.sound.updateJetEngines(
+          this.airShuttle.phase === 'airborne' ? 1 : 0.55,
+          Math.min(1, status.speedMps / 120),
+        );
+      }
+    } else if (this.airShuttleEngineAudio) {
+      this.stopAirShuttleEngineAudio();
     }
 
     this.spawnAirShuttleSpray(dt);
@@ -17161,13 +17325,12 @@ export class GameEngine {
       this.emitHud();
     }
     if (events.engineStarted) {
-      this.sound.playFerryEngineStart();
+      this.startAirShuttleEngineAudio();
       this.toast('Both turboprops catch. The Crescent Clipper taxis for the water runway.', 'discovery');
       this.persistAirShuttle(true);
       this.emitHud();
     }
     if (events.tookOff) {
-      this.sound.playFerryEngineStart();
       this.spawnParticles(
         this.airShuttle.planeX,
         this.airShuttle.planeY + 0.4,
@@ -17214,54 +17377,209 @@ export class GameEngine {
       this.toast(result.message, 'warning');
       return;
     }
-    this.airShuttleCabinView = 0;
+    this.airShuttleLocalX = -2.15;
+    this.airShuttleLocalY = 0.55;
+    this.airShuttleLocalZ = 2.05;
+    this.airShuttleBoardingAnim = 1.35;
+    this.airShuttleSeatedKind = null;
+    this.airShuttleSeatIndex = 0;
+    this.airShuttleTalkIndex = 0;
     this.airShuttleMealServed = false;
-    const status = this.airShuttle.getStatus();
-    const seat = this.airShuttle.getSeatWorldPoint();
-    this.playerX = seat.x;
-    this.playerY = seat.y;
-    this.playerZ = seat.z;
+    this.confiscateAirShuttleWeapons();
+    const door = this.airShuttle.getBoardingPoint();
+    this.playerX = door.x;
+    this.playerY = this.airShuttle.planeY + 0.7;
+    this.playerZ = door.z;
     this.playerVelY = 0;
     this.grounded = false;
     this.isSwimming = false;
     this.isUnderwater = false;
-    this.camYaw = status.planeYaw + Math.PI;
+    this.camYaw = this.airShuttle.planeYaw;
     this.camPitch = -0.03;
+    this.startAirShuttleEngineAudio();
     this.sound.playCarDoorLatch(true);
     this.syncAirShuttleVisual(0);
     this.persistAirShuttle(true);
     this.toast(result.message, 'discovery');
     this.speakAirShuttleVoice(
-      "Welcome aboard the Crescent Clipper. I'm your cabin attendant. Would you like something from the galley, or shall I show you the lounge?",
+      `Welcome aboard the Crescent Clipper. I'm Amara, your cabin attendant. I've secured your sidearm and ammunition in the undercarriage pod — you'll have them back at the destination. Walk the aisle and choose any seat, or visit the lounge, bedroom or bathroom.`,
     );
     this.nearbyInteraction = this.findNearbyInteraction();
     this.emitHud();
   }
 
-  private handleAirShuttleCabinView(): void {
-    if (!this.airShuttle.aboard) return;
-    this.airShuttleCabinView = (this.airShuttleCabinView + 1) % 4;
-    if (this.airShuttleCabinView === 1) {
-      if (!this.airShuttleMealServed) {
-        this.serveAirShuttleMeal();
-      } else {
-        this.speakAirShuttleVoice(
-          'The lounge is yours. The television is live, the couch is made up, and I can bring another plate whenever you like.',
-        );
-      }
-    } else if (this.airShuttleCabinView === 2) {
-      this.speakAirShuttleVoice(
-        'Your private bedroom is ready. The bed is turned down and the reading lamp is on.',
-      );
-    } else if (this.airShuttleCabinView === 3) {
-      this.speakAirShuttleVoice(
-        'The bathroom is fully stocked with warm towels, hot water and a marble sink.',
-      );
+  private airShuttleLocalToWorld(
+    localX: number,
+    localY: number,
+    localZ: number,
+  ): { x: number; y: number; z: number } {
+    const c = Math.cos(this.airShuttle.planeYaw);
+    const s = Math.sin(this.airShuttle.planeYaw);
+    return {
+      x: this.airShuttle.planeX + localX * c + localZ * s,
+      y: this.airShuttle.planeY + localY,
+      z: this.airShuttle.planeZ - localX * s + localZ * c,
+    };
+  }
+
+  private updateAirShuttleCabinWalk(dt: number): void {
+    const total = 1.35;
+    if (this.airShuttleBoardingAnim > 0) {
+      this.airShuttleBoardingAnim = Math.max(0, this.airShuttleBoardingAnim - dt);
+      const t = 1 - this.airShuttleBoardingAnim / total;
+      const eased = t * t * (3 - 2 * t);
+      this.airShuttleLocalX = THREE.MathUtils.lerp(-2.15, 0, eased);
+      this.airShuttleLocalY = THREE.MathUtils.lerp(0.55, 2.1, eased);
+      this.airShuttleLocalZ = THREE.MathUtils.lerp(2.05, 3.2, eased);
     } else {
-      this.speakAirShuttleVoice('Back in the cockpit. We are cruising smoothly.');
+      let moveRight = 0;
+      let moveForward = 0;
+      if (this.keys['KeyW'] || this.keys['key_w'] || this.keys['ArrowUp']) moveForward += 1;
+      if (this.keys['KeyS'] || this.keys['key_s'] || this.keys['ArrowDown']) moveForward -= 1;
+      if (this.keys['KeyD'] || this.keys['key_d'] || this.keys['ArrowRight']) moveRight += 1;
+      if (this.keys['KeyA'] || this.keys['key_a'] || this.keys['ArrowLeft']) moveRight -= 1;
+      moveRight = THREE.MathUtils.clamp(moveRight + this.joyX, -1, 1);
+      moveForward = THREE.MathUtils.clamp(moveForward + this.joyY, -1, 1);
+      const inputMag = Math.min(1, Math.hypot(moveRight, moveForward));
+
+      if (this.airShuttleSeatedKind) {
+        if (inputMag > 0.4) this.handleAirShuttleStand();
+      } else if (inputMag > 0.06) {
+        const fwdX = -Math.sin(this.camYaw);
+        const fwdZ = -Math.cos(this.camYaw);
+        const rightX = Math.cos(this.camYaw);
+        const rightZ = -Math.sin(this.camYaw);
+        const dirX = fwdX * moveForward + rightX * moveRight;
+        const dirZ = fwdZ * moveForward + rightZ * moveRight;
+        const c = Math.cos(this.airShuttle.planeYaw);
+        const s = Math.sin(this.airShuttle.planeYaw);
+        const localDX = dirX * c - dirZ * s;
+        const localDZ = dirX * s + dirZ * c;
+        const sprinting =
+          this.keys['ShiftLeft'] || this.keys['ShiftRight'] || this.keys['key_shift'];
+        const speed = sprinting ? 2.55 : 1.55;
+        this.airShuttleLocalX += localDX * speed * inputMag * dt;
+        this.airShuttleLocalZ += localDZ * speed * inputMag * dt;
+        const rearCabin = this.airShuttleLocalZ < -2.95;
+        const maxX = rearCabin ? 1.02 : 0.3;
+        this.airShuttleLocalX = THREE.MathUtils.clamp(this.airShuttleLocalX, -maxX, maxX);
+        this.airShuttleLocalZ = THREE.MathUtils.clamp(this.airShuttleLocalZ, -6.0, 3.55);
+        this.airShuttleLocalY = 2.1;
+        this.currentSpeedMps = speed * inputMag;
+      } else {
+        this.currentSpeedMps = 0;
+      }
     }
+
+    const rig = this.world?.crescentClipper;
+    if (rig) {
+      rig.root.updateMatrixWorld(true);
+      _vec3C.set(this.airShuttleLocalX, this.airShuttleLocalY, this.airShuttleLocalZ);
+      rig.root.localToWorld(_vec3C);
+      this.playerX = _vec3C.x;
+      this.playerY = _vec3C.y;
+      this.playerZ = _vec3C.z;
+    } else {
+      const world = this.airShuttleLocalToWorld(
+        this.airShuttleLocalX,
+        this.airShuttleLocalY,
+        this.airShuttleLocalZ,
+      );
+      this.playerX = world.x;
+      this.playerY = world.y;
+      this.playerZ = world.z;
+    }
+    this.playerVelY = 0;
+    this.grounded = true;
+    this.isSwimming = false;
+    this.isUnderwater = false;
+    this.nearbyInteraction = this.findNearbyInteraction();
+  }
+
+  private handleAirShuttleSit(kind: 'seat' | 'couch' | 'bed' | 'bath', index = 0): void {
+    if (!this.airShuttle.aboard) return;
+    const rows = [2.55, 1.15, -0.25];
+    let x = 0;
+    let z = 3.2;
+    let label = 'the couch';
+    if (kind === 'seat') {
+      const side = index % 2 === 0 ? -1 : 1;
+      x = side * 0.67;
+      z = rows[Math.floor(index / 2)] ?? rows[0];
+      label = `seat ${index + 1}`;
+    } else if (kind === 'couch') {
+      x = 0.9;
+      z = -1.95;
+      label = 'the couch';
+    } else if (kind === 'bed') {
+      x = -0.55;
+      z = -5.0;
+      label = 'the private bed';
+    } else {
+      x = 0.82;
+      z = -4.8;
+      label = 'the marble bathroom';
+    }
+    this.airShuttleSeatedKind = kind;
+    this.airShuttleSeatIndex = index;
+    this.airShuttleLocalX = x;
+    this.airShuttleLocalY = 2.1;
+    this.airShuttleLocalZ = z;
+    this.camPitch = kind === 'bed' ? -0.12 : -0.04;
+    this.toast(`You settle into ${label}.`, 'info');
+    this.speakAirShuttleVoice(
+      kind === 'seat'
+        ? 'Is this seat comfortable? I can bring a pillow or a drink whenever you like.'
+        : kind === 'couch'
+          ? 'The television is live. I can leave you to the couch, or bring your meal here.'
+          : kind === 'bed'
+            ? 'The bedroom is made up with a fresh blanket. Sleep well; I will wake you before we land.'
+            : 'The bathroom is stocked with warm towels and hot water.',
+      index % 2,
+    );
     this.nearbyInteraction = this.findNearbyInteraction();
     this.emitHud();
+  }
+
+  private handleAirShuttleStand(): void {
+    if (!this.airShuttleSeatedKind) return;
+    const z = this.airShuttleLocalZ;
+    this.airShuttleSeatedKind = null;
+    this.airShuttleLocalX = 0;
+    this.airShuttleLocalZ = THREE.MathUtils.clamp(z + 0.55, -5.5, 3.4);
+    this.airShuttleLocalY = 2.1;
+    this.camYaw = this.airShuttle.planeYaw;
+    this.camPitch = -0.04;
+    this.toast('You stand and step back into the aisle.', 'info');
+    this.nearbyInteraction = this.findNearbyInteraction();
+    this.emitHud();
+  }
+
+  private handleAirShuttleTalk(maidIndex: number): void {
+    if (!this.airShuttle.aboard) return;
+    if (maidIndex === 0 && !this.airShuttleMealServed) {
+      this.serveAirShuttleMeal();
+      return;
+    }
+    const lines =
+      maidIndex === 0
+        ? [
+            'Your sidearm and ammunition are tagged and locked in the undercarriage pod. I will hand them back when we land.',
+            'We have six club seats, a live television and a couch in the lounge. The bedroom and bathroom are aft.',
+            'If you need anything at all, just walk up and speak to me. I will hear you over the engines.',
+          ]
+        : [
+            "I'm Celeste, the second attendant. Amara has the galley; I have the rear cabin and the luggage pod.",
+            'The bedroom is on the port side, the bathroom opposite. Both are private for the whole crossing.',
+            'Would you like a cold drink, a warm towel, or another plate from the galley?',
+          ];
+    const line = lines[this.airShuttleTalkIndex % lines.length];
+    this.airShuttleTalkIndex += 1;
+    this.speakAirShuttleVoice(line, maidIndex);
+    this.toast(
+      maidIndex === 0 ? 'Amara listens from the lounge.' : 'Celeste listens from the rear cabin.',
+      'info',
+    );
   }
 
   private serveAirShuttleMeal(): void {
@@ -17271,37 +17589,97 @@ export class GameEngine {
     this.addItem('coconut', 1, true);
     this.spawnParticles(this.playerX, this.playerY + 1.0, this.playerZ, 0xf8f3e6, 8);
     this.speakAirShuttleVoice(
-      'Here you are: coconut fish curry, freshly plated, with chilled coconut water. If you would like anything else, just say the word and I will bring it.',
+      `Here you are: coconut fish curry, freshly plated, with chilled coconut water. Your sidearm is safe in the undercarriage pod — ${this.airShuttleLuggageCount} secured item${this.airShuttleLuggageCount === 1 ? '' : 's'}. If you would like anything else, just say the word.`,
     );
-    this.toast('The maid serves coconut fish curry and chilled coconut water.', 'craft');
+    this.toast('Amara serves coconut fish curry and chilled coconut water.', 'craft');
   }
 
   /**
-   * The maid's lines use the browser's installed speech voices, so they sound
-   * like a real person rather than a synthesized beep. Text still appears when
-   * speech synthesis is unavailable or muted.
+   * Each attendant gets a different installed speech voice and pitch, so the
+   * two maids sound like different people. Text still appears when speech
+   * synthesis is unavailable or muted.
    */
-  private speakAirShuttleVoice(line: string): void {
+  private speakAirShuttleVoice(line: string, profile = 0): void {
     this.toast(line, 'info');
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
     try {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(line);
-      utterance.rate = 0.98;
-      utterance.pitch = 1.08;
+      utterance.rate = profile === 0 ? 0.97 : 1.03;
+      utterance.pitch = profile === 0 ? 1.12 : 0.9;
       utterance.volume = 0.95;
       const voices = window.speechSynthesis.getVoices();
-      const preferred =
-        voices.find(
-          (voice) =>
-            /^en/i.test(voice.lang) &&
-            /Samantha|Victoria|Karen|Zira|Aria|Jenny|Female|Natural/i.test(voice.name),
-        ) ?? voices.find((voice) => /^en/i.test(voice.lang));
+      const english = voices.filter((voice) => /^en/i.test(voice.lang));
+      const preferredPool = english.filter((voice) =>
+        /Samantha|Victoria|Karen|Zira|Aria|Jenny|Female|Natural|Serena|Moira|Fiona/i.test(
+          voice.name,
+        ),
+      );
+      const pool = preferredPool.length > 0 ? preferredPool : english;
+      const preferred = pool[profile % Math.max(1, pool.length)];
       if (preferred) utterance.voice = preferred;
       window.speechSynthesis.speak(utterance);
     } catch {
       // Text fallback is already shown above.
     }
+  }
+
+  private confiscateAirShuttleWeapons(): void {
+    const ids = new Set<ItemId>();
+    let count = 0;
+    for (const slot of this.inventory) {
+      if (ITEMS[slot.itemId]?.category === 'weapon') {
+        ids.add(slot.itemId);
+        count += slot.quantity;
+      }
+    }
+    this.airShuttleStowedWeapons = ids;
+    this.airShuttleStowedHotbar = [];
+    for (let i = 0; i < this.hotbarItemIds.length; i++) {
+      const itemId = this.hotbarItemIds[i];
+      if (itemId && ids.has(itemId)) {
+        this.airShuttleStowedHotbar.push({ index: i, itemId });
+        this.hotbarItemIds[i] = null;
+      }
+    }
+    if (this.airShuttleStowedHotbar.length > 0) this.cancelReload();
+    this.airShuttleLuggageCount = count;
+    this.emitHud();
+    this.toast(
+      count > 0
+        ? `Amara tags your weapons and stows ${count} item${count === 1 ? '' : 's'} in the undercarriage luggage pod.`
+        : 'Amara checks the undercarriage luggage pod. No weapons to stow.',
+      'info',
+    );
+  }
+
+  private restoreAirShuttleWeapons(): void {
+    if (this.airShuttleStowedWeapons.size === 0) return;
+    const count = this.airShuttleLuggageCount;
+    for (const slot of this.airShuttleStowedHotbar) {
+      if (this.hotbarItemIds[slot.index] === null) {
+        this.hotbarItemIds[slot.index] = slot.itemId;
+      }
+    }
+    this.airShuttleStowedWeapons.clear();
+    this.airShuttleStowedHotbar = [];
+    this.airShuttleLuggageCount = 0;
+    this.emitHud();
+    this.toast(
+      `Amara returns ${count} secured item${count === 1 ? '' : 's'} from the undercarriage luggage pod.`,
+      'discovery',
+    );
+  }
+
+  private startAirShuttleEngineAudio(): void {
+    if (this.airShuttleEngineAudio) return;
+    this.airShuttleEngineAudio = this.sound.startJetEngines();
+  }
+
+  private stopAirShuttleEngineAudio(): void {
+    if (!this.airShuttleEngineAudio) return;
+    this.sound.stopJetEngines();
+    this.airShuttleEngineAudio = false;
   }
 
   private handleAirShuttleDisembark(): void {
@@ -17322,8 +17700,16 @@ export class GameEngine {
     this.grounded = true;
     this.isSwimming = false;
     this.isUnderwater = false;
-    this.airShuttleCabinView = 0;
+    this.airShuttleLocalX = 0;
+    this.airShuttleLocalY = 2.1;
+    this.airShuttleLocalZ = 3.2;
+    this.airShuttleBoardingAnim = 0;
+    this.airShuttleSeatedKind = null;
+    this.airShuttleSeatIndex = 0;
+    this.airShuttleTalkIndex = 0;
     this.airShuttleMealServed = false;
+    this.restoreAirShuttleWeapons();
+    this.stopAirShuttleEngineAudio();
     this.sound.playCarDoorLatch(true);
     this.syncAirShuttleVisual(0);
     this.persistAirShuttle(true);
@@ -17339,7 +17725,7 @@ export class GameEngine {
     if (wasAboard) {
       this.handleAirShuttleDisembark();
     }
-    this.sound.playFerryEngineStop();
+    this.stopAirShuttleEngineAudio();
     this.toast(
       `The Crescent Clipper is parked at ${base.label}, turned around and ready for the ${AIR_SHUTTLE_LEG_MINUTES}-minute return flight.`,
       'discovery',
