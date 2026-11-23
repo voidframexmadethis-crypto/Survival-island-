@@ -355,14 +355,24 @@ export class WaterparkRuntime {
     if (!bestSlide) return null;
 
     const entry = this.getPhysicalSlideEntry(bestSlide.spec.id)!;
-    const first = bestSlide.samples[0];
     const width = getWaterparkSlideWidth(bestSlide.spec.kind);
     const lateralLimit = this.physicalLateralLimit(bestSlide);
+    // Use the frame at the actual mouth, not the hidden top of the curve. This
+    // keeps the initial lateral offset continuous with the visible flume.
+    sampleWaterparkPath(
+      bestSlide.samples,
+      entry.distance,
+      this.scratchPoint,
+      this.scratchTangent,
+      this.scratchRight,
+      this.scratchUp,
+    );
     const lateral = Math.min(
       lateralLimit,
       Math.max(
         -lateralLimit,
-        (playerX - entry.x) * first.right.x + (playerZ - entry.z) * first.right.z,
+        (playerX - entry.x) * this.scratchRight.x +
+          (playerZ - entry.z) * this.scratchRight.z,
       ),
     );
     this.physical = {
@@ -404,37 +414,49 @@ export class WaterparkRuntime {
         ride.elapsed,
       );
     }
-    sampleWaterparkPath(
-      ride.slide.samples,
-      ride.distance,
-      this.scratchPoint,
-      this.scratchTangent,
-      this.scratchRight,
-      this.scratchUp,
-    );
-    const boost =
-      ride.slide.spec.kind === 'watercoaster' || ride.slide.spec.kind === 'log' ? 1 : 0;
-    ride.speed = stepWaterparkSpeed(
-      ride.speed,
-      this.scratchTangent.y,
-      frameDt,
-      ride.slide.spec.kind,
-      boost,
-    );
-    ride.elapsed += frameDt;
-    ride.distance += ride.speed * frameDt;
+    // Integrate in short fixed slices. At 30 Hz a fall can advance more than a
+    // metre per frame; slicing keeps slope, speed and wall response continuous
+    // instead of sampling only once per rendered frame.
+    let remaining = frameDt;
+    while (remaining > 1e-6) {
+      const step = Math.min(1 / 120, remaining);
+      remaining -= step;
+      sampleWaterparkPath(
+        ride.slide.samples,
+        ride.distance,
+        this.scratchPoint,
+        this.scratchTangent,
+        this.scratchRight,
+        this.scratchUp,
+      );
+      const boost =
+        ride.slide.spec.kind === 'watercoaster' || ride.slide.spec.kind === 'log'
+          ? 1
+          : 0;
+      ride.speed = stepWaterparkSpeed(
+        ride.speed,
+        this.scratchTangent.y,
+        step,
+        ride.slide.spec.kind,
+        boost,
+      );
+      ride.elapsed += step;
+      ride.distance += ride.speed * step;
 
-    if (ride.distance >= ride.slide.length - 0.03) {
-      const finished = this.finishPhysicalSlide(ride);
-      return finished;
-    }
+      if (ride.distance >= ride.slide.length - 0.03) {
+        return this.finishPhysicalSlide(ride);
+      }
 
-    const limit = this.physicalLateralLimit(ride.slide);
-    ride.lateralVelocity += -ride.lateral * 2.1 * frameDt;
-    ride.lateral += ride.lateralVelocity * frameDt;
-    if (Math.abs(ride.lateral) > limit) {
-      ride.lateral = Math.sign(ride.lateral) * limit;
-      ride.lateralVelocity = 0;
+      const limit = this.physicalLateralLimit(ride.slide);
+      // Spring the rider toward the flume centre while bleeding off wall
+      // energy, so joints and sharp banking cannot cause a lateral oscillation.
+      ride.lateralVelocity +=
+        (-ride.lateral * 18 - ride.lateralVelocity * 7.5) * step;
+      ride.lateral += ride.lateralVelocity * step;
+      if (Math.abs(ride.lateral) > limit) {
+        ride.lateral = Math.sign(ride.lateral) * limit;
+        ride.lateralVelocity = 0;
+      }
     }
     return this.buildPhysicalSnapshot(
       ride.slide,
@@ -538,18 +560,30 @@ export class WaterparkRuntime {
       newBest,
     });
     const exit = ride.slide.spec.exit;
+    sampleWaterparkPath(
+      ride.slide.samples,
+      ride.slide.length,
+      this.scratchPoint,
+      this.scratchTangent,
+      this.scratchRight,
+      this.scratchUp,
+    );
     const snapshot: PhysicalSlideSnapshot = {
       slideId: ride.slide.spec.id,
       name: ride.slide.spec.name,
       x: WATERPARK_SITE.x + exit.x,
       y: WATERPARK_DECK_Y,
       z: WATERPARK_SITE.z + exit.z,
-      yaw: 0,
+      // Keep the splashdown heading continuous with the flume so the camera
+      // does not snap to north when the ride hands control back to walking.
+      yaw: Math.atan2(this.scratchTangent.x, this.scratchTangent.z),
       bank: 0,
       lateralOffset: 0,
       lateralLimit: this.physicalLateralLimit(ride.slide),
-      speed: ride.speed,
-      speedKmh: ride.speed * 3.6,
+      // The splash pool arrests forward motion; handing 30 m/s back to walking
+      // physics on the next frame would launch the player.
+      speed: 0,
+      speedKmh: 0,
       progressPercent: 100,
       heightM: 0,
       finished: true,

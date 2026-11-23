@@ -229,6 +229,8 @@ test('all 28 slides are physically ridden end-to-end at 30, 60 and 120 Hz', () =
       }
       assert.ok(snapshot.finished, `${slide.id} never reached splashdown`);
       assert.equal(snapshot.progressPercent, 100);
+      assert.equal(snapshot.speed, 0, `${slide.id} must be arrested by the splash pool`);
+      assert.ok(Number.isFinite(snapshot.yaw), `${slide.id} has an invalid splashdown heading`);
       assertClose(snapshot.x, WATERPARK_SITE.x + slide.exit.x, 0.001);
       assertClose(snapshot.z, WATERPARK_SITE.z + slide.exit.z, 0.001);
       assertClose(snapshot.y, WATERPARK_DECK_Y, 0.001);

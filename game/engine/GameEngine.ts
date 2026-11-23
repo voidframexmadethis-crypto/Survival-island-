@@ -12025,8 +12025,17 @@ export class GameEngine {
     this.playerX = snapshot.x;
     this.playerY = snapshot.y;
     this.playerZ = snapshot.z;
-    this.playerYaw = snapshot.yaw;
-    this.camYaw = snapshot.yaw - Math.PI;
+    // Follow the flume tangent through a short angular blend. Wrapping the
+    // delta keeps curves and banked joints from snapping the camera through
+    // 180 degrees when the tangent crosses the +/-PI seam.
+    const yawDelta = Math.atan2(
+      Math.sin(snapshot.yaw - this.playerYaw),
+      Math.cos(snapshot.yaw - this.playerYaw),
+    );
+    const yawBlend = 1 - Math.exp(-(snapshot.finished ? 18 : 11) * dt);
+    const maxTurn = (snapshot.finished ? 6.5 : 4.5) * dt;
+    this.playerYaw += THREE.MathUtils.clamp(yawDelta * yawBlend, -maxTurn, maxTurn);
+    this.camYaw = this.playerYaw - Math.PI;
     this.playerVelY = 0;
     this.grounded = snapshot.finished;
     this.isSwimming = false;
