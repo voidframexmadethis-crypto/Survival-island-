@@ -195,6 +195,7 @@ function formatTimePhase(t: number): string {
 export function SurvivalGameClient() {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<GameEngine | null>(null);
+  const engineFactoryRef = useRef<(() => GameEngine | null) | null>(null);
   const lookPointerId = useRef<number | null>(null);
   const lastLookPos = useRef({ x: 0, y: 0 });
   const pointerDownPos = useRef({ x: 0, y: 0 });
@@ -204,7 +205,7 @@ export function SurvivalGameClient() {
   const slotButtonRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const [screen, setScreen] = useState<'menu' | 'playing'>('menu');
-  const [engineReady, setEngineReady] = useState(false);
+  const [engineReady, setEngineReady] = useState(true);
   const [engineInstance, setEngineInstance] = useState<GameEngine | null>(null);
   const launchPendingRef = useRef(false);
   const [currentSlotId, setCurrentSlotId] = useState<string>('slot_1');
@@ -642,124 +643,132 @@ export function SurvivalGameClient() {
     if (!mountEl) return;
 
     let engine: GameEngine | null = null;
-    let clearErrId = 0;
     let cancelled = false;
-    setEngineReady(false);
 
-    // Defer the heavy synchronous island/world build by one tick so the boot
-    // screen can paint first. Previously the menu mounted over an unpainted
-    // canvas and the whole page froze while the engine was constructed.
-    const bootId = window.setTimeout(() => {
-    if (cancelled) return;
-    const initialSettings = loadSettings();
-    try {
-      engine = new GameEngine(mountEl, initialSettings, {
-        onHudUpdate: (snapshot) => {
-          setHud(snapshot);
-          const eq = snapshot.equippedSlot;
-          const total = snapshot.hotbarItemIds.length;
-          if (eq >= 0) {
-            setHudWindowStart((prev) => {
-              const maxStart = Math.max(0, total - 9);
-              if (eq < prev) return Math.min(maxStart, eq);
-              if (eq >= prev + 9) return Math.min(maxStart, eq - 9 + 1);
-              return Math.min(maxStart, prev);
-            });
-          }
-        },
-        onToast: pushToast,
-        onOpenStation: (station, structureId) => {
-          if (station === 'mainland') {
-            setActiveStationStructureId(structureId);
-            setActiveModal('mainland');
-            engine?.setMode('paused');
-            return;
-          }
-          if (station === 'underground_elevator') {
-            // Strictly clears any car menu and opens ONLY the elevator computer
-            setActiveStationStructureId(structureId);
-            setActiveModal('underground_elevator');
-            engine?.setMode('paused');
-            return;
-          }
-          if (
-            station === 'vehicles' ||
-            station === 'car_radio' ||
-            station === 'vehicle_cargo'
-          ) {
-            // Block car menus if the elevator computer is currently active
-            setActiveModal((prev) => {
-              if (prev === 'underground_elevator') return prev;
+    // The menu is pure DOM and no longer waits for the full island build. The
+    // heavy engine is created only when a world is launched, so the first
+    // screen is interactive immediately instead of sitting behind a loader.
+    const createEngine = (): GameEngine | null => {
+      if (engine) return engine;
+      if (cancelled) return null;
+      const initialSettings = loadSettings();
+      try {
+        engine = new GameEngine(mountEl, initialSettings, {
+          onHudUpdate: (snapshot) => {
+            setHud(snapshot);
+            const eq = snapshot.equippedSlot;
+            const total = snapshot.hotbarItemIds.length;
+            if (eq >= 0) {
+              setHudWindowStart((prev) => {
+                const maxStart = Math.max(0, total - 9);
+                if (eq < prev) return Math.min(maxStart, eq);
+                if (eq >= prev + 9) return Math.min(maxStart, eq - 9 + 1);
+                return Math.min(maxStart, prev);
+              });
+            }
+          },
+          onToast: pushToast,
+          onOpenStation: (station, structureId) => {
+            if (station === 'mainland') {
               setActiveStationStructureId(structureId);
+              setActiveModal('mainland');
               engine?.setMode('paused');
-              return station;
+              return;
+            }
+            if (station === 'underground_elevator') {
+              // Strictly clears any car menu and opens ONLY the elevator computer
+              setActiveStationStructureId(structureId);
+              setActiveModal('underground_elevator');
+              engine?.setMode('paused');
+              return;
+            }
+            if (
+              station === 'vehicles' ||
+              station === 'car_radio' ||
+              station === 'vehicle_cargo'
+            ) {
+              // Block car menus if the elevator computer is currently active
+              setActiveModal((prev) => {
+                if (prev === 'underground_elevator') return prev;
+                setActiveStationStructureId(structureId);
+                engine?.setMode('paused');
+                return station;
+              });
+              return;
+            }
+            if (station === 'tv') {
+              setTvPipDismissed(false);
+              setTvViewMode('inline');
+            }
+            setActiveStationStructureId(structureId);
+            setActiveModal(station);
+            engine?.setMode('paused');
+          },
+          onYouTubeError: (videoId, errorCode) => {
+            ytErrSeqRef.current += 1;
+            setYoutubeErrorSignal({
+              videoId,
+              code: errorCode,
+              seq: ytErrSeqRef.current,
             });
-            return;
-          }
-          if (station === 'tv') {
-            setTvPipDismissed(false);
-            setTvViewMode('inline');
-          }
-          setActiveStationStructureId(structureId);
-          setActiveModal(station);
-          engine?.setMode('paused');
-        },
-        onYouTubeError: (videoId, errorCode) => {
-          ytErrSeqRef.current += 1;
-          setYoutubeErrorSignal({
-            videoId,
-            code: errorCode,
-            seq: ytErrSeqRef.current,
-          });
-        },
-        onTvProjectionUpdate: (proj) => {
-          tvOverlayRef.current?.updateProjection(proj);
-        },
-        onTvBassUpdate: (bassEnergy, bassMode) => {
-          tvOverlayRef.current?.updateBassBump(bassEnergy, bassMode);
-        },
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unable to initialize WebGL 3D renderer.';
-      setWebglError(msg);
-      return;
-    }
+          },
+          onTvProjectionUpdate: (proj) => {
+            tvOverlayRef.current?.updateProjection(proj);
+          },
+          onTvBassUpdate: (bassEnergy, bassMode) => {
+            tvOverlayRef.current?.updateBassBump(bassEnergy, bassMode);
+          },
+        });
+      } catch (err) {
+        const msg =
+          err instanceof Error ? err.message : 'Unable to initialize WebGL 3D renderer.';
+        setWebglError(msg);
+        return null;
+      }
 
-    if (cancelled) {
-      engine?.dispose();
-      engine = null;
-      return;
-    }
-    if (!engine) return;
-    const bootedEngine = engine;
-    engineRef.current = bootedEngine;
-    setEngineInstance(bootedEngine);
-    clearErrId = window.requestAnimationFrame(() => {
+      if (cancelled) {
+        engine.dispose();
+        engine = null;
+        return null;
+      }
+      engineRef.current = engine;
+      setEngineInstance(engine);
       setWebglError(null);
-      setEngineReady(true);
-    });
-
+      return engine;
+    };
+    engineFactoryRef.current = createEngine;
     const params = new URLSearchParams(window.location.search);
-    if (params.get('autostart') === '1') {
-      bootedEngine.startNewWorldState('slot_1', true, {
-        worldType: 'island',
-        worldName: 'Survival Island',
-        gameMode: 'survival',
-      });
-      bootedEngine.ensurePlayerHasGun(true);
-      bootedEngine.setMode('playing');
-      window.requestAnimationFrame(() => {
-        setCurrentSlotId('slot_1');
-        setActiveModal(null);
-        setScreen('playing');
-      });
-    }
-    }, 32);
+    const autostart = params.get('autostart') === '1';
+    setEngineReady(!autostart);
+
+    const bootId =
+      autostart
+        ? window.setTimeout(() => {
+            const bootedEngine = createEngine();
+            if (!bootedEngine) {
+              setEngineReady(true);
+              return;
+            }
+            bootedEngine.startNewWorldState('slot_1', true, {
+              worldType: 'island',
+              worldName: 'Survival Island',
+              gameMode: 'survival',
+            });
+            bootedEngine.ensurePlayerHasGun(true);
+            bootedEngine.setMode('playing');
+            window.requestAnimationFrame(() => {
+              setCurrentSlotId('slot_1');
+              setActiveModal(null);
+              setScreen('playing');
+              setEngineReady(true);
+            });
+          }, 32)
+        : 0;
 
     return () => {
       cancelled = true;
-      window.clearTimeout(bootId);
-      if (clearErrId) window.cancelAnimationFrame(clearErrId);
+      if (bootId) window.clearTimeout(bootId);
+      if (engineFactoryRef.current === createEngine) engineFactoryRef.current = null;
       engine?.dispose();
       engineRef.current = null;
       setEngineInstance(null);
@@ -988,15 +997,17 @@ export function SurvivalGameClient() {
     flatSurfaceStyle?: FlatSurfaceStyle;
     playerGender?: 'boy' | 'girl';
   }) => {
-    if (!engineRef.current || launchPendingRef.current) return;
-    engineRef.current.unlockAudio();
+    if (launchPendingRef.current || (!engineRef.current && !engineFactoryRef.current)) return;
+    engineRef.current?.unlockAudio();
     launchPendingRef.current = true;
-    // Show the boot screen and let it paint before the synchronous world build.
+    // The engine is normally created here, on first launch, instead of blocking
+    // the initial menu. Show the loader while the synchronous build runs.
     setEngineReady(false);
     window.setTimeout(() => {
       try {
-        const engine = engineRef.current;
+        const engine = engineRef.current ?? engineFactoryRef.current?.() ?? null;
         if (!engine) return;
+        engine.unlockAudio();
         const safeMode = resolveAllowedGameMode(opts.worldType, opts.gameMode);
         const slotId = createNewSaveSlotId(opts.worldType);
         const playCinematic = opts.worldType === 'island';
@@ -1024,19 +1035,19 @@ export function SurvivalGameClient() {
   };
 
   const handleContinueGame = (slotId?: string) => {
-    if (!engineRef.current) return;
     const targetId = slotId || latestSave?.slotId;
     if (!targetId) return;
     const data = loadGameFromSlot(targetId);
     if (!data) return;
-    if (launchPendingRef.current) return;
-    engineRef.current.unlockAudio();
+    if (launchPendingRef.current || (!engineRef.current && !engineFactoryRef.current)) return;
+    engineRef.current?.unlockAudio();
     launchPendingRef.current = true;
     setEngineReady(false);
     window.setTimeout(() => {
       try {
-        const engine = engineRef.current;
+        const engine = engineRef.current ?? engineFactoryRef.current?.() ?? null;
         if (!engine) return;
+        engine.unlockAudio();
         engine.loadFromSave(data);
         setCurrentSlotId(targetId);
         if (data.worldType !== 'flat') {
@@ -1493,6 +1504,18 @@ export function SurvivalGameClient() {
               Shaping terrain · planting forests · lighting the island
             </p>
           </div>
+        </div>
+      )}
+
+      {/* Instant menu backdrop while the full 3D engine waits for launch. */}
+      {screen === 'menu' && !engineInstance && !webglError && (
+        <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden bg-[radial-gradient(circle_at_74%_16%,#fbbf24_0%,#b45309_14%,#3b2414_38%,#07140f_76%)]">
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_105%,rgba(6,78,59,0.75),transparent_62%)]" />
+          <div className="absolute -left-[12%] bottom-[26%] h-[34%] w-[78%] rounded-[50%] bg-emerald-950/95 blur-[1px]" />
+          <div className="absolute -right-[18%] bottom-[30%] h-[28%] w-[70%] rounded-[50%] bg-stone-900/90 blur-[1px]" />
+          <div className="absolute inset-x-0 bottom-0 h-[34%] bg-[linear-gradient(180deg,rgba(4,47,46,0.9)_0%,#052e2b_35%,#041b18_72%,#020617_100%)]" />
+          <div className="absolute inset-x-0 bottom-[31%] h-px bg-amber-200/30 shadow-[0_0_28px_rgba(251,191,36,0.45)]" />
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(2,6,23,0.05),rgba(2,6,23,0.45))]" />
         </div>
       )}
 

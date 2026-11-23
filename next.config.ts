@@ -10,6 +10,9 @@ const createNextConfig = (phase: string): NextConfig => ({
   typescript: {
     ignoreBuildErrors: false,
   },
+  // Freebuff serves the dev app through its managed Daytona proxy. Without
+  // this, Next rejects the proxied /_next/* requests as cross-origin in dev.
+  allowedDevOrigins: ['*.daytonaproxy01.net'],
   // Allow access to remote image placeholder.
   images: {
     remotePatterns: [

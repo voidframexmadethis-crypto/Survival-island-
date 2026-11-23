@@ -74,7 +74,12 @@ interface FlatWaterSail {
   bobPhase: number;
 }
 
-export const PIRATE_CINEMATIC_DURATION = 19.0;
+// The opening was a 19-second slow burn. The same staged beats now play in
+// 12 seconds so players reach the island quickly while every ship, crew,
+// breakup and splash cue still has time to read.
+export const PIRATE_CINEMATIC_DURATION = 12.0;
+const CINEMATIC_TIMELINE_DURATION = 19.0;
+const CINEMATIC_TIME_SCALE = CINEMATIC_TIMELINE_DURATION / PIRATE_CINEMATIC_DURATION;
 
 const _tmpVec = new THREE.Vector3();
 const _tmpNavVec = new THREE.Vector3();
@@ -1165,7 +1170,7 @@ export class PirateCinematicRig {
   }
 
   public update(
-    t: number,
+    elapsed: number,
     oceanLevel: number,
     playerSpawn: { x: number; z: number },
     getTerrainHeight: (x: number, z: number) => number,
@@ -1173,7 +1178,7 @@ export class PirateCinematicRig {
     outCamLook: THREE.Vector3,
     audio: PirateCinematicAudioCallbacks,
   ): PirateCinematicFrameOutput {
-    if (t >= PIRATE_CINEMATIC_DURATION) {
+    if (elapsed >= PIRATE_CINEMATIC_DURATION) {
       return {
         finished: true,
         subtitle: '',
@@ -1184,8 +1189,13 @@ export class PirateCinematicRig {
       };
     }
 
+    // Existing stage timings are authored against a 19-second timeline. Scale
+    // elapsed time into that timeline so the shortened cut keeps every cue.
+    const t = Math.min(
+      CINEMATIC_TIMELINE_DURATION,
+      Math.max(0, elapsed) * CINEMATIC_TIME_SCALE,
+    );
     const isGirl = this.playerGender === 'girl';
-    const heShe = isGirl ? 'she' : 'he';
     const activePlayerRig = isGirl ? this.girlRig : this.boyRig;
 
     const swellY = Math.sin(t * 2.2) * 0.68;
@@ -1459,7 +1469,7 @@ export class PirateCinematicRig {
         this.splashGroup.visible = false;
       }
 
-      const swimP = THREE.MathUtils.clamp(sp / (PIRATE_CINEMATIC_DURATION - 12.75), 0, 1);
+      const swimP = THREE.MathUtils.clamp(sp / (CINEMATIC_TIMELINE_DURATION - 12.75), 0, 1);
       const swimX = THREE.MathUtils.lerp(splashX, playerSpawn.x, swimP * 0.45);
       const swimZ = THREE.MathUtils.lerp(splashZ, playerSpawn.z + 18, swimP * 0.45);
       this.playerGroup.position.set(swimX, oceanLevel - 0.88 + Math.sin(t * 4) * 0.12, swimZ);
@@ -1568,7 +1578,7 @@ export class PirateCinematicRig {
         this.splashGroup.visible = false;
       }
 
-      const swimP = THREE.MathUtils.clamp(sp / (PIRATE_CINEMATIC_DURATION - 15.1), 0, 1);
+      const swimP = THREE.MathUtils.clamp(sp / (CINEMATIC_TIMELINE_DURATION - 15.1), 0, 1);
       const swimX = THREE.MathUtils.lerp(splashX, playerSpawn.x + 3.5, swimP * 0.45);
       const swimZ = THREE.MathUtils.lerp(splashZ, playerSpawn.z + 20, swimP * 0.45);
       this.navigator.root.position.set(
@@ -1651,12 +1661,12 @@ export class PirateCinematicRig {
       const e = THREE.MathUtils.smoothstep(t / 4.2, 0, 1);
       subtitle =
         t < 2.2
-          ? 'Thunder splits the sky! Broadside cannons BOOM as the pirate crew battles the storm!'
-          : 'Pirates scramble across the deck shouting "ABANDON SHIP!" as the navigator cries beside the wheel...';
+          ? 'The treasure galleon Emerald Fortune sails for Lost World Island, bound for the jewel coves beyond the mist.'
+          : 'The island rises ahead — but the old hull groans beneath the crew’s feet.';
       crewShout =
         t < 2.2
-          ? 'CAPTAIN: "HOLD FAST! MAN THE DECK!" · CANNONS BOOMING'
-          : 'CREW: "ABANDON SHIP!! ABANDON SHIP!!"';
+          ? 'CAPTAIN: "JEWELS AHEAD! LOST WORLD ISLAND OFF THE BOW!"'
+          : 'CREW: "THE HULL IS GROANING! WE’RE TAKING WATER!"';
 
       outCamPos.set(
         this.shipPosX + THREE.MathUtils.lerp(24, 15, e),
@@ -1673,8 +1683,8 @@ export class PirateCinematicRig {
       // and ocean water seeps & pours inside!
       const e = THREE.MathUtils.smoothstep((t - 4.2) / 3.2, 0, 1);
       subtitle =
-        'CRACK!! The bottom half of the pirate ship splits open — dark ocean water pours into the hull!';
-      crewShout = 'NAVIGATOR (crying at the wheel): "The hull is cracking! Water is flooding in!"';
+        'CRACK!! A spar snaps and the hull splits open. Cold ocean water floods the lower deck.';
+      crewShout = 'SHIP NAVIGATOR: "THE SHIP IS SINKING! WE CANNOT STAY ABOARD!"';
 
       outCamPos.set(
         this.shipPosX + THREE.MathUtils.lerp(15, -10.5, e),
@@ -1690,8 +1700,13 @@ export class PirateCinematicRig {
       // Beat 3: Ship Navigator rushes up to the Player at the railing and says "I love you..."
       const e = THREE.MathUtils.smoothstep((t - 7.4) / 2.8, 0, 1);
       subtitle =
-        'The Ship Navigator rushes up to you at the railing, tears streaming down her face: "I love you..."';
-      crewShout = 'SHIP NAVIGATOR: "I LOVE YOU... JUMP! PROMISE YOU\'LL SURVIVE!"';
+        t < 8.8
+          ? 'You find the navigator at the wheel. “What do you know about the island?”'
+          : 'She grips your arm. “Jewels ahead — but we will not reach them. Don’t stay on this ship.”';
+      crewShout =
+        t < 8.8
+          ? 'YOU: "NAVIGATOR — WHAT DO YOU KNOW ABOUT THE ISLAND?"'
+          : 'SHIP NAVIGATOR: "JEWELS AHEAD — BUT THE SHIP IS GOING DOWN!"';
 
       outCamPos.set(
         this.shipPosX + THREE.MathUtils.lerp(-10.5, -10.8, e),
@@ -1707,10 +1722,9 @@ export class PirateCinematicRig {
     } else if (t < 13.0) {
       // Beat 4: Player (Boy or Girl) jumps off the sinking boat first!
       const e = THREE.MathUtils.smoothstep((t - 10.2) / 2.8, 0, 1);
-      subtitle = isGirl
-        ? 'While the crew panics on deck, she leaps off the sinking boat and dives into the ocean!'
-        : 'While the crew panics on deck, he leaps off the sinking boat and dives into the ocean!';
-      crewShout = 'CREW: "ABANDON SHIP!! SHE\'S GOING DOWN!!"';
+      subtitle =
+        'No jewel is worth drowning for. You keep your shirt, your pants, and your shoes, then dive clear of the sinking ship.';
+      crewShout = 'YOU: "I DON’T NEED TO STAY ABOARD — SWIM FOR THE ISLAND!"';
 
       outCamPos.set(
         this.shipPosX + THREE.MathUtils.lerp(-10.8, -21.0, e),
@@ -1724,7 +1738,7 @@ export class PirateCinematicRig {
       // AND the Ship Navigator jumps off later to survive on the island too!
       const e = THREE.MathUtils.smoothstep((t - 13.0) / 3.4, 0, 1);
       subtitle =
-        'BOOM!! As the pirate ship falls into pieces — sails flat underwater and wood floating in the waves — the Ship Navigator jumps off after you!';
+        'BOOM!! The galleon breaks apart behind you. Sails flatten underwater, then the navigator jumps after you.';
       crewShout = 'SHIP NAVIGATOR: "WAIT FOR ME! I\'M JUMPING!"';
 
       outCamPos.set(
@@ -1739,8 +1753,9 @@ export class PirateCinematicRig {
       );
     } else {
       // Beat 6: Smooth continuous tide-wash glide onto Survival Island beach!
-      const e = THREE.MathUtils.smoothstep((t - 16.4) / (PIRATE_CINEMATIC_DURATION - 16.4), 0, 1);
-      subtitle = `Carried by the tide, ${heShe} and the Ship Navigator wash ashore on Lost World Island...`;
+      const e = THREE.MathUtils.smoothstep((t - 16.4) / (CINEMATIC_TIMELINE_DURATION - 16.4), 0, 1);
+      subtitle =
+        'Carried by the tide, you and the navigator wash ashore on Lost World Island — alive, and still wearing your shirt, pants, and shoes.';
       crewShout = '';
 
       const startX = this.shipPosX - 6.5;
