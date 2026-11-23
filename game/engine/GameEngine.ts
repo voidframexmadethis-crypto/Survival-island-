@@ -108,9 +108,7 @@ import {
 import {
   FERRY_DECK_Y,
   FERRY_STERN_Z,
-  LOUISIANA_FERRY_LEG_MS,
-  LOUISIANA_FERRY_LEG_HOURS,
-  LOUISIANA_FERRY_ROUND_TRIP_HOURS,
+  LOUISIANA_FERRY_DIRECT_DURATION_MS,
   LouisianaFerryVoyageSystem,
   formatFerryDuration,
   type LouisianaFerrySaveState,
@@ -2156,7 +2154,7 @@ export class GameEngine {
   };
 
   private onPageHide = (): void => {
-    // The 48-hour crossing must survive a closed tab, not just a pause.
+    // An in-progress crossing must survive a closed tab, not just a pause.
     this.persistLouisianaFerryVoyage(true);
   };
 
@@ -12961,7 +12959,7 @@ export class GameEngine {
           return {
             id: 'ferry_return_board',
             label: 'Board the Crescent Star for the Island',
-            sublabel: `Crescent City berth · ${LOUISIANA_FERRY_LEG_HOURS}-hour return crossing`,
+            sublabel: `Crescent City berth · ${formatFerryDuration(LOUISIANA_FERRY_DIRECT_DURATION_MS)} return crossing`,
             kind: 'ferry_boarding',
             actionCategory: 'use',
             distance: returnDist,
@@ -12980,7 +12978,7 @@ export class GameEngine {
             sublabel:
               voyage.direction === 'outbound'
                 ? 'Walkable deck · living room · bedroom · bathroom'
-                : `Return crossing · ${LOUISIANA_FERRY_LEG_HOURS} hours back to the island`,
+                : `Return crossing · ${formatFerryDuration(LOUISIANA_FERRY_DIRECT_DURATION_MS)} back to the island`,
             kind: 'ferry_boarding',
             actionCategory: 'use',
             distance: rampDist,
@@ -13036,7 +13034,7 @@ export class GameEngine {
           {
             id: 'ferry_sofa',
             label: 'Relax in the Ferry Living Room',
-            sublabel: `Sofa · coffee table · ${LOUISIANA_FERRY_LEG_HOURS}-hour crossing`,
+            sublabel: `Sofa · coffee table · ${formatFerryDuration(LOUISIANA_FERRY_DIRECT_DURATION_MS)} crossing`,
             x: 1.15,
             z: -1.9,
           },
@@ -16688,6 +16686,9 @@ export class GameEngine {
   };
 
   private resetLouisianaFerryVoyage(): void {
+    // The live hull is a direct, fixed-step island/mainland shuttle. The old
+    // long-haul route remains only for its isolated tests/legacy saves.
+    this.ferryVoyage.enableDirectCrossing();
     this.ferryVoyage.reset();
     this.ferryDepartureHintShown = false;
     this.ferryDockedNoticeShown = false;
@@ -16735,8 +16736,16 @@ export class GameEngine {
       this.resetLouisianaFerryVoyage();
       return;
     }
+    this.ferryVoyage.enableDirectCrossing();
     this.ferryVoyage.restore(save, Date.now());
     this.ferryVoyageCarId = save.carId ?? null;
+    if (
+      this.ferryVoyageCarId &&
+      this.ferryVoyage.phase !== 'idle' &&
+      this.ferryVoyage.phase !== 'arrived'
+    ) {
+      this.setFerryCarVisible(false);
+    }
     this.ferryDockedNoticeShown = false;
     this.ferryDepartureHintShown = false;
     this.ferryWakeAccum = 0;
@@ -16824,7 +16833,7 @@ export class GameEngine {
 
     if (this.ferryVoyage.phase === 'at_sea') {
       this.spawnFerryWake(dt);
-      // The 48-hour clock lives in the save, but the readout only needs a
+      // The crossing save lives in storage, but the readout only needs a
       // few refreshes per second at most.
       this.ferryHudAccum += dt;
       if (this.ferryHudAccum >= 2) {
@@ -16857,7 +16866,7 @@ export class GameEngine {
     if (events.departed) {
       this.ferryDepartureHintShown = true;
       this.toast(
-        `Lines cast off. The Crescent Star is underway — ${LOUISIANA_FERRY_LEG_HOURS} hours to ${destinationName}. The voyage keeps running even if you close the game.`,
+        `Lines cast off. The Crescent Star is underway — ${formatFerryDuration(LOUISIANA_FERRY_DIRECT_DURATION_MS)} to ${destinationName}.`,
         'discovery',
       );
       this.sound.playFerryHorn();
@@ -16941,8 +16950,8 @@ export class GameEngine {
     const arrivedAtCity = this.ferryVoyage.destination === 'crescent_city';
     this.toast(
       arrivedAtCity
-        ? `${LOUISIANA_FERRY_LEG_HOURS} hours later, the Crescent Star is secured in Crescent City. The stern gate is open — head aft and press E to disembark.`
-        : `${LOUISIANA_FERRY_LEG_HOURS} hours later, the Crescent Star is back at the island landing. The stern gate is open — head aft and press E to disembark.`,
+        ? `The Crescent Star is secured in Crescent City. The stern gate is open — head aft and press E to disembark.`
+        : `The Crescent Star is back at the island landing. The stern gate is open — head aft and press E to disembark.`,
       'discovery',
     );
     this.persistLouisianaFerryVoyage(true);
@@ -17012,7 +17021,7 @@ export class GameEngine {
     this.sound.playSteamHiss();
     this.toast(
       atCity
-        ? `You disembark in Crescent City. The Crescent Star is moored at the berth, ready for the ${LOUISIANA_FERRY_LEG_HOURS}-hour return crossing.`
+        ? `You disembark in Crescent City. The Crescent Star is moored at the berth, ready for the ${formatFerryDuration(LOUISIANA_FERRY_DIRECT_DURATION_MS)} return crossing.`
         : 'You disembark at the island landing. The Crescent Star is moored at the pier for the next crossing.',
       'discovery',
     );
@@ -17109,7 +17118,7 @@ export class GameEngine {
         this.syncLouisianaFerryVisual(0);
         const remaining = formatFerryDuration(this.ferryVoyage.getStatus().remainingMs);
         this.toast(
-          `Slept in the cabin. The crossing continues on its real-time clock — ${remaining} to ${this.ferryVoyage.destination === 'crescent_city' ? 'Crescent City' : 'the island'}.`,
+          `Slept in the cabin. The crossing is still underway — ${remaining} to ${this.ferryVoyage.destination === 'crescent_city' ? 'Crescent City' : 'the island'}.`,
           'discovery',
         );
         this.emitHud();
@@ -17147,7 +17156,7 @@ export class GameEngine {
         break;
       }
       case 'ferry_living_tv': {
-        this.toast(`The ferry TV is playing a Louisiana travelogue for the ${LOUISIANA_FERRY_LEG_HOURS}-hour crossing.`, 'info');
+        this.toast(`The ferry TV is playing a Louisiana travelogue for the ${formatFerryDuration(LOUISIANA_FERRY_DIRECT_DURATION_MS)} crossing.`, 'info');
         break;
       }
       default:
@@ -17286,7 +17295,7 @@ export class GameEngine {
   /**
    * The worker-driven car reaches the pier, then the player leaves it with the
    * dock crew and boards the physical Crescent Star. The car is delivered to
-   * Crescent City when the 48-hour crossing finishes.
+   * Crescent City when the direct crossing finishes.
    */
   private startCrescentStarFromCar(car: ModularVehicleData): void {
     if (this.activeVehicleId === car.id) this.exitVehicle();
@@ -17300,6 +17309,9 @@ export class GameEngine {
     this.ferryArrivalTimer = 0;
     if (this.world?.ferryWorkerGroup) this.world.ferryWorkerGroup.visible = false;
     this.ferryVoyageCarId = car.id;
+    // The car rides in the enclosed hold: hide its pier mesh until the same
+    // vehicle is unloaded at the Crescent City terminal.
+    this.setFerryCarVisible(false);
     this.ferryVoyage.clearBoarding();
 
     const ramp = this.ferryVoyage.getRampWorldPoint();
@@ -17330,7 +17342,7 @@ export class GameEngine {
     this.updateCamera();
     this.sound.playSteamHiss();
     this.toast(
-      `The dock crew loads ${car.name}. You walk up the Crescent Star ramp for the ${LOUISIANA_FERRY_LEG_HOURS}-hour crossing.`,
+      `The dock crew loads ${car.name}. You walk up the Crescent Star ramp for the ${formatFerryDuration(LOUISIANA_FERRY_DIRECT_DURATION_MS)} crossing.`,
       'discovery',
     );
     this.emitHud();
@@ -17354,8 +17366,15 @@ export class GameEngine {
     if (carMesh) {
       carMesh.root.position.set(car.x, car.y, car.z);
       carMesh.root.rotation.set(0, car.yaw, 0);
+      carMesh.root.visible = true;
     }
     this.toast(`${car.name} is waiting for you at the Crescent City terminal.`, 'info');
+  }
+
+  private setFerryCarVisible(visible: boolean): void {
+    if (!this.ferryVoyageCarId) return;
+    const carMesh = this.vehicleMeshes.get(this.ferryVoyageCarId);
+    if (carMesh) carMesh.root.visible = visible;
   }
 
   private applyMainlandOutfitVisual(): void {

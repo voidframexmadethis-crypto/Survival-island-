@@ -1,4 +1,8 @@
 import { FERRY_DOCK_BOAT_POS } from './ferryPickup';
+import {
+  IslandFerryController,
+  type FerryEntity,
+} from './islandFerryController';
 
 /**
  * Passenger ferry voyage between the island landing and Crescent City.
@@ -43,6 +47,19 @@ export const LOUISIANA_FERRY_DOCK_POS = {
 } as const;
 /** Crescent City berth. The hull waits here between the outbound and return legs. */
 export const LOUISIANA_FERRY_CITY_DOCK_POS = { x: 40, z: 1428 } as const;
+
+/**
+ * Direct shuttle profile used by the live game. The old 864 km / 48-hour loop
+ * remains available for its tests, but the playable Crescent Star now runs the
+ * real island-to-mainland crossing in the locked 1/60 step at a visible speed.
+ */
+export const LOUISIANA_FERRY_DIRECT_SPEED_MPS = 7;
+export const LOUISIANA_FERRY_DIRECT_ROUTE_METERS = Math.hypot(
+  LOUISIANA_FERRY_CITY_DOCK_POS.x - LOUISIANA_FERRY_DOCK_POS.x,
+  LOUISIANA_FERRY_CITY_DOCK_POS.z - LOUISIANA_FERRY_DOCK_POS.z,
+);
+export const LOUISIANA_FERRY_DIRECT_DURATION_MS =
+  (LOUISIANA_FERRY_DIRECT_ROUTE_METERS / LOUISIANA_FERRY_DIRECT_SPEED_MPS) * 1000;
 
 export const FERRY_DECK_Y = 1.55;
 export const FERRY_ROOT_Y = 0.18;
@@ -529,7 +546,41 @@ export class LouisianaFerryVoyageSystem {
   private arrivalTimer = 0;
   private bobTime = 0;
 
+  /** Direct fixed-step crossing used by the playable game. */
+  private directMode = false;
+  private readonly directController = new IslandFerryController(
+    { x: LOUISIANA_FERRY_DOCK_POS.x, y: FERRY_ROOT_Y, z: LOUISIANA_FERRY_DOCK_POS.z },
+    { x: LOUISIANA_FERRY_CITY_DOCK_POS.x, y: FERRY_ROOT_Y, z: LOUISIANA_FERRY_CITY_DOCK_POS.z },
+  );
+  private readonly directEntity: FerryEntity = {
+    id: 'crescent-star',
+    position: { x: LOUISIANA_FERRY_DOCK_POS.x, y: FERRY_ROOT_Y, z: LOUISIANA_FERRY_DOCK_POS.z },
+    yaw: 0,
+    speed: LOUISIANA_FERRY_DIRECT_SPEED_MPS,
+    isMoving: false,
+    headingToMainland: true,
+  };
+  private readonly updateScratch: LouisianaFerryUpdate = {
+    phaseChanged: false,
+    boarded: false,
+    gateOpened: false,
+    departed: false,
+    arrived: false,
+    carryX: 0,
+    carryZ: 0,
+  };
+
   constructor(private readonly now: () => number = () => Date.now()) {}
+
+  /** Switch the live hull to the direct, allocation-free fixed-step crossing. */
+  enableDirectCrossing(): void {
+    this.directMode = true;
+    this.directEntity.speed = LOUISIANA_FERRY_DIRECT_SPEED_MPS;
+  }
+
+  isDirectCrossing(): boolean {
+    return this.directMode;
+  }
 
   get destination(): LouisianaFerryDock {
     return this.direction === 'outbound' ? 'crescent_city' : 'island';
@@ -559,6 +610,16 @@ export class LouisianaFerryVoyageSystem {
     this.boatY = FERRY_ROOT_Y;
     this.boatYaw = ferryOriginHeading('outbound');
     this.boatRoll = 0;
+    if (this.directMode) {
+      this.directEntity.headingToMainland = true;
+      this.directEntity.isMoving = false;
+      this.directEntity.position.x = LOUISIANA_FERRY_DOCK_POS.x;
+      this.directEntity.position.y = FERRY_ROOT_Y;
+      this.directEntity.position.z = LOUISIANA_FERRY_DOCK_POS.z;
+      this.directEntity.yaw = ferryOriginHeading('outbound');
+      this.boatX = this.directEntity.position.x;
+      this.boatZ = this.directEntity.position.z;
+    }
     return this.emptyUpdate();
   }
 
@@ -583,6 +644,16 @@ export class LouisianaFerryVoyageSystem {
     this.boatY = FERRY_ROOT_Y;
     this.boatYaw = ferryOriginHeading('return');
     this.boatRoll = 0;
+    if (this.directMode) {
+      this.directEntity.headingToMainland = false;
+      this.directEntity.isMoving = false;
+      this.directEntity.position.x = LOUISIANA_FERRY_CITY_DOCK_POS.x;
+      this.directEntity.position.y = FERRY_ROOT_Y;
+      this.directEntity.position.z = LOUISIANA_FERRY_CITY_DOCK_POS.z;
+      this.directEntity.yaw = ferryOriginHeading('return');
+      this.boatX = this.directEntity.position.x;
+      this.boatZ = this.directEntity.position.z;
+    }
   }
 
   clearBoarding(): boolean {
@@ -593,8 +664,11 @@ export class LouisianaFerryVoyageSystem {
   }
 
   getStatus(): LouisianaFerryStatus {
+    const durationMs = this.directMode
+      ? LOUISIANA_FERRY_DIRECT_DURATION_MS
+      : LOUISIANA_FERRY_LEG_MS;
     const elapsedMs = this.currentElapsedMs();
-    const remainingMs = Math.max(0, LOUISIANA_FERRY_LEG_MS - elapsedMs);
+    const remainingMs = Math.max(0, durationMs - elapsedMs);
     return {
       phase: this.phase,
       direction: this.direction,
@@ -605,10 +679,12 @@ export class LouisianaFerryVoyageSystem {
       secondsToDeparture: this.departTimer,
       routeProgress: this.routeProgress,
       routeDistanceMeters: this.routeDistanceMeters,
-      routeLengthMeters: LOUISIANA_FERRY_ROUTE_METERS,
+      routeLengthMeters: this.directMode
+        ? LOUISIANA_FERRY_DIRECT_ROUTE_METERS
+        : LOUISIANA_FERRY_ROUTE_METERS,
       elapsedMs,
       remainingMs,
-      durationMs: LOUISIANA_FERRY_LEG_MS,
+      durationMs,
       boatX: this.boatX,
       boatY: this.boatY,
       boatZ: this.boatZ,
@@ -623,6 +699,7 @@ export class LouisianaFerryVoyageSystem {
 
   /** Wall-clock time already spent on the current at-sea leg. */
   currentElapsedMs(): number {
+    if (this.directMode) return this.elapsedMs;
     if (this.departureAtMs === null) return this.elapsedMs;
     return Math.max(
       0,
@@ -716,6 +793,14 @@ export class LouisianaFerryVoyageSystem {
     this.gateLift = 1;
     this.departTimer = 0;
     this.departureAtMs = this.now();
+    if (this.directMode) {
+      this.directEntity.headingToMainland = this.direction === 'outbound';
+      this.directEntity.isMoving = true;
+      this.directEntity.position.x = this.boatX;
+      this.directEntity.position.y = this.boatY;
+      this.directEntity.position.z = this.boatZ;
+      this.directEntity.yaw = this.boatYaw;
+    }
     return {
       ok: true,
       message: this.direction === 'outbound'
@@ -741,6 +826,14 @@ export class LouisianaFerryVoyageSystem {
         this.gateLift = 1;
         this.departTimer = 0;
         this.departureAtMs = this.now();
+        if (this.directMode) {
+          this.directEntity.headingToMainland = this.direction === 'outbound';
+          this.directEntity.isMoving = true;
+          this.directEntity.position.x = this.boatX;
+          this.directEntity.position.y = this.boatY;
+          this.directEntity.position.z = this.boatZ;
+          this.directEntity.yaw = this.boatYaw;
+        }
         out.phaseChanged = true;
         out.boarded = true;
       }
@@ -775,6 +868,52 @@ export class LouisianaFerryVoyageSystem {
     }
 
     if (this.phase === 'at_sea') {
+      if (this.directMode) {
+        this.bobTime += dt;
+        this.elapsedMs = Math.min(
+          LOUISIANA_FERRY_DIRECT_DURATION_MS,
+          this.elapsedMs + dt * 1000,
+        );
+        const startX = this.boatX;
+        const startZ = this.boatZ;
+        const arrived = this.directController.stepFixed(this.directEntity, null, dt);
+        this.boatX = this.directEntity.position.x;
+        this.boatZ = this.directEntity.position.z;
+        this.boatY = FERRY_ROOT_Y + Math.sin(this.bobTime * 1.35) * 0.035;
+        this.boatRoll =
+          Math.sin(this.bobTime * 0.8) * 0.008 + Math.sin(this.bobTime * 2.1) * 0.003;
+        this.boatYaw = this.directEntity.yaw;
+        this.speedMps = this.directEntity.isMoving ? this.directEntity.speed : 0;
+        const originX =
+          this.direction === 'outbound'
+            ? LOUISIANA_FERRY_DOCK_POS.x
+            : LOUISIANA_FERRY_CITY_DOCK_POS.x;
+        const originZ =
+          this.direction === 'outbound'
+            ? LOUISIANA_FERRY_DOCK_POS.z
+            : LOUISIANA_FERRY_CITY_DOCK_POS.z;
+        this.routeDistanceMeters = Math.min(
+          LOUISIANA_FERRY_DIRECT_ROUTE_METERS,
+          Math.hypot(this.boatX - originX, this.boatZ - originZ),
+        );
+        this.routeProgress =
+          LOUISIANA_FERRY_DIRECT_ROUTE_METERS > 0
+            ? this.routeDistanceMeters / LOUISIANA_FERRY_DIRECT_ROUTE_METERS
+            : 1;
+        out.carryX = this.boatX - startX;
+        out.carryZ = this.boatZ - startZ;
+        if (arrived) {
+          this.elapsedMs = LOUISIANA_FERRY_DIRECT_DURATION_MS;
+          this.routeProgress = 1;
+          this.routeDistanceMeters = LOUISIANA_FERRY_DIRECT_ROUTE_METERS;
+          this.phase = 'arriving';
+          this.arrivalTimer = LOUISIANA_FERRY_ARRIVAL_SECONDS;
+          this.speedMps = 0;
+          this.boatRoll = 0;
+          out.phaseChanged = true;
+        }
+        return out;
+      }
       this.bobTime += dt;
       const carryLocal = this.localOffsetFrom(
         playerX,
@@ -848,12 +987,18 @@ export class LouisianaFerryVoyageSystem {
         this.phase = 'arrived';
         this.gateLift = 1;
         this.boatYaw = dockYaw;
-        const end = ferryRoutePositionAt(
-          this.direction === 'outbound' ? LOUISIANA_FERRY_ROUTE_METERS : 0,
-        );
+        const end = this.directMode
+          ? this.direction === 'outbound'
+            ? LOUISIANA_FERRY_CITY_DOCK_POS
+            : LOUISIANA_FERRY_DOCK_POS
+          : ferryRoutePositionAt(
+              this.direction === 'outbound' ? LOUISIANA_FERRY_ROUTE_METERS : 0,
+            );
         this.boatX = end.x;
         this.boatZ = end.z;
-        this.routeDistanceMeters = LOUISIANA_FERRY_ROUTE_METERS;
+        this.routeDistanceMeters = this.directMode
+          ? LOUISIANA_FERRY_DIRECT_ROUTE_METERS
+          : LOUISIANA_FERRY_ROUTE_METERS;
         this.routeProgress = 1;
         out.phaseChanged = true;
         out.arrived = true;
@@ -885,9 +1030,11 @@ export class LouisianaFerryVoyageSystem {
       savedAtMs: nowMs,
       elapsedMs: elapsed,
       routeProgress: this.routeProgress,
-      routeDistanceMeters: active
-        ? ferryDistanceForElapsed(elapsed)
-        : this.routeDistanceMeters,
+      routeDistanceMeters: this.directMode
+        ? this.routeDistanceMeters
+        : active
+          ? ferryDistanceForElapsed(elapsed)
+          : this.routeDistanceMeters,
       aboard: this.aboard,
       carId,
       playerLocalX: playerLocal?.x ?? 0,
@@ -912,6 +1059,11 @@ export class LouisianaFerryVoyageSystem {
     this.departTimer = LOUISIANA_FERRY_DEPART_DELAY;
     this.arrivalTimer = 0;
     this.speedMps = 0;
+
+    if (this.directMode) {
+      this.restoreDirect(save, nowMs);
+      return;
+    }
 
     const resumeable =
       save.phase === 'at_sea' ||
@@ -969,6 +1121,84 @@ export class LouisianaFerryVoyageSystem {
     }
   }
 
+  /** Resumes the direct fixed-step shuttle at its saved metre marker. */
+  private restoreDirect(save: LouisianaFerrySaveState, nowMs: number): void {
+    const direction = this.direction;
+    const origin =
+      direction === 'outbound'
+        ? LOUISIANA_FERRY_DOCK_POS
+        : LOUISIANA_FERRY_CITY_DOCK_POS;
+    const target =
+      direction === 'outbound'
+        ? LOUISIANA_FERRY_CITY_DOCK_POS
+        : LOUISIANA_FERRY_DOCK_POS;
+    const phase = save.phase;
+    const resumeable =
+      phase === 'at_sea' || phase === 'arriving' || phase === 'arrived';
+    const heading = Math.atan2(target.x - origin.x, target.z - origin.z);
+
+    this.directEntity.headingToMainland = direction === 'outbound';
+    this.directEntity.yaw = heading;
+    this.directEntity.position.y = FERRY_ROOT_Y;
+
+    if (!resumeable) {
+      // Closed before the lines were cast off: board again at this berth.
+      this.phase = phase === 'boarding' ? 'boarding' : 'idle';
+      this.boardingCleared = true;
+      this.aboard = false;
+      this.routeProgress = 0;
+      this.routeDistanceMeters = 0;
+      this.elapsedMs = 0;
+      this.gateLift = 0;
+      this.speedMps = 0;
+      this.boatRoll = 0;
+      this.directEntity.isMoving = false;
+      this.directEntity.position.x = origin.x;
+      this.directEntity.position.z = origin.z;
+      this.boatX = origin.x;
+      this.boatZ = origin.z;
+      this.boatY = FERRY_ROOT_Y;
+      this.boatYaw = ferryOriginHeading(direction);
+      return;
+    }
+
+    const progress =
+      phase === 'arrived' || phase === 'arriving'
+        ? 1
+        : clamp01(save.routeProgress);
+    this.routeProgress = progress;
+    this.routeDistanceMeters = progress * LOUISIANA_FERRY_DIRECT_ROUTE_METERS;
+    this.elapsedMs =
+      phase === 'arrived'
+        ? LOUISIANA_FERRY_DIRECT_DURATION_MS
+        : Math.max(
+            0,
+            Math.min(
+              LOUISIANA_FERRY_DIRECT_DURATION_MS,
+              save.elapsedMs || progress * LOUISIANA_FERRY_DIRECT_DURATION_MS,
+            ),
+          );
+    this.directEntity.position.x =
+      origin.x + (target.x - origin.x) * progress;
+    this.directEntity.position.z =
+      origin.z + (target.z - origin.z) * progress;
+    this.directEntity.isMoving = phase === 'at_sea';
+    this.boatX = this.directEntity.position.x;
+    this.boatZ = this.directEntity.position.z;
+    this.boatY = FERRY_ROOT_Y;
+    this.boatYaw = phase === 'at_sea' ? heading : ferryDockedHeading(direction);
+    // A save taken on the arrival frame still needs the normal arrival step so
+    // the car is unloaded and the player is placed on the destination quay.
+    this.phase = phase === 'arrived' ? 'arriving' : phase;
+    this.aboard = Boolean(save.aboard);
+    this.gateLift = 0;
+    this.speedMps = phase === 'at_sea' ? LOUISIANA_FERRY_DIRECT_SPEED_MPS : 0;
+    this.departureAtMs = nowMs - this.elapsedMs;
+    if (this.phase === 'arriving') {
+      this.arrivalTimer = 1.2;
+    }
+  }
+
   private localOffsetFrom(
     x: number,
     z: number,
@@ -1011,15 +1241,16 @@ export class LouisianaFerryVoyageSystem {
   }
 
   private emptyUpdate(): LouisianaFerryUpdate {
-    return {
-      phaseChanged: false,
-      boarded: false,
-      gateOpened: false,
-      departed: false,
-      arrived: false,
-      carryX: 0,
-      carryZ: 0,
-    };
+    // Reuse one result object: the fixed-step loop must not allocate per tick.
+    const out = this.updateScratch;
+    out.phaseChanged = false;
+    out.boarded = false;
+    out.gateOpened = false;
+    out.departed = false;
+    out.arrived = false;
+    out.carryX = 0;
+    out.carryZ = 0;
+    return out;
   }
 }
 

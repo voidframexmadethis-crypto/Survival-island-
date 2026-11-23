@@ -1822,7 +1822,10 @@ export function SurvivalGameClient() {
                   {hud.ferryVoyage.aboard && hud.ferryVoyage.phase === 'at_sea' && (
                     <div className="flex items-center justify-between gap-1 text-[9px] text-teal-300/80 font-mono-tabular">
                       <span>
-                        {formatFerryDuration(hud.ferryVoyage.elapsedMs)} elapsed · {(hud.ferryVoyage.routeDistanceMeters / 1000).toFixed(0)} km
+                        {formatFerryDuration(hud.ferryVoyage.elapsedMs)} elapsed ·{' '}
+                        {hud.ferryVoyage.routeDistanceMeters < 1000
+                          ? `${hud.ferryVoyage.routeDistanceMeters.toFixed(0)} m`
+                          : `${(hud.ferryVoyage.routeDistanceMeters / 1000).toFixed(1)} km`}
                       </span>
                       <span>
                         {hud.ferryVoyage.boatX.toFixed(1)}, {hud.ferryVoyage.boatZ.toFixed(1)}
