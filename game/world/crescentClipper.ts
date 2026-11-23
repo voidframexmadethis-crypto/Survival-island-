@@ -11,7 +11,13 @@ export interface CrescentClipperHandles {
   maid: THREE.Object3D;
   maids: THREE.Object3D[];
   stairs: THREE.Group;
+  bedroomDoor: THREE.Group;
+  bathroomDoor: THREE.Group;
+  servicePlate: THREE.Group;
+  landingGear: THREE.Group;
   cabinTvMat: THREE.MeshStandardMaterial;
+  bedroomLampMat: THREE.MeshStandardMaterial;
+  bathroomLightMat: THREE.MeshStandardMaterial;
 }
 
 function makeNameTexture(): THREE.CanvasTexture | null {
@@ -92,6 +98,24 @@ export function buildCrescentClipper(): CrescentClipperHandles {
   const maidApronMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.88 });
   const skinMat = new THREE.MeshStandardMaterial({ color: 0x8d5a3b, roughness: 0.86 });
   const hairMat = new THREE.MeshStandardMaterial({ color: 0x2b1b12, roughness: 0.9 });
+  const bedroomLampMat = new THREE.MeshStandardMaterial({
+    color: 0xffe6b0,
+    emissive: 0xffb84d,
+    emissiveIntensity: 1.1,
+    roughness: 0.3,
+  });
+  const bathroomLightMat = new THREE.MeshStandardMaterial({
+    color: 0xe8fbff,
+    emissive: 0x9fe8ff,
+    emissiveIntensity: 1.0,
+    roughness: 0.25,
+  });
+  const xboxMat = new THREE.MeshStandardMaterial({
+    color: 0x0b1410,
+    emissive: 0x53ff8a,
+    emissiveIntensity: 1.1,
+    roughness: 0.4,
+  });
   const cabinTvMat = new THREE.MeshStandardMaterial({
     color: 0x071523,
     emissive: 0x38bdf8,
@@ -339,9 +363,18 @@ export function buildCrescentClipper(): CrescentClipperHandles {
   addBox(0.45, 0.16, 0.32, -0.3, 2.61, -4.25, whiteMat);
   addBox(1.2, 0.75, 0.1, -0.55, 2.85, -6.02, woodMat);
   addBox(0.36, 0.38, 0.36, 0.08, 2.28, -5.1, woodMat);
-  const bedLamp = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 0.3, 8), goldMat);
+  const bedLamp = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.12, 0.16, 0.3, 8),
+    bedroomLampMat,
+  );
   bedLamp.position.set(0.08, 2.62, -5.1);
   root.add(bedLamp);
+  const bathroomLight = new THREE.Mesh(
+    new THREE.BoxGeometry(0.5, 0.04, 0.28),
+    bathroomLightMat,
+  );
+  bathroomLight.position.set(0.82, 3.68, -4.55);
+  root.add(bathroomLight);
   addBox(1.15, 0.035, 1.6, -0.58, 2.11, -4.9, carpetMat);
 
   // Bathroom: toilet, sink, mirror and shower screen.
@@ -358,6 +391,47 @@ export function buildCrescentClipper(): CrescentClipperHandles {
   root.add(mirror);
   addBox(0.08, 1.9, 0.76, 0.35, 3.05, -4.0, frostedMat);
   addBox(0.06, 0.9, 0.55, 0.82, 2.15, -3.45, bathMat);
+
+  // ---- Galley, cabin lighting and interior doors ------------------------
+  addBox(0.72, 0.46, 1.15, -1.02, 2.32, 3.18, woodMat);
+  addBox(0.72, 0.06, 1.15, -1.02, 2.57, 3.18, whiteMat);
+  addBox(0.62, 0.42, 0.4, -1.02, 2.82, 3.48, frameMat);
+  addBox(0.16, 0.32, 0.2, -1.02, 2.9, 3.18, goldMat);
+  addBox(0.18, 0.05, 0.28, -1.02, 2.85, 3.18, cabinTvMat);
+  addBox(0.3, 0.18, 0.24, -1.02, 2.66, 2.78, bathMat);
+  for (const lightZ of [2.2, 0.6, -1.4, -4.0]) {
+    addBox(0.6, 0.035, 0.16, 0, 3.69, lightZ, bedroomLampMat);
+  }
+  const bedroomDoor = new THREE.Group();
+  bedroomDoor.position.set(0.28, 2.1, -3.55);
+  addBox(0.045, 1.48, 0.82, 0, 0.74, 0.41, woodMat, bedroomDoor);
+  addBox(0.06, 0.06, 0.16, 0.05, 0.72, 0.7, goldMat, bedroomDoor);
+  root.add(bedroomDoor);
+  const bathroomDoor = new THREE.Group();
+  bathroomDoor.position.set(0.28, 2.1, -4.62);
+  addBox(0.045, 1.48, 0.82, 0, 0.74, 0.41, woodMat, bathroomDoor);
+  addBox(0.06, 0.06, 0.16, -0.05, 0.72, 0.7, goldMat, bathroomDoor);
+  root.add(bathroomDoor);
+
+  // ---- Xbox console and service plate ------------------------------------
+  addBox(0.22, 0.26, 0.62, -1.16, 2.6, -1.95, frameMat);
+  addBox(0.03, 0.16, 0.16, -1.28, 2.6, -1.95, xboxMat);
+  const servicePlate = new THREE.Group();
+  servicePlate.position.set(0.55, 2.56, 1.85);
+  const plateDish = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.16, 0.025, 16), whiteMat);
+  servicePlate.add(plateDish);
+  const curry = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), goldMat);
+  curry.scale.set(1, 0.45, 1);
+  curry.position.y = 0.05;
+  servicePlate.add(curry);
+  const drinkGlass = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.045, 0.2, 10),
+    glassMat,
+  );
+  drinkGlass.position.set(0.19, 0.05, -0.02);
+  servicePlate.add(drinkGlass);
+  servicePlate.visible = false;
+  root.add(servicePlate);
 
   // ---- Maid service -------------------------------------------------------
   const maid = new THREE.Group();
@@ -428,6 +502,29 @@ export function buildCrescentClipper(): CrescentClipperHandles {
   addBox(0.06, 0.8, 0.06, -1.2, -1.35, 0.45, goldMat, stairs);
   root.add(stairs);
 
+  // ---- Amphibian landing gear -------------------------------------------
+  const landingGear = new THREE.Group();
+  for (const side of [-1, 1]) {
+    addBox(0.12, 1.05, 0.12, side * 2.2, 1.25, 0.7, frameMat, landingGear);
+    const wheel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.28, 0.28, 0.18, 14),
+      propellerMat,
+    );
+    wheel.rotation.z = Math.PI / 2;
+    wheel.position.set(side * 2.2, 0.72, 0.7);
+    landingGear.add(wheel);
+    addBox(0.42, 0.08, 0.1, side * 2.2, 0.95, 0.7, goldMat, landingGear);
+  }
+  addBox(0.12, 0.95, 0.12, 0, 1.3, 5.6, frameMat, landingGear);
+  const noseWheel = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.24, 0.24, 0.16, 14),
+    propellerMat,
+  );
+  noseWheel.rotation.z = Math.PI / 2;
+  noseWheel.position.set(0, 0.8, 5.6);
+  landingGear.add(noseWheel);
+  root.add(landingGear);
+
   // The port-side gull wing door hinges at the roof and lifts outward/up.
   const door = new THREE.Group();
   door.position.set(-1.48, 3.58, 2.25);
@@ -473,6 +570,12 @@ export function buildCrescentClipper(): CrescentClipperHandles {
     maid,
     maids: [maid, maid2],
     stairs,
+    bedroomDoor,
+    bathroomDoor,
+    servicePlate,
+    landingGear,
     cabinTvMat,
+    bedroomLampMat,
+    bathroomLightMat,
   };
 }

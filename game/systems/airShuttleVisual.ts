@@ -11,6 +11,7 @@ export interface AirShuttleVisualRig {
   maid?: Object3D | null;
   maids?: Object3D[] | null;
   stairs?: Object3D | null;
+  landingGear?: Object3D | null;
   cabinTvMat?: { emissiveIntensity: number } | null;
 }
 
@@ -51,6 +52,10 @@ export function applyAirShuttleVisual(
   if (rig.stairs) {
     rig.stairs.rotation.z = -1.15 * (1 - shuttle.doorOpen);
     rig.stairs.position.y = 2.02 - 0.55 * (1 - shuttle.doorOpen);
+  }
+  if (rig.landingGear) {
+    rig.landingGear.visible = shuttle.altitudeM < 4;
+    rig.landingGear.scale.y = shuttle.altitudeM < 4 ? 1 : 0.2;
   }
   if (rig.cabinTvMat) {
     // The cabin TV is live for the whole flight: a soft scan-pulse keeps the

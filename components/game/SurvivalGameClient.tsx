@@ -4980,6 +4980,65 @@ export function SurvivalGameClient() {
         </div>
       )}
 
+      {activeModal === 'air_shuttle_entertainment' && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/85 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-emerald-500/40 bg-[#0b1410] p-5 text-emerald-50 shadow-2xl">
+            <div className="flex items-center justify-between gap-3 border-b border-emerald-900 pb-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.25em] text-emerald-400">
+                  Cabin entertainment
+                </p>
+                <h2 className="text-xl font-bold">Xbox Series X</h2>
+              </div>
+              <span className="h-3 w-3 rounded-full bg-emerald-400 shadow-[0_0_14px_#34d399]" />
+            </div>
+            <div className="mt-4 grid gap-2">
+              <div className="rounded-xl border border-emerald-900 bg-emerald-950/40 p-3 opacity-70">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold">Minecraft</span>
+                  <span className="rounded bg-stone-800 px-2 py-0.5 text-[9px] uppercase tracking-wide text-stone-300">
+                    Unavailable
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] leading-snug text-emerald-200/70">
+                  No Minecraft executable or integration is installed in this build. This tile is
+                  intentionally not playable.
+                </p>
+              </div>
+              <div className="rounded-xl border border-emerald-900 bg-emerald-950/40 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold">Cabin TV</span>
+                  <span className="rounded bg-emerald-800 px-2 py-0.5 text-[9px] uppercase tracking-wide text-emerald-100">
+                    Live
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] leading-snug text-emerald-200/70">
+                  The lounge television is powered. Return to the cabin and sit on the couch to
+                  watch, or use the cabin switch above the TV to turn it off.
+                </p>
+              </div>
+              <div className="rounded-xl border border-emerald-900 bg-emerald-950/40 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold">Flight status</span>
+                  <span className="text-[10px] text-emerald-300">
+                    {hud?.airShuttle?.phase === 'airborne' ? 'IN FLIGHT' : 'ON GROUND'}
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] leading-snug text-emerald-200/70">
+                  {hud?.airShuttle?.label ?? 'Crescent Clipper cabin network'}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={closeModal}
+              className="mt-4 w-full rounded-xl bg-emerald-500 py-2.5 text-sm font-bold text-emerald-950 transition hover:bg-emerald-400"
+            >
+              Close Xbox Dashboard
+            </button>
+          </div>
+        </div>
+      )}
+
       {activeModal === 'console' && (
         <CommandConsoleModal
           onClose={closeModal}

@@ -131,6 +131,7 @@ import {
   AIR_SHUTTLE_LEG_MINUTES,
 } from '../systems/crescentCityAirShuttle';
 import { applyAirShuttleVisual } from '../systems/airShuttleVisual';
+import { AirShuttleCabinCrewSystem } from '../systems/airShuttleCabinCrew';
 import {
   clearAirShuttleState,
   loadAirShuttleState,
@@ -646,6 +647,7 @@ export interface EngineCallbacks {
       | 'dragon_sanctuary'
       | 'viking_village'
       | 'mainland'
+      | 'air_shuttle_entertainment'
     >,
     structureId?: string,
   ) => void;
@@ -800,11 +802,18 @@ export class GameEngine {
   private airShuttleSeatedKind: 'seat' | 'couch' | 'bed' | 'bath' | null = null;
   private airShuttleSeatIndex = 0;
   private airShuttleTalkIndex = 0;
-  private airShuttleMealServed = false;
   private airShuttleStowedWeapons = new Set<ItemId>();
   private airShuttleStowedHotbar: { index: number; itemId: ItemId }[] = [];
   private airShuttleLuggageCount = 0;
   private airShuttleEngineAudio = false;
+  private airShuttleCrew = new AirShuttleCabinCrewSystem();
+  private airShuttleTvOn = true;
+  private airShuttleBedroomDoorOpen = false;
+  private airShuttleBathroomDoorOpen = false;
+  private airShuttleBedroomLampOn = true;
+  private airShuttleBathroomLightOn = true;
+  private airShuttleAddress: 'sir' | "ma'am" = 'sir';
+  private airShuttleRestedNotified = false;
   private mainlandStuntCooldown = 0;
   private beeGate: BeeGateHandle | null = null;
   private beeGateAnchor: THREE.Group | null = null;
@@ -7996,6 +8005,36 @@ export class GameEngine {
         this.handleAirShuttleTalk(0);
       } else if (near.id === 'air_shuttle_talk_1') {
         this.handleAirShuttleTalk(1);
+      } else if (near.id === 'air_shuttle_order_food') {
+        this.handleAirShuttleOrder('coconut_fish_curry', false);
+      } else if (near.id === 'air_shuttle_order_drink') {
+        this.handleAirShuttleOrder('coconut', true);
+      } else if (near.id.startsWith('air_shuttle_plate_')) {
+        this.consumeAirShuttlePlate(Number(near.id.slice('air_shuttle_plate_'.length)));
+      } else if (near.id.startsWith('air_shuttle_collect_')) {
+        this.collectAirShuttlePlate(Number(near.id.slice('air_shuttle_collect_'.length)));
+      } else if (near.id === 'air_shuttle_tv_toggle') {
+        this.airShuttleTvOn = !this.airShuttleTvOn;
+        this.toast(`Cabin TV ${this.airShuttleTvOn ? 'on' : 'off'}.`, 'info');
+      } else if (near.id === 'air_shuttle_xbox') {
+        this.airShuttleTvOn = true;
+        this.callbacks.onOpenStation('air_shuttle_entertainment');
+      } else if (near.id === 'air_shuttle_bedroom_door') {
+        this.airShuttleBedroomDoorOpen = !this.airShuttleBedroomDoorOpen;
+        this.toast(`Bedroom door ${this.airShuttleBedroomDoorOpen ? 'opened' : 'closed'}.`, 'info');
+      } else if (near.id === 'air_shuttle_bathroom_door') {
+        this.airShuttleBathroomDoorOpen = !this.airShuttleBathroomDoorOpen;
+        this.toast(`Bathroom door ${this.airShuttleBathroomDoorOpen ? 'opened' : 'closed'}.`, 'info');
+      } else if (near.id === 'air_shuttle_lamp') {
+        this.airShuttleBedroomLampOn = !this.airShuttleBedroomLampOn;
+        this.toast(`Reading lamp ${this.airShuttleBedroomLampOn ? 'on' : 'off'}.`, 'info');
+      } else if (near.id === 'air_shuttle_sink') {
+        this.vitals.thirst = Math.min(this.vitals.maxThirst, this.vitals.thirst + 8);
+        this.spawnParticles(this.playerX, this.playerY + 1.0, this.playerZ, 0x7dd3fc, 6);
+        this.toast('You wash up at the marble sink and drink a little cold water.', 'info');
+      } else if (near.id === 'air_shuttle_address') {
+        this.airShuttleAddress = this.airShuttleAddress === 'sir' ? "ma'am" : 'sir';
+        this.toast(`The crew will address you as ${this.airShuttleAddress}.`, 'info');
       } else {
         this.handleAirShuttleBoarding();
       }
@@ -13020,23 +13059,104 @@ export class GameEngine {
       localX: number;
       localZ: number;
       range: number;
+      priority?: number;
     };
+    const amara = this.airShuttleCrew.getAgentPosition('amara');
+    const celeste = this.airShuttleCrew.getAgentPosition('celeste');
+    const amaraBusy = this.airShuttleCrew.hasPendingService('amara');
+    const celesteBusy = this.airShuttleCrew.hasPendingService('celeste');
+    const foodReady = this.airShuttleCrew
+      .getPlates()
+      .some((plate) => plate.itemId === 'coconut_fish_curry');
+    const drinkReady = this.airShuttleCrew
+      .getPlates()
+      .some((plate) => plate.itemId === 'coconut');
     const stops: CabinStop[] = [
       {
-        id: 'air_shuttle_talk_0',
-        label: 'Talk to Amara',
-        sublabel: 'Cabin attendant · warmer voice · food and luggage service',
-        localX: 0.03,
-        localZ: 0.55,
+        id: amaraBusy || foodReady ? 'air_shuttle_talk_0' : 'air_shuttle_order_food',
+        label:
+          amaraBusy || foodReady
+            ? 'Talk to Amara'
+            : 'Order Coconut Fish Curry',
+        sublabel:
+          amaraBusy || foodReady
+            ? 'Cabin attendant · natural conversation · luggage and galley service'
+            : 'Amara walks to the galley and serves it at your table',
+        localX: amara.x,
+        localZ: amara.z,
         range: 0.95,
       },
       {
-        id: 'air_shuttle_talk_1',
-        label: 'Talk to Celeste',
-        sublabel: 'Rear cabin attendant · distinct voice · drinks and towels',
-        localX: 0.52,
-        localZ: -1.2,
+        id: celesteBusy || drinkReady ? 'air_shuttle_talk_1' : 'air_shuttle_order_drink',
+        label:
+          celesteBusy || drinkReady
+            ? 'Talk to Celeste'
+            : 'Order a Chilled Coconut Drink',
+        sublabel:
+          celesteBusy || drinkReady
+            ? 'Rear cabin attendant · distinct voice · drinks and towels'
+            : 'Celeste walks to the galley and serves it at your table',
+        localX: celeste.x,
+        localZ: celeste.z,
         range: 0.95,
+      },
+      {
+        id: 'air_shuttle_tv_toggle',
+        label: `Turn Cabin TV ${this.airShuttleTvOn ? 'Off' : 'On'}`,
+        sublabel: 'Live television above the couch',
+        localX: -1.02,
+        localZ: -1.95,
+        range: 1.35,
+        priority: 1,
+      },
+      {
+        id: 'air_shuttle_xbox',
+        label: 'Open Xbox Series X Dashboard',
+        sublabel: 'Entertainment menu · Minecraft availability is labeled honestly',
+        localX: -1.02,
+        localZ: -1.45,
+        range: 1.25,
+        priority: 1.2,
+      },
+      {
+        id: 'air_shuttle_bedroom_door',
+        label: `${this.airShuttleBedroomDoorOpen ? 'Close' : 'Open'} Bedroom Door`,
+        sublabel: 'Private aft bedroom',
+        localX: 0.28,
+        localZ: -3.55,
+        range: 0.68,
+      },
+      {
+        id: 'air_shuttle_bathroom_door',
+        label: `${this.airShuttleBathroomDoorOpen ? 'Close' : 'Open'} Bathroom Door`,
+        sublabel: 'Marble bathroom · warm towels',
+        localX: 0.28,
+        localZ: -4.62,
+        range: 0.68,
+      },
+      {
+        id: 'air_shuttle_lamp',
+        label: `Turn Reading Lamp ${this.airShuttleBedroomLampOn ? 'Off' : 'On'}`,
+        sublabel: 'Bedroom nightstand lighting',
+        localX: 0.08,
+        localZ: -5.1,
+        range: 0.75,
+      },
+      {
+        id: 'air_shuttle_sink',
+        label: 'Wash at the Marble Sink',
+        sublabel: 'Cold water and fresh towels',
+        localX: 0.82,
+        localZ: -4.25,
+        range: 0.75,
+      },
+      {
+        id: 'air_shuttle_address',
+        label: `Crew Address: ${this.airShuttleAddress === 'sir' ? 'Sir' : "Ma'am"}`,
+        sublabel: 'Choose how the attendants address you',
+        localX: 0,
+        localZ: 3.35,
+        range: 0.7,
       },
       {
         id: 'air_shuttle_couch',
@@ -13075,14 +13195,37 @@ export class GameEngine {
         range: 0.66,
       });
     }
+    for (const plate of this.airShuttleCrew.getPlates()) {
+      const drink = plate.itemId === 'coconut';
+      stops.push({
+        id: plate.ready
+          ? `air_shuttle_plate_${plate.id}`
+          : `air_shuttle_collect_${plate.id}`,
+        label: plate.ready
+          ? drink
+            ? 'Drink the Chilled Coconut'
+            : 'Eat the Coconut Fish Curry'
+          : 'Ask Attendant to Collect the Used Plate',
+        sublabel: plate.ready
+          ? 'Freshly served on the cabin table'
+          : 'Leave the plate for the attendant to return to the galley',
+        localX: plate.tableX,
+        localZ: plate.tableZ,
+        range: 0.85,
+        priority: 2,
+      });
+    }
 
     let best: CabinStop | null = null;
     let bestDistance = Infinity;
+    let bestScore = Infinity;
     for (const stop of stops) {
       const distance = Math.hypot(local.x - stop.localX, local.z - stop.localZ);
-      if (distance <= stop.range && distance < bestDistance) {
+      const score = distance - (stop.priority ?? 0) * 0.45;
+      if (distance <= stop.range && score < bestScore) {
         best = stop;
         bestDistance = distance;
+        bestScore = score;
       }
     }
     if (!best) return null;
@@ -17185,10 +17328,16 @@ export class GameEngine {
     this.airShuttleSeatedKind = null;
     this.airShuttleSeatIndex = 0;
     this.airShuttleTalkIndex = 0;
-    this.airShuttleMealServed = false;
     this.airShuttleStowedWeapons.clear();
     this.airShuttleStowedHotbar = [];
     this.airShuttleLuggageCount = 0;
+    this.airShuttleCrew.reset();
+    this.airShuttleTvOn = true;
+    this.airShuttleBedroomDoorOpen = false;
+    this.airShuttleBathroomDoorOpen = false;
+    this.airShuttleBedroomLampOn = true;
+    this.airShuttleBathroomLightOn = true;
+    this.airShuttleRestedNotified = false;
     if (this.airShuttleEngineAudio) {
       this.sound.stopJetEngines();
       this.airShuttleEngineAudio = false;
@@ -17200,6 +17349,12 @@ export class GameEngine {
     const rig = this.world?.crescentClipper;
     if (!rig) return;
     applyAirShuttleVisual(rig, this.airShuttle, dt);
+    rig.bedroomDoor.rotation.y = this.airShuttleBedroomDoorOpen ? -1.12 : 0;
+    rig.bathroomDoor.rotation.y = this.airShuttleBathroomDoorOpen ? 1.12 : 0;
+    rig.bedroomLampMat.emissiveIntensity = this.airShuttleBedroomLampOn ? 1.1 : 0.02;
+    rig.bathroomLightMat.emissiveIntensity = this.airShuttleBathroomLightOn ? 1.0 : 0.02;
+    if (!this.airShuttleTvOn) rig.cabinTvMat.emissiveIntensity = 0.02;
+    if (!this.airShuttle.aboard) rig.servicePlate.visible = false;
   }
 
   private persistAirShuttle(force = false): void {
@@ -17230,10 +17385,16 @@ export class GameEngine {
     this.airShuttleSeatedKind = null;
     this.airShuttleSeatIndex = 0;
     this.airShuttleTalkIndex = 0;
-    this.airShuttleMealServed = false;
     this.airShuttleStowedWeapons.clear();
     this.airShuttleStowedHotbar = [];
     this.airShuttleLuggageCount = 0;
+    this.airShuttleCrew.reset();
+    this.airShuttleTvOn = true;
+    this.airShuttleBedroomDoorOpen = false;
+    this.airShuttleBathroomDoorOpen = false;
+    this.airShuttleBedroomLampOn = true;
+    this.airShuttleBathroomLightOn = true;
+    this.airShuttleRestedNotified = false;
     this.syncAirShuttleVisual(0);
 
     if (this.airShuttle.aboard) {
@@ -17384,7 +17545,13 @@ export class GameEngine {
     this.airShuttleSeatedKind = null;
     this.airShuttleSeatIndex = 0;
     this.airShuttleTalkIndex = 0;
-    this.airShuttleMealServed = false;
+    this.airShuttleCrew.reset();
+    this.airShuttleTvOn = true;
+    this.airShuttleBedroomDoorOpen = false;
+    this.airShuttleBathroomDoorOpen = false;
+    this.airShuttleBedroomLampOn = true;
+    this.airShuttleBathroomLightOn = true;
+    this.airShuttleRestedNotified = false;
     this.confiscateAirShuttleWeapons();
     const door = this.airShuttle.getBoardingPoint();
     this.playerX = door.x;
@@ -17493,7 +17660,56 @@ export class GameEngine {
     this.grounded = true;
     this.isSwimming = false;
     this.isUnderwater = false;
+    if (this.airShuttleSeatedKind === 'bed') {
+      this.vitals.stamina = Math.min(this.vitals.maxStamina, this.vitals.stamina + dt * 6);
+      this.vitals.health = Math.min(this.vitals.maxHealth, this.vitals.health + dt * 0.3);
+      if (!this.airShuttleRestedNotified && dt > 0 && this.airShuttle.elapsedMs > 6000) {
+        this.airShuttleRestedNotified = true;
+        this.toast('You rest in the private bedroom. Stamina is recovering.', 'info');
+      }
+    }
+    this.updateAirShuttleCabinCrew(dt);
     this.nearbyInteraction = this.findNearbyInteraction();
+  }
+
+  private updateAirShuttleCabinCrew(dt: number): void {
+    this.airShuttleCrew.update(dt);
+    const events = this.airShuttleCrew.consumeEvents();
+    for (const event of events) {
+      if (event.type === 'plate_placed') {
+        const isDrink = event.plate.itemId === 'coconut';
+        this.toast(
+          `${event.agentId === 'amara' ? 'Amara' : 'Celeste'} places your ${isDrink ? 'chilled coconut drink' : 'coconut fish curry'} on the table.`,
+          'discovery',
+        );
+        this.speakAirShuttleVoice(
+          `Your ${isDrink ? 'drink' : 'meal'} is on the table, ${this.airShuttleAddress}. Enjoy.`,
+          event.agentId === 'amara' ? 0 : 1,
+        );
+      } else if (event.type === 'plate_collected') {
+        this.toast('The attendant clears the used plate and returns it to the galley.', 'info');
+      }
+    }
+
+    const rig = this.world?.crescentClipper;
+    if (!rig) return;
+    const agents = this.airShuttleCrew.getAgentSnapshots();
+    for (let i = 0; i < rig.maids.length; i++) {
+      const agent = agents.find((entry) => entry.id === (i === 0 ? 'amara' : 'celeste'));
+      if (!agent) continue;
+      rig.maids[i].position.x = agent.x;
+      rig.maids[i].position.z = agent.z;
+    }
+    const plate = this.airShuttleCrew.getPlates()[0];
+    rig.servicePlate.visible = Boolean(plate);
+    if (plate) {
+      rig.servicePlate.position.set(plate.tableX, 2.56, plate.tableZ);
+    }
+    rig.bedroomDoor.rotation.y = this.airShuttleBedroomDoorOpen ? -1.12 : 0;
+    rig.bathroomDoor.rotation.y = this.airShuttleBathroomDoorOpen ? 1.12 : 0;
+    rig.bedroomLampMat.emissiveIntensity = this.airShuttleBedroomLampOn ? 1.1 : 0.02;
+    rig.bathroomLightMat.emissiveIntensity = this.airShuttleBathroomLightOn ? 1.0 : 0.02;
+    if (!this.airShuttleTvOn) rig.cabinTvMat.emissiveIntensity = 0.02;
   }
 
   private handleAirShuttleSit(kind: 'seat' | 'couch' | 'bed' | 'bath', index = 0): void {
@@ -17557,21 +17773,18 @@ export class GameEngine {
 
   private handleAirShuttleTalk(maidIndex: number): void {
     if (!this.airShuttle.aboard) return;
-    if (maidIndex === 0 && !this.airShuttleMealServed) {
-      this.serveAirShuttleMeal();
-      return;
-    }
+    const address = this.airShuttleAddress;
     const lines =
       maidIndex === 0
         ? [
-            'Your sidearm and ammunition are tagged and locked in the undercarriage pod. I will hand them back when we land.',
-            'We have six club seats, a live television and a couch in the lounge. The bedroom and bathroom are aft.',
-            'If you need anything at all, just walk up and speak to me. I will hear you over the engines.',
+            `Your sidearm and ammunition are tagged and locked in the undercarriage pod, ${address}. I will hand them back when we land.`,
+            `We have six club seats, a live television and a couch in the lounge, ${address}. The bedroom and bathroom are aft.`,
+            `If you need anything at all, walk up and speak to me. The galley is stocked and I can bring a plate to your table.`,
           ]
         : [
-            "I'm Celeste, the second attendant. Amara has the galley; I have the rear cabin and the luggage pod.",
+            `I'm Celeste, the second attendant. Amara has the galley; I have the rear cabin and the luggage pod, ${address}.`,
             'The bedroom is on the port side, the bathroom opposite. Both are private for the whole crossing.',
-            'Would you like a cold drink, a warm towel, or another plate from the galley?',
+            `Would you like a cold drink, a warm towel, or another plate from the galley? Just say the word, ${address}.`,
           ];
     const line = lines[this.airShuttleTalkIndex % lines.length];
     this.airShuttleTalkIndex += 1;
@@ -17582,16 +17795,58 @@ export class GameEngine {
     );
   }
 
-  private serveAirShuttleMeal(): void {
-    if (this.airShuttleMealServed) return;
-    this.airShuttleMealServed = true;
-    this.addItem('coconut_fish_curry', 1, true);
-    this.addItem('coconut', 1, true);
-    this.spawnParticles(this.playerX, this.playerY + 1.0, this.playerZ, 0xf8f3e6, 8);
+  private handleAirShuttleOrder(itemId: ItemId, drink: boolean): void {
+    if (!this.airShuttle.aboard) return;
+    const local = this.getAirShuttleLocalPosition();
+    const tables = [
+      { x: 0.55, z: 1.85 },
+      { x: -0.55, z: 0.45 },
+    ];
+    const table = tables.reduce((best, entry) => {
+      const d = Math.hypot(local.x - entry.x, local.z - entry.z);
+      const bestD = Math.hypot(local.x - best.x, local.z - best.z);
+      return d < bestD ? entry : best;
+    }, tables[0]);
+    const agentId = drink ? 'celeste' : 'amara';
+    this.airShuttleCrew.request(itemId, table.x, table.z, drink, agentId);
     this.speakAirShuttleVoice(
-      `Here you are: coconut fish curry, freshly plated, with chilled coconut water. Your sidearm is safe in the undercarriage pod — ${this.airShuttleLuggageCount} secured item${this.airShuttleLuggageCount === 1 ? '' : 's'}. If you would like anything else, just say the word.`,
+      drink
+        ? `Of course, ${this.airShuttleAddress}. I'll bring a chilled coconut to your table and set it down myself.`
+        : `Certainly, ${this.airShuttleAddress}. I'll collect the coconut fish curry from the galley and serve it at your table.`,
+      drink ? 1 : 0,
     );
-    this.toast('Amara serves coconut fish curry and chilled coconut water.', 'craft');
+    this.toast(
+      `${drink ? 'Celeste' : 'Amara'} heads to the galley to prepare your ${drink ? 'drink' : 'meal'}.`,
+      'info',
+    );
+  }
+
+  private consumeAirShuttlePlate(plateId: number): void {
+    const plate = this.airShuttleCrew.getPlate(plateId);
+    if (!plate) return;
+    const consumed = this.airShuttleCrew.consumePlate(plateId);
+    if (!consumed) return;
+    const drink = plate.itemId === 'coconut';
+    this.addItem(plate.itemId, 1, true);
+    this.useOrEquipItem(plate.itemId);
+    this.toast(
+      `You ${drink ? 'drink the chilled coconut' : 'eat the coconut fish curry'} at the cabin table. Ask the attendant to clear the plate when you are finished.`,
+      'info',
+    );
+    this.speakAirShuttleVoice(
+      drink
+        ? `Enjoy the coconut, ${this.airShuttleAddress}. I'll clear the glass whenever you're ready.`
+        : `Enjoy your meal, ${this.airShuttleAddress}. I'll clear the plate whenever you're ready.`,
+      plate.itemId === 'coconut' ? 1 : 0,
+    );
+  }
+
+  private collectAirShuttlePlate(plateId: number): void {
+    if (this.airShuttleCrew.collectPlate(plateId)) {
+      this.toast('You ask the attendant to collect the used plate.', 'info');
+    } else {
+      this.toast('The attendant is serving another passenger. Try again shortly.', 'warning');
+    }
   }
 
   /**
@@ -17707,7 +17962,13 @@ export class GameEngine {
     this.airShuttleSeatedKind = null;
     this.airShuttleSeatIndex = 0;
     this.airShuttleTalkIndex = 0;
-    this.airShuttleMealServed = false;
+    this.airShuttleCrew.reset();
+    this.airShuttleTvOn = true;
+    this.airShuttleBedroomDoorOpen = false;
+    this.airShuttleBathroomDoorOpen = false;
+    this.airShuttleBedroomLampOn = true;
+    this.airShuttleBathroomLightOn = true;
+    this.airShuttleRestedNotified = false;
     this.restoreAirShuttleWeapons();
     this.stopAirShuttleEngineAudio();
     this.sound.playCarDoorLatch(true);

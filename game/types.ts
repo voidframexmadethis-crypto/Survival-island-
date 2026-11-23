@@ -1262,6 +1262,7 @@ export type ActiveModal =
   | 'car_radio'
   | 'navigator_companion'
   | 'viking_village'
+  | 'air_shuttle_entertainment'
   | 'mainland'
   | 'lost_world';
 

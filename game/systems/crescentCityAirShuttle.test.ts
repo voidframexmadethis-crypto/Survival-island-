@@ -171,7 +171,13 @@ test('the route is a long visible flight and the visual rig follows the door and
   assert.equal(rig.maids.length, 2);
   assert.ok(rig.maid);
   assert.ok(rig.stairs);
+  assert.ok(rig.bedroomDoor);
+  assert.ok(rig.bathroomDoor);
+  assert.ok(rig.servicePlate);
+  assert.ok(rig.landingGear);
   assert.ok(rig.cabinTvMat);
+  assert.ok(rig.bedroomLampMat);
+  assert.ok(rig.bathroomLightMat);
   assert.ok(Math.abs(rig.stairs.rotation.z) < 0.01);
 
   shuttle.board();
