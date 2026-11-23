@@ -57,6 +57,7 @@ import {
   ShieldAlert,
   ShieldOff,
   ShieldPlus,
+  Ship,
   Skull,
   Sparkles,
   Store,
@@ -1779,6 +1780,34 @@ export function SurvivalGameClient() {
                     </span>
                   </button>
                 )}
+
+              {hud.ferryVoyage && hud.ferryVoyage.phase !== 'idle' && (
+                <div className="rounded border border-teal-700/60 bg-teal-950/80 px-2 py-1 text-[10px] text-teal-100 space-y-1">
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="flex items-center gap-1 font-semibold truncate">
+                      <Ship className="w-3 h-3 text-amber-300 shrink-0" />
+                      Crescent Star
+                    </span>
+                    <span className="font-mono-tabular text-amber-300 shrink-0">
+                      {hud.ferryVoyage.aboard
+                        ? `D${hud.ferryVoyage.voyageDay}/${hud.ferryVoyage.voyageDays}`
+                        : 'BOARD'}
+                    </span>
+                  </div>
+                  <div className="h-1 rounded-full bg-teal-950 overflow-hidden">
+                    <div
+                      className="h-full bg-amber-400 transition-[width] duration-500"
+                      style={{ width: `${Math.round(hud.ferryVoyage.routeProgress * 100)}%` }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-1 text-[9px] text-teal-200/90">
+                    <span className="truncate">{hud.ferryVoyage.label}</span>
+                    <span className="uppercase shrink-0">
+                      {hud.ferryVoyage.room?.replace('_', ' ') ?? 'deck'}
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {hud.worldType === 'flat' ? (
                 <div className="space-y-1.5">

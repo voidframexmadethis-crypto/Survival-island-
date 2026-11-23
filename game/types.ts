@@ -1328,6 +1328,9 @@ export interface NearbyInteraction {
     | 'dragon_sanctuary'
     | 'dragon_abandoned'
     | 'ferry_pickup'
+    | 'ferry_dock_tv'
+    | 'ferry_boarding'
+    | 'ferry_room'
     | 'mainland_terminal'
     | 'waterpark_ride'
     | 'mainland_business';
@@ -1562,6 +1565,16 @@ export interface HUDStateSnapshot {
   caveSummary?: import('./systems/caveSystem').CaveSummarySnapshot;
   finalIsland?: import('./systems/finalIslandFeatures').FinalIslandHudState;
   mainland?: import('./systems/louisianaMainland').MainlandHudState;
+  ferryVoyage?: {
+    phase: string;
+    label: string;
+    voyageDay: number;
+    voyageDays: number;
+    routeProgress: number;
+    room: string | null;
+    aboard: boolean;
+    boardingCleared: boolean;
+  };
   lostWorld?: import('./systems/lostWorldExpansion').LostWorldHudState;
   lostWorldBeat?: { title: string; subtitle: string; active: boolean };
   dragonEggs?: string[];

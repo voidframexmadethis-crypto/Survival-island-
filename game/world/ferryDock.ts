@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import {
   FERRY_CALL_POS,
-  FERRY_DOCK_BOAT_POS,
   FERRY_DOCK_CAR_STOP,
 } from '../systems/ferryPickup';
 import { getTerrainHeight } from './terrain';
@@ -12,6 +11,9 @@ export interface IslandFerryDockHandles {
   callPos: THREE.Vector3;
   carStopPos: THREE.Vector3;
   boatPos: THREE.Vector3;
+  tvPos: THREE.Vector3;
+  tvScreenMat: THREE.MeshStandardMaterial;
+  tvScreenMesh: THREE.Mesh;
   colliders: { x: number; z: number; radius: number }[];
 }
 
@@ -34,17 +36,6 @@ export function buildIslandFerryDock(): IslandFerryDockHandles {
     roughness: 0.46,
     metalness: 0.58,
   });
-  const hullMat = new THREE.MeshStandardMaterial({ color: 0x184e4a, roughness: 0.62 });
-  const hullStripeMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.58 });
-  const cabinMat = new THREE.MeshStandardMaterial({ color: 0xe7e5e4, roughness: 0.72 });
-  const windowMat = new THREE.MeshStandardMaterial({
-    color: 0x172554,
-    emissive: 0x0ea5e9,
-    emissiveIntensity: 0.28,
-    roughness: 0.24,
-    metalness: 0.36,
-  });
-  const lifeRingMat = new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.68 });
   const callBlueMat = new THREE.MeshStandardMaterial({
     color: 0x0c4a6e,
     emissive: 0x0ea5e9,
@@ -118,79 +109,75 @@ export function buildIslandFerryDock(): IslandFerryDockHandles {
     dockGroup.add(bollard);
   }
 
-  // ---- Moored island ferry ------------------------------------------------
-  const boat = new THREE.Group();
-  boat.position.set(FERRY_DOCK_BOAT_POS.x, 0.18, FERRY_DOCK_BOAT_POS.z);
-
-  const hull = new THREE.Mesh(new THREE.BoxGeometry(7.4, 1.7, 19), hullMat);
-  hull.position.y = 0.62;
-  hull.castShadow = true;
-  hull.receiveShadow = true;
-  boat.add(hull);
-
-  const waterlineStripe = new THREE.Mesh(new THREE.BoxGeometry(7.48, 0.22, 19.08), hullStripeMat);
-  waterlineStripe.position.y = 0.98;
-  boat.add(waterlineStripe);
-
-  const bow = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 3.7, 4.8, 4, 1, false), hullMat);
-  bow.rotation.x = Math.PI / 2;
-  bow.rotation.y = Math.PI / 4;
-  bow.position.set(0, 0.6, -10.8);
-  boat.add(bow);
-
-  const carDeck = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.18, 14.4), darkTimberMat);
-  carDeck.position.y = 1.55;
-  boat.add(carDeck);
-
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(5.8, 2.2, 4.4), cabinMat);
-  cabin.position.set(0, 2.72, 4.8);
-  cabin.castShadow = true;
-  boat.add(cabin);
-
-  for (const side of [-1, 1]) {
-    for (let i = 0; i < 3; i++) {
-      const window = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.72, 0.92), windowMat);
-      window.position.set(side * 2.92, 2.82, 3.55 + i * 1.12);
-      boat.add(window);
+  // ---- Dock departure TV --------------------------------------------------
+  // The TV is the boarding gate: tapping it clears the ferry and rolls the
+  // safety/departure feed. The screen is a unique dynamic material so the
+  // static-merge pass leaves it accessible for live updates.
+  let tvTexture: THREE.CanvasTexture | null = null;
+  if (typeof document !== 'undefined') {
+    const tvCanvas = document.createElement('canvas');
+    tvCanvas.width = 512;
+    tvCanvas.height = 288;
+    const tvCtx = tvCanvas.getContext('2d');
+    if (tvCtx) {
+      tvCtx.fillStyle = '#071a20';
+      tvCtx.fillRect(0, 0, 512, 288);
+      tvCtx.fillStyle = '#0d3a3d';
+      tvCtx.fillRect(18, 18, 476, 252);
+      tvCtx.fillStyle = '#f5b642';
+      tvCtx.fillRect(18, 18, 476, 10);
+      tvCtx.fillRect(18, 260, 476, 10);
+      tvCtx.fillStyle = '#e6f6f5';
+      tvCtx.font = 'bold 42px Georgia, serif';
+      tvCtx.textAlign = 'center';
+      tvCtx.fillText('CRESCENT CITY', 256, 92);
+      tvCtx.font = 'bold 54px Arial, sans-serif';
+      tvCtx.fillStyle = '#f5b642';
+      tvCtx.fillText('FERRY TV', 256, 152);
+      tvCtx.font = 'bold 22px Arial, sans-serif';
+      tvCtx.fillStyle = '#9fe3df';
+      tvCtx.fillText('TAP TO CLEAR BOARDING', 256, 194);
+      tvCtx.fillStyle = '#cbe9e6';
+      tvCtx.font = '18px Arial, sans-serif';
+      tvCtx.fillText('18-DAY CROSSING  ·  CABIN  ·  GALLEY  ·  DECK', 256, 232);
     }
+    tvTexture = new THREE.CanvasTexture(tvCanvas);
+    tvTexture.colorSpace = THREE.SRGBColorSpace;
+    tvTexture.anisotropy = 4;
   }
-  const frontWindow = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.75, 0.08), windowMat);
-  frontWindow.position.set(0, 2.82, 2.58);
-  boat.add(frontWindow);
-
-  const funnel = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 1.7, 10), hullStripeMat);
-  funnel.position.set(0, 4.4, 5.15);
-  boat.add(funnel);
-  const funnelCap = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.42, 0.18, 10), steelMat);
-  funnelCap.position.set(0, 5.25, 5.15);
-  boat.add(funnelCap);
-
-  // Guard rails around the vehicle deck.
-  for (const side of [-1, 1]) {
-    for (let i = 0; i < 8; i++) {
-      const railPost = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.9, 5), steelMat);
-      railPost.position.set(side * 3.45, 2.05, -7.6 + i * 2.1);
-      boat.add(railPost);
-    }
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, 15.2), steelMat);
-    rail.position.set(side * 3.45, 2.46, -0.1);
-    boat.add(rail);
-  }
-
-  for (const side of [-1, 1]) {
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.12, 8, 14), lifeRingMat);
-    ring.position.set(side * 3.78, 1.9, -4.6);
-    ring.rotation.y = Math.PI / 2;
-    boat.add(ring);
-  }
-
-  // Fold-down vehicle ramp from the pier onto the ferry deck.
-  const ferryRamp = new THREE.Mesh(new THREE.BoxGeometry(5.8, 0.16, 4.8), steelMat);
-  ferryRamp.position.set(0, 1.18, -8.8);
-  ferryRamp.rotation.x = 0.19;
-  boat.add(ferryRamp);
-
-  dockGroup.add(boat);
+  const tvScreenMat = new THREE.MeshStandardMaterial({
+    color: tvTexture ? 0xffffff : 0x0d3a3d,
+    ...(tvTexture ? { map: tvTexture, emissiveMap: tvTexture } : {}),
+    emissive: 0x9fe3df,
+    emissiveIntensity: 0.85,
+    roughness: 0.24,
+  });
+  const tvFrameMat = new THREE.MeshStandardMaterial({
+    color: 0x1e3b3f,
+    roughness: 0.42,
+    metalness: 0.45,
+  });
+  const tvGroup = new THREE.Group();
+  tvGroup.position.set(FERRY_DOCK_CAR_STOP.x + 6.2, 0.82, 688.2);
+  const tvPost = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 1.9, 8), steelMat);
+  tvPost.position.y = 0.9;
+  tvGroup.add(tvPost);
+  const tvHousing = new THREE.Mesh(new THREE.BoxGeometry(3.0, 1.9, 0.28), tvFrameMat);
+  tvHousing.position.set(0, 2.15, 0);
+  tvHousing.castShadow = true;
+  tvGroup.add(tvHousing);
+  const tvScreenMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.62, 1.52), tvScreenMat);
+  tvScreenMesh.position.set(0, 2.15, -0.151);
+  tvScreenMesh.rotation.y = Math.PI;
+  tvGroup.add(tvScreenMesh);
+  const tvCanopy = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.12, 1.0), tvFrameMat);
+  tvCanopy.position.set(0, 3.18, -0.22);
+  tvCanopy.rotation.x = -0.12;
+  tvGroup.add(tvCanopy);
+  const tvLed = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.08, 0.04), buttonMat);
+  tvLed.position.set(1.3, 1.42, -0.16);
+  tvGroup.add(tvLed);
+  dockGroup.add(tvGroup);
 
   // Tall pier light so the landing reads from the beach at night.
   const lightPole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 6.2, 7), steelMat);
@@ -236,11 +223,13 @@ export function buildIslandFerryDock(): IslandFerryDockHandles {
       0.8,
       FERRY_DOCK_CAR_STOP.z,
     ),
-    boatPos: new THREE.Vector3(
-      FERRY_DOCK_BOAT_POS.x,
-      0.18,
-      FERRY_DOCK_BOAT_POS.z,
-    ),
-    colliders: [{ x: FERRY_CALL_POS.x, z: FERRY_CALL_POS.z, radius: 0.55 }],
+    boatPos: new THREE.Vector3(26, 0.18, 713),
+    tvPos: new THREE.Vector3(FERRY_DOCK_CAR_STOP.x + 6.2, 1.75, 688.2),
+    tvScreenMat,
+    tvScreenMesh,
+    colliders: [
+      { x: FERRY_CALL_POS.x, z: FERRY_CALL_POS.z, radius: 0.55 },
+      { x: FERRY_DOCK_CAR_STOP.x + 6.2, z: 688.2, radius: 0.7 },
+    ],
   };
 }

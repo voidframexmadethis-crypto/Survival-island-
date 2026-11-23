@@ -8,6 +8,7 @@ import { buildLouisianaMainland, type LouisianaMainlandHandles } from './louisia
 import { buildLouisianaBusinesses } from './louisianaBusinesses';
 import { buildLouisianaNeighborhoods } from './louisianaNeighborhoods';
 import { buildIslandFerryDock } from './ferryDock';
+import { buildLouisianaFerry, type LouisianaFerryHandles } from './louisianaFerry';
 import { buildTransitCauseway } from './transitCauseway';
 import {
   buildLouisianaWaterMeshes,
@@ -241,6 +242,9 @@ export interface WorldHandles {
   ferryCallPos: THREE.Vector3;
   ferryDockPos: THREE.Vector3;
   ferryBoatPos: THREE.Vector3;
+  ferryTvPos: THREE.Vector3;
+  ferryTvScreenMat: THREE.MeshStandardMaterial;
+  louisianaFerry: LouisianaFerryHandles;
   soilPlots: { x: number; y: number; z: number }[];
   houseStations: HouseStationTarget[];
   tvScreenMat: THREE.MeshStandardMaterial;
@@ -7366,6 +7370,12 @@ gl_Position = projectionMatrix * mvPosition;`,
     colliders.push(islandFerry.colliders[i]);
   }
   staticMergeTargets.push({ group: islandFerry.dockGroup });
+
+  // The rideable ferry is deliberately not batched: the voyage system moves
+  // its root every frame and queries its walkable deck.
+  const louisianaFerry = buildLouisianaFerry();
+  overworldGroup.add(louisianaFerry.root);
+
   staticMergeTargets.push({ group: islandFerry.callGroup });
 
   // Drivable Mississippi river bridge inside Crescent City. The survival
@@ -7912,6 +7922,9 @@ gl_Position = projectionMatrix * mvPosition;`,
     ferryCallPos: islandFerry.callPos,
     ferryDockPos: islandFerry.carStopPos,
     ferryBoatPos: islandFerry.boatPos,
+    ferryTvPos: islandFerry.tvPos,
+    ferryTvScreenMat: islandFerry.tvScreenMat,
+    louisianaFerry,
     soilPlots,
     houseStations: hillHouse.stations,
     tvScreenMat: hillHouse.tvScreenMat,
