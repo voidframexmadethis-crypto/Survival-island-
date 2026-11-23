@@ -45,6 +45,24 @@ export interface LouisianaMainlandHandles {
   streetcarGroup: THREE.Group;
   streetcarRoute: { x: number; z: number }[];
   colliders: { x: number; z: number; radius: number }[];
+  /** Living street dressing, animated by the engine each frame. */
+  streetWalkers: THREE.Group[];
+  streetDancers: THREE.Group[];
+  trafficCars: {
+    bodies: THREE.InstancedMesh;
+    cabins: THREE.InstancedMesh;
+    lanes: Array<{
+      index: number;
+      x: number;
+      y: number;
+      yaw: number;
+      direction: 1 | -1;
+      speed: number;
+      offset: number;
+    }>;
+  };
+  /** World-space centre used to skip street-life animation from far away. */
+  streetLifeCenter: { x: number; z: number };
 }
 
 type BuildingLot = {
@@ -723,11 +741,20 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
   }), trafficCount, false);
   const trafficColors = [0x1d4ed8, 0xb91c1c, 0xf8fafc, 0x334155, 0xd97706, 0x0f766e, 0x7c3aed];
   const trafficColor = new THREE.Color();
+  const trafficLanes: Array<{
+    index: number;
+    x: number;
+    y: number;
+    yaw: number;
+    direction: 1 | -1;
+    speed: number;
+    offset: number;
+  }> = [];
   for (let i = 0; i < trafficCount; i++) {
     const lane = i % 4;
     const x = lane === 0 ? 63 : lane === 1 ? 80 : lane === 2 ? -147 : 247;
     const z = 310 + (i / trafficCount) * 295 + (lane % 2) * 3.2;
-    const yaw = lane < 2 ? 0 : Math.PI * 0.5;
+    const yaw = lane === 0 ? 0 : lane === 1 ? Math.PI : Math.PI * 0.5;
     const y = groundYAtLocal(x, z);
     dummy.position.set(x, y + 0.42, z);
     dummy.rotation.set(0, yaw, 0);
@@ -740,12 +767,212 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
     dummy.scale.set(lane < 2 ? 1.45 : 2.6, 0.52, lane < 2 ? 2.1 : 1.25);
     dummy.updateMatrix();
     trafficCabins.setMatrixAt(i, dummy.matrix);
+    if (lane < 2) {
+      trafficLanes.push({
+        index: i,
+        x,
+        y,
+        yaw,
+        direction: lane === 0 ? 1 : -1,
+        speed: 5.2 + (i % 3) * 0.8,
+        offset: (i / trafficCount) * 295,
+      });
+    }
   }
+  trafficBodies.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  trafficCabins.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   trafficBodies.instanceMatrix.needsUpdate = true;
   trafficBodies.instanceColor!.needsUpdate = true;
   trafficBodies.computeBoundingSphere();
   trafficCabins.instanceMatrix.needsUpdate = true;
   trafficCabins.computeBoundingSphere();
+
+  // ---- Ambient street life: pedestrians, sitters and hydraulic show cars --
+  const streetLife = new THREE.Group();
+  streetLife.name = 'crescent-city-street-life';
+  group.add(streetLife);
+  const streetWalkers: THREE.Group[] = [];
+  const streetDancers: THREE.Group[] = [];
+
+  const skinMaterials = [0xf1c27d, 0xc68642, 0x8d5524].map(
+    (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.86 }),
+  );
+  const shirtMaterials = [0xb91c1c, 0x1d4ed8, 0x0f766e, 0xf8fafc, 0xd97706, 0x7c3aed].map(
+    (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.82 }),
+  );
+  const jeansMaterial = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.92 });
+  const shoeMaterial = new THREE.MeshStandardMaterial({ color: 0x0b0f12, roughness: 0.9 });
+
+  const buildCitizen = (
+    shirt: THREE.Material,
+    skin: THREE.Material,
+    seated: boolean,
+  ): THREE.Group => {
+    const person = new THREE.Group();
+    if (seated) {
+      addBox(jeansMaterial, 0.2, 0.2, 0.56, -0.14, 0.46, 0.24, 0, 0, 0, person);
+      addBox(jeansMaterial, 0.2, 0.2, 0.56, 0.14, 0.46, 0.24, 0, 0, 0, person);
+      addBox(shoeMaterial, 0.22, 0.14, 0.24, -0.14, 0.32, 0.5, 0, 0, 0, person);
+      addBox(shoeMaterial, 0.22, 0.14, 0.24, 0.14, 0.32, 0.5, 0, 0, 0, person);
+      addBox(shirt, 0.54, 0.62, 0.3, 0, 0.86, 0, 0, 0, 0, person);
+      addBox(shirt, 0.13, 0.5, 0.18, -0.34, 0.86, 0.06, 0, 0, 0, person);
+      addBox(shirt, 0.13, 0.5, 0.18, 0.34, 0.86, 0.06, 0, 0, 0, person);
+      addBox(skin, 0.27, 0.27, 0.27, 0, 1.32, 0, 0, 0, 0, person);
+    } else {
+      addBox(jeansMaterial, 0.22, 0.8, 0.24, -0.13, 0.4, 0, 0, 0, 0, person);
+      addBox(jeansMaterial, 0.22, 0.8, 0.24, 0.13, 0.4, 0, 0, 0, 0, person);
+      addBox(shoeMaterial, 0.24, 0.14, 0.4, -0.13, 0.07, 0.08, 0, 0, 0, person);
+      addBox(shoeMaterial, 0.24, 0.14, 0.4, 0.13, 0.07, 0.08, 0, 0, 0, person);
+      addBox(shirt, 0.54, 0.62, 0.3, 0, 1.1, 0, 0, 0, 0, person);
+      addBox(shirt, 0.13, 0.52, 0.18, -0.34, 1.08, 0.02, 0, 0, 0, person);
+      addBox(shirt, 0.13, 0.52, 0.18, 0.34, 1.08, 0.02, 0, 0, 0, person);
+      addBox(skin, 0.27, 0.27, 0.27, 0, 1.58, 0, 0, 0, 0, person);
+    }
+    person.userData.dynamic = true;
+    return person;
+  };
+
+  // Sidewalk strollers. Each walks a short ping-pong route along the curb.
+  const walkerSpots = [
+    { x: 61.6, z: 352, range: 22, speed: 0.46, phase: 0.2 },
+    { x: 61.6, z: 438, range: 16, speed: 0.38, phase: 2.4 },
+    { x: 61.6, z: 512, range: 20, speed: 0.5, phase: 4.1 },
+    { x: 82.4, z: 366, range: 18, speed: 0.42, phase: 1.1 },
+    { x: 82.4, z: 452, range: 24, speed: 0.54, phase: 3.3 },
+    { x: 82.4, z: 540, range: 14, speed: 0.36, phase: 5.2 },
+    { x: 112, z: 437.2, range: 26, speed: 0.6, phase: 0.8 },
+    { x: 154, z: 422.8, range: 20, speed: 0.44, phase: 2.9 },
+    { x: 24, z: 438.4, range: 18, speed: 0.5, phase: 4.6 },
+    { x: 44, z: 421.6, range: 15, speed: 0.34, phase: 1.7 },
+  ];
+  for (let i = 0; i < walkerSpots.length; i++) {
+    const spot = walkerSpots[i];
+    const person = buildCitizen(
+      shirtMaterials[i % shirtMaterials.length],
+      skinMaterials[i % skinMaterials.length],
+      false,
+    );
+    const y = groundYAtLocal(spot.x, spot.z);
+    person.position.set(spot.x, y, spot.z);
+    person.userData.walk = {
+      baseZ: spot.z,
+      baseY: y,
+      range: spot.range,
+      speed: spot.speed,
+      phase: spot.phase,
+    };
+    streetLife.add(person);
+    streetWalkers.push(person);
+  }
+
+  // Folks just sitting on stoops and benches — no scripted movement.
+  const sitterSpots = [
+    { x: 66.2, z: 444.5, yaw: -0.4 },
+    { x: 77.8, z: 405.5, yaw: 0.5 },
+    { x: 118.6, z: 441.8, yaw: 2.2 },
+    { x: 27.4, z: 437.6, yaw: -1.1 },
+  ];
+  for (let i = 0; i < sitterSpots.length; i++) {
+    const spot = sitterSpots[i];
+    const y = groundYAtLocal(spot.x, spot.z);
+    const bench = new THREE.Group();
+    bench.position.set(spot.x, y, spot.z);
+    bench.rotation.y = spot.yaw;
+    addBox(woodDarkMat, 1.9, 0.12, 0.55, 0, 0.48, 0, 0, 0, 0, bench);
+    addBox(woodDarkMat, 1.9, 0.5, 0.1, 0, 0.78, -0.26, 0, 0, 0, bench);
+    addBox(ironMat, 0.1, 0.48, 0.44, -0.78, 0.24, 0, 0, 0, 0, bench);
+    addBox(ironMat, 0.1, 0.48, 0.44, 0.78, 0.24, 0, 0, 0, 0, bench);
+    const person = buildCitizen(
+      shirtMaterials[(i + 2) % shirtMaterials.length],
+      skinMaterials[(i + 1) % skinMaterials.length],
+      true,
+    );
+    person.position.set(0, 0.12, 0.02);
+    bench.add(person);
+    streetLife.add(bench);
+  }
+
+  // Parked hydraulic show cars. Wheels stay put while the body pumps and tilts.
+  const buildHydraulicShowCar = (
+    paint: number,
+    underglow: number,
+    miniTruck: boolean,
+  ): { car: THREE.Group; body: THREE.Group } => {
+    const car = new THREE.Group();
+    const body = new THREE.Group();
+    body.userData.dynamic = true;
+    car.add(body);
+    const paintMat = new THREE.MeshStandardMaterial({
+      color: paint,
+      roughness: 0.32,
+      metalness: 0.45,
+    });
+    const chromeMat = new THREE.MeshStandardMaterial({
+      color: 0xe2e8f0,
+      roughness: 0.2,
+      metalness: 0.9,
+    });
+    const glassMat = new THREE.MeshStandardMaterial({
+      color: 0x8ab4c8,
+      roughness: 0.12,
+      metalness: 0.4,
+    });
+    addBox(paintMat, 1.95, 0.5, 4.35, 0, 0.58, 0, 0, 0, 0, body);
+    addBox(paintMat, 1.7, 0.5, 1.5, 0, 1.0, -1.15, 0, 0, 0, body);
+    if (miniTruck) {
+      addBox(glassMat, 1.45, 0.34, 0.12, 0, 1.16, -0.44, 0, 0, 0, body);
+      addBox(paintMat, 1.8, 0.24, 1.9, 0, 0.82, 1.05, 0, 0, 0, body);
+      addBox(paintMat, 0.12, 0.34, 1.9, -0.88, 0.98, 1.05, 0, 0, 0, body);
+      addBox(paintMat, 0.12, 0.34, 1.9, 0.88, 0.98, 1.05, 0, 0, 0, body);
+    } else {
+      addBox(glassMat, 1.6, 0.42, 2.0, 0, 1.02, -0.1, 0, 0, 0, body);
+      addBox(paintMat, 1.62, 0.1, 2.05, 0, 1.26, -0.1, 0, 0, 0, body);
+    }
+    addBox(chromeMat, 2.0, 0.16, 0.18, 0, 0.44, 2.18, 0, 0, 0, body);
+    addBox(chromeMat, 2.0, 0.16, 0.18, 0, 0.44, -2.18, 0, 0, 0, body);
+    addBox(
+      new THREE.MeshBasicMaterial({ color: underglow }),
+      1.9,
+      0.06,
+      3.6,
+      0,
+      0.28,
+      0,
+      0,
+      0,
+      0,
+      car,
+    );
+    const tireMat = new THREE.MeshStandardMaterial({ color: 0x111318, roughness: 0.94 });
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1.35, 1.35]) {
+        addBox(chromeMat, 0.3, 0.52, 0.52, sx * 0.95, 0.3, sz, 0, 0, 0, car);
+        addBox(tireMat, 0.16, 0.54, 0.54, sx * 1.06, 0.3, sz, 0, 0, 0, car);
+      }
+    }
+    return { car, body };
+  };
+
+  const hydraulicSpots = [
+    { x: 60.6, z: 392, yaw: 0.04, paint: 0xb91c1c, glow: 0xef4444, miniTruck: false, phase: 0.4, speed: 1.8 },
+    { x: 83.4, z: 486, yaw: Math.PI - 0.05, paint: 0x6d28d9, glow: 0xa855f7, miniTruck: true, phase: 2.2, speed: 2.6 },
+    { x: 83.4, z: 552, yaw: Math.PI + 0.03, paint: 0x0f766e, glow: 0x22d3ee, miniTruck: false, phase: 4.4, speed: 1.6 },
+  ];
+  for (const spot of hydraulicSpots) {
+    const { car, body } = buildHydraulicShowCar(spot.paint, spot.glow, spot.miniTruck);
+    const y = groundYAtLocal(spot.x, spot.z);
+    car.position.set(spot.x, y, spot.z);
+    car.rotation.y = spot.yaw;
+    car.userData.hydraulics = {
+      body,
+      baseY: 0,
+      phase: spot.phase,
+      speed: spot.speed,
+      tilt: spot.miniTruck ? 0.09 : 0.06,
+    };
+    streetLife.add(car);
+    streetDancers.push(car);
+  }
 
   const streetcarGroup = new THREE.Group();
   streetcarGroup.name = 'canal-street-streetcar';
@@ -867,11 +1094,19 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
     addBox(mat, 3.2, 1.1, 0.18, spot.x, y + 3.4, spot.z);
   }
 
+  // Walking pedestrians and pumping show cars are animated by the engine, so
+  // they must stay as individual meshes instead of being static-merged.
+  for (const animated of [...streetWalkers, ...streetDancers]) {
+    animated.traverse((object) => {
+      object.userData.noStaticMerge = true;
+    });
+  }
+
   // Translate the whole shipped district onto the separated Louisiana shelf.
   group.position.set(LOUISIANA_CITY_OFFSET.x, 0, LOUISIANA_CITY_OFFSET.z);
   group.updateMatrixWorld(true);
   group.traverse((obj) => {
-    if (obj === streetcarGroup) {
+    if (obj === streetcarGroup || obj.userData.dynamic) {
       obj.matrixAutoUpdate = true;
       return;
     }
@@ -922,5 +1157,16 @@ export function buildLouisianaMainland(): LouisianaMainlandHandles {
     streetcarGroup,
     streetcarRoute,
     colliders: worldColliders,
+    streetWalkers,
+    streetDancers,
+    trafficCars: {
+      bodies: trafficBodies,
+      cabins: trafficCabins,
+      lanes: trafficLanes,
+    },
+    streetLifeCenter: {
+      x: toWorldX(CITY.pos.x),
+      z: toWorldZ(CITY.pos.z),
+    },
   };
 }

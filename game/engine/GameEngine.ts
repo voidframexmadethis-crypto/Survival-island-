@@ -454,6 +454,7 @@ import {
   WorldHandles,
 } from '../world/worldBuilder';
 import { buildFlatWorld, FlatWorldHandles } from '../world/flatWorldBuilder';
+import type { LouisianaMainlandHandles } from '../world/louisianaMainland';
 import {
   CoasterPiecePresetKey,
   RollerCoasterRuntime,
@@ -1557,6 +1558,8 @@ export class GameEngine {
   private hydraulicBounceTimer = 0;
   /** Consecutive rear-bumper hits on the El Camino, so each one lands higher. */
   private rearBounceEscalation = new Map<string, { level: number; lastAtMs: number }>();
+  /** Scratch object reused when stamping moving Crescent City traffic. */
+  private mainlandTrafficDummy = new THREE.Object3D();
   private autoParkJobs = new Map<
     string,
     {
@@ -17250,6 +17253,15 @@ export class GameEngine {
       city.streetcarGroup.position.z = a.z + span * pingPong;
       city.streetcarGroup.rotation.y = phase < 0.5 ? 0 : Math.PI;
     }
+    if (
+      city &&
+      Math.hypot(
+        this.playerX - city.streetLifeCenter.x,
+        this.playerZ - city.streetLifeCenter.z,
+      ) < 340
+    ) {
+      this.updateCrescentCityStreetLife(city);
+    }
     let speedKmh = 0;
     let driftMps = 0;
     let driving = false;
@@ -17286,6 +17298,59 @@ export class GameEngine {
         this.toast(`Stunt jump! ${ramp.label} · ${Math.round(speedKmh)} km/h`, 'discovery');
         break;
       }
+    }
+  }
+
+  /**
+   * Brings the Crescent City sidewalks to life: strollers along the curb,
+   * parked lowriders pumping on their hydraulics and boulevard traffic rolling.
+   * Everything is skipped when the player is far from the mainland district.
+   */
+  private updateCrescentCityStreetLife(city: LouisianaMainlandHandles): void {
+    const elapsed = this.elapsed;
+    for (let i = 0; i < city.streetWalkers.length; i++) {
+      const walker = city.streetWalkers[i];
+      const info = walker.userData.walk as
+        | { baseZ: number; baseY: number; range: number; speed: number; phase: number }
+        | undefined;
+      if (!info) continue;
+      const cycle = elapsed * info.speed + info.phase;
+      walker.position.z = info.baseZ + Math.sin(cycle) * info.range;
+      walker.position.y = info.baseY + Math.abs(Math.sin(cycle * 3.2)) * 0.035;
+      walker.rotation.y = Math.cos(cycle) >= 0 ? 0 : Math.PI;
+    }
+    for (let i = 0; i < city.streetDancers.length; i++) {
+      const car = city.streetDancers[i];
+      const info = car.userData.hydraulics as
+        | { body: THREE.Group; baseY: number; phase: number; speed: number; tilt: number }
+        | undefined;
+      if (!info) continue;
+      const pump = elapsed * info.speed + info.phase;
+      info.body.position.y = info.baseY + Math.abs(Math.sin(pump)) * 0.2;
+      info.body.rotation.z = Math.sin(pump * 0.5) * info.tilt;
+      info.body.rotation.x = Math.cos(pump) * info.tilt * 0.55;
+    }
+    const traffic = city.trafficCars;
+    if (traffic && traffic.lanes.length > 0) {
+      const dummy = this.mainlandTrafficDummy;
+      const span = 295;
+      for (let i = 0; i < traffic.lanes.length; i++) {
+        const lane = traffic.lanes[i];
+        const travel =
+          (((elapsed * lane.speed + lane.offset) % span) + span) % span;
+        const z = lane.direction > 0 ? 310 + travel : 605 - travel;
+        dummy.position.set(lane.x, lane.y + 0.42, z);
+        dummy.rotation.set(0, lane.yaw, 0);
+        dummy.scale.set(1.8, 0.62, 3.9);
+        dummy.updateMatrix();
+        traffic.bodies.setMatrixAt(lane.index, dummy.matrix);
+        dummy.position.set(lane.x, lane.y + 0.92, z);
+        dummy.scale.set(1.45, 0.52, 2.1);
+        dummy.updateMatrix();
+        traffic.cabins.setMatrixAt(lane.index, dummy.matrix);
+      }
+      traffic.bodies.instanceMatrix.needsUpdate = true;
+      traffic.cabins.instanceMatrix.needsUpdate = true;
     }
   }
 
