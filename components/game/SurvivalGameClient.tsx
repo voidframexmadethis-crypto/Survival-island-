@@ -2544,6 +2544,101 @@ export function SurvivalGameClient() {
                 </button>
               )}
 
+              {hud.ferryFuelDrop?.open &&
+                !activeModal &&
+                hud.nearbyInteraction?.kind === 'ferry_fuel' && (
+                  <div className="pointer-events-auto w-[min(92vw,340px)] rounded-xl border border-lime-500/55 bg-stone-950/95 px-3 py-2 shadow-2xl backdrop-blur-md text-left">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-[0.2em] text-lime-300">
+                        <Ship className="w-3.5 h-3.5" /> Drop
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => engineRef.current?.closeFerryFuelMenu()}
+                        className="text-[10px] font-bold uppercase tracking-wide text-stone-400 hover:text-stone-100"
+                      >
+                        Close
+                      </button>
+                    </div>
+                    <div className="mt-1 text-[10px] leading-snug text-stone-300">
+                      Coconuts press straight into the Crescent Star fuel tank ·{' '}
+                      <span className="font-semibold text-lime-200">
+                        {hud.ferryFuelDrop.coconutCount} in pack
+                      </span>
+                    </div>
+                    <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-stone-800">
+                      <div
+                        className="h-full bg-lime-400 transition-[width] duration-500"
+                        style={{
+                          width: `${Math.max(
+                            0,
+                            Math.min(
+                              100,
+                              (hud.ferryFuelDrop.tankLiters /
+                                hud.ferryFuelDrop.tankCapacityLiters) *
+                                100,
+                            ),
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-[9px] font-mono-tabular text-stone-400">
+                      <span>
+                        {hud.ferryFuelDrop.tankLiters.toFixed(0)} /{' '}
+                        {hud.ferryFuelDrop.tankCapacityLiters} L
+                      </span>
+                      <span>
+                        {hud.ferryFuelDrop.litersPerCoconut.toFixed(1)} L per coconut
+                      </span>
+                    </div>
+                    <div className="mt-2 grid grid-cols-3 gap-1.5">
+                      {[
+                        { label: 'DROP 1', count: 1 },
+                        { label: 'DROP 3', count: 3 },
+                        {
+                          label: 'DROP ALL',
+                          count: hud.ferryFuelDrop.coconutCount,
+                        },
+                      ].map((option) => (
+                        <button
+                          key={option.label}
+                          type="button"
+                          disabled={hud.ferryFuelDrop!.coconutCount < option.count || option.count < 1}
+                          onClick={() =>
+                            engineRef.current?.dropFerryCoconuts(option.count)
+                          }
+                          className="rounded-lg border border-lime-500/60 bg-lime-500/15 px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-lime-200 transition hover:bg-lime-500/30 disabled:cursor-default disabled:border-stone-700 disabled:bg-stone-900 disabled:text-stone-600"
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                    {(hud.ferryFuelDrop.biofuelCount > 0 ||
+                      hud.ferryFuelDrop.canDrawReserve) && (
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {hud.ferryFuelDrop.biofuelCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.dropFerryBiofuelCanister()}
+                            className="flex-1 rounded-lg border border-amber-500/55 bg-amber-500/15 px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-amber-200 transition hover:bg-amber-500/30"
+                          >
+                            Drop Canister · +{hud.ferryFuelDrop.litersPerCanister} L
+                          </button>
+                        )}
+                        {hud.ferryFuelDrop.canDrawReserve && (
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.drawFerryReserveFuel()}
+                            className="flex-1 rounded-lg border border-stone-600 bg-stone-800/70 px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-stone-200 transition hover:bg-stone-700"
+                          >
+                            Draw Reserve
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
               {hud.nearbyInteraction &&
                 !activeModal &&
                 hud.nearbyInteraction.kind !== 'carcass' &&

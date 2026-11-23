@@ -378,6 +378,21 @@ export const LOUISIANA_FERRY_LOW_FUEL_LITERS = 50;
 export const LOUISIANA_FERRY_RESERVE_LITERS = 100;
 export const LOUISIANA_FERRY_BIOFUEL_LITERS = 25;
 export const LOUISIANA_FERRY_BIOFUEL_COCONUTS = 3;
+/** Biofuel one fresh coconut yields when dropped straight into the tank. */
+export const LOUISIANA_FERRY_LITERS_PER_COCONUT =
+  LOUISIANA_FERRY_BIOFUEL_LITERS / LOUISIANA_FERRY_BIOFUEL_COCONUTS;
+
+/** Fuel produced by dropping `count` whole coconuts into the tank. */
+export function ferryBiofuelFromCoconuts(count: number): number {
+  if (!Number.isFinite(count) || count <= 0) return 0;
+  return Math.floor(count) * LOUISIANA_FERRY_LITERS_PER_COCONUT;
+}
+
+/** Coconuts needed to produce `liters`, rounded up to whole nuts. */
+export function ferryCoconutsForLiters(liters: number): number {
+  if (!Number.isFinite(liters) || liters <= 0) return 0;
+  return Math.ceil(liters / LOUISIANA_FERRY_LITERS_PER_COCONUT);
+}
 export const LOUISIANA_FERRY_ENGINE_START_MS = 2500;
 
 /**

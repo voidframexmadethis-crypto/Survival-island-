@@ -12,6 +12,7 @@ import {
   LOUISIANA_FERRY_DOCK_POS,
   LOUISIANA_FERRY_FUEL_CAPACITY_LITERS,
   LOUISIANA_FERRY_FUEL_PER_LEG_LITERS,
+  LOUISIANA_FERRY_LITERS_PER_COCONUT,
   LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS,
   LOUISIANA_FERRY_RESERVE_LITERS,
   LOUISIANA_FERRY_LEG_HOURS,
@@ -21,6 +22,8 @@ import {
   LOUISIANA_FERRY_ROUTE_METERS,
   LOUISIANA_FERRY_TARGET_SPEED_MPS,
   LouisianaFerryVoyageSystem,
+  ferryBiofuelFromCoconuts,
+  ferryCoconutsForLiters,
   ferryDistanceForElapsed,
   ferryPointForDirection,
   ferryRouteHeadingAt,
@@ -697,4 +700,17 @@ test('biofuel fills the tank and the one-shot reserve is clamped to capacity', (
   assert.equal(ferry.reserveUsed, true);
   assert.ok(ferry.fuelLiters >= Math.min(LOUISIANA_FERRY_RESERVE_LITERS + 10, LOUISIANA_FERRY_FUEL_CAPACITY_LITERS));
   assert.equal(ferry.drawReserve(), false);
+});
+
+test('coconuts dropped in the tank convert at the canister press rate', () => {
+  assert.equal(LOUISIANA_FERRY_LITERS_PER_COCONUT, LOUISIANA_FERRY_BIOFUEL_LITERS / 3);
+  assert.equal(ferryBiofuelFromCoconuts(1), LOUISIANA_FERRY_LITERS_PER_COCONUT);
+  assert.ok(Math.abs(ferryBiofuelFromCoconuts(3) - LOUISIANA_FERRY_BIOFUEL_LITERS) < 1e-9);
+  assert.equal(ferryBiofuelFromCoconuts(0), 0);
+  assert.equal(ferryBiofuelFromCoconuts(-2), 0);
+  assert.equal(ferryBiofuelFromCoconuts(Number.NaN), 0);
+  assert.equal(ferryCoconutsForLiters(1), 1);
+  assert.equal(ferryCoconutsForLiters(LOUISIANA_FERRY_BIOFUEL_LITERS), 3);
+  assert.equal(ferryCoconutsForLiters(LOUISIANA_FERRY_BIOFUEL_LITERS + 0.5), 4);
+  assert.equal(ferryCoconutsForLiters(0), 0);
 });

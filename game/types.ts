@@ -1571,6 +1571,16 @@ export interface HUDStateSnapshot {
   finalIsland?: import('./systems/finalIslandFeatures').FinalIslandHudState;
   mainland?: import('./systems/louisianaMainland').MainlandHudState;
   airShuttle?: import('./systems/crescentCityAirShuttle').AirShuttleStatus;
+  ferryFuelDrop?: {
+    open: boolean;
+    coconutCount: number;
+    biofuelCount: number;
+    tankLiters: number;
+    tankCapacityLiters: number;
+    litersPerCoconut: number;
+    litersPerCanister: number;
+    canDrawReserve: boolean;
+  };
   ferryVoyage?: {
     phase: string;
     label: string;

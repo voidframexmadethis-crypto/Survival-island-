@@ -111,12 +111,14 @@ import {
   LOUISIANA_FERRY_LEG_HOURS,
   LOUISIANA_FERRY_LEG_MS,
   LOUISIANA_FERRY_BIOFUEL_LITERS,
-  LOUISIANA_FERRY_BIOFUEL_COCONUTS,
   LOUISIANA_FERRY_FUEL_CAPACITY_LITERS,
+  LOUISIANA_FERRY_LITERS_PER_COCONUT,
   LOUISIANA_FERRY_LOW_FUEL_LITERS,
   LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS,
   LOUISIANA_FERRY_RESERVE_LITERS,
   LouisianaFerryVoyageSystem,
+  ferryBiofuelFromCoconuts,
+  ferryCoconutsForLiters,
   formatFerryDuration,
   type LouisianaFerrySaveState,
 } from '../systems/louisianaFerryVoyage';
@@ -796,6 +798,7 @@ export class GameEngine {
   private ferryWakeAccum = 0;
   private ferrySmokeAccum = 0;
   private ferryHornCooldown = 0;
+  private ferryFuelMenuOpen = false;
   private ferryLowFuelNoticeShown = false;
   private ferryFuelStarvedNoticeShown = false;
   private ferryLastPersistMs = 0;
@@ -13398,8 +13401,8 @@ export class GameEngine {
       ) {
         return {
           id: 'ferry_fuel_dock',
-          label: 'Add Biofuel at the Stern Fuel Tank',
-          sublabel: `Tank ${voyage.fuelLiters.toFixed(0)} / ${LOUISIANA_FERRY_FUEL_CAPACITY_LITERS} L · coconut biofuel or emergency reserve`,
+          label: 'Drop Coconuts into the Stern Fuel Tank',
+          sublabel: `1 coconut = ${LOUISIANA_FERRY_LITERS_PER_COCONUT.toFixed(1)} L · ${LOUISIANA_FERRY_BIOFUEL_LITERS} L per canister · tank ${voyage.fuelPercent.toFixed(0)}%`,
           kind: 'ferry_fuel',
           actionCategory: 'use',
           distance: sternTankDist,
@@ -13414,8 +13417,8 @@ export class GameEngine {
           if (!voyage.canDepart) {
             return {
               id: 'ferry_fuel_dock',
-              label: 'Fuel the Crescent Star',
-              sublabel: `Tank ${voyage.fuelPercent.toFixed(0)}% · need ${LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS} L · coconut biofuel`,
+              label: 'Drop Coconuts into the Fuel Tank',
+              sublabel: `1 coconut = ${LOUISIANA_FERRY_LITERS_PER_COCONUT.toFixed(1)} L · need ${LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS} L to sail`,
               kind: 'ferry_fuel',
               actionCategory: 'use',
               distance: tvDist,
@@ -13443,8 +13446,8 @@ export class GameEngine {
           if (!voyage.canDepart) {
             return {
               id: 'ferry_fuel_dock',
-              label: 'Refuel the Crescent Star at the Berth',
-              sublabel: `Tank ${voyage.fuelPercent.toFixed(0)}% · need ${LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS} L · coconut biofuel`,
+              label: 'Drop Coconuts into the Fuel Tank',
+              sublabel: `1 coconut = ${LOUISIANA_FERRY_LITERS_PER_COCONUT.toFixed(1)} L · need ${LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS} L to sail`,
               kind: 'ferry_fuel',
               actionCategory: 'use',
               distance: returnDist,
@@ -13573,15 +13576,15 @@ export class GameEngine {
           },
           {
             id: 'ferry_fuel',
-            label: 'Refuel from the Engine-Room Coconut Press',
-            sublabel: `Biofuel ${LOUISIANA_FERRY_BIOFUEL_LITERS} L per canister · 3 coconuts · tank ${voyage.fuelPercent.toFixed(0)}%`,
+            label: 'Drop Coconuts into the Engine-Room Tank',
+            sublabel: `1 coconut = ${LOUISIANA_FERRY_LITERS_PER_COCONUT.toFixed(1)} L · ${LOUISIANA_FERRY_BIOFUEL_LITERS} L per canister · tank ${voyage.fuelPercent.toFixed(0)}%`,
             x: -3.3,
             z: 13.0,
           },
           {
             id: 'ferry_stern_fuel',
-            label: 'Add Biofuel at the Stern Fuel Tank',
-            sublabel: `Visible aft tank · ${voyage.fuelLiters.toFixed(0)} L / ${LOUISIANA_FERRY_FUEL_CAPACITY_LITERS} L · ${voyage.fuelPercent.toFixed(0)}%`,
+            label: 'Drop Coconuts into the Stern Fuel Tank',
+            sublabel: `Visible aft tank · 1 coconut = ${LOUISIANA_FERRY_LITERS_PER_COCONUT.toFixed(1)} L · ${voyage.fuelLiters.toFixed(0)} L / ${LOUISIANA_FERRY_FUEL_CAPACITY_LITERS} L`,
             x: -3.05,
             z: -14.15,
           },
@@ -16898,6 +16901,18 @@ export class GameEngine {
         ...this.ferryVoyage.getStatus(),
         room: this.ferryVoyage.getStatus().room,
       },
+      ferryFuelDrop: {
+        open: this.ferryFuelMenuOpen,
+        coconutCount: this.getItemCount('coconut'),
+        biofuelCount: this.getItemCount('coconut_biofuel'),
+        tankLiters: this.ferryVoyage.fuelLiters,
+        tankCapacityLiters: LOUISIANA_FERRY_FUEL_CAPACITY_LITERS,
+        litersPerCoconut: LOUISIANA_FERRY_LITERS_PER_COCONUT,
+        litersPerCanister: LOUISIANA_FERRY_BIOFUEL_LITERS,
+        canDrawReserve:
+          !this.ferryVoyage.reserveUsed &&
+          this.ferryVoyage.fuelLiters < LOUISIANA_FERRY_FUEL_CAPACITY_LITERS - 0.01,
+      },
       airShuttle: this.airShuttle.getStatus(),
       lostWorld: getLostWorldHudState(this.lostWorld),
       lostWorldBeat: this.getLostWorldCinematicBeat(),
@@ -17280,6 +17295,7 @@ export class GameEngine {
     this.ferryWakeAccum = 0;
     this.ferrySmokeAccum = 0;
     this.ferryHornCooldown = 0;
+    this.ferryFuelMenuOpen = false;
     this.ferryLowFuelNoticeShown = false;
     this.ferryFuelStarvedNoticeShown = false;
     this.ferryHudAccum = 0;
@@ -18475,8 +18491,62 @@ export class GameEngine {
     this.emitHud();
   }
 
-  /** Refuels from a canister, pressed coconuts, or the emergency reserve. */
+  /** Opens the tank-side drop menu so the player can pour fuel in by hand. */
   private handleFerryFuel(): void {
+    const voyage = this.ferryVoyage;
+    if (voyage.fuelLiters >= LOUISIANA_FERRY_FUEL_CAPACITY_LITERS - 0.01) {
+      this.ferryFuelMenuOpen = false;
+      this.toast(
+        `The Crescent Star tank is already full (${LOUISIANA_FERRY_FUEL_CAPACITY_LITERS} L).`,
+        'info',
+      );
+      this.emitHud();
+      return;
+    }
+    this.ferryFuelMenuOpen = true;
+    this.nearbyInteraction = this.findNearbyInteraction();
+    this.emitHud();
+  }
+
+  public closeFerryFuelMenu(): void {
+    this.ferryFuelMenuOpen = false;
+    this.emitHud();
+  }
+
+  /**
+   * Drops whole coconuts straight into the fuel tank. Each nut presses itself
+   * into biofuel on contact, so no canister is needed at the tank.
+   */
+  public dropFerryCoconuts(count: number): void {
+    const voyage = this.ferryVoyage;
+    const free = LOUISIANA_FERRY_FUEL_CAPACITY_LITERS - voyage.fuelLiters;
+    if (free <= 0.01) {
+      this.ferryFuelMenuOpen = false;
+      this.toast(
+        `The Crescent Star tank is already full (${LOUISIANA_FERRY_FUEL_CAPACITY_LITERS} L).`,
+        'info',
+      );
+      this.emitHud();
+      return;
+    }
+    const held = this.getItemCount('coconut');
+    if (held <= 0) {
+      this.toast('No fresh coconuts in your pack to drop into the tank.', 'warning');
+      return;
+    }
+    const wanted = Math.max(1, Math.floor(count));
+    const used = Math.min(wanted, held, ferryCoconutsForLiters(free));
+    if (used <= 0) return;
+    this.removeItem('coconut', used);
+    const added = voyage.addFuel(ferryBiofuelFromCoconuts(used));
+    this.applyFerryFuel(
+      added,
+      `${used} coconut${used === 1 ? '' : 's'} dropped into the tank`,
+    );
+  }
+
+  /** Drops a pressed canister into the tank for the full 25 L. */
+  public dropFerryBiofuelCanister(): void {
     const voyage = this.ferryVoyage;
     if (voyage.fuelLiters >= LOUISIANA_FERRY_FUEL_CAPACITY_LITERS - 0.01) {
       this.toast(
@@ -18485,31 +18555,40 @@ export class GameEngine {
       );
       return;
     }
-    const wasStopped =
-      voyage.engineState === 'off' || voyage.engineState === 'starved';
-    let added = 0;
-    let source = '';
-    if (this.getItemCount('coconut_biofuel') > 0) {
-      this.removeItem('coconut_biofuel', 1);
-      added = voyage.addFuel(LOUISIANA_FERRY_BIOFUEL_LITERS);
-      source = 'coconut biofuel canister';
-    } else if (this.getItemCount('coconut') >= LOUISIANA_FERRY_BIOFUEL_COCONUTS) {
-      this.removeItem('coconut', LOUISIANA_FERRY_BIOFUEL_COCONUTS);
-      added = voyage.addFuel(LOUISIANA_FERRY_BIOFUEL_LITERS);
-      source = `${LOUISIANA_FERRY_BIOFUEL_COCONUTS} coconuts pressed in the engine-room press`;
-    } else if (!voyage.reserveUsed && voyage.fuelLiters < LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS) {
-      const before = voyage.fuelLiters;
-      voyage.drawReserve();
-      added = voyage.fuelLiters - before;
-      source = 'emergency reserve tank';
+    if (this.getItemCount('coconut_biofuel') <= 0) {
+      this.toast('No Coconut Biofuel Canister in your pack.', 'warning');
+      return;
     }
+    this.removeItem('coconut_biofuel', 1);
+    const added = voyage.addFuel(LOUISIANA_FERRY_BIOFUEL_LITERS);
+    this.applyFerryFuel(added, 'coconut biofuel canister');
+  }
+
+  /** Draws the one-shot emergency reserve from the drop menu. */
+  public drawFerryReserveFuel(): void {
+    const voyage = this.ferryVoyage;
+    if (voyage.reserveUsed) {
+      this.toast('The emergency reserve has already been drawn.', 'warning');
+      return;
+    }
+    const before = voyage.fuelLiters;
+    voyage.drawReserve();
+    const added = voyage.fuelLiters - before;
     if (added <= 0) {
       this.toast(
-        `No biofuel. Craft a Coconut Biofuel Canister (${LOUISIANA_FERRY_BIOFUEL_COCONUTS} coconuts) or draw the dock reserve.`,
-        'warning',
+        `The Crescent Star tank is already full (${LOUISIANA_FERRY_FUEL_CAPACITY_LITERS} L).`,
+        'info',
       );
       return;
     }
+    this.applyFerryFuel(added, 'emergency reserve tank');
+  }
+
+  private applyFerryFuel(added: number, source: string): void {
+    if (added <= 0) return;
+    const voyage = this.ferryVoyage;
+    const wasStopped =
+      voyage.engineState === 'off' || voyage.engineState === 'starved';
     this.sound.playCraftSuccess();
     this.spawnFerryExhaustBurst(4);
     let started = false;
@@ -18525,7 +18604,7 @@ export class GameEngine {
       }
     }
     this.toast(
-      `Added ${added.toFixed(0)} L from the ${source}. Tank ${voyage.fuelLiters.toFixed(0)} L (${voyage.fuelPercent.toFixed(0)}%)${started ? ' — engines restarting automatically' : ''}.`,
+      `Dropped ${added.toFixed(1)} L into the Crescent Star from ${source}. Tank ${voyage.fuelLiters.toFixed(0)} L (${voyage.fuelPercent.toFixed(0)}%)${started ? ' — engines restarting automatically' : ''}.`,
       'craft',
     );
     this.persistLouisianaFerryVoyage(true);
