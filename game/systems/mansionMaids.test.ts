@@ -10,15 +10,15 @@ import {
   stepMaidPatrol,
 } from './mansionMaids';
 
-test('the premade mansion has 16 bedrooms, 16 baths, three storeys and five maids', () => {
+test('the premade hill house wing has 16 bedrooms, 16 baths, three storeys and six maids', () => {
   assert.equal(MANSION_SPEC.stories, 3);
   assert.equal(MANSION_SPEC.bedrooms, 16);
   assert.equal(MANSION_SPEC.bathrooms, 16);
   assert.equal(MANSION_SPEC.musicLounges, 2);
   assert.equal(MANSION_SPEC.talkingAreas, 1);
   assert.equal(MANSION_SPEC.indoorPools, 1);
-  assert.equal(MANSION_SPEC.maids, 5);
-  assert.equal(MANSION_MAIDS.length, 5);
+  assert.equal(MANSION_SPEC.maids, 6);
+  assert.equal(MANSION_MAIDS.length, 6);
 });
 
 test('maid duties cover cooking, cleaning, serving, cars and repairs', () => {
@@ -39,7 +39,7 @@ test('maid duties cover cooking, cleaning, serving, cars and repairs', () => {
   ] as const) {
     assert.ok(tasks.has(expected), `no maid handles ${expected}`);
   }
-  assert.equal(new Set(MANSION_MAIDS.map((maid) => maid.name)).size, 5);
+  assert.equal(new Set(MANSION_MAIDS.map((maid) => maid.name)).size, 6);
   assert.match(describeMaidDuties(MANSION_MAIDS[0]), /cook/i);
 });
 
@@ -49,16 +49,16 @@ test('every maid has a duty route inside the mansion or its motor court', () => 
     assert.ok(maid.speed > 0.5);
     for (const point of maid.route) {
       assert.ok(Math.abs(point.x) <= 20, `${maid.name} route leaves the grounds`);
-      assert.ok(Math.abs(point.z) <= 9.5, `${maid.name} route leaves the grounds`);
+      assert.ok(Math.abs(point.z) <= 21.5, `${maid.name} route leaves the grounds`);
       assert.ok(point.y >= 0 && point.y <= 7.3);
       assert.ok(point.pause > 0);
     }
   }
 });
 
-test('the strongwoman feat moves the coaster exactly 100 feet', () => {
-  assert.equal(COASTER_RELOCATION_FEET, 100);
-  assert.equal(COASTER_RELOCATION_METERS, 30.48);
+test('the strongwoman feat moves the coaster exactly 8,000 feet', () => {
+  assert.equal(COASTER_RELOCATION_FEET, 8000);
+  assert.equal(COASTER_RELOCATION_METERS, 2438.4);
   const bianca = MANSION_MAIDS.find((maid) => maid.id === 'maid_bianca');
   assert.ok(bianca);
   assert.ok(bianca!.route.some((point) => point.work === 'coaster_feat'));

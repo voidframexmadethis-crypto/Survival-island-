@@ -269,6 +269,7 @@ export interface WorldHandles {
   abandonedDragonGroup: THREE.Group;
   garagePos: THREE.Vector3;
   garageBenchPos: THREE.Vector3;
+  garageMaid: { group: THREE.Group; armL: THREE.Group; armR: THREE.Group };
   armoryChest: ShipwreckChestHandle;
   wheatfieldPos: THREE.Vector3;
   caveCeilings: CaveCeilingCluster[];
@@ -4356,6 +4357,52 @@ export function buildIslandWorld(
     garageGroup.add(can);
   });
 
+  // Estate maid working the garage: she services the player's cars,
+  // hydraulics, subwoofers and lights whenever they are parked here.
+  const garageMaid = new THREE.Group();
+  garageMaid.name = 'mansion-garage-maid';
+  const maidDressMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.82 });
+  const maidBlouseMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.7 });
+  const maidSkinMat = new THREE.MeshStandardMaterial({ color: 0x8d5524, roughness: 0.72 });
+  const maidHairMat = new THREE.MeshStandardMaterial({ color: 0x1a1210, roughness: 0.9 });
+  const maidBody = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 0.3), maidBlouseMat);
+  maidBody.position.y = 1.15;
+  const maidSkirt = new THREE.Mesh(new THREE.CylinderGeometry(0.29, 0.4, 0.55, 10), maidDressMat);
+  maidSkirt.position.y = 0.68;
+  const maidLegs = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.5, 0.26), maidDressMat);
+  maidLegs.position.y = 0.28;
+  const maidApron = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.7, 0.07), maidBlouseMat);
+  maidApron.position.set(0, 0.94, 0.17);
+  const maidHead = new THREE.Mesh(new THREE.SphereGeometry(0.19, 12, 10), maidSkinMat);
+  maidHead.position.y = 1.62;
+  const maidHair = new THREE.Mesh(new THREE.SphereGeometry(0.2, 10, 8), maidHairMat);
+  maidHair.position.set(0, 1.68, -0.03);
+  const maidBun = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 8), maidHairMat);
+  maidBun.position.set(0, 1.8, -0.15);
+  const garageMaidArmL = new THREE.Group();
+  garageMaidArmL.position.set(-0.32, 1.34, 0);
+  const gMaidArmLMesh = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.54, 0.14), maidBlouseMat);
+  gMaidArmLMesh.position.y = -0.27;
+  garageMaidArmL.add(gMaidArmLMesh);
+  const garageMaidArmR = new THREE.Group();
+  garageMaidArmR.position.set(0.32, 1.34, 0);
+  const gMaidArmRMesh = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.54, 0.14), maidBlouseMat);
+  gMaidArmRMesh.position.y = -0.27;
+  const gMaidWrench = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.4, 0.04), steelFrameMat);
+  gMaidWrench.position.set(0.02, -0.5, 0.1);
+  garageMaidArmR.add(gMaidArmRMesh, gMaidWrench);
+  garageMaid.add(maidBody, maidSkirt, maidLegs, maidApron, maidHead, maidHair, maidBun, garageMaidArmL, garageMaidArmR);
+  garageMaid.position.set(-3.0, 0.16, 2.6);
+  garageMaid.traverse((object) => {
+    object.userData.noStaticMerge = true;
+    object.userData.dynamic = true;
+    if (object instanceof THREE.Mesh) {
+      object.castShadow = true;
+      object.receiveShadow = false;
+    }
+  });
+  garageGroup.add(garageMaid);
+
   overworldGroup.add(garageGroup);
   staticMergeTargets.push({ group: garageGroup });
 
@@ -7989,6 +8036,11 @@ gl_Position = projectionMatrix * mvPosition;`,
     abandonedDragonGroup: abandonedDragonGroup ?? new THREE.Group(),
     garagePos,
     garageBenchPos,
+    garageMaid: {
+      group: garageMaid,
+      armL: garageMaidArmL,
+      armR: garageMaidArmR,
+    },
     armoryChest,
     wheatfieldPos: new THREE.Vector3(WHEATFIELD_POS.x, wheatY, WHEATFIELD_POS.z),
     caveCeilings,

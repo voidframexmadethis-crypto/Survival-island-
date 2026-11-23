@@ -2270,6 +2270,64 @@ export class SoundEngine {
     thump.stop(now + 0.19);
   }
 
+  /** Electric pump run and valve hiss for independent section movements. */
+  public playHydraulicPump(
+    kind: 'up' | 'down' | 'lock' | 'unlock' | 'bounce',
+  ): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const rising = kind === 'up' || kind === 'lock';
+    const duration = kind === 'bounce' ? 0.16 : kind === 'lock' || kind === 'unlock' ? 0.22 : 0.34;
+
+    const pump = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    pump.type = 'sawtooth';
+    pump.frequency.setValueAtTime(rising ? 190 : 360, now);
+    pump.frequency.exponentialRampToValueAtTime(rising ? 540 : 180, now + duration * 0.55);
+    pump.frequency.exponentialRampToValueAtTime(rising ? 300 : 140, now + duration);
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 760;
+    filter.Q.value = 0.9;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(kind === 'bounce' ? 0.16 : 0.1, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+    pump.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.masterGain);
+    pump.start(now);
+    pump.stop(now + duration + 0.02);
+
+    const noise = this.createNoiseSource('white');
+    if (noise) {
+      const hp = this.ctx.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = 2200;
+      const ng = this.ctx.createGain();
+      ng.gain.setValueAtTime(0.0001, now);
+      ng.gain.exponentialRampToValueAtTime(0.035, now + 0.015);
+      ng.gain.exponentialRampToValueAtTime(0.001, now + duration);
+      noise.connect(hp);
+      hp.connect(ng);
+      ng.connect(this.masterGain);
+      noise.start(now, Math.random() * 1.5, duration + 0.02);
+    }
+
+    if (kind === 'bounce') {
+      const thump = this.ctx.createOscillator();
+      const tg = this.ctx.createGain();
+      thump.type = 'triangle';
+      thump.frequency.setValueAtTime(120, now);
+      thump.frequency.exponentialRampToValueAtTime(38, now + 0.14);
+      tg.gain.setValueAtTime(0.24, now);
+      tg.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+      thump.connect(tg);
+      tg.connect(this.masterGain);
+      thump.start(now);
+      thump.stop(now + 0.17);
+    }
+  }
+
   public playTotemUndying(): void {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;

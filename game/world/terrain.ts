@@ -31,7 +31,7 @@ export const HILLTOP_HOUSE_STAIR = {
   topY: HILLTOP_UPPER_FLOOR_Y,
 } as const;
 // Three-storey premade mansion on the hilltop lawn north of the old shelter.
-export const PREMADE_MANSION_POS = { x: -78, z: 96 };
+export const PREMADE_MANSION_POS = { x: -78, z: 111 };
 export const PREMADE_MANSION_FLOOR_Y = HILL_HOUSE_Y + 0.08;
 export const PREMADE_MANSION_UPPER_FLOOR_Y = PREMADE_MANSION_FLOOR_Y + 3.6;
 export const PREMADE_MANSION_TOP_FLOOR_Y = PREMADE_MANSION_FLOOR_Y + 7.2;
@@ -223,7 +223,7 @@ export function isTerrainProtectedAt(x: number, z: number): boolean {
   // Premade mansion footprint, exterior stairs and motor court.
   if (
     Math.abs(x - PREMADE_MANSION_POS.x) < 25 &&
-    Math.abs(z - PREMADE_MANSION_POS.z) < 16
+    Math.abs(z - PREMADE_MANSION_POS.z) < 24
   ) {
     return true;
   }
@@ -319,6 +319,17 @@ export function getHilltopBaseFloorY(
     ) {
       bestY = PREMADE_MANSION_TOP_FLOOR_Y;
     }
+    if (
+      sweepFootY >= PREMADE_MANSION_FLOOR_Y - 1.65 &&
+      PREMADE_MANSION_FLOOR_Y > bestY &&
+      bestY < PREMADE_MANSION_UPPER_FLOOR_Y - 0.6
+    ) {
+      bestY = PREMADE_MANSION_FLOOR_Y;
+    }
+  }
+  // Single-storey north garden pavilion (living room, study, library,
+  // summer kitchen and tiki bar) attached to the main mansion.
+  if (mdx >= -13.2 && mdx <= 13.2 && mdz >= -21.2 && mdz < -9.2) {
     if (
       sweepFootY >= PREMADE_MANSION_FLOOR_Y - 1.65 &&
       PREMADE_MANSION_FLOOR_Y > bestY &&

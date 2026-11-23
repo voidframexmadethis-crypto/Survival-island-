@@ -3498,16 +3498,64 @@ export function SurvivalGameClient() {
                           >
                             Tilt R
                           </button>
+                          <span className="w-full text-[10px] font-semibold uppercase tracking-wide text-stone-500 pt-0.5">
+                            Independent cylinders
+                          </span>
+                          {(
+                            [
+                              ['F +', 'front_raise'],
+                              ['F −', 'front_lower'],
+                              ['R +', 'rear_raise'],
+                              ['R −', 'rear_lower'],
+                              ['L +', 'left_raise'],
+                              ['L −', 'left_lower'],
+                              ['Rt +', 'right_raise'],
+                              ['Rt −', 'right_lower'],
+                            ] as const
+                          ).map(([label, action]) => (
+                            <button
+                              key={action}
+                              type="button"
+                              onClick={() => engineRef.current?.triggerHydraulicAction(action)}
+                              className="min-h-[30px] px-2 py-1 rounded-lg bg-stone-900 border border-amber-700/50 text-amber-200 text-[11px] font-bold"
+                            >
+                              {label}
+                            </button>
+                          ))}
                           <button
                             type="button"
-                            onClick={() => engineRef.current?.triggerHydraulicAction('lock_up')}
-                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
-                              hud.activeVehicle.hydraulicMode === 'lock_up'
-                                ? 'bg-purple-500 border-purple-200 text-stone-950'
-                                : 'bg-stone-900 border-stone-700 text-stone-200'
-                            }`}
+                            onClick={() => engineRef.current?.triggerHydraulicAction('height_lock')}
+                            className="min-h-[30px] px-2 py-1 rounded-lg bg-amber-400 border border-amber-100 text-stone-950 text-[11px] font-bold"
                           >
-                            Lock [X]
+                            Lock Height
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('bounce_soft')}
+                            className="min-h-[30px] px-2 py-1 rounded-lg bg-stone-900 border border-purple-500/60 text-purple-100 text-[11px] font-bold"
+                          >
+                            Soft Bounce
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('bounce')}
+                            className="min-h-[30px] px-2 py-1 rounded-lg bg-purple-600 border border-purple-300 text-white text-[11px] font-bold"
+                          >
+                            Bounce
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('bounce_hard')}
+                            className="min-h-[30px] px-2 py-1 rounded-lg bg-fuchsia-600 border border-fuchsia-300 text-white text-[11px] font-bold"
+                          >
+                            Hard Bounce
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('normal_height')}
+                            className="min-h-[30px] px-2 py-1 rounded-lg bg-stone-900 border border-stone-600 text-stone-200 text-[11px] font-bold"
+                          >
+                            Stock Height
                           </button>
                           <button
                             type="button"

@@ -466,6 +466,17 @@ import {
   type MaidPatrolState,
 } from '../systems/mansionMaids';
 import {
+  adjustHydraulicSection,
+  createHydraulicControlState,
+  hasManualHydraulicHeight,
+  hydraulicBounceImpulse,
+  hydraulicCornerTargets,
+  hydraulicSectionSummary,
+  resetHydraulicHeight,
+  toggleHydraulicLock,
+  type HydraulicControlState,
+} from '../systems/hydraulicControls';
+import {
   CoasterPiecePresetKey,
   RollerCoasterRuntime,
 } from '../systems/rollerCoasterRuntime';
@@ -1525,6 +1536,8 @@ export class GameEngine {
   private hydraulicMode: HydraulicMode = 'level';
   /** True while the lowrider is held up on locked hydraulic cylinders. */
   private hydraulicLocked = false;
+  private hydraulicControls: HydraulicControlState = createHydraulicControlState();
+  private hydraulicBounceIntensity = 1;
   private hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
   private vehicleInteriorCamera = false;
   private convertibleTopProgressMap = new Map<string, number>();
@@ -1540,6 +1553,7 @@ export class GameEngine {
   private mansionMaidStates = new Map<string, MaidPatrolState>();
   private mansionCoasterShift = 0;
   private mansionCoasterToastShown = false;
+  private garageMaidServiceCooldown = 0;
 
   // Creature Taming & Mounting & Sandbox
   private mountedCreatureId: string | null = null;
@@ -5290,6 +5304,7 @@ export class GameEngine {
     this.vehicleVisualRoll = 0;
     this.hydraulicMode = 'level';
     this.hydraulicLocked = false;
+    this.hydraulicControls = createHydraulicControlState();
     this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.trunkBassPulse = 0;
@@ -17331,9 +17346,45 @@ export class GameEngine {
     if (!this.mansionCoasterToastShown && shift > 0.55) {
       this.mansionCoasterToastShown = true;
       this.toast(
-        'Bianca moved the waterpark coaster 100 ft with one hand.',
+        'Bianca moved the waterpark coaster 8,000 ft with one hand.',
         'discovery',
       );
+    }
+  }
+
+  /** Garage maid wipes, fixes and services the player's car in the garage. */
+  private updateGarageMaid(dt: number): void {
+    const garageMaid = this.world?.garageMaid;
+    if (!garageMaid) return;
+    const gx = this.world.garagePos.x;
+    const gz = this.world.garagePos.z;
+    const dx = this.playerX - gx;
+    const dz = this.playerZ - gz;
+    if (dx * dx + dz * dz > 140 * 140) return;
+
+    this.garageMaidServiceCooldown = Math.max(0, this.garageMaidServiceCooldown - dt);
+    const nearGarage = dx * dx + dz * dz < 14 * 14;
+    if (nearGarage) {
+      const wave = Math.sin(this.elapsed * 5.6);
+      garageMaid.armR.rotation.x = 0.2 + wave * 0.5;
+      garageMaid.armL.rotation.x = -0.1 - wave * 0.18;
+      garageMaid.group.rotation.y = Math.atan2(this.playerX - gx, this.playerZ - gz);
+    } else {
+      garageMaid.armR.rotation.x = Math.sin(this.elapsed * 1.4) * 0.08;
+      garageMaid.armL.rotation.x = -Math.sin(this.elapsed * 1.2) * 0.06;
+    }
+
+    if (nearGarage && this.garageMaidServiceCooldown <= 0 && this.activeVehicleId) {
+      const car = this.vehicles.find((v) => v.id === this.activeVehicleId);
+      if (car && car.hp < car.maxHp) {
+        car.hp = car.maxHp;
+        this.garageMaidServiceCooldown = 24;
+        this.toast(
+          `Mansion maid serviced ${car.name}: bodywork, hydraulics, subwoofers and headlights.`,
+          'discovery',
+        );
+        this.emitHud();
+      }
     }
   }
 
@@ -20440,6 +20491,7 @@ export class GameEngine {
       this.currentDimension === 'overworld'
     ) {
       this.updateMansionMaids(dt);
+      this.updateGarageMaid(dt);
     }
 
     // Autonomous Ship Navigator Companion AI on Survival Island
@@ -21809,6 +21861,7 @@ export class GameEngine {
     this.vehicleDescendHold = false;
     this.hydraulicMode = 'level';
     this.hydraulicLocked = false;
+    this.hydraulicControls = createHydraulicControlState();
     this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.trunkBassPulse = 0;
@@ -22684,6 +22737,15 @@ export class GameEngine {
         ? 'lock_up'
         : 'level';
     this.hydraulicLocked = parkedLockedUp;
+    this.hydraulicControls = parkedLockedUp
+      ? {
+          front: 0.78,
+          rear: 0.78,
+          left: 0,
+          right: 0,
+          locked: true,
+        }
+      : createHydraulicControlState();
     const parkedTargets = getThreeWheelHydraulicTargets(
       this.isAirbagVehicle(v),
       v.airbagLockLevel ?? 1,
@@ -22895,6 +22957,7 @@ export class GameEngine {
     }
     this.hydraulicMode = 'level';
     this.hydraulicLocked = false;
+    this.hydraulicControls = createHydraulicControlState();
     this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.trunkBassPulse = 0;
@@ -23007,6 +23070,92 @@ export class GameEngine {
     this.toast(`${vehicle.name} rolls forward on its hydraulics.`, 'info');
   }
 
+  /** Independent front/rear/left/right cylinders, lock and repeatable bounce. */
+  private handleSectionHydraulicAction(
+    action: string,
+    av: ModularVehicleData,
+  ): boolean {
+    const sectionMap = {
+      front_raise: ['front', 1],
+      front_lower: ['front', -1],
+      rear_raise: ['rear', 1],
+      rear_lower: ['rear', -1],
+      left_raise: ['left', 1],
+      left_lower: ['left', -1],
+      right_raise: ['right', 1],
+      right_lower: ['right', -1],
+    } as const;
+
+    if (action in sectionMap) {
+      const [section, direction] = sectionMap[action as keyof typeof sectionMap];
+      if (this.hydraulicControls.locked) {
+        this.toast(`${av.name}: Hydraulics are locked — press Lock to adjust`, 'info');
+        return true;
+      }
+      this.hydraulicControls = adjustHydraulicSection(
+        this.hydraulicControls,
+        section,
+        direction,
+      );
+      this.hydraulicMode = 'level';
+      this.hydraulicLocked = false;
+      this.sound.playHydraulicPump(direction > 0 ? 'up' : 'down');
+      this.emitHud();
+      return true;
+    }
+
+    if (action === 'height_lock') {
+      this.hydraulicControls = toggleHydraulicLock(this.hydraulicControls);
+      this.hydraulicLocked = this.hydraulicControls.locked;
+      this.hydraulicMode = 'level';
+      this.sound.playHydraulicPump(this.hydraulicControls.locked ? 'lock' : 'unlock');
+      this.toast(
+        this.hydraulicControls.locked
+          ? `${av.name}: Hydraulics Locked — ${hydraulicSectionSummary(this.hydraulicControls)}`
+          : `${av.name}: Hydraulics Unlocked`,
+        this.hydraulicControls.locked ? 'discovery' : 'info',
+      );
+      this.emitHud();
+      return true;
+    }
+
+    if (action === 'bounce' || action === 'bounce_soft' || action === 'bounce_hard') {
+      // Bounce always adds spring impulses to the existing targets. It never
+      // changes a locked section height, so the rear stays raised through any
+      // number of bounces.
+      this.hydraulicBounceIntensity =
+        action === 'bounce_soft' ? 0.65 : action === 'bounce_hard' ? 1.75 : 1.1;
+      const impulse = hydraulicBounceImpulse(
+        this.hydraulicControls,
+        this.hydraulicBounceIntensity,
+        'all',
+      );
+      this.hydVel.fl += impulse.fl;
+      this.hydVel.fr += impulse.fr;
+      this.hydVel.rl += impulse.rl;
+      this.hydVel.rr += impulse.rr;
+      this.hydraulicBounceTimer = action === 'bounce_hard' ? 0.42 : 0.58;
+      this.sound.playHydraulicPump('bounce');
+      this.spawnParticles(av.x, av.y + 0.3, av.z, 0xfbbf24, action === 'bounce_hard' ? 11 : 7);
+      this.emitHud();
+      return true;
+    }
+
+    if (action === 'normal_height') {
+      this.hydraulicControls = resetHydraulicHeight(this.hydraulicControls);
+      this.hydraulicControls.locked = false;
+      this.hydraulicLocked = false;
+      this.hydraulicMode = 'level';
+      this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
+      this.sound.playHydraulicPump('down');
+      this.toast(`${av.name}: Returned to stock ride height`, 'info');
+      this.emitHud();
+      return true;
+    }
+
+    return false;
+  }
+
   public triggerHydraulicAction(
     action:
       | 'front_hop'
@@ -23019,7 +23168,20 @@ export class GameEngine {
       | 'rear_lock'
       | 'side_to_side'
       | 'coil_bounce'
-      | 'three_wheel',
+      | 'three_wheel'
+      | 'front_raise'
+      | 'front_lower'
+      | 'rear_raise'
+      | 'rear_lower'
+      | 'left_raise'
+      | 'left_lower'
+      | 'right_raise'
+      | 'right_lower'
+      | 'height_lock'
+      | 'bounce'
+      | 'bounce_soft'
+      | 'bounce_hard'
+      | 'normal_height',
   ): void {
     if (!this.activeVehicleId || this.mode !== 'playing' || this.gameOver) return;
     const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
@@ -23031,6 +23193,7 @@ export class GameEngine {
     this.sound.unlock();
     const isDonk = this.isDonkHydraulicVehicle(av);
     const isAirbag = this.isAirbagVehicle(av);
+    if (!isAirbag && this.handleSectionHydraulicAction(action, av)) return;
 
     // Cadillac Coupe DeVille Airbag + Coil-Over Spring Suspension
     if (isAirbag) {
@@ -24105,6 +24268,17 @@ export class GameEngine {
       }
     }
 
+    // Independent section heights take over when the player has raised the
+    // front, rear or either side. These targets are held while bouncing, so a
+    // locked rear never sinks back to stock height.
+    if (!activeIsAirbag && hasManualHydraulicHeight(this.hydraulicControls)) {
+      const manual = hydraulicCornerTargets(this.hydraulicControls);
+      tFl = manual.fl;
+      tFr = manual.fr;
+      tRl = manual.rl;
+      tRr = manual.rr;
+    }
+
     const stiffness = activeIsAirbag
       ? 16 + airbagSpeed * 58
       : activeIsDonk
@@ -24333,9 +24507,15 @@ export class GameEngine {
           1,
           2.2,
         );
+        const manualHeights = hydraulicCornerTargets(this.hydraulicControls);
+        const manualAvg =
+          (manualHeights.fl + manualHeights.fr + manualHeights.rl + manualHeights.rr) * 0.25;
         const heaveCap =
-          (activeIsDonk ? 0.34 : activeV?.preset === 'lowrider' ? 0.56 : 0.5) *
-            bounceBoost +
+          Math.max(
+            (activeIsDonk ? 0.34 : activeV?.preset === 'lowrider' ? 0.56 : 0.5) *
+              bounceBoost,
+            manualAvg > 0 ? manualAvg * 0.92 : 0,
+          ) +
           // A locked car still bounces above its held ride height instead of
           // being flattened against the cap.
           (this.hydraulicLocked ? 0.16 : 0);

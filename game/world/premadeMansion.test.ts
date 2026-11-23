@@ -9,7 +9,7 @@ import {
 } from './terrain';
 import { createPremadeMansion } from './premadeMansion';
 
-test('premade mansion builds three storeys with 16 bedroom and 16 bathroom stations', () => {
+test('hill house wing builds three storeys with 16 bedroom and 16 bathroom stations', () => {
   const mansion = createPremadeMansion();
 
   const beds = mansion.stations.filter(
@@ -28,6 +28,11 @@ test('premade mansion builds three storeys with 16 bedroom and 16 bathroom stati
   assert.ok(mansion.stations.some((station) => station.id === 'mansion_talking_lounge'));
   assert.ok(mansion.stations.some((station) => station.id === 'mansion_kitchen'));
   assert.ok(mansion.stations.some((station) => station.id === 'mansion_dining'));
+  assert.ok(mansion.stations.some((station) => station.id === 'hill_house_living_garden'));
+  assert.ok(mansion.stations.some((station) => station.id === 'hill_house_library'));
+  assert.ok(mansion.stations.some((station) => station.id === 'hill_house_study'));
+  assert.ok(mansion.stations.some((station) => station.id === 'hill_house_summer_kitchen'));
+  assert.ok(mansion.stations.some((station) => station.id === 'hill_house_tiki_bar'));
 
   // Suite beds are split across the second and third storeys.
   const upperBeds = beds.filter((station) => station.y > PREMADE_MANSION_UPPER_FLOOR_Y - 0.5);
@@ -36,10 +41,10 @@ test('premade mansion builds three storeys with 16 bedroom and 16 bathroom stati
   assert.equal(topBeds.length, 8);
 });
 
-test('premade mansion includes five animated maids and a coaster display', () => {
+test('hill house wing includes six animated maids and a coaster display', () => {
   const mansion = createPremadeMansion();
-  assert.equal(mansion.maids.length, 5);
-  assert.equal(new Set(mansion.maids.map((maid) => maid.group.name)).size, 5);
+  assert.equal(mansion.maids.length, 6);
+  assert.equal(new Set(mansion.maids.map((maid) => maid.group.name)).size, 6);
   for (const maid of mansion.maids) {
     assert.equal(maid.group.userData.dynamic, true);
     assert.ok(maid.group.children.length >= 8);
@@ -53,7 +58,7 @@ test('premade mansion includes five animated maids and a coaster display', () =>
   assert.equal(mansion.group.position.x, PREMADE_MANSION_POS.x);
 });
 
-test('all three mansion floors resolve as solid walkable ground', () => {
+test('all three storeys and the garden pavilion resolve as walkable ground', () => {
   const x = PREMADE_MANSION_POS.x;
   const z = PREMADE_MANSION_POS.z;
   assert.equal(getHilltopBaseFloorY(x, z, PREMADE_MANSION_FLOOR_Y), PREMADE_MANSION_FLOOR_Y);
@@ -64,5 +69,9 @@ test('all three mansion floors resolve as solid walkable ground', () => {
   assert.equal(
     getHilltopBaseFloorY(x, z, PREMADE_MANSION_TOP_FLOOR_Y),
     PREMADE_MANSION_TOP_FLOOR_Y,
+  );
+  assert.equal(
+    getHilltopBaseFloorY(x, z - 15, PREMADE_MANSION_FLOOR_Y),
+    PREMADE_MANSION_FLOOR_Y,
   );
 });

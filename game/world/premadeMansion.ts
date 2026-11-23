@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import {
+  COASTER_RELOCATION_FEET,
   COASTER_RELOCATION_METERS,
   MANSION_MAIDS,
   type MaidDefinition,
@@ -43,7 +44,7 @@ const HALF_D = 9.2;
 
 export function createPremadeMansion(): PremadeMansionHandles {
   const group = new THREE.Group();
-  group.name = 'premade-mansion';
+  group.name = 'premade-hill-house-grand-wing';
   group.position.set(PREMADE_MANSION_POS.x, HILL_HOUSE_Y, PREMADE_MANSION_POS.z);
 
   const colliders: { x: number; z: number; radius: number }[] = [];
@@ -123,6 +124,12 @@ export function createPremadeMansion(): PremadeMansionHandles {
     emissive: 0xffc46b,
     emissiveIntensity: 1.2,
     roughness: 0.4,
+  });
+  const tvScreenMat = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    emissive: 0x2563eb,
+    emissiveIntensity: 0.6,
+    roughness: 0.2,
   });
 
   const addBox = (
@@ -554,6 +561,173 @@ export function createPremadeMansion(): PremadeMansionHandles {
     group.add(lamp);
   }
 
+  // ---------- north garden pavilion: second kitchen, tiki bar, library, study ----------
+  const pavZ0 = -21.2;
+  const pavZ1 = -9.2;
+  addBox(group, marbleMat, 26.4, 0.18, pavZ1 - pavZ0, 0, 0.0, (pavZ0 + pavZ1) / 2, false);
+  addBox(group, stuccoMat, 26.8, 3.5, 0.34, 0, 1.75, pavZ0);
+  addBox(group, stuccoMat, 0.34, 3.5, pavZ1 - pavZ0, -13.2, 1.75, (pavZ0 + pavZ1) / 2);
+  addBox(group, stuccoMat, 0.34, 3.5, pavZ1 - pavZ0, 13.2, 1.75, (pavZ0 + pavZ1) / 2);
+  addBox(group, roofMat, 27.0, 0.3, pavZ1 - pavZ0 + 0.5, 0, 3.55, (pavZ0 + pavZ1) / 2);
+  addBox(group, trimMat, 26.8, 0.22, 0.24, 0, 3.25, pavZ0 + 0.2);
+  for (const x of [-9.2, -4.6, 0, 4.6, 9.2]) {
+    addWindow(group, x, 1.6, pavZ0 + 0.02, 1.8, 1.6, 'z');
+  }
+  for (const z of [-18.3, -14.0, -11.0]) {
+    addWindow(group, -13.18, 1.6, z, 1.5, 1.6, 'x');
+    addWindow(group, 13.18, 1.6, z, 1.5, 1.6, 'x');
+  }
+  // Wide glazed opening between the pavilion and the main mansion.
+  addBox(group, stuccoMat, 26.8, 3.5, 0.3, 0, 1.75, pavZ1);
+  addBox(group, glassMat, 9.0, 2.6, 0.06, 0, 1.4, pavZ1 + 0.17, false);
+  addBox(group, trimMat, 9.2, 0.26, 0.2, 0, 2.75, pavZ1 + 0.17);
+  // Internal subdivisions.
+  for (const x of [-4.5, 1.5, 6.5]) {
+    addBox(group, stuccoMat, 0.18, 2.9, 11.4, x, 1.45, (pavZ0 + pavZ1) / 2);
+  }
+  addBox(group, stuccoMat, 6.0, 2.9, 0.18, 9.5, 1.45, -14.5);
+
+  // Garden living room (functional second living room).
+  addBox(group, carpetMat, 7.4, 0.07, 9.6, -8.7, 0.11, -15.4, false);
+  for (const [x, z, sx, sz] of [
+    [-8.7, -11.4, 6.0, 0.95],
+    [-8.7, -19.2, 6.0, 0.95],
+    [-12.0, -15.3, 0.95, 6.8],
+  ] as const) {
+    addBox(group, trimMat, sx, 0.6, sz, x, 0.4, z);
+    addBox(group, whiteMat, sx * 0.84, 0.22, sz * 0.7, x, 0.78, z, false);
+  }
+  addBox(group, trimMat, 2.6, 0.35, 1.4, -8.7, 0.28, -15.2);
+  addBox(group, blackMat, 3.0, 1.65, 0.16, -8.7, 1.85, -20.9);
+  addBox(group, tvScreenMat, 2.7, 1.4, 0.04, -8.7, 1.85, -20.8, false);
+  stationAt(
+    'hill_house_living_garden',
+    'house_couch',
+    'Garden Living Room',
+    'Second functional living room with fireplace TV',
+    -8.7,
+    GROUND_Y,
+    -15.2,
+    3.1,
+    { x: -8.7, z: -14.1, yaw: 0 },
+  );
+
+  // Library with floor-to-ceiling shelves.
+  addBox(group, carpetMat, 5.6, 0.07, 10.2, -1.5, 0.11, -15.2, false);
+  for (let shelf = 0; shelf < 4; shelf++) {
+    const z = -19.8 + shelf * 2.4;
+    addBox(group, trimMat, 5.2, 2.6, 0.6, -1.5, 1.3, z);
+    for (let row = 0; row < 4; row++) {
+      for (let book = 0; book < 11; book++) {
+        addBox(
+          group,
+          bedFabricMats[(row * 11 + book + shelf) % bedFabricMats.length],
+          0.12,
+          0.36,
+          0.42,
+          -3.9 + book * 0.44,
+          0.5 + row * 0.55,
+          z + 0.36,
+          false,
+        );
+      }
+    }
+  }
+  addBox(group, trimMat, 1.5, 0.45, 1.2, 0.2, 0.28, -13.4);
+  addBox(group, carpetMat, 0.9, 0.5, 0.9, 0.2, 0.7, -13.4);
+  addBox(group, lampMat, 0.18, 0.32, 0.18, 0.2, 1.4, -13.4, false);
+  stationAt(
+    'hill_house_library',
+    'house_couch',
+    'Read in the Library',
+    'Floor-to-ceiling shelves and reading chair',
+    0.2,
+    GROUND_Y,
+    -13.4,
+    2.8,
+    { x: 0.2, z: -13.5, yaw: 0 },
+  );
+
+  // Study with desk and built-in bookcase.
+  addBox(group, carpetMat, 4.2, 0.07, 10.2, 4.0, 0.11, -15.2, false);
+  addBox(group, trimMat, 2.8, 0.12, 1.2, 4.0, 0.9, -17.2);
+  addBox(group, trimMat, 0.16, 0.85, 1.1, 4.0, 0.46, -17.2);
+  addBox(group, trimMat, 0.8, 1.0, 0.8, 4.0, 0.52, -15.9);
+  addBox(group, trimMat, 0.7, 2.5, 3.6, 5.6, 1.25, -12.8);
+  for (let i = 0; i < 3; i++) {
+    addBox(group, bedFabricMats[i + 3], 0.1, 0.36, 0.5, 5.25, 0.55 + i * 0.62, -13.7, false);
+  }
+  addBox(group, lampMat, 0.16, 0.28, 0.16, 4.75, 1.15, -16.8, false);
+  stationAt(
+    'hill_house_study',
+    'house_couch',
+    'Study at the Writing Desk',
+    'Private study with desk, chair and bookshelf',
+    4.0,
+    GROUND_Y,
+    -15.9,
+    2.7,
+    { x: 4.0, z: -15.9, yaw: 0 },
+  );
+
+  // Summer kitchen (second, separate kitchen) and tiki bar.
+  addBox(group, tileMat, 5.8, 0.08, 5.6, 9.6, 0.12, -17.6, false);
+  addBox(group, trimMat, 5.6, 0.9, 1.2, 9.6, 0.46, -19.8);
+  addBox(group, marbleMat, 5.8, 0.12, 1.4, 9.6, 0.98, -19.8);
+  addBox(group, blackMat, 0.9, 0.8, 0.7, 8.1, 0.55, -19.8);
+  for (const dx of [-0.25, 0.25]) {
+    addBox(group, fireMat, 0.18, 0.05, 0.18, 8.1 + dx, 1.04, -19.8, false);
+  }
+  addBox(group, chromeMat, 1.1, 1.9, 0.8, 12.2, 0.98, -19.8);
+  addBox(group, marbleMat, 2.8, 0.12, 1.1, 10.4, 0.98, -16.6);
+  addBox(group, trimMat, 2.8, 0.9, 1.1, 10.4, 0.46, -16.6);
+  addBox(group, chromeMat, 0.5, 0.05, 0.4, 10.4, 1.06, -16.6, false);
+  stationAt(
+    'hill_house_summer_kitchen',
+    'house_stove',
+    'Cook in the Summer Kitchen',
+    'Second full kitchen with range, prep island and refrigerator',
+    10.4,
+    GROUND_Y,
+    -16.6,
+    2.9,
+  );
+
+  // Thatched tiki bar with milk, food and stools.
+  addBox(group, tileMat, 5.8, 0.08, 4.6, 9.6, 0.12, -11.6, false);
+  addBox(group, trimMat, 5.4, 1.1, 0.9, 9.6, 0.6, -13.4);
+  addBox(group, marbleMat, 5.7, 0.12, 1.1, 9.6, 1.2, -13.4);
+  for (const x of [7.5, 9.1, 10.7, 12.3]) {
+    addBox(group, trimMat, 0.5, 0.85, 0.5, x, 0.45, -11.7);
+  }
+  for (let i = 0; i < 4; i++) {
+    addBox(group, roofMat, 5.8, 0.18, 0.9, 9.6, 3.15 + i * 0.12, -12.4 + i * 0.9);
+  }
+  for (let i = 0; i < 7; i++) {
+    const bottle = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.05, 0.05, 0.24, 8),
+      new THREE.MeshStandardMaterial({
+        color: [0x38bdf8, 0xf59e0b, 0x22c55e, 0xef4444][i % 4],
+        roughness: 0.25,
+      }),
+    );
+    bottle.position.set(7.4 + i * 0.62, 1.38, -13.55);
+    group.add(bottle);
+  }
+  addBox(group, whiteMat, 0.32, 0.55, 0.32, 12.0, 1.45, -13.55, false);
+  addBox(group, whiteMat, 0.18, 0.1, 0.1, 11.92, 1.79, -13.55, false);
+  addBox(group, goldMat, 0.22, 0.22, 0.22, 8.7, 1.36, -12.9, false);
+  stationAt(
+    'hill_house_tiki_bar',
+    'house_fridge',
+    'Order at the Tiki Bar',
+    'Tropical bar with milk, food and cold drinks',
+    9.6,
+    GROUND_Y,
+    -12.7,
+    2.7,
+  );
+
   // ---------- 16 guest suites across the second and third storeys ----------
   const roomCenters = [-9.3, -3.1, 3.1, 9.3];
   const suiteDefs: {
@@ -831,7 +1005,7 @@ export function createPremadeMansion(): PremadeMansionHandles {
     'mansion_maid_feat',
     'house_couch',
     'Watch Bianca Move the Coaster',
-    `One hand · ${COASTER_RELOCATION_METERS.toFixed(1)} m (100 ft) away from the waterpark`,
+    `One hand · ${COASTER_RELOCATION_METERS.toFixed(1)} m (${COASTER_RELOCATION_FEET.toLocaleString()} ft) away from the waterpark`,
     16.4,
     GROUND_Y,
     7.4,

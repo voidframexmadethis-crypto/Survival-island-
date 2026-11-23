@@ -11,12 +11,12 @@ export const MANSION_SPEC = {
   musicLounges: 2,
   talkingAreas: 1,
   indoorPools: 1,
-  maids: 5,
+  maids: 6,
 } as const;
 
-/** 100 ft, the distance the head maid can carry a coaster with one hand. */
-export const COASTER_RELOCATION_FEET = 100;
-export const COASTER_RELOCATION_METERS = 30.48;
+/** 8,000 ft, the distance the head maid can carry a coaster with one hand. */
+export const COASTER_RELOCATION_FEET = 8000;
+export const COASTER_RELOCATION_METERS = 2438.4;
 
 export type MaidWork =
   | 'cook'
@@ -137,6 +137,22 @@ export const MANSION_MAIDS: MaidDefinition[] = [
       { x: 18.2, y: GROUND, z: 2.4, label: 'Interior vacuum', work: 'clean_interior', pause: 6 },
       { x: 16.8, y: GROUND, z: 4.4, label: 'Speaker test bench', work: 'speakers', pause: 5 },
       { x: 18.2, y: GROUND, z: 0.2, label: 'Headlight aiming wall', work: 'headlights', pause: 4 },
+    ],
+  },
+  {
+    id: 'maid_nia',
+    name: 'Nia',
+    role: 'Tiki Bar, Library & Garden Maid',
+    uniform: 'classic',
+    speed: 0.95,
+    tasks: ['serve', 'cook', 'clean_room', 'make_bed', 'repair'],
+    route: [
+      { x: 9.6, y: GROUND, z: -12.7, label: 'Tiki bar', work: 'serve', pause: 5 },
+      { x: 10.4, y: GROUND, z: -16.6, label: 'Summer kitchen', work: 'cook', pause: 6 },
+      { x: -8.7, y: GROUND, z: -15.2, label: 'Garden living room', work: 'clean_room', pause: 6 },
+      { x: 0.2, y: GROUND, z: -13.4, label: 'Library', work: 'clean_room', pause: 5 },
+      { x: 4.0, y: GROUND, z: -15.9, label: 'Study', work: 'clean_room', pause: 4 },
+      { x: -9.9, y: GROUND, z: 3.2, label: 'Pool gallery', work: 'clean_room', pause: 5 },
     ],
   },
   {
