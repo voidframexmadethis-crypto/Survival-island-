@@ -24261,10 +24261,19 @@ export class GameEngine {
               wc.corner === 'rl'
                 ? wc.baseY + Math.max(0, this.hydCorners.rl - 0.3) * (activeIsAirbag ? 0.55 : 0.85)
                 : wc.baseY;
+          } else if (!activeIsAirbag) {
+            // Every full-cylinder lowrider can lift both front tyres clear of
+            // the road while the rear contact patch stays planted and carries
+            // the car. Air-ride cars keep their wheels down.
+            const cornerH = this.hydCorners[wc.corner];
+            const frontWheel = wc.corner === 'fl' || wc.corner === 'fr';
+            const lift = frontWheel
+              ? Math.min(0.46, Math.max(0, cornerH - minCorner - 0.05) * 0.78)
+              : 0;
+            wc.obj.position.y = wc.baseY + lift;
           } else {
-            // Real hydraulics move the body against the suspension; the tyres
-            // keep their contact patch on the road. Only the three-wheel pose
-            // and the dance car's hop lift a wheel.
+            // Air-ride and other hydraulics move only the body; the tyres keep
+            // their contact patch on the road.
             wc.obj.position.y = wc.baseY;
           }
         }
