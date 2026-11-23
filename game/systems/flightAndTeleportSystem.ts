@@ -64,6 +64,7 @@ import {
   WOODLAND_MANSION_POS,
 } from '../world/terrain';
 import { WATERPARK_DECK_Y, WATERPARK_SITE } from '../world/waterparkLayout';
+import { getVolcanoFlexSite } from '../world/volcanoFlexLayout';
 
 export interface FlightPlayerState {
   x: number;
@@ -170,6 +171,21 @@ export const ISLAND_TELEPORT_DESTINATIONS: Record<string, TeleportDestination> =
     x: WATERPARK_SITE.x + 38,
     y: WATERPARK_DECK_Y + 0.65,
     z: WATERPARK_SITE.z - 42,
+  },
+  volcano: {
+    x: getVolcanoFlexSite().station.x,
+    y: getVolcanoFlexSite().station.y + 1.1,
+    z: getVolcanoFlexSite().station.z,
+  },
+  'volcano flex': {
+    x: getVolcanoFlexSite().station.x,
+    y: getVolcanoFlexSite().station.y + 1.1,
+    z: getVolcanoFlexSite().station.z,
+  },
+  'volcano flex coaster': {
+    x: getVolcanoFlexSite().station.x,
+    y: getVolcanoFlexSite().station.y + 1.1,
+    z: getVolcanoFlexSite().station.z,
   },
   garage: { x: VEHICLE_GARAGE_POS.x, z: VEHICLE_GARAGE_POS.z },
   'underground garage': {

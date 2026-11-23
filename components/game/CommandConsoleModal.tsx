@@ -38,6 +38,7 @@ export const CommandConsoleModal: React.FC<CommandConsoleModalProps> = ({
     '/tp dragon valley',
     '/tp viking village',
     '/tp resort corner',
+    '/tp volcano flex',
     '/tp ruined castle',
     '/tp desert',
     '/tp cherry grove',

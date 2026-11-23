@@ -8,6 +8,11 @@ import {
 } from '../types';
 import { getTerrainHeight } from '../world/terrain';
 import {
+  buildVolcanoFlexEnvironment,
+  buildVolcanoFlexTrainCar,
+  type VolcanoFlexEnvironment,
+} from '../world/volcanoFlexModel';
+import {
   CoasterEditor,
   CoasterTrain,
   CustomInversion,
@@ -58,6 +63,7 @@ interface ActiveCoasterEntry {
   maxHeightM: number;
   estPeakSpeedKmh: number;
   inversionsCount: number;
+  theme: 'volcano_flex' | null;
 }
 
 const TRACK_COLORS = [
@@ -95,6 +101,42 @@ function makeBasisMatrix(sample: TrackSample): THREE.Matrix4 {
   return _coasterBasis.makeBasis(_coasterRight, _coasterUp, _coasterFwd);
 }
 
+function stabilizeVolcanoFrames(samples: TrackSample[]): void {
+  if (samples.length < 3) return;
+  let peakIndex = 0;
+  let lastInversionIndex = -1;
+  for (let i = 0; i < samples.length; i++) {
+    if (samples[i].position.y > samples[peakIndex].position.y) peakIndex = i;
+    if (samples[i].segmentType === 'inversion') lastInversionIndex = i;
+  }
+  const peakY = samples[peakIndex].position.y;
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  for (let i = 0; i < samples.length; i++) {
+    const sample = samples[i];
+    // Stabilise the powered ascent and the flat docking run. Without this the
+    // parallel-transport frame accumulates a false roll after several laps of
+    // the tower. The inversion descent and return elements keep their authored
+    // bank rotations.
+    if (
+      i <= peakIndex ||
+      sample.position.y >= peakY - 2 ||
+      (lastInversionIndex >= 0 && i >= lastInversionIndex)
+    ) {
+      const tangent = new THREE.Vector3(
+        sample.tangent.x,
+        sample.tangent.y,
+        sample.tangent.z,
+      ).normalize();
+      const right = new THREE.Vector3().crossVectors(tangent, worldUp);
+      if (right.lengthSq() < 0.001) right.set(-1, 0, 0);
+      right.normalize();
+      const up = new THREE.Vector3().crossVectors(right, tangent).normalize();
+      sample.right = { x: right.x, y: right.y, z: right.z };
+      sample.up = { x: up.x, y: up.y, z: up.z };
+    }
+  }
+}
+
 function mergeNormalizedParts(parts: THREE.BufferGeometry[]): THREE.BufferGeometry | null {
   if (parts.length === 0) return null;
   const prepared: THREE.BufferGeometry[] = [];
@@ -121,6 +163,8 @@ export class RollerCoasterRuntime {
   private seq = 0;
   private cachedHudSummaries: CoasterHudSummaryItem[] | null = null;
   private hudCacheDirty = true;
+  private themeElapsed = 0;
+  private themedEnvironments = new Map<string, VolcanoFlexEnvironment>();
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -131,6 +175,11 @@ export class RollerCoasterRuntime {
   public clearAll(): void {
     for (const entry of this.coasters.values()) {
       this.disposeEntryMesh(entry);
+      const themed = this.themedEnvironments.get(entry.id);
+      if (themed) {
+        themed.dispose();
+        this.themedEnvironments.delete(entry.id);
+      }
     }
     this.coasters.clear();
     this.hudCacheDirty = true;
@@ -199,6 +248,7 @@ export class RollerCoasterRuntime {
       maxHeightM: 1.25,
       estPeakSpeedKmh: 0,
       inversionsCount: 0,
+      theme: null,
     };
     this.coasters.set(id, entry);
 
@@ -220,6 +270,11 @@ export class RollerCoasterRuntime {
     const entry = this.coasters.get(coasterId);
     if (!entry) return false;
     this.disposeEntryMesh(entry);
+    const themed = this.themedEnvironments.get(coasterId);
+    if (themed) {
+      themed.dispose();
+      this.themedEnvironments.delete(coasterId);
+    }
     this.coasters.delete(coasterId);
     this.hudCacheDirty = true;
     return true;
@@ -631,6 +686,9 @@ export class RollerCoasterRuntime {
     entry.meshGroup.name = `Coaster_${entry.id}`;
 
     entry.samples = entry.editor.getTrack();
+    if (entry.theme === 'volcano_flex') {
+      stabilizeVolcanoFrames(entry.samples);
+    }
     entry.train.track = entry.samples;
     const totalLength =
       entry.samples.length >= 2
@@ -754,7 +812,12 @@ export class RollerCoasterRuntime {
           }
         }
 
-        if (s.distance >= nextSupportDist && s.up.y > 0.25 && Math.abs(s.tangent.y) < 0.78) {
+        if (
+          entry.theme !== 'volcano_flex' &&
+          s.distance >= nextSupportDist &&
+          s.up.y > 0.25 &&
+          Math.abs(s.tangent.y) < 0.78
+        ) {
           nextSupportDist = s.distance + (isWooden ? 6.5 : 9.5);
           const groundY = getTerrainHeight(s.position.x, s.position.z);
           const pillarTop = s.position.y - 0.42;
@@ -785,6 +848,11 @@ export class RollerCoasterRuntime {
       const chassisMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.38, metalness: 0.85 });
 
       for (let c = 0; c < entry.trainCarCount; c++) {
+        if (entry.theme === 'volcano_flex') {
+          entry.carMeshes.push(buildVolcanoFlexTrainCar(c, c === 0));
+          entry.meshGroup.add(entry.carMeshes[entry.carMeshes.length - 1]);
+          continue;
+        }
         const car = new THREE.Group();
         const bodyMat = new THREE.MeshStandardMaterial({
           color: isLogFlume ? '#78350f' : (c === 0 ? carColor : 0xf1f5f9),
@@ -872,13 +940,25 @@ export class RollerCoasterRuntime {
       _coasterUp.set(sample.up.x, sample.up.y, sample.up.z).normalize();
       const basis = makeBasisMatrix(sample);
 
-      const verticalOffset = isInverted ? 0.95 : 0.12;
+      const verticalOffset =
+        entry.theme === 'volcano_flex' ? (isInverted ? 1.04 : 0.215) : isInverted ? 0.95 : 0.12;
       car.position.copy(_coasterPos).addScaledVector(_coasterUp, verticalOffset);
       car.quaternion.setFromRotationMatrix(basis);
+      const wheels = car.userData.wheels as THREE.Mesh[] | undefined;
+      if (wheels) {
+        const angle = (carDist / 0.2) % (Math.PI * 2);
+        for (const wheel of wheels) wheel.rotation.x = -angle;
+      }
     }
   }
 
   public update(dt: number, playerX?: number, playerZ?: number): void {
+    this.themeElapsed += dt;
+    for (const entry of this.coasters.values()) {
+      if (entry.theme !== 'volcano_flex') continue;
+      const themed = this.themedEnvironments.get(entry.id);
+      themed?.update(dt, this.themeElapsed, entry.train.speed * 3.6);
+    }
     let anyMoved = false;
     const hasCoords = typeof playerX === 'number' && typeof playerZ === 'number';
     for (const entry of this.coasters.values()) {
@@ -1071,12 +1151,18 @@ export class RollerCoasterRuntime {
       running: false,
       meshGroup: new THREE.Group(),
       carMeshes: [],
-      maxHeightM: 0,
+             maxHeightM: 0,
       estPeakSpeedKmh: 0,
       inversionsCount: 0,
+      theme: item.pieceTags?.includes('volcano_flex') ? 'volcano_flex' : null,
     };
     this.coasters.set(entry.id, entry);
     this.rebuildEntryGeometry(entry);
+    if (entry.theme === 'volcano_flex' && !this.themedEnvironments.has(entry.id)) {
+      const themed = buildVolcanoFlexEnvironment();
+      this.rootGroup.add(themed.root);
+      this.themedEnvironments.set(entry.id, themed);
+    }
     this.hudCacheDirty = true;
     return id;
   }
@@ -1107,6 +1193,8 @@ export class RollerCoasterRuntime {
 
   public dispose(): void {
     this.clearAll();
+    for (const themed of this.themedEnvironments.values()) themed.dispose();
+    this.themedEnvironments.clear();
     this.scene.remove(this.rootGroup);
   }
 }

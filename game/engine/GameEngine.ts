@@ -428,6 +428,12 @@ import {
   type AmusementParkDeliveryPayload,
 } from '../coaster/park';
 import { CustomInversion } from '../systems/rollerCoasterSystem';
+import {
+  VOLCANO_FLEX_ID,
+  buildVolcanoFlexCoasterData,
+  getVolcanoFlexSite,
+} from '../world/volcanoFlexLayout';
+import { CoasterRideAudio } from '../systems/coasterRideAudio';
 import { RealisticOcean } from '../world/RealisticOcean';
 import {
   applyRealisticMeshLightingPass,
@@ -1216,6 +1222,7 @@ export class GameEngine {
   private amusementParkRuntime!: AmusementParkRuntime;
   private waterpark!: WaterparkRuntime;
   private ridingCoasterId: string | null = null;
+  private coasterRideAudio: CoasterRideAudio | null = null;
   private ridingWaterparkId: string | null = null;
   private gameMode: GameMode = 'survival';
   private hitMarkerActive = false;
@@ -1530,7 +1537,7 @@ export class GameEngine {
     // Cap DPR cleanly at <= 2 without redundant canvas reallocations
     ZeroStutterCameraController.applyRendererCaps(
       this.renderer,
-      this.isSoftwareGl ? 1 : this.isTouchDevice ? 1.5 : 2,
+      this.isSoftwareGl ? 0.65 : this.isTouchDevice ? 1.5 : 2,
     );
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -2590,7 +2597,9 @@ export class GameEngine {
     this.worldQueue.clear();
     if (this.currentDimension === 'overworld' && this.worldType === 'island') {
       this.worldPerfManager.syncAll(0, 0);
-      const cullDist = Math.min(this.effectiveMaxDrawDistance, 220);
+      const cullDist = this.isSoftwareGl
+        ? 110
+        : Math.min(this.effectiveMaxDrawDistance, 220);
       this.world.cullWorldByDistance(0, 0, cullDist, undefined, this.maxActivePointLights);
       this.cullPlacedObjectsByDistance(0, 0, cullDist);
     }
@@ -4578,6 +4587,7 @@ export class GameEngine {
     this.clearTransitAndElevatorState();
     this.flightAndTeleport.toggleFlight(false);
     this.clearMovementInputs();
+    this.coasterRideAudio?.stop();
     this.ridingCoasterId = null;
     this.ridingWaterparkId = null;
     this.waterpark?.cancelPhysicalSlide();
@@ -4916,6 +4926,7 @@ export class GameEngine {
     });
     // Meat Drying Rack right next to the premade shelter (Hilltop House front porch / yard)
     this.ensurePremadeShelterDryingRack();
+    this.ensureVolcanoFlexAttraction();
 
     this.visitedBiomes = new Set(['beach']);
     this.exploredCells = new Set();
@@ -5118,6 +5129,7 @@ export class GameEngine {
     this.clearTransitAndElevatorState();
     this.flightAndTeleport.toggleFlight(false);
     this.clearMovementInputs();
+    this.coasterRideAudio?.stop();
     this.ridingCoasterId = null;
     this.ridingWaterparkId = null;
     this.waterpark?.cancelPhysicalSlide();
@@ -5418,6 +5430,7 @@ export class GameEngine {
     }
 
     this.coasterRuntime?.importCoasters(save.coasters);
+    if (loadedWorldType === 'island') this.ensureVolcanoFlexAttraction();
     this.amusementParkRuntime?.restore(save.amusementParks);
     this.ecosystem = save.ecosystem || createInitialEcosystem();
     this.lostWorld = normalizeLostWorldState(save.lostWorld);
@@ -5540,6 +5553,7 @@ export class GameEngine {
   public respawnPlayer(): void {
     this.clearTransitAndElevatorState();
     this.seatedState = null;
+    this.coasterRideAudio?.stop();
     this.ridingCoasterId = null;
     this.ridingWaterparkId = null;
     this.waterpark?.cancelPhysicalSlide();
@@ -8408,6 +8422,14 @@ export class GameEngine {
         }
       }
       if (near.kind === 'coaster_station') {
+        if (near.structureId === 'volcano_flex_station') {
+          // Walk-through boarding: the station gate, train and restraints are
+          // all physically present, and E puts the rider into the lead seat.
+          if (!this.ridingCoasterId && !this.ridingWaterparkId) {
+            this.boardCoasterRide(VOLCANO_FLEX_ID);
+          }
+          return;
+        }
         this.callbacks.onOpenStation('coaster', near.structureId);
         return;
       }
@@ -13972,11 +13994,15 @@ export class GameEngine {
           drying_rack: 'use',
           coaster_station: 'craft',
         };
+        const isVolcanoStation = st.id === 'volcano_flex_station';
         best = {
           id: st.id,
-          label: labels[st.type],
+          label: isVolcanoStation ? 'Board VOLCANO FLEX' : labels[st.type],
+          sublabel: isVolcanoStation
+            ? 'Lead seat · 900-ft volcanic launch · 15 inversions'
+            : undefined,
           kind: st.type,
-          actionCategory: catMap[st.type],
+          actionCategory: isVolcanoStation ? 'use' : catMap[st.type],
           distance: d,
           targetX: st.x,
           targetY: st.y,
@@ -15239,6 +15265,9 @@ export class GameEngine {
         this.playerX = rideCam.position.x;
         this.playerY = rideCam.position.y;
         this.playerZ = rideCam.position.z;
+        if (this.ridingCoasterId === VOLCANO_FLEX_ID) {
+          this.coasterRideAudio?.update(rideCam.speedKmh, rideCam.segmentLabel);
+        }
 
         if (rideCam.progressPercent >= 98 && rideCam.segmentLabel === 'Load Station') {
           this.exitCoasterRide();
@@ -15247,6 +15276,7 @@ export class GameEngine {
         return;
       }
       this.ridingCoasterId = null;
+      this.coasterRideAudio?.stop();
     }
     this.camera.rotation.order = 'YXZ';
     this.camera.up.set(0, 1, 0);
@@ -24773,6 +24803,8 @@ export class GameEngine {
     }
     this.vehicleUnderglowPool = [];
     this.vehicleUnderglowMeta.clear();
+    this.coasterRideAudio?.dispose();
+    this.coasterRideAudio = null;
     this.sound?.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
@@ -24781,6 +24813,37 @@ export class GameEngine {
   // =========================================================================
   // ROLLER COASTER CREATOR & PARK RIDE API (ISLAND & FLAT WORLDS)
   // =========================================================================
+
+  /**
+   * Volcano Flex is part of the island itself, not a demo spawned from the
+   * editor. Its station is surveyed exactly 10 ft from the Bayou Thunder deck
+   * and the coaster/environment are rebuilt from the saved themed coaster on
+   * every load. Older saves receive the attraction automatically.
+   */
+  private ensureVolcanoFlexAttraction(): void {
+    if (this.worldType !== 'island') return;
+    const site = getVolcanoFlexSite();
+    if (!this.structures.some((structure) => structure.id === 'volcano_flex_station')) {
+      this.spawnStructure({
+        id: 'volcano_flex_station',
+        type: 'coaster_station',
+        // The structure footprint sits on the boarding spur east of the
+        // surveyed 10-ft gap, so no deck or roof overhangs the waterpark. The
+        // south offset keeps its platform posts clear of the custom train.
+        x: site.station.x + 2.8,
+        y: site.station.y,
+        z: site.station.z + 0.8,
+        rotationY: -Math.PI / 2,
+      });
+    }
+    if (!this.coasterRuntime) return;
+    const exists = this.coasterRuntime
+      .getHudSummaries()
+      .some((coaster) => coaster.id === VOLCANO_FLEX_ID);
+    if (!exists) {
+      this.coasterRuntime.addCoasterData(buildVolcanoFlexCoasterData());
+    }
+  }
 
   public createCoaster(name?: string, withStation = true): string | null {
     if (!this.coasterRuntime) return null;
@@ -24975,6 +25038,7 @@ export class GameEngine {
     if (!this.coasterRuntime) return false;
     if (this.ridingCoasterId === coasterId) {
       this.ridingCoasterId = null;
+      this.coasterRideAudio?.stop();
     }
     const ok = this.coasterRuntime.deleteCoaster(coasterId);
     if (ok) {
@@ -25244,6 +25308,10 @@ export class GameEngine {
     }
     this.coasterRuntime.dispatchTrain(coasterId, true);
     this.ridingCoasterId = coasterId;
+    if (summary.id === VOLCANO_FLEX_ID) {
+      this.coasterRideAudio ??= new CoasterRideAudio();
+      this.coasterRideAudio.start();
+    }
     this.toast(`Dispatched front row on ${summary.name} — press E to disembark`, 'discovery');
     this.emitHud();
     return true;
@@ -25251,6 +25319,7 @@ export class GameEngine {
 
   public exitCoasterRide(): void {
     if (!this.ridingCoasterId) return;
+    this.coasterRideAudio?.stop();
     this.ridingCoasterId = null;
     this.camera.rotation.order = 'YXZ';
     this.camera.up.set(0, 1, 0);
