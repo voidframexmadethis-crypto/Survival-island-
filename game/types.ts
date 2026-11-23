@@ -1334,6 +1334,7 @@ export interface NearbyInteraction {
     | 'ferry_boarding'
     | 'ferry_room'
     | 'ferry_fuel'
+    | 'air_shuttle'
     | 'mainland_terminal'
     | 'waterpark_ride'
     | 'mainland_business';
@@ -1568,6 +1569,7 @@ export interface HUDStateSnapshot {
   caveSummary?: import('./systems/caveSystem').CaveSummarySnapshot;
   finalIsland?: import('./systems/finalIslandFeatures').FinalIslandHudState;
   mainland?: import('./systems/louisianaMainland').MainlandHudState;
+  airShuttle?: import('./systems/crescentCityAirShuttle').AirShuttleStatus;
   ferryVoyage?: {
     phase: string;
     label: string;

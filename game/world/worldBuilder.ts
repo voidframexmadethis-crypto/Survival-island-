@@ -9,6 +9,12 @@ import { buildLouisianaBusinesses } from './louisianaBusinesses';
 import { buildLouisianaNeighborhoods } from './louisianaNeighborhoods';
 import { buildIslandFerryDock } from './ferryDock';
 import { buildLouisianaFerry, type LouisianaFerryHandles } from './louisianaFerry';
+import { buildCrescentClipper, type CrescentClipperHandles } from './crescentClipper';
+import { buildSeaplaneBase, type SeaplaneBaseHandles } from './seaplaneBase';
+import {
+  CRESCENT_CITY_SEAPLANE_BASE,
+  ISLAND_SEAPLANE_BASE,
+} from '../systems/crescentCityAirShuttle';
 import { isAlwaysVisibleWorldObject } from './worldCullPolicy';
 import { buildTransitCauseway } from './transitCauseway';
 import {
@@ -246,6 +252,9 @@ export interface WorldHandles {
   ferryTvPos: THREE.Vector3;
   ferryTvScreenMat: THREE.MeshStandardMaterial;
   louisianaFerry: LouisianaFerryHandles;
+  crescentClipper: CrescentClipperHandles;
+  islandSeaplaneBase: SeaplaneBaseHandles;
+  citySeaplaneBase: SeaplaneBaseHandles;
   soilPlots: { x: number; y: number; z: number }[];
   houseStations: HouseStationTarget[];
   tvScreenMat: THREE.MeshStandardMaterial;
@@ -7377,6 +7386,25 @@ gl_Position = projectionMatrix * mvPosition;`,
   const louisianaFerry = buildLouisianaFerry();
   overworldGroup.add(louisianaFerry.root);
 
+  // Water runways beside the ferry pier and on Crescent City's lake. The
+  // floating slabs and hangars are static; the Clipper itself is not batched.
+  const islandSeaplaneBase = buildSeaplaneBase(ISLAND_SEAPLANE_BASE);
+  const citySeaplaneBase = buildSeaplaneBase(CRESCENT_CITY_SEAPLANE_BASE);
+  overworldGroup.add(islandSeaplaneBase.group, citySeaplaneBase.group);
+  staticMergeTargets.push(
+    { group: islandSeaplaneBase.group },
+    { group: citySeaplaneBase.group },
+  );
+  const crescentClipper = buildCrescentClipper();
+  // Keep the aircraft out of the static merge: the flight system moves it.
+  overworldGroup.add(crescentClipper.root);
+  crescentClipper.root.position.set(
+    ISLAND_SEAPLANE_BASE.parkingX,
+    ISLAND_SEAPLANE_BASE.waterY + 0.1,
+    ISLAND_SEAPLANE_BASE.parkingZ,
+  );
+  crescentClipper.root.rotation.y = ISLAND_SEAPLANE_BASE.outboundYaw;
+
   staticMergeTargets.push({ group: islandFerry.callGroup });
 
   // Drivable Mississippi river bridge inside Crescent City. The survival
@@ -7929,6 +7957,9 @@ gl_Position = projectionMatrix * mvPosition;`,
     ferryTvPos: islandFerry.tvPos,
     ferryTvScreenMat: islandFerry.tvScreenMat,
     louisianaFerry,
+    crescentClipper,
+    islandSeaplaneBase,
+    citySeaplaneBase,
     soilPlots,
     houseStations: hillHouse.stations,
     tvScreenMat: hillHouse.tvScreenMat,

@@ -14,6 +14,9 @@ export interface LouisianaFerryVisualRig {
     opacity: number;
     map: { offset: { y: number } } | null;
   } | null;
+  fuelTankFill?: Object3D;
+  fuelTankGaugeMat?: { color: { setHex: (hex: number) => void }; emissive: { setHex: (hex: number) => void }; emissiveIntensity: number } | null;
+  fuelTankFillMat?: { color: { setHex: (hex: number) => void }; emissive: { setHex: (hex: number) => void }; emissiveIntensity: number } | null;
 }
 
 /**
@@ -49,6 +52,26 @@ export function applyLouisianaFerryVisual(
         // Scroll the foam aft at roughly the speed the hull is making.
         map.offset.y = -((voyage.elapsedMs / 1000) * 0.045) % 1;
       }
+    }
+  }
+
+  if (rig.fuelTankFill) {
+    const fraction = Math.max(0, Math.min(1, voyage.fuelPercent / 100));
+    rig.fuelTankFill.scale.y = Math.max(0.015, fraction);
+    rig.fuelTankFill.visible = fraction > 0.002;
+    // Filled from the bottom of the sight glass, so the column visibly drops
+    // as the engines burn the stern tank down.
+    const color = fraction <= 0.25 ? 0xef4444 : fraction <= 0.5 ? 0xf59e0b : 0x84cc16;
+    const glow = fraction <= 0.25 ? 0x991b1b : fraction <= 0.5 ? 0x92400e : 0x4d7c0f;
+    if (rig.fuelTankFillMat) {
+      rig.fuelTankFillMat.color.setHex(color);
+      rig.fuelTankFillMat.emissive.setHex(glow);
+      rig.fuelTankFillMat.emissiveIntensity = fraction <= 0.25 ? 0.9 : 0.45;
+    }
+    if (rig.fuelTankGaugeMat) {
+      rig.fuelTankGaugeMat.color.setHex(color);
+      rig.fuelTankGaugeMat.emissive.setHex(glow);
+      rig.fuelTankGaugeMat.emissiveIntensity = fraction <= 0.25 ? 1.6 : 0.9;
     }
   }
 }

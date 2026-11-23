@@ -79,6 +79,7 @@ import { ITEMS, isActiveWeaponItem, isAmmoItem, isFirearmItem } from '@/game/dat
 import { STAGE_1_MISSIONS } from '@/game/data/missions';
 import { GameEngine } from '@/game/engine/GameEngine';
 import { formatFerryDuration } from '@/game/systems/louisianaFerryVoyage';
+import { formatAirShuttleDuration } from '@/game/systems/crescentCityAirShuttle';
 import {
   DEFAULT_SETTINGS,
   createNewSaveSlotId,
@@ -1851,6 +1852,54 @@ export function SurvivalGameClient() {
                       </span>
                       <span>
                         {hud.ferryVoyage.boatX.toFixed(1)}, {hud.ferryVoyage.boatZ.toFixed(1)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {hud.airShuttle && hud.airShuttle.phase !== 'idle' && (
+                <div className="rounded border border-sky-700/60 bg-sky-950/80 px-2 py-1 text-[10px] text-sky-100 space-y-1">
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="flex items-center gap-1 font-semibold truncate">
+                      <Plane className="w-3 h-3 text-amber-300 shrink-0" />
+                      Crescent Clipper
+                    </span>
+                    <span className="font-mono-tabular text-amber-300 shrink-0">
+                      {hud.airShuttle.phase === 'airborne'
+                        ? formatAirShuttleDuration(hud.airShuttle.remainingMs)
+                        : hud.airShuttle.phase === 'parked'
+                          ? 'READY'
+                          : 'AUTO'}
+                    </span>
+                  </div>
+                  <div className="h-1 rounded-full bg-sky-950 overflow-hidden">
+                    <div
+                      className="h-full bg-amber-400 transition-[width] duration-500"
+                      style={{ width: `${Math.round(hud.airShuttle.routeProgress * 100)}%` }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-1 text-[9px] text-sky-200/90">
+                    <span className="truncate">{hud.airShuttle.label}</span>
+                    <span className="uppercase shrink-0">
+                      {hud.airShuttle.engineOn ? 'ENG ON' : 'ENG OFF'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-1 text-[9px] text-sky-300/80 font-mono-tabular">
+                    <span>
+                      {hud.airShuttle.destination === 'crescent_city'
+                        ? 'ISLAND → CRESCENT CITY'
+                        : 'CRESCENT CITY → ISLAND'}
+                    </span>
+                    <span>
+                      {hud.airShuttle.altitudeM.toFixed(0)} m · {hud.airShuttle.speedMps.toFixed(0)} m/s
+                    </span>
+                  </div>
+                  {hud.airShuttle.aboard && hud.airShuttle.phase === 'airborne' && (
+                    <div className="flex items-center justify-between gap-1 text-[9px] text-sky-300/80 font-mono-tabular">
+                      <span>{formatAirShuttleDuration(hud.airShuttle.elapsedMs)} elapsed</span>
+                      <span>
+                        {hud.airShuttle.planeX.toFixed(0)}, {hud.airShuttle.planeZ.toFixed(0)}
                       </span>
                     </div>
                   )}

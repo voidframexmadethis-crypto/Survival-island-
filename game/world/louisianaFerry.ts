@@ -24,6 +24,10 @@ export interface LouisianaFerryHandles {
   wake: THREE.Group;
   wakeMaterial: THREE.MeshBasicMaterial;
   wakeTexture: THREE.CanvasTexture | null;
+  /** Stern fuel tank and its sight gauge, driven by the voyage fuel level. */
+  fuelTankFill: THREE.Group;
+  fuelTankGaugeMat: THREE.MeshStandardMaterial;
+  fuelTankFillMat: THREE.MeshStandardMaterial;
 }
 
 /**
@@ -393,6 +397,103 @@ export function buildLouisianaFerry(): LouisianaFerryHandles {
   // Bathroom ceiling light.
   addBox(0.7, 0.07, 0.7, 2.8, FERRY_CABIN_ROOF_Y - 0.1, 7.2, lampMat);
 
+  // ---- Stern fuel tank ---------------------------------------------------
+  // The tank is deliberately on the open aft deck so the player can see the
+  // tank and its sight glass from the pier, the ramp and the cabin door.
+  const tankMat = new THREE.MeshStandardMaterial({
+    color: 0x3b4a4d,
+    roughness: 0.55,
+    metalness: 0.45,
+  });
+  const tankTrimMat = new THREE.MeshStandardMaterial({
+    color: 0xd9a441,
+    roughness: 0.42,
+    metalness: 0.35,
+  });
+  const fuelTankGroup = new THREE.Group();
+  fuelTankGroup.name = 'crescent-star-stern-fuel-tank';
+  fuelTankGroup.position.set(-3.05, 2.16, -14.15);
+  root.add(fuelTankGroup);
+  const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.78, 0.78, 3.5, 16), tankMat);
+  tank.rotation.x = Math.PI / 2;
+  tank.castShadow = true;
+  fuelTankGroup.add(tank);
+  for (const z of [-1.25, 1.25]) {
+    const band = new THREE.Mesh(new THREE.TorusGeometry(0.8, 0.055, 6, 16), tankTrimMat);
+    band.position.z = z;
+    fuelTankGroup.add(band);
+  }
+  const tankCap = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.22, 0.18, 10), tankTrimMat);
+  tankCap.position.set(0, 0.82, 1.2);
+  fuelTankGroup.add(tankCap);
+  for (const z of [-1.2, 1.2]) {
+    addBox(1.5, 0.22, 0.34, -3.05, 1.4, -14.15 + z, steelMat, root);
+  }
+  const fuelLabelTexture = makeCanvasTexture((ctx) => {
+    ctx.clearRect(0, 0, 512, 256);
+    ctx.fillStyle = '#1f2f32';
+    ctx.fillRect(0, 0, 512, 256);
+    ctx.strokeStyle = '#d9a441';
+    ctx.lineWidth = 10;
+    ctx.strokeRect(8, 8, 496, 240);
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 92px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('FUEL', 256, 128);
+    ctx.fillStyle = '#d9a441';
+    ctx.font = 'bold 30px Arial, sans-serif';
+    ctx.fillText('COCONUT BIOFUEL', 256, 194);
+  });
+  const fuelLabelMat = new THREE.MeshStandardMaterial({
+    color: fuelLabelTexture ? 0xffffff : 0x1f2f32,
+    ...(fuelLabelTexture ? { map: fuelLabelTexture } : {}),
+    roughness: 0.6,
+  });
+  const fuelLabel = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.75), fuelLabelMat);
+  fuelLabel.position.set(0, 0.16, -0.02);
+  fuelLabel.rotation.y = Math.PI / 2;
+  fuelLabel.position.x = 0.83;
+  fuelTankGroup.add(fuelLabel);
+  // Sight glass: a fixed tube with a liquid column scaled by fuel fraction.
+  const sightGlassMat = new THREE.MeshStandardMaterial({
+    color: 0xbfe8ef,
+    transparent: true,
+    opacity: 0.3,
+    roughness: 0.1,
+    metalness: 0.2,
+  });
+  const sightTube = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.13, 0.13, 1.28, 10),
+    sightGlassMat,
+  );
+  sightTube.position.set(0, 0, 0.98);
+  fuelTankGroup.add(sightTube);
+  const fuelTankFillMat = new THREE.MeshStandardMaterial({
+    color: 0x84cc16,
+    emissive: 0x4d7c0f,
+    emissiveIntensity: 0.45,
+    roughness: 0.4,
+  });
+  const fuelTankFill = new THREE.Group();
+  fuelTankFill.position.set(0, -0.62, 0.98);
+  const fuelColumn = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.09, 0.09, 1.2, 8),
+    fuelTankFillMat,
+  );
+  fuelColumn.position.y = 0.6;
+  fuelTankFill.add(fuelColumn);
+  fuelTankGroup.add(fuelTankFill);
+  const fuelTankGaugeMat = new THREE.MeshStandardMaterial({
+    color: 0x84cc16,
+    emissive: 0x4d7c0f,
+    emissiveIntensity: 0.9,
+    roughness: 0.35,
+  });
+  const gaugeFace = new THREE.Mesh(new THREE.CircleGeometry(0.19, 14), fuelTankGaugeMat);
+  gaugeFace.position.set(0.83, 0.16, 0.82);
+  gaugeFace.rotation.y = Math.PI / 2;
+  fuelTankGroup.add(gaugeFace);
+
   // ---- Open aft deck, rails and wheelhouse -------------------------------
   for (const side of [-1, 1]) {
     for (let i = 0; i < 6; i++) {
@@ -495,5 +596,8 @@ export function buildLouisianaFerry(): LouisianaFerryHandles {
     wake,
     wakeMaterial,
     wakeTexture,
+    fuelTankFill,
+    fuelTankGaugeMat,
+    fuelTankFillMat,
   };
 }

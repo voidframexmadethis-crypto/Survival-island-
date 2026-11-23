@@ -221,6 +221,22 @@ test('the rendered ferry root moves continuously at passenger-ship speed', () =>
   assert.equal(isAlwaysVisibleWorldObject(model.root), true);
 });
 
+test('the stern fuel tank sight glass tracks the fuel level', () => {
+  const model = buildLouisianaFerry();
+  const { ferry } = makeFerry();
+  applyLouisianaFerryVisual(model, ferry);
+  assert.ok(model.fuelTankFill.scale.y > 0.99);
+
+  ferry.fuelLiters = LOUISIANA_FERRY_FUEL_CAPACITY_LITERS * 0.25;
+  applyLouisianaFerryVisual(model, ferry);
+  assert.ok(Math.abs(model.fuelTankFill.scale.y - 0.25) < 0.01);
+  assert.equal(model.fuelTankFill.visible, true);
+
+  ferry.fuelLiters = 0;
+  applyLouisianaFerryVisual(model, ferry);
+  assert.equal(model.fuelTankFill.visible, false);
+});
+
 test('the rendered hull is never stationary for even one second of an active voyage', () => {
   const model = buildLouisianaFerry();
   const { ferry, advance } = makeFerry();

@@ -126,6 +126,16 @@ import {
   loadFerryVoyageState,
   saveFerryVoyageState,
 } from '../systems/ferryVoyageSave';
+import {
+  AirShuttleVoyageSystem,
+  AIR_SHUTTLE_LEG_MINUTES,
+} from '../systems/crescentCityAirShuttle';
+import { applyAirShuttleVisual } from '../systems/airShuttleVisual';
+import {
+  clearAirShuttleState,
+  loadAirShuttleState,
+  saveAirShuttleState,
+} from '../systems/airShuttleSave';
 import { getCausewaySurfaceY } from '../systems/islandMainlandTransit';
 import {
   MAINLAND_BUSINESSES,
@@ -779,6 +789,10 @@ export class GameEngine {
   private ferryFuelStarvedNoticeShown = false;
   private ferryLastPersistMs = 0;
   private ferryHudAccum = 0;
+  private airShuttle = new AirShuttleVoyageSystem();
+  private airShuttleLastPersistMs = 0;
+  private airShuttleHudAccum = 0;
+  private airShuttleSprayAccum = 0;
   private mainlandStuntCooldown = 0;
   private beeGate: BeeGateHandle | null = null;
   private beeGateAnchor: THREE.Group | null = null;
@@ -2165,11 +2179,13 @@ export class GameEngine {
   private onPageHide = (): void => {
     // An in-progress crossing must survive a closed tab, not just a pause.
     this.persistLouisianaFerryVoyage(true);
+    this.persistAirShuttle(true);
   };
 
   private onVisibilityChange = (): void => {
     if (document.hidden) {
       this.persistLouisianaFerryVoyage(true);
+      this.persistAirShuttle(true);
       this.clearMovementInputs();
       this.rafPausedByVisibility = true;
       this.fpsController.stop();
@@ -5146,6 +5162,8 @@ export class GameEngine {
     this.ferryPickup.reset();
     this.resetLouisianaFerryVoyage();
     clearFerryVoyageState();
+    this.resetAirShuttleVoyage();
+    clearAirShuttleState();
     this.ferryRideActive = false;
     this.ferryArrivalTimer = 0;
     this.ferryBoardingDoorTimer = 0;
@@ -5189,6 +5207,7 @@ export class GameEngine {
     this.ferryRideActive = false;
     this.ferryPickup.reset();
     this.resetLouisianaFerryVoyage();
+    this.resetAirShuttleVoyage();
     this.ferryArrivalTimer = 0;
     this.ferryBoardingDoorTimer = 0;
     if (this.world?.ferryWorkerGroup) this.world.ferryWorkerGroup.visible = false;
@@ -5661,6 +5680,7 @@ export class GameEngine {
     // Resume the Crescent Star on its wall clock. This runs after the saved
     // player position so a rider can be put back on the moving deck.
     this.hydrateLouisianaFerryVoyage(save.ferryVoyage ?? null);
+    this.hydrateAirShuttle();
     this.applyPlayingCullImmediate();
     this.resetFrameTiming();
     this.emitHud();
@@ -7945,6 +7965,15 @@ export class GameEngine {
     }
     if (near && near.kind === 'underground_elevator') {
       this.openUndergroundElevator();
+      return;
+    }
+    if (near && near.kind === 'air_shuttle') {
+      if (near.id === 'air_shuttle_disembark') {
+        this.handleAirShuttleDisembark();
+      } else {
+        this.handleAirShuttleBoarding();
+      }
+      this.actionCooldown = 0.55;
       return;
     }
     if (near && near.kind === 'ferry_pickup') {
@@ -12923,6 +12952,52 @@ export class GameEngine {
       return nearHouseStation;
     }
 
+    // Crescent Clipper seaplane. Boarding is the only trigger: once the
+    // player is inside, the doors close and the automatic flight starts.
+    if (this.worldType === 'island' && this.currentDimension === 'overworld') {
+      if (this.airShuttle.aboard) {
+        if (this.airShuttle.canDisembark) {
+          const base = this.airShuttle.currentBase;
+          const door = this.airShuttle.getBoardingPoint();
+          return {
+            id: 'air_shuttle_disembark',
+            label: 'Step Out of the Crescent Clipper',
+            sublabel: `${base.label} · plane turned around and ready for the return flight`,
+            kind: 'air_shuttle',
+            actionCategory: 'use',
+            distance: 0,
+            targetX: door.x,
+            targetY: base.waterY + 2.4,
+            targetZ: door.z,
+          };
+        }
+      } else if (this.airShuttle.canBoard) {
+        const base = this.airShuttle.currentBase;
+        const door = this.airShuttle.getBoardingPoint();
+        const distance = Math.hypot(door.x - this.playerX, door.z - this.playerZ);
+        if (
+          distance < base.boardingRadius &&
+          Math.abs(this.playerY - (base.waterY + 1.9)) < 11
+        ) {
+          const destination = this.airShuttle.destination;
+          return {
+            id: 'air_shuttle_board',
+            label:
+              this.airShuttle.direction === 'outbound'
+                ? 'Board the Crescent Clipper'
+                : 'Board the Crescent Clipper for Driftwood Island',
+            sublabel: `${AIR_SHUTTLE_LEG_MINUTES}-minute automatic flight to ${destination.label} · no fuel required`,
+            kind: 'air_shuttle',
+            actionCategory: 'use',
+            distance,
+            targetX: door.x,
+            targetY: base.waterY + 2.4,
+            targetZ: door.z,
+          };
+        }
+      }
+    }
+
     if (this.worldType === 'island' && this.waterpark) {
       const waterparkNear = this.waterpark.getNearbyInteraction(
         this.playerX,
@@ -12951,6 +13026,32 @@ export class GameEngine {
       const tvPos = this.world?.ferryTvPos;
       const ramp = this.ferryVoyage.getRampWorldPoint();
       const deckY = this.ferryVoyage.boatY + FERRY_DECK_Y;
+      // The stern tank is visible from the pier. Let the player top it up
+      // there without having to climb aboard while the boat is moored.
+      const sternTank = this.ferryVoyage.ferryLocalToWorld(-3.05, -14.15);
+      const sternTankDist = Math.hypot(
+        sternTank.x - this.playerX,
+        sternTank.z - this.playerZ,
+      );
+      if (
+        voyage.direction === 'outbound' &&
+        (voyage.phase === 'idle' || voyage.phase === 'boarding') &&
+        voyage.fuelLiters < LOUISIANA_FERRY_FUEL_CAPACITY_LITERS - 0.01 &&
+        sternTankDist < 9 &&
+        Math.abs(this.playerY - (this.ferryVoyage.boatY + 2.0)) < 4.5
+      ) {
+        return {
+          id: 'ferry_fuel_dock',
+          label: 'Add Biofuel at the Stern Fuel Tank',
+          sublabel: `Tank ${voyage.fuelLiters.toFixed(0)} / ${LOUISIANA_FERRY_FUEL_CAPACITY_LITERS} L · coconut biofuel or emergency reserve`,
+          kind: 'ferry_fuel',
+          actionCategory: 'use',
+          distance: sternTankDist,
+          targetX: sternTank.x,
+          targetY: this.ferryVoyage.boatY + 2.0,
+          targetZ: sternTank.z,
+        };
+      }
       if (voyage.phase === 'idle' && voyage.direction === 'outbound' && tvPos) {
         const tvDist = Math.hypot(tvPos.x - this.playerX, tvPos.z - this.playerZ);
         if (tvDist < 4.0 && Math.abs(tvPos.y - this.playerY) < 2.8) {
@@ -13120,6 +13221,13 @@ export class GameEngine {
             sublabel: `Biofuel ${LOUISIANA_FERRY_BIOFUEL_LITERS} L per canister · 3 coconuts · tank ${voyage.fuelPercent.toFixed(0)}%`,
             x: -3.3,
             z: 13.0,
+          },
+          {
+            id: 'ferry_stern_fuel',
+            label: 'Add Biofuel at the Stern Fuel Tank',
+            sublabel: `Visible aft tank · ${voyage.fuelLiters.toFixed(0)} L / ${LOUISIANA_FERRY_FUEL_CAPACITY_LITERS} L · ${voyage.fuelPercent.toFixed(0)}%`,
+            x: -3.05,
+            z: -14.15,
           },
         ];
         let bestRoom: (typeof roomSpots)[number] | null = null;
@@ -15753,6 +15861,29 @@ export class GameEngine {
       }
     }
 
+    if (this.airShuttle.aboard) {
+      // Pilot's eye view. The camera rides the aircraft's full pitch and roll
+      // while camYaw/camPitch are kept as a look offset.
+      this.handsRig.root.visible = false;
+      if (this.localPlayerHandle) this.localPlayerHandle.group.visible = false;
+      const rig = this.world?.crescentClipper;
+      if (rig) {
+        rig.root.updateMatrixWorld(true);
+        _vec3A.set(0, 3.28, 5.0);
+        rig.root.localToWorld(_vec3A);
+        this.camera.position.copy(_vec3A);
+        this.camera.up.set(0, 1, 0).transformDirection(rig.root.matrixWorld).normalize();
+        const lookPitch = THREE.MathUtils.clamp(this.camPitch, -1.05, 0.8);
+        _vec3B.set(
+          _vec3A.x - Math.sin(this.camYaw) * Math.cos(lookPitch) * 30,
+          _vec3A.y + Math.sin(lookPitch) * 30,
+          _vec3A.z - Math.cos(this.camYaw) * Math.cos(lookPitch) * 30,
+        );
+        this.camera.lookAt(_vec3B);
+      }
+      return;
+    }
+
     if (this.activeVehicleId) {
       const activeV = this.vehicles.find((v) => v.id === this.activeVehicleId);
       if (activeV) {
@@ -16376,6 +16507,7 @@ export class GameEngine {
         ...this.ferryVoyage.getStatus(),
         room: this.ferryVoyage.getStatus().room,
       },
+      airShuttle: this.airShuttle.getStatus(),
       lostWorld: getLostWorldHudState(this.lostWorld),
       lostWorldBeat: this.getLostWorldCinematicBeat(),
       unlockedGildedPaint: this.unlockedGildedPaint,
@@ -16855,6 +16987,252 @@ export class GameEngine {
     }
   }
 
+  private resetAirShuttleVoyage(): void {
+    this.airShuttle.reset();
+    this.airShuttleLastPersistMs = 0;
+    this.airShuttleHudAccum = 0;
+    this.airShuttleSprayAccum = 0;
+    this.syncAirShuttleVisual(0);
+  }
+
+  private syncAirShuttleVisual(dt: number): void {
+    const rig = this.world?.crescentClipper;
+    if (!rig) return;
+    applyAirShuttleVisual(rig, this.airShuttle, dt);
+  }
+
+  private persistAirShuttle(force = false): void {
+    const now = Date.now();
+    if (!force && now - this.airShuttleLastPersistMs < 5000) return;
+    this.airShuttleLastPersistMs = now;
+    saveAirShuttleState(this.airShuttle.serialize(now), this.currentSlotId);
+  }
+
+  private hydrateAirShuttle(): void {
+    if (this.worldType !== 'island') {
+      this.resetAirShuttleVoyage();
+      return;
+    }
+    const save = loadAirShuttleState(this.currentSlotId);
+    if (!save) {
+      this.resetAirShuttleVoyage();
+      return;
+    }
+    const restored = this.airShuttle.restore(save, Date.now());
+    this.airShuttleLastPersistMs = 0;
+    this.airShuttleHudAccum = 0;
+    this.airShuttleSprayAccum = 0;
+    this.syncAirShuttleVisual(0);
+
+    if (this.airShuttle.aboard) {
+      const seat = this.airShuttle.getSeatWorldPoint();
+      this.playerX = seat.x;
+      this.playerY = seat.y;
+      this.playerZ = seat.z;
+      this.playerVelY = 0;
+      this.grounded = false;
+      this.isSwimming = false;
+      this.isUnderwater = false;
+      this.camYaw = this.airShuttle.planeYaw + Math.PI;
+      this.camPitch = -0.03;
+    } else if (restored.completed && restored.wasAboard) {
+      // The fifty-five minutes elapsed while the app was closed. Put the
+      // passenger on the dock at the destination rather than back on the isle.
+      const point = this.airShuttle.getDisembarkPoint();
+      this.playerX = point.x;
+      this.playerZ = point.z;
+      this.playerY = this.transitGroundY(point.x, point.z) + 0.05;
+      this.playerYaw = this.airShuttle.direction === 'return' ? Math.PI : 0;
+      this.camYaw = this.airShuttle.direction === 'return' ? Math.PI : 0;
+      this.camPitch = -0.12;
+      this.playerVelY = 0;
+      this.grounded = true;
+      this.isSwimming = false;
+      this.isUnderwater = false;
+    }
+    this.nearbyInteraction = this.findNearbyInteraction();
+  }
+
+  private spawnAirShuttleSpray(dt: number): void {
+    const status = this.airShuttle.getStatus();
+    const onWater =
+      status.phase === 'taxi_out' ||
+      status.phase === 'takeoff' ||
+      status.phase === 'landing' ||
+      status.phase === 'taxi_in';
+    if (!onWater || status.speedMps <= 0.1) return;
+    this.airShuttleSprayAccum += dt;
+    if (this.airShuttleSprayAccum < 0.14) return;
+    this.airShuttleSprayAccum = 0;
+    const base = this.airShuttle.currentBase;
+    const waterY = base.waterY + 0.12;
+    const sideX = Math.cos(this.airShuttle.planeYaw);
+    const sideZ = -Math.sin(this.airShuttle.planeYaw);
+    for (const side of [-1, 1]) {
+      this.spawnParticles(
+        this.airShuttle.planeX + sideX * 2.25 * side,
+        waterY,
+        this.airShuttle.planeZ + sideZ * 2.25 * side,
+        0xe0f2fe,
+        2,
+      );
+    }
+    this.spawnParticles(
+      this.airShuttle.planeX - Math.sin(this.airShuttle.planeYaw) * 7,
+      waterY,
+      this.airShuttle.planeZ - Math.cos(this.airShuttle.planeYaw) * 7,
+      0xcfefff,
+      2,
+    );
+  }
+
+  private updateAirShuttle(dt: number): void {
+    const events = this.airShuttle.update(dt);
+    this.syncAirShuttleVisual(dt);
+    const status = this.airShuttle.getStatus();
+
+    if (this.airShuttle.aboard) {
+      const seat = this.airShuttle.getSeatWorldPoint();
+      this.playerX = seat.x;
+      this.playerY = seat.y;
+      this.playerZ = seat.z;
+      this.playerVelY = 0;
+      this.grounded = false;
+      this.isSwimming = false;
+      this.isUnderwater = false;
+      this.seatedState = null;
+      // Keep the pilot's look direction locked to the aircraft while still
+      // honouring any mouse look applied this frame.
+      this.camYaw = Math.atan2(
+        Math.sin(this.camYaw + events.yawDelta),
+        Math.cos(this.camYaw + events.yawDelta),
+      );
+    }
+
+    this.spawnAirShuttleSpray(dt);
+
+    if (events.doorsClosed) {
+      this.sound.playCarDoorLatch(true);
+      this.toast('The Crescent Clipper gull-wing door lifts shut.', 'info');
+      this.persistAirShuttle(true);
+      this.emitHud();
+    }
+    if (events.engineStarted) {
+      this.sound.playFerryEngineStart();
+      this.toast('Both turboprops catch. The Crescent Clipper taxis for the water runway.', 'discovery');
+      this.persistAirShuttle(true);
+      this.emitHud();
+    }
+    if (events.tookOff) {
+      this.sound.playFerryEngineStart();
+      this.spawnParticles(
+        this.airShuttle.planeX,
+        this.airShuttle.planeY + 0.4,
+        this.airShuttle.planeZ,
+        0xe0f2fe,
+        10,
+      );
+      this.toast(
+        `The Crescent Clipper lifts off. ${AIR_SHUTTLE_LEG_MINUTES} minutes to ${this.airShuttle.destination.label}. No fuel required — the flight is automatic.`,
+        'discovery',
+      );
+      this.persistAirShuttle(true);
+      this.emitHud();
+    }
+    if (events.landed) {
+      this.toast(
+        `Touchdown at ${this.airShuttle.destination.label}. The Clipper is taxiing in.`,
+        'info',
+      );
+      this.persistAirShuttle(true);
+      this.emitHud();
+    }
+    if (events.arrived) {
+      this.handleAirShuttleArrived();
+    }
+
+    if (status.phase === 'airborne') {
+      this.airShuttleHudAccum += dt;
+      if (this.airShuttleHudAccum >= 2) {
+        this.airShuttleHudAccum = 0;
+        this.emitHud();
+      }
+      this.persistAirShuttle(false);
+    }
+  }
+
+  private handleAirShuttleBoarding(): void {
+    if (this.activeVehicleId) {
+      this.toast('Park and step out of the car to board the seaplane.', 'warning');
+      return;
+    }
+    const result = this.airShuttle.board();
+    if (!result.ok) {
+      this.toast(result.message, 'warning');
+      return;
+    }
+    const status = this.airShuttle.getStatus();
+    const seat = this.airShuttle.getSeatWorldPoint();
+    this.playerX = seat.x;
+    this.playerY = seat.y;
+    this.playerZ = seat.z;
+    this.playerVelY = 0;
+    this.grounded = false;
+    this.isSwimming = false;
+    this.isUnderwater = false;
+    this.camYaw = status.planeYaw + Math.PI;
+    this.camPitch = -0.03;
+    this.sound.playCarDoorLatch(true);
+    this.syncAirShuttleVisual(0);
+    this.persistAirShuttle(true);
+    this.toast(result.message, 'discovery');
+    this.nearbyInteraction = this.findNearbyInteraction();
+    this.emitHud();
+  }
+
+  private handleAirShuttleDisembark(): void {
+    const result = this.airShuttle.disembark();
+    if (!result.ok) {
+      this.toast(result.message, 'warning');
+      return;
+    }
+    const base = this.airShuttle.currentBase;
+    const point = this.airShuttle.getDisembarkPoint();
+    this.playerX = point.x;
+    this.playerZ = point.z;
+    this.playerY = this.transitGroundY(point.x, point.z) + 0.05;
+    this.playerYaw = base.id === 'island' ? 0 : Math.PI;
+    this.camYaw = this.playerYaw;
+    this.camPitch = -0.12;
+    this.playerVelY = 0;
+    this.grounded = true;
+    this.isSwimming = false;
+    this.isUnderwater = false;
+    this.sound.playCarDoorLatch(true);
+    this.syncAirShuttleVisual(0);
+    this.persistAirShuttle(true);
+    this.toast(result.message, 'info');
+    this.nearbyInteraction = this.findNearbyInteraction();
+    this.updateCamera();
+    this.emitHud();
+  }
+
+  private handleAirShuttleArrived(): void {
+    const wasAboard = this.airShuttle.aboard;
+    const base = this.airShuttle.currentBase;
+    if (wasAboard) {
+      this.handleAirShuttleDisembark();
+    }
+    this.sound.playFerryEngineStop();
+    this.toast(
+      `The Crescent Clipper is parked at ${base.label}, turned around and ready for the ${AIR_SHUTTLE_LEG_MINUTES}-minute return flight.`,
+      'discovery',
+    );
+    this.persistAirShuttle(true);
+    this.nearbyInteraction = this.findNearbyInteraction();
+    this.emitHud();
+  }
+
   private updateLouisianaFerryVoyage(dt: number): void {
     // A passenger on the Crescent Star must be looking at the ship, not at a
     // lingering intro/farewell shot while the hull sails off-camera. Boarding
@@ -17321,6 +17699,10 @@ export class GameEngine {
         break;
       }
       case 'ferry_fuel': {
+        this.handleFerryFuel();
+        break;
+      }
+      case 'ferry_stern_fuel': {
         this.handleFerryFuel();
         break;
       }
@@ -18494,6 +18876,10 @@ export class GameEngine {
     // carried with the deck rather than being left behind in open water.
     this.updateLouisianaFerryVoyage(dt);
 
+    // The seaplane is fully automatic once boarded. Its cockpit owns the
+    // player position while the Clipper is in flight.
+    this.updateAirShuttle(dt);
+
     // Scripted island ferry pickup runs before player control so the worker's
     // car owns the player position while the player is riding shotgun.
     this.updateFerryPickup(dt);
@@ -18519,7 +18905,8 @@ export class GameEngine {
       this.mode === 'playing' &&
       canProcessGameplayInput(this.masterRuntime) &&
       !this.gameOver &&
-      !this.cinematicActive;
+      !this.cinematicActive &&
+      !this.airShuttle.aboard;
     if (playerActive) {
       this.updatePlayer(dt);
     } else if (
@@ -18530,6 +18917,7 @@ export class GameEngine {
       !this.mountedCreatureId &&
       !this.ridingCoasterId &&
       !this.seatedState &&
+      !this.airShuttle.aboard &&
       !this.flightAndTeleport.flying &&
       !this.dragonFlight.flying &&
       this.vaultTimer <= 0
