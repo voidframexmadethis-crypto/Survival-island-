@@ -1816,13 +1816,13 @@ export function SurvivalGameClient() {
                         : 'CRESCENT CITY → ISLAND'}
                     </span>
                     <span>
-                      {hud.ferryVoyage.speedMps.toFixed(2)} m/s
+                      {hud.ferryVoyage.speedMps.toFixed(2)} m/s · {hud.ferryVoyage.speedKnots.toFixed(1)} kn
                     </span>
                   </div>
                   {hud.ferryVoyage.aboard && hud.ferryVoyage.phase === 'at_sea' && (
                     <div className="flex items-center justify-between gap-1 text-[9px] text-teal-300/80 font-mono-tabular">
                       <span>
-                        {formatFerryDuration(hud.ferryVoyage.elapsedMs)} elapsed
+                        {formatFerryDuration(hud.ferryVoyage.elapsedMs)} elapsed · {(hud.ferryVoyage.routeDistanceMeters / 1000).toFixed(0)} km
                       </span>
                       <span>
                         {hud.ferryVoyage.boatX.toFixed(1)}, {hud.ferryVoyage.boatZ.toFixed(1)}

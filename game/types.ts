@@ -1572,6 +1572,8 @@ export interface HUDStateSnapshot {
     direction: 'outbound' | 'return';
     destination: 'island' | 'crescent_city';
     routeProgress: number;
+    routeDistanceMeters: number;
+    routeLengthMeters: number;
     elapsedMs: number;
     remainingMs: number;
     durationMs: number;
@@ -1581,7 +1583,9 @@ export interface HUDStateSnapshot {
     boatY: number;
     boatZ: number;
     boatYaw: number;
+    boatRoll: number;
     speedMps: number;
+    speedKnots: number;
     room: string | null;
     aboard: boolean;
     boardingCleared: boolean;

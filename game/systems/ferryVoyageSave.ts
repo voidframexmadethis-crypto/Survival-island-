@@ -1,6 +1,8 @@
 import type { LouisianaFerrySaveState } from './louisianaFerryVoyage';
 
-const FERRY_VOYAGE_KEY = 'survival_island_crescent_star_voyage_v2';
+const FERRY_VOYAGE_KEY = 'survival_island_crescent_star_voyage_v3';
+/** Nine-hour voyages written by the previous build; still resumes on the clock. */
+const LEGACY_FERRY_VOYAGE_KEY = 'survival_island_crescent_star_voyage_v2';
 
 interface StoredFerryVoyage {
   slotId: string;
@@ -25,7 +27,7 @@ function isValidState(raw: unknown): raw is LouisianaFerrySaveState {
   if (!raw || typeof raw !== 'object') return false;
   const state = raw as Partial<LouisianaFerrySaveState>;
   return (
-    state.version === 2 &&
+    (state.version === 2 || state.version === 3) &&
     (state.direction === 'outbound' || state.direction === 'return') &&
     typeof state.phase === 'string' &&
     (state.departureAtMs === null || typeof state.departureAtMs === 'number') &&
@@ -45,6 +47,7 @@ export function saveFerryVoyageState(
   try {
     const payload: StoredFerryVoyage = { slotId, state };
     storage.setItem(FERRY_VOYAGE_KEY, JSON.stringify(payload));
+    storage.removeItem(LEGACY_FERRY_VOYAGE_KEY);
     return true;
   } catch {
     return false;
@@ -57,13 +60,20 @@ export function loadFerryVoyageState(
 ): LouisianaFerrySaveState | null {
   if (!storage) return null;
   try {
-    const parsed = JSON.parse(
-      storage.getItem(FERRY_VOYAGE_KEY) || 'null',
-    ) as StoredFerryVoyage | null;
-    if (!parsed || !isValidState(parsed.state)) return null;
-    // Only resume a voyage that belongs to the slot being loaded.
-    if (parsed.slotId && slotId && parsed.slotId !== slotId) return null;
-    return parsed.state;
+    const stored = storage.getItem(FERRY_VOYAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored) as StoredFerryVoyage | null;
+      if (!parsed || !isValidState(parsed.state)) return null;
+      // Only resume a voyage that belongs to the slot being loaded.
+      if (parsed.slotId && slotId && parsed.slotId !== slotId) return null;
+      return parsed.state;
+    }
+    const legacyRaw = storage.getItem(LEGACY_FERRY_VOYAGE_KEY);
+    if (!legacyRaw) return null;
+    const legacy = JSON.parse(legacyRaw) as StoredFerryVoyage | null;
+    if (!legacy || !isValidState(legacy.state)) return null;
+    if (legacy.slotId && slotId && legacy.slotId !== slotId) return null;
+    return legacy.state;
   } catch {
     return null;
   }
@@ -75,9 +85,10 @@ export function clearFerryVoyageState(
   if (!storage) return;
   try {
     storage.removeItem(FERRY_VOYAGE_KEY);
+    storage.removeItem(LEGACY_FERRY_VOYAGE_KEY);
   } catch {
     // Ignore storage quota / privacy errors
   }
 }
 
-export { FERRY_VOYAGE_KEY };
+export { FERRY_VOYAGE_KEY, LEGACY_FERRY_VOYAGE_KEY };

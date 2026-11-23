@@ -20,6 +20,83 @@ export interface LouisianaFerryHandles {
   tvScreenMat: THREE.MeshStandardMaterial;
   deckY: number;
   rooms: typeof FERRY_ROOMS;
+  /** Foam ribbon + hull foam. Its opacity and scroll are driven by speed. */
+  wake: THREE.Group;
+  wakeMaterial: THREE.MeshBasicMaterial;
+  wakeTexture: THREE.CanvasTexture | null;
+}
+
+/**
+ * Open-water foam for the wake. Drawn into an alpha texture so the ribbon
+ * reads as churned water instead of a solid white triangle, and fades out at
+ * the far end of the trail. `flipY = false` keeps v=0 (the stern) on the near
+ * edge when the ribbon is scrolled.
+ */
+function makeWakeTexture(): THREE.CanvasTexture | null {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let i = 0; i < 260; i++) {
+    const t = Math.random();
+    const spread = 0.1 + t * 0.95;
+    const x = 128 + (Math.random() - 0.5) * 250 * spread;
+    const y = Math.random() * 512;
+    const length = 8 + Math.random() * 52;
+    ctx.strokeStyle = `rgba(232, 248, 255, ${0.08 + Math.random() * 0.42})`;
+    ctx.lineWidth = 0.8 + Math.random() * 3.2;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    // The streaks fan away from the stern as the wake widens.
+    ctx.lineTo(x + (x - 128) * 0.05, y + length);
+    ctx.stroke();
+  }
+  // Erase the far end so the ribbon dissolves into the sea.
+  const fade = ctx.createLinearGradient(0, 0, 0, 512);
+  fade.addColorStop(0, 'rgba(0,0,0,0)');
+  fade.addColorStop(0.72, 'rgba(0,0,0,0.15)');
+  fade.addColorStop(1, 'rgba(0,0,0,1)');
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.fillStyle = fade;
+  ctx.fillRect(0, 0, 256, 512);
+  ctx.globalCompositeOperation = 'source-over';
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.flipY = false;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+/** Flat quad in the XZ plane with UVs running near (v=0) to far (v=1). */
+function buildWakeQuad(
+  halfNear: number,
+  halfFar: number,
+  nearZ: number,
+  farZ: number,
+  y: number,
+): THREE.BufferGeometry {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(
+      [
+        -halfNear, y, nearZ,
+        halfNear, y, nearZ,
+        halfFar, y, farZ,
+        -halfFar, y, farZ,
+      ],
+      3,
+    ),
+  );
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0], 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+  geo.setIndex([0, 2, 1, 0, 3, 2]);
+  return geo;
 }
 
 function makeCanvasTexture(
@@ -123,7 +200,7 @@ export function buildLouisianaFerry(): LouisianaFerryHandles {
     ctx.fillText('STAR', 256, 190);
     ctx.fillStyle = '#f5b642';
     ctx.font = 'bold 24px Arial, sans-serif';
-    ctx.fillText('ISLAND  ·  LOUISIANA  ·  18 DAYS', 256, 232);
+    ctx.fillText('ISLAND  ·  LOUISIANA  ·  48-HOUR CROSSING', 256, 232);
   });
   const nameMat = new THREE.MeshStandardMaterial({
     color: nameTexture ? 0xffffff : 0x123f3b,
@@ -357,6 +434,50 @@ export function buildLouisianaFerry(): LouisianaFerryHandles {
     root.add(board);
   }
 
+  // ---- Wake, hull foam and bow wave --------------------------------------
+  // Everything here rides on the hull root, so it physically travels with the
+  // ship. The engine scrolls the foam and fades it with the measured speed.
+  const wake = new THREE.Group();
+  wake.name = 'crescent-star-wake';
+  const wakeTexture = makeWakeTexture();
+  const wakeMaterial = new THREE.MeshBasicMaterial({
+    color: 0xdcf3ff,
+    ...(wakeTexture ? { map: wakeTexture } : {}),
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+  });
+  const waterY = -FERRY_ROOT_Y + 0.045;
+  const sternWake = new THREE.Mesh(
+    buildWakeQuad(4.4, 30, FERRY_STERN_Z - 0.4, -165, waterY),
+    wakeMaterial,
+  );
+  sternWake.renderOrder = 2;
+  wake.add(sternWake);
+  const innerWake = new THREE.Mesh(
+    buildWakeQuad(2.6, 13, FERRY_STERN_Z + 0.2, -95, waterY + 0.008),
+    wakeMaterial,
+  );
+  innerWake.renderOrder = 3;
+  wake.add(innerWake);
+  for (const side of [-1, 1]) {
+    const hullFoam = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 36), wakeMaterial);
+    hullFoam.rotation.x = -Math.PI / 2;
+    hullFoam.position.set(side * (FERRY_HALF_WIDTH + 0.15), waterY, 0.2);
+    hullFoam.renderOrder = 2;
+    wake.add(hullFoam);
+    const bowFoam = new THREE.Mesh(new THREE.PlaneGeometry(2.0, 11), wakeMaterial);
+    bowFoam.rotation.x = -Math.PI / 2;
+    bowFoam.rotation.z = side * 0.52;
+    bowFoam.position.set(side * 5.2, waterY + 0.01, 16.2);
+    bowFoam.renderOrder = 3;
+    wake.add(bowFoam);
+  }
+  wake.visible = false;
+  root.add(wake);
+
   // Soft warm spill from the cabin lights. Keeps the rooms readable at night.
   const cabinGlow = new THREE.PointLight(0xffd79a, 12, 18, 2);
   cabinGlow.position.set(0, 3.2, 3.5);
@@ -371,5 +492,8 @@ export function buildLouisianaFerry(): LouisianaFerryHandles {
     tvScreenMat: screenMat,
     deckY: FERRY_DECK_Y,
     rooms: FERRY_ROOMS,
+    wake,
+    wakeMaterial,
+    wakeTexture,
   };
 }

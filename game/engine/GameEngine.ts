@@ -2156,7 +2156,7 @@ export class GameEngine {
   };
 
   private onPageHide = (): void => {
-    // The nine-hour crossing must survive a closed tab, not just a pause.
+    // The 48-hour crossing must survive a closed tab, not just a pause.
     this.persistLouisianaFerryVoyage(true);
   };
 
@@ -11625,11 +11625,13 @@ export class GameEngine {
         boost: this.isSprinting,
       });
 
-      const maxRadius = getPlayableMaxRadius();
-      const rad = Math.hypot(this.flightPlayerProxy.x, this.flightPlayerProxy.z);
-      if (rad > maxRadius && rad > 0.001) {
-        this.flightPlayerProxy.x *= maxRadius / rad;
-        this.flightPlayerProxy.z *= maxRadius / rad;
+      if (!this.ferryVoyage.aboard) {
+        const maxRadius = getPlayableMaxRadius();
+        const rad = Math.hypot(this.flightPlayerProxy.x, this.flightPlayerProxy.z);
+        if (rad > maxRadius && rad > 0.001) {
+          this.flightPlayerProxy.x *= maxRadius / rad;
+          this.flightPlayerProxy.z *= maxRadius / rad;
+        }
       }
       this.flightPlayerProxy.y = Math.min(this.flightPlayerProxy.y, 175);
 
@@ -11703,12 +11705,16 @@ export class GameEngine {
         if (!allowZ) nextZ = this.playerZ;
       }
 
-      // Playable World Boundary
-      const maxRadius = getPlayableMaxRadius();
-      const rad = Math.hypot(nextX, nextZ);
-      if (rad > maxRadius) {
-        nextX *= maxRadius / rad;
-        nextZ *= maxRadius / rad;
+      // Playable World Boundary. A passenger on the Crescent Star is often
+      // hundreds of kilometres offshore, so the island boundary must not drag
+      // them off the deck mid-crossing.
+      if (!this.ferryVoyage.aboard) {
+        const maxRadius = getPlayableMaxRadius();
+        const rad = Math.hypot(nextX, nextZ);
+        if (rad > maxRadius) {
+          nextX *= maxRadius / rad;
+          nextZ *= maxRadius / rad;
+        }
       }
 
       // O(1) Spatial Hash Grid collision detection (skip Island colliders in Flat World)
@@ -12955,7 +12961,7 @@ export class GameEngine {
           return {
             id: 'ferry_return_board',
             label: 'Board the Crescent Star for the Island',
-            sublabel: 'Crescent City berth · nine-hour return crossing',
+            sublabel: `Crescent City berth · ${LOUISIANA_FERRY_LEG_HOURS}-hour return crossing`,
             kind: 'ferry_boarding',
             actionCategory: 'use',
             distance: returnDist,
@@ -12974,7 +12980,7 @@ export class GameEngine {
             sublabel:
               voyage.direction === 'outbound'
                 ? 'Walkable deck · living room · bedroom · bathroom'
-                : 'Return crossing · nine hours back to the island',
+                : `Return crossing · ${LOUISIANA_FERRY_LEG_HOURS} hours back to the island`,
             kind: 'ferry_boarding',
             actionCategory: 'use',
             distance: rampDist,
@@ -13030,7 +13036,7 @@ export class GameEngine {
           {
             id: 'ferry_sofa',
             label: 'Relax in the Ferry Living Room',
-            sublabel: 'Sofa · coffee table · nine-hour crossing',
+            sublabel: `Sofa · coffee table · ${LOUISIANA_FERRY_LEG_HOURS}-hour crossing`,
             x: 1.15,
             z: -1.9,
           },
@@ -16704,7 +16710,7 @@ export class GameEngine {
   /**
    * Writes the voyage's wall-clock departure + rider position. Called on every
    * phase change, periodically at sea, and when the page is hidden, so closing
-   * the game never restarts the nine-hour crossing.
+   * the game never restarts the 48-hour crossing.
    */
   private persistLouisianaFerryVoyage(force = false): void {
     const now = Date.now();
@@ -16721,11 +16727,11 @@ export class GameEngine {
       this.resetLouisianaFerryVoyage();
       return;
     }
-    const save =
-      slotSave && slotSave.version === 2
-        ? slotSave
-        : loadFerryVoyageState(this.currentSlotId);
-    if (!save || save.version !== 2) {
+    const supportedVersion = slotSave?.version === 2 || slotSave?.version === 3;
+    const save = supportedVersion
+      ? slotSave
+      : loadFerryVoyageState(this.currentSlotId);
+    if (!save || (save.version !== 2 && save.version !== 3)) {
       this.resetLouisianaFerryVoyage();
       return;
     }
@@ -16804,7 +16810,7 @@ export class GameEngine {
 
     if (this.ferryVoyage.phase === 'at_sea') {
       this.spawnFerryWake(dt);
-      // The nine-hour clock lives in the save, but the readout only needs a
+      // The 48-hour clock lives in the save, but the readout only needs a
       // few refreshes per second at most.
       this.ferryHudAccum += dt;
       if (this.ferryHudAccum >= 2) {
@@ -16851,31 +16857,51 @@ export class GameEngine {
     this.syncFerryDepartureHint();
   }
 
-  /** Foam and funnel smoke make the hull's true speed readable from the deck. */
+  /** Bow spray, stern churn and funnel smoke make the hull's speed readable. */
   private spawnFerryWake(dt: number): void {
     const ferry = this.ferryVoyage;
-    // ~2 cm/s is the true nine-hour cruise speed; even that leaves a wake.
-    if (ferry.speedMps <= 0.0005) return;
+    if (ferry.speedMps <= 0.05) return;
     const c = Math.cos(ferry.boatYaw);
     const s = Math.sin(ferry.boatYaw);
+    // ~5 m/s cruise: churn the stern every few frames and throw bow spray.
     this.ferryWakeAccum += dt;
-    if (this.ferryWakeAccum >= 0.1) {
+    if (this.ferryWakeAccum >= 0.08) {
       this.ferryWakeAccum = 0;
-      const localZ = FERRY_STERN_Z + 0.4;
-      const wx = ferry.boatX + localZ * s;
-      const wz = ferry.boatZ + localZ * c;
-      this.spawnParticles(wx, ferry.boatY + 0.12, wz, 0xcfefff, 3);
+      const sternZ = FERRY_STERN_Z + 0.4;
+      this.spawnParticles(
+        ferry.boatX + sternZ * s,
+        ferry.boatY + 0.12,
+        ferry.boatZ + sternZ * c,
+        0xcfefff,
+        4,
+      );
+      for (const side of [-1, 1]) {
+        this.spawnParticles(
+          ferry.boatX + side * 4.9 * c,
+          ferry.boatY + 0.18,
+          ferry.boatZ - side * 4.9 * s,
+          0xe0f2fe,
+          1,
+        );
+      }
       const bowZ = 16.6;
       this.spawnParticles(
-        ferry.boatX + bowZ * s,
-        ferry.boatY + 0.35,
-        ferry.boatZ + bowZ * c,
+        ferry.boatX + bowZ * s - 4.2 * c,
+        ferry.boatY + 0.3,
+        ferry.boatZ + bowZ * c + 4.2 * s,
         0xe0f2fe,
-        1,
+        2,
+      );
+      this.spawnParticles(
+        ferry.boatX + bowZ * s + 4.2 * c,
+        ferry.boatY + 0.3,
+        ferry.boatZ + bowZ * c - 4.2 * s,
+        0xe0f2fe,
+        2,
       );
     }
     this.ferrySmokeAccum += dt;
-    if (this.ferrySmokeAccum >= 0.34) {
+    if (this.ferrySmokeAccum >= 0.3) {
       this.ferrySmokeAccum = 0;
       const funnelZ = 7.2;
       this.spawnParticles(
@@ -16972,7 +16998,7 @@ export class GameEngine {
     this.sound.playSteamHiss();
     this.toast(
       atCity
-        ? 'You disembark in Crescent City. The Crescent Star is moored at the berth, ready for the nine-hour return crossing.'
+        ? `You disembark in Crescent City. The Crescent Star is moored at the berth, ready for the ${LOUISIANA_FERRY_LEG_HOURS}-hour return crossing.`
         : 'You disembark at the island landing. The Crescent Star is moored at the pier for the next crossing.',
       'discovery',
     );
@@ -17246,7 +17272,7 @@ export class GameEngine {
   /**
    * The worker-driven car reaches the pier, then the player leaves it with the
    * dock crew and boards the physical Crescent Star. The car is delivered to
-   * Crescent City when the nine-hour crossing finishes.
+   * Crescent City when the 48-hour crossing finishes.
    */
   private startCrescentStarFromCar(car: ModularVehicleData): void {
     if (this.activeVehicleId === car.id) this.exitVehicle();
@@ -18316,6 +18342,18 @@ export class GameEngine {
       this.currentDimension === 'overworld' &&
       this.worldType === 'island'
     ) {
+      // The crossing runs far beyond the island's 6.4 km water plane, so once
+      // the Crescent Star is at sea keep the ocean centred on her. In port the
+      // plane stays at the origin so shoreline waves remain world-anchored.
+      const offshore =
+        this.ferryVoyage.phase === 'at_sea' ||
+        this.ferryVoyage.phase === 'arriving' ||
+        this.ferryVoyage.phase === 'arrived';
+      if (offshore) {
+        this.realisticOcean.setCenter(this.playerX, this.playerZ);
+      } else {
+        this.realisticOcean.setCenter(0, 0);
+      }
       this.realisticOcean.update(dt);
     }
 

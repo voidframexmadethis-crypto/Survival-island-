@@ -79,16 +79,22 @@ export class RealisticOcean {
         varying vec2 vUv;
         varying float vWave;
         varying vec3 vWorldPos;
+        varying vec2 vWaveXZ;
         varying vec3 vWaveNormal;
 
         void main() {
           vUv = uv;
 
           vec3 pos = position;
+          // Waves are anchored in world space, so an offshore crossing reads as
+          // water flowing past the hull instead of a backdrop glued to it. The
+          // plane follows the ship, but the wave field does not.
+          vec2 waveXZ = (modelMatrix * vec4(pos, 1.0)).xz;
+          vWaveXZ = waveXZ;
 
-          float wave1 = sin(pos.x * 0.035 + uTime * 1.15);
-          float wave2 = cos(pos.y * 0.048 + uTime * 0.85);
-          float wave3 = sin((pos.x + pos.y) * 0.019 + uTime * 0.58);
+          float wave1 = sin(waveXZ.x * 0.035 + uTime * 1.15);
+          float wave2 = cos(waveXZ.y * 0.048 + uTime * 0.85);
+          float wave3 = sin((waveXZ.x + waveXZ.y) * 0.019 + uTime * 0.58);
 
           float displacement =
             wave1 * 0.34 +
@@ -99,11 +105,11 @@ export class RealisticOcean {
           vWave = displacement;
 
           float dWdX =
-            cos(pos.x * 0.035 + uTime * 1.15) * 0.035 * 0.34 +
-            cos((pos.x + pos.y) * 0.019 + uTime * 0.58) * 0.019 * 0.26;
+            cos(waveXZ.x * 0.035 + uTime * 1.15) * 0.035 * 0.34 +
+            cos((waveXZ.x + waveXZ.y) * 0.019 + uTime * 0.58) * 0.019 * 0.26;
           float dWdY =
-            -sin(pos.y * 0.048 + uTime * 0.85) * 0.048 * 0.22 +
-            cos((pos.x + pos.y) * 0.019 + uTime * 0.58) * 0.019 * 0.26;
+            -sin(waveXZ.y * 0.048 + uTime * 0.85) * 0.048 * 0.22 +
+            cos((waveXZ.x + waveXZ.y) * 0.019 + uTime * 0.58) * 0.019 * 0.26;
 
           vec3 localN = normalize(vec3(-dWdX, -dWdY, 1.0));
           vWaveNormal = normalize(mat3(modelMatrix) * localN);
@@ -136,6 +142,7 @@ export class RealisticOcean {
         varying vec2 vUv;
         varying float vWave;
         varying vec3 vWorldPos;
+        varying vec2 vWaveXZ;
         varying vec3 vWaveNormal;
 
         float wHash(vec2 p) {
@@ -226,7 +233,7 @@ export class RealisticOcean {
           float shallowMask = 1.0 - smoothstep(0.05, 1.9, waterDepth);
           vec3 waterColor = mix(waterBody, mix(sandSeabedTint, waterBody, 0.62), shallowMask * 0.66);
 
-          vec3 N = computeWaveNormal(vWorldPos.xz, uTime, viewDist);
+          vec3 N = computeWaveNormal(vWaveXZ, uTime, viewDist);
           vec3 V = camDelta / max(0.001, viewDist);
           vec3 L = normalize(uSunDirection);
           vec3 H = normalize(L + V);
@@ -262,9 +269,9 @@ export class RealisticOcean {
           float shallowBand = 1.0 - smoothstep(0.02, 0.92, waterDepth);
           float totalFoam = 0.0;
           if (shallowBand > 0.01 || (viewDist < 200.0 && uDetailLevel > 0.42)) {
-            float surfNoise = wNoise(vWorldPos.xz * 0.82 - vec2(uTime * 0.44, uTime * 0.36));
+            float surfNoise = wNoise(vWaveXZ * 0.82 - vec2(uTime * 0.44, uTime * 0.36));
             float surfLace = (viewDist < 135.0 && uDetailLevel > 0.52)
-              ? wNoise(vWorldPos.xz * 2.35 + vec2(uTime * 0.25, -uTime * 0.18))
+              ? wNoise(vWaveXZ * 2.35 + vec2(uTime * 0.25, -uTime * 0.18))
               : surfNoise;
             float shoreWave1 = 0.5 + 0.5 * sin(waterDepth * 10.8 - uTime * 2.55 + surfNoise * 3.4);
             float shoreWave2 = 0.5 + 0.5 * sin(waterDepth * 17.5 - uTime * 3.15 + surfLace * 2.6);
@@ -338,6 +345,16 @@ export class RealisticOcean {
     this.shoreHeightTex = tex;
     this.material.uniforms.uShoreHeightTex.value = tex;
     this.material.uniforms.uHasShoreTex.value = 1.0;
+  }
+
+  /**
+   * Re-centres the water plane so an offshore crossing always has sea beneath
+   * the hull. Callers keep it parked at the origin while the player is in the
+   * island world, preserving the world-anchored shoreline waves.
+   */
+  setCenter(x: number, z: number): void {
+    this.water.position.x = x;
+    this.water.position.z = z;
   }
 
   setVisible(visible: boolean): void {
