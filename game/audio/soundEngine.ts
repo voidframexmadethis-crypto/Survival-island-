@@ -2069,6 +2069,30 @@ export class SoundEngine {
     starter.stop(now + 0.95);
   }
 
+  /** Dies down from a marine diesel rumble to silence as the engines stop. */
+  public playFerryEngineStop(): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const duration = 1.8;
+    const rumble = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(220, now);
+    lp.frequency.exponentialRampToValueAtTime(90, now + duration);
+    rumble.type = 'sawtooth';
+    rumble.frequency.setValueAtTime(42, now);
+    rumble.frequency.exponentialRampToValueAtTime(18, now + duration);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.16, now + 0.08);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    rumble.connect(lp);
+    lp.connect(g);
+    g.connect(this.masterGain);
+    rumble.start(now);
+    rumble.stop(now + duration + 0.05);
+  }
+
   public playHydraulicHop(kind: 'hop' | 'tilt' | 'lock'): void {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;

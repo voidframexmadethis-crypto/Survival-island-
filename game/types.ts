@@ -122,6 +122,7 @@ export type ItemId =
   | 'sand'
   | 'berries'
   | 'coconut'
+  | 'coconut_biofuel'
   | 'apple'
   | 'banana'
   | 'maple_syrup'
@@ -1332,6 +1333,7 @@ export interface NearbyInteraction {
     | 'ferry_dock_tv'
     | 'ferry_boarding'
     | 'ferry_room'
+    | 'ferry_fuel'
     | 'mainland_terminal'
     | 'waterpark_ride'
     | 'mainland_business';
@@ -1586,6 +1588,18 @@ export interface HUDStateSnapshot {
     boatRoll: number;
     speedMps: number;
     speedKnots: number;
+    fuelLiters: number;
+    fuelCapacityLiters: number;
+    fuelPercent: number;
+    engineState: string;
+    engineRunning: boolean;
+    lowFuel: boolean;
+    fuelStarved: boolean;
+    canDepart: boolean;
+    minimumDepartFuelLiters: number;
+    reserveLiters: number;
+    reserveUsed: boolean;
+    biofuelLiters: number;
     room: string | null;
     aboard: boolean;
     boardingCleared: boolean;

@@ -1,6 +1,16 @@
 import { CookingRecipe, CraftingRecipe } from '../types';
 
 export const CRAFTING_RECIPES: CraftingRecipe[] = [
+  {
+    id: 'craft_coconut_biofuel',
+    resultItemId: 'coconut_biofuel',
+    resultQuantity: 1,
+    category: 'survival',
+    requiresTable: false,
+    craftTimeSeconds: 2.5,
+    ingredients: [{ itemId: 'coconut', quantity: 3 }],
+    description: 'Press three fresh coconuts into a 25 L canister of fictional Crescent Star coconut biofuel.',
+  },
   // Hand-craftable basics & tools
   {
     id: 'craft_rope',

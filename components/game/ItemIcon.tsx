@@ -149,6 +149,8 @@ export function ItemIcon({
       return <Cherry {...props} />;
     case 'coconut':
       return <Nut {...props} />;
+    case 'coconut_biofuel':
+      return <Droplet {...props} />;
     case 'apple':
       return <Apple {...props} />;
     case 'banana':

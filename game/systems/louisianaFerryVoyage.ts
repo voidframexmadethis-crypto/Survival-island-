@@ -116,6 +116,7 @@ export type LouisianaFerryPhase =
   | 'arrived';
 export type LouisianaFerryDirection = 'outbound' | 'return';
 export type LouisianaFerryDock = 'island' | 'crescent_city';
+export type LouisianaFerryEngineState = 'off' | 'starting' | 'running' | 'starved';
 
 export interface LouisianaFerryStatus {
   phase: LouisianaFerryPhase;
@@ -138,6 +139,18 @@ export interface LouisianaFerryStatus {
   boatRoll: number;
   speedMps: number;
   speedKnots: number;
+  fuelLiters: number;
+  fuelCapacityLiters: number;
+  fuelPercent: number;
+  engineState: LouisianaFerryEngineState;
+  engineRunning: boolean;
+  lowFuel: boolean;
+  fuelStarved: boolean;
+  canDepart: boolean;
+  minimumDepartFuelLiters: number;
+  reserveLiters: number;
+  reserveUsed: boolean;
+  biofuelLiters: number;
   room: FerryRoomId | 'open_deck' | 'ramp' | null;
   label: string;
 }
@@ -150,11 +163,12 @@ export interface LouisianaFerryUpdate {
   arrived: boolean;
   carryX: number;
   carryZ: number;
+  reserveEngaged: boolean;
 }
 
 /** Everything needed to resume a crossing after the app was closed. */
 export interface LouisianaFerrySaveState {
-  version: 2 | 3;
+  version: 2 | 3 | 4;
   direction: LouisianaFerryDirection;
   phase: LouisianaFerryPhase;
   destination: LouisianaFerryDock;
@@ -169,6 +183,10 @@ export interface LouisianaFerrySaveState {
   /** Rider's spot on the hull, so a resumed voyage puts them back on deck. */
   playerLocalX: number;
   playerLocalZ: number;
+  /** Fuel and engine state (v4; older saves resume with a full tank). */
+  fuelLiters?: number;
+  engineState?: LouisianaFerryEngineState;
+  reserveUsed?: boolean;
 }
 
 export interface FerryPoint {
@@ -349,6 +367,19 @@ const FERRY_ROUTE_SAMPLES = buildRouteSamples(ferryWaypoints(solveLoopRadius()))
 export const LOUISIANA_FERRY_ROUTE_METERS =
   FERRY_ROUTE_SAMPLES[FERRY_ROUTE_SAMPLES.length - 1].distance;
 
+/** Crescent Star fuel system. One 48-hour leg burns 90 L of a 200 L tank. */
+export const LOUISIANA_FERRY_FUEL_CAPACITY_LITERS = 200;
+export const LOUISIANA_FERRY_FUEL_PER_LEG_LITERS = 90;
+export const LOUISIANA_FERRY_FUEL_PER_METER =
+  LOUISIANA_FERRY_FUEL_PER_LEG_LITERS / LOUISIANA_FERRY_ROUTE_METERS;
+export const LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS = 90;
+export const LOUISIANA_FERRY_LOW_FUEL_LITERS = 50;
+/** Emergency reserve: enough to limp through one full leg and never strand. */
+export const LOUISIANA_FERRY_RESERVE_LITERS = 100;
+export const LOUISIANA_FERRY_BIOFUEL_LITERS = 25;
+export const LOUISIANA_FERRY_BIOFUEL_COCONUTS = 3;
+export const LOUISIANA_FERRY_ENGINE_START_MS = 2500;
+
 /**
  * Speed needed to cover the whole course inside the official 48 hours while
  * spending `ACCEL_SECONDS` getting underway and `DECEL_SECONDS` slowing for the
@@ -414,6 +445,21 @@ export function ferryDistanceForElapsed(elapsedMs: number): number {
   }
   const remaining = LOUISIANA_FERRY_LEG_SECONDS - seconds;
   return LOUISIANA_FERRY_ROUTE_METERS - (0.5 * cruise * remaining * remaining) / decel;
+}
+
+/** Inverse of ferryDistanceForElapsed, used when fuel freezes the leg. */
+export function ferryElapsedForDistance(distance: number): number {
+  const target = Math.max(0, Math.min(LOUISIANA_FERRY_ROUTE_METERS, distance));
+  if (target <= 0) return 0;
+  if (target >= LOUISIANA_FERRY_ROUTE_METERS) return LOUISIANA_FERRY_LEG_MS;
+  let low = 0;
+  let high = LOUISIANA_FERRY_LEG_MS;
+  for (let i = 0; i < 34; i++) {
+    const mid = (low + high) / 2;
+    if (ferryDistanceForElapsed(mid) < target) low = mid;
+    else high = mid;
+  }
+  return high;
 }
 
 /** Instantaneous speed for wall-clock milliseconds since departure. */
@@ -542,6 +588,11 @@ export class LouisianaFerryVoyageSystem {
   boatYaw = 0;
   boatRoll = 0;
   departureAtMs: number | null = null;
+  /** Fuel/engine state persists with the voyage. */
+  fuelLiters = LOUISIANA_FERRY_FUEL_CAPACITY_LITERS;
+  engineState: LouisianaFerryEngineState = 'off';
+  reserveUsed = false;
+  private engineStartupAtMs: number | null = null;
   private departTimer = 0;
   private arrivalTimer = 0;
   private bobTime = 0;
@@ -568,6 +619,7 @@ export class LouisianaFerryVoyageSystem {
     arrived: false,
     carryX: 0,
     carryZ: 0,
+    reserveEngaged: false,
   };
 
   constructor(private readonly now: () => number = () => Date.now()) {}
@@ -580,6 +632,91 @@ export class LouisianaFerryVoyageSystem {
 
   isDirectCrossing(): boolean {
     return this.directMode;
+  }
+
+  get fuelPercent(): number {
+    return (this.fuelLiters / LOUISIANA_FERRY_FUEL_CAPACITY_LITERS) * 100;
+  }
+
+  get lowFuel(): boolean {
+    return this.fuelLiters <= LOUISIANA_FERRY_LOW_FUEL_LITERS;
+  }
+
+  /** Boarding is allowed if the tank or the emergency reserve can cover a leg. */
+  get canDepart(): boolean {
+    return (
+      this.fuelLiters + (this.reserveUsed ? 0 : LOUISIANA_FERRY_RESERVE_LITERS) >=
+      LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS
+    );
+  }
+
+  /** Adds biofuel; returns litres actually accepted. */
+  addFuel(liters: number): number {
+    if (!Number.isFinite(liters) || liters <= 0) return 0;
+    const before = this.fuelLiters;
+    this.fuelLiters = Math.min(
+      LOUISIANA_FERRY_FUEL_CAPACITY_LITERS,
+      this.fuelLiters + liters,
+    );
+    return this.fuelLiters - before;
+  }
+
+  /** Drains the one-shot emergency reserve. Rebuilt whenever the hull docks. */
+  drawReserve(): boolean {
+    if (this.reserveUsed) return false;
+    this.addFuel(LOUISIANA_FERRY_RESERVE_LITERS);
+    this.reserveUsed = true;
+    return true;
+  }
+
+  /** Boarding only needs one full leg; the reserve is drawn automatically. */
+  private ensureDepartureFuel(): boolean {
+    if (this.fuelLiters >= LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS) return true;
+    if (!this.reserveUsed) this.drawReserve();
+    return this.fuelLiters >= LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS;
+  }
+
+  /** Turns the ignition: starter whine for 2.5 s, then the engines run. */
+  startEngine(): FerryUpdateResult {
+    if (this.fuelLiters <= 0) {
+      return {
+        ok: false,
+        message: 'The Crescent Star is out of fuel. Refill with coconut biofuel or draw the reserve tank.',
+      };
+    }
+    if (this.engineState === 'running' || this.engineState === 'starting') {
+      return {
+        ok: true,
+        message:
+          this.engineState === 'running'
+            ? 'The Crescent Star engines are already running.'
+            : 'The Crescent Star engines are turning over.',
+      };
+    }
+    if (this.phase === 'at_sea' || this.phase === 'departing') {
+      this.departureAtMs = this.now() - this.elapsedMs;
+    }
+    this.engineState = 'starting';
+    this.engineStartupAtMs = this.now();
+    return {
+      ok: true,
+      message: 'The Crescent Star ignition catches. Engines starting.',
+    };
+  }
+
+  /** Stops the engines. Under way this freezes the voyage and the fuel burn. */
+  shutdownEngine(): FerryUpdateResult {
+    if (this.engineState === 'off' || this.engineState === 'starved') {
+      return { ok: true, message: 'The Crescent Star engines are already stopped.' };
+    }
+    if (this.phase === 'at_sea' || this.phase === 'departing') {
+      this.elapsedMs = this.currentElapsedMs();
+      this.departureAtMs = this.now() - this.elapsedMs;
+    }
+    this.engineState = 'off';
+    this.engineStartupAtMs = null;
+    this.speedMps = 0;
+    return { ok: true, message: 'The Crescent Star engines shut down.' };
   }
 
   get destination(): LouisianaFerryDock {
@@ -604,6 +741,10 @@ export class LouisianaFerryVoyageSystem {
     this.gateLift = 0;
     this.speedMps = 0;
     this.departureAtMs = null;
+    this.fuelLiters = LOUISIANA_FERRY_FUEL_CAPACITY_LITERS;
+    this.engineState = 'off';
+    this.engineStartupAtMs = null;
+    this.reserveUsed = false;
     const start = ferryRoutePositionAt(0);
     this.boatX = start.x;
     this.boatZ = start.z;
@@ -638,6 +779,10 @@ export class LouisianaFerryVoyageSystem {
     this.gateLift = 0;
     this.speedMps = 0;
     this.departureAtMs = null;
+    // The tank carries over; the emergency reserve is rebuilt at the berth.
+    this.engineState = 'off';
+    this.engineStartupAtMs = null;
+    this.reserveUsed = false;
     const point = ferryPointForDirection(0, 'return');
     this.boatX = point.x;
     this.boatZ = point.z;
@@ -692,6 +837,19 @@ export class LouisianaFerryVoyageSystem {
       boatRoll: this.boatRoll,
       speedMps: this.speedMps,
       speedKnots: this.speedMps * 1.943844,
+      fuelLiters: this.fuelLiters,
+      fuelCapacityLiters: LOUISIANA_FERRY_FUEL_CAPACITY_LITERS,
+      fuelPercent: this.fuelPercent,
+      engineState: this.engineState,
+      engineRunning:
+        this.engineState === 'starting' || this.engineState === 'running',
+      lowFuel: this.lowFuel,
+      fuelStarved: this.engineState === 'starved' || this.fuelLiters <= 0,
+      canDepart: this.canDepart,
+      minimumDepartFuelLiters: LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS,
+      reserveLiters: LOUISIANA_FERRY_RESERVE_LITERS,
+      reserveUsed: this.reserveUsed,
+      biofuelLiters: LOUISIANA_FERRY_BIOFUEL_LITERS,
       room: this.roomAtWorld(this.boatX, this.boatZ),
       label: this.label(elapsedMs, remainingMs),
     };
@@ -700,6 +858,9 @@ export class LouisianaFerryVoyageSystem {
   /** Wall-clock time already spent on the current at-sea leg. */
   currentElapsedMs(): number {
     if (this.directMode) return this.elapsedMs;
+    if (this.engineState !== 'starting' && this.engineState !== 'running') {
+      return this.elapsedMs;
+    }
     if (this.departureAtMs === null) return this.elapsedMs;
     return Math.max(
       0,
@@ -784,6 +945,12 @@ export class LouisianaFerryVoyageSystem {
     if (Math.hypot(dx, dz) > 6.2 || Math.abs(playerY - (this.boatY + FERRY_DECK_Y)) > 3.2) {
       return { ok: false, message: 'Walk to the foot of the ferry ramp.' };
     }
+    if (!this.ensureDepartureFuel()) {
+      return {
+        ok: false,
+        message: `The Crescent Star cannot sail on ${this.fuelLiters.toFixed(0)} L of ${LOUISIANA_FERRY_FUEL_CAPACITY_LITERS} L. Craft coconut biofuel or use the dock reserve.`,
+      };
+    }
     this.aboard = true;
     // The gate is already up from the ramp; cast off on this frame. The old
     // gate-lift + countdown ran on simulation dt, which could leave the hull
@@ -793,6 +960,9 @@ export class LouisianaFerryVoyageSystem {
     this.gateLift = 1;
     this.departTimer = 0;
     this.departureAtMs = this.now();
+    // Fueling/boarding starts the engines automatically; the hull is under way
+    // on the 48-hour wall clock without waiting for a simulation frame budget.
+    this.startEngine();
     if (this.directMode) {
       this.directEntity.headingToMainland = this.direction === 'outbound';
       this.directEntity.isMoving = true;
@@ -826,6 +996,7 @@ export class LouisianaFerryVoyageSystem {
         this.gateLift = 1;
         this.departTimer = 0;
         this.departureAtMs = this.now();
+        this.startEngine();
         if (this.directMode) {
           this.directEntity.headingToMainland = this.direction === 'outbound';
           this.directEntity.isMoving = true;
@@ -915,6 +1086,15 @@ export class LouisianaFerryVoyageSystem {
         return out;
       }
       this.bobTime += dt;
+      if (
+        this.engineState === 'starting' &&
+        this.engineStartupAtMs !== null &&
+        this.now() - this.engineStartupAtMs >= LOUISIANA_FERRY_ENGINE_START_MS
+      ) {
+        this.engineState = 'running';
+      }
+      const driving =
+        this.engineState === 'starting' || this.engineState === 'running';
       const carryLocal = this.localOffsetFrom(
         playerX,
         playerZ,
@@ -922,14 +1102,51 @@ export class LouisianaFerryVoyageSystem {
         previousZ,
         previousYaw,
       );
+      if (!driving) {
+        // Engines stopped or out of fuel: the hull holds its position and the
+        // 48-hour clock is frozen until the player restarts or refuels.
+        this.boatY = FERRY_ROOT_Y + Math.sin(this.bobTime * 1.35) * 0.035;
+        this.boatRoll =
+          Math.sin(this.bobTime * 0.8) * 0.008 + Math.sin(this.bobTime * 2.1) * 0.003;
+        this.speedMps = 0;
+        out.carryX = 0;
+        out.carryZ = 0;
+        return out;
+      }
       const elapsed = this.currentElapsedMs();
-      this.elapsedMs = elapsed;
-      // The wall clock is authoritative: closing the tab for an hour really
-      // puts the hull an hour further down the course.
-      const distance = ferryDistanceForElapsed(elapsed);
-      this.routeDistanceMeters = distance;
+      const targetDistance = ferryDistanceForElapsed(elapsed);
+      let distance = targetDistance;
+      const deltaDistance = Math.max(0, targetDistance - this.routeDistanceMeters);
+      let starved = false;
+      if (deltaDistance > 0) {
+        const needed = deltaDistance * LOUISIANA_FERRY_FUEL_PER_METER;
+        if (needed > this.fuelLiters && !this.reserveUsed) {
+          // Never strand permanently: one emergency reserve is drawn before
+          // the engines are allowed to starve.
+          this.reserveUsed = true;
+          this.fuelLiters = Math.min(
+            LOUISIANA_FERRY_FUEL_CAPACITY_LITERS,
+            this.fuelLiters + LOUISIANA_FERRY_RESERVE_LITERS,
+          );
+          out.reserveEngaged = true;
+        }
+        if (needed > this.fuelLiters) {
+          distance = this.routeDistanceMeters +
+            this.fuelLiters / LOUISIANA_FERRY_FUEL_PER_METER;
+          this.fuelLiters = 0;
+          starved = true;
+        } else {
+          this.fuelLiters = Math.max(0, this.fuelLiters - needed);
+        }
+      }
+      this.routeDistanceMeters = Math.min(
+        LOUISIANA_FERRY_ROUTE_METERS,
+        distance,
+      );
       this.routeProgress =
-        LOUISIANA_FERRY_ROUTE_METERS > 0 ? distance / LOUISIANA_FERRY_ROUTE_METERS : 0;
+        LOUISIANA_FERRY_ROUTE_METERS > 0
+          ? this.routeDistanceMeters / LOUISIANA_FERRY_ROUTE_METERS
+          : 0;
       // The return leg samples the same course backwards, so progress 0 sits at
       // the Crescent City berth, not back at the island.
       const point = ferryPointForDirection(this.routeProgress, this.direction);
@@ -938,7 +1155,7 @@ export class LouisianaFerryVoyageSystem {
       this.boatY = FERRY_ROOT_Y + Math.sin(this.bobTime * 1.35) * 0.035;
       this.boatRoll =
         Math.sin(this.bobTime * 0.8) * 0.008 + Math.sin(this.bobTime * 2.1) * 0.003;
-      this.speedMps = ferrySpeedForElapsed(elapsed);
+      this.speedMps = starved ? 0 : ferrySpeedForElapsed(elapsed);
 
       // The course is already smooth, so following its tangent keeps the bow
       // leading through every bend without frame-rate-dependent lag.
@@ -950,12 +1167,25 @@ export class LouisianaFerryVoyageSystem {
       out.carryX = carried.x - playerX;
       out.carryZ = carried.z - playerZ;
 
+      if (starved) {
+        this.elapsedMs = ferryElapsedForDistance(this.routeDistanceMeters);
+        this.departureAtMs = this.now() - this.elapsedMs;
+        this.engineState = 'starved';
+        this.speedMps = 0;
+        this.boatRoll = 0;
+        out.phaseChanged = true;
+        return out;
+      }
+
+      this.elapsedMs = elapsed;
       if (this.routeProgress >= 1) {
         this.phase = 'arriving';
         this.arrivalTimer = LOUISIANA_FERRY_ARRIVAL_SECONDS;
         out.phaseChanged = true;
         this.speedMps = 0;
         this.boatRoll = 0;
+        this.engineState = 'off';
+        this.engineStartupAtMs = null;
       }
       return out;
     }
@@ -1022,7 +1252,7 @@ export class LouisianaFerryVoyageSystem {
     const active = this.departureAtMs !== null && phase !== 'idle';
     const elapsed = active ? this.currentElapsedMs() : 0;
     return {
-      version: 3,
+      version: 4,
       direction: this.direction,
       phase,
       destination: this.destination,
@@ -1032,13 +1262,17 @@ export class LouisianaFerryVoyageSystem {
       routeProgress: this.routeProgress,
       routeDistanceMeters: this.directMode
         ? this.routeDistanceMeters
-        : active
+        : active &&
+            (this.engineState === 'starting' || this.engineState === 'running')
           ? ferryDistanceForElapsed(elapsed)
           : this.routeDistanceMeters,
       aboard: this.aboard,
       carId,
       playerLocalX: playerLocal?.x ?? 0,
       playerLocalZ: playerLocal?.z ?? -10.5,
+      fuelLiters: this.fuelLiters,
+      engineState: this.engineState,
+      reserveUsed: this.reserveUsed,
     };
   }
 
@@ -1059,8 +1293,19 @@ export class LouisianaFerryVoyageSystem {
     this.departTimer = LOUISIANA_FERRY_DEPART_DELAY;
     this.arrivalTimer = 0;
     this.speedMps = 0;
+    this.fuelLiters = Math.max(
+      0,
+      Math.min(
+        LOUISIANA_FERRY_FUEL_CAPACITY_LITERS,
+        save.fuelLiters ?? LOUISIANA_FERRY_FUEL_CAPACITY_LITERS,
+      ),
+    );
+    this.reserveUsed = Boolean(save.reserveUsed);
+    this.engineStartupAtMs = null;
 
     if (this.directMode) {
+      this.engineState =
+        save.phase === 'at_sea' || save.phase === 'arriving' ? 'running' : 'off';
       this.restoreDirect(save, nowMs);
       return;
     }
@@ -1076,6 +1321,7 @@ export class LouisianaFerryVoyageSystem {
       this.phase = save.phase === 'boarding' ? 'boarding' : 'idle';
       this.boardingCleared = true;
       this.aboard = false;
+      this.engineState = 'off';
       // Every leg's route progress starts at 0; direction picks the berth.
       this.routeProgress = 0;
       this.routeDistanceMeters = 0;
@@ -1090,25 +1336,75 @@ export class LouisianaFerryVoyageSystem {
       return;
     }
 
+    const savedEngine =
+      save.engineState ??
+      (save.phase === 'at_sea' || save.phase === 'arriving' ? 'running' : 'off');
+    const engineActive =
+      savedEngine === 'starting' || savedEngine === 'running';
+    this.engineState = engineActive
+      ? 'running'
+      : savedEngine === 'starved'
+        ? 'starved'
+        : 'off';
     this.phase = 'at_sea';
     this.gateLift = 1;
-    this.elapsedMs = Math.max(
+    const savedDistance = Math.max(
       0,
-      Math.min(LOUISIANA_FERRY_LEG_MS, nowMs - this.departureAtMs),
+      Math.min(
+        LOUISIANA_FERRY_ROUTE_METERS,
+        save.routeDistanceMeters ?? 0,
+      ),
     );
-    const distance = ferryDistanceForElapsed(this.elapsedMs);
-    this.routeDistanceMeters = distance;
+    this.elapsedMs = engineActive
+      ? Math.max(
+          0,
+          Math.min(LOUISIANA_FERRY_LEG_MS, nowMs - this.departureAtMs),
+        )
+      : Math.max(0, Math.min(LOUISIANA_FERRY_LEG_MS, save.elapsedMs));
+
+    let distance = engineActive
+      ? ferryDistanceForElapsed(this.elapsedMs)
+      : savedDistance;
+    let starved = this.engineState === 'starved' || this.fuelLiters <= 0;
+    if (engineActive && distance > savedDistance) {
+      const needed =
+        (distance - savedDistance) * LOUISIANA_FERRY_FUEL_PER_METER;
+      if (needed > this.fuelLiters && !this.reserveUsed) {
+        this.reserveUsed = true;
+        this.fuelLiters = Math.min(
+          LOUISIANA_FERRY_FUEL_CAPACITY_LITERS,
+          this.fuelLiters + LOUISIANA_FERRY_RESERVE_LITERS,
+        );
+      }
+      if (needed > this.fuelLiters) {
+        distance = savedDistance + this.fuelLiters / LOUISIANA_FERRY_FUEL_PER_METER;
+        this.fuelLiters = 0;
+        starved = true;
+      } else {
+        this.fuelLiters = Math.max(0, this.fuelLiters - needed);
+      }
+    }
+    this.routeDistanceMeters = Math.min(LOUISIANA_FERRY_ROUTE_METERS, distance);
     this.routeProgress =
-      LOUISIANA_FERRY_ROUTE_METERS > 0 ? distance / LOUISIANA_FERRY_ROUTE_METERS : 0;
+      LOUISIANA_FERRY_ROUTE_METERS > 0
+        ? this.routeDistanceMeters / LOUISIANA_FERRY_ROUTE_METERS
+        : 0;
+    if (starved) {
+      this.engineState = 'starved';
+      this.elapsedMs = ferryElapsedForDistance(this.routeDistanceMeters);
+      this.departureAtMs = nowMs - this.elapsedMs;
+    }
     const point = ferryPointForDirection(this.routeProgress, direction);
     this.boatX = point.x;
     this.boatZ = point.z;
     this.boatY = FERRY_ROOT_Y;
     this.boatRoll = 0;
-    this.speedMps = ferrySpeedForElapsed(this.elapsedMs);
+    this.speedMps =
+      engineActive && !starved ? ferrySpeedForElapsed(this.elapsedMs) : 0;
     this.boatYaw = normalizeAngle(
       ferryHeadingForDirection(this.routeProgress, direction),
     );
+    this.aboard = Boolean(save.aboard);
 
     if (this.routeProgress >= 1) {
       // Let the normal arrival sequence finish on the first resumed frame.
@@ -1117,7 +1413,7 @@ export class LouisianaFerryVoyageSystem {
       this.gateLift = 1;
       this.speedMps = 0;
       this.boatYaw = ferryDockedHeading(direction);
-      this.aboard = Boolean(save.aboard);
+      this.engineState = 'off';
     }
   }
 
@@ -1229,8 +1525,16 @@ export class LouisianaFerryVoyageSystem {
         return 'Raising the stern boarding gate';
       case 'departing':
         return `Casting off in ${Math.ceil(this.departTimer)}s`;
-      case 'at_sea':
-        return `${formatFerryDuration(remainingMs)} to ${destinationName} · ${(this.routeProgress * 100).toFixed(1)}%`;
+      case 'at_sea': {
+        const fuel = `${this.fuelLiters.toFixed(0)} L · ${this.fuelPercent.toFixed(0)}%`;
+        if (this.engineState === 'starved' || this.fuelLiters <= 0) {
+          return `Adrift · out of fuel · ${fuel} · refuel in the engine room`;
+        }
+        if (this.engineState === 'off') {
+          return `Hove to · engines stopped · ${fuel} · restart in the engine room`;
+        }
+        return `${formatFerryDuration(remainingMs)} to ${destinationName} · ${(this.routeProgress * 100).toFixed(1)}% · ${fuel}${this.lowFuel ? ' · LOW FUEL' : ''}`;
+      }
       case 'arriving':
         return `Docking at ${destinationName}`;
       case 'arrived':
@@ -1250,6 +1554,7 @@ export class LouisianaFerryVoyageSystem {
     out.arrived = false;
     out.carryX = 0;
     out.carryZ = 0;
+    out.reserveEngaged = false;
     return out;
   }
 }

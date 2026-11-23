@@ -139,7 +139,7 @@ export function buildIslandFerryDock(): IslandFerryDockHandles {
       tvCtx.fillText('TAP TO CLEAR BOARDING', 256, 194);
       tvCtx.fillStyle = '#cbe9e6';
       tvCtx.font = '18px Arial, sans-serif';
-      tvCtx.fillText('DIRECT CROSSING  ·  CABIN  ·  GALLEY  ·  DECK', 256, 232);
+      tvCtx.fillText('48-HOUR CROSSING  ·  CABIN  ·  GALLEY  ·  DECK', 256, 232);
     }
     tvTexture = new THREE.CanvasTexture(tvCanvas);
     tvTexture.colorSpace = THREE.SRGBColorSpace;

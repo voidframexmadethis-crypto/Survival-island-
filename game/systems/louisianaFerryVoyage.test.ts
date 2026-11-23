@@ -7,8 +7,13 @@ import {
   LOUISIANA_FERRY_ACCEL_SECONDS,
   LOUISIANA_FERRY_ARRIVAL_SECONDS,
   LOUISIANA_FERRY_CITY_DOCK_POS,
+  LOUISIANA_FERRY_BIOFUEL_LITERS,
   LOUISIANA_FERRY_CRUISE_MPS,
   LOUISIANA_FERRY_DOCK_POS,
+  LOUISIANA_FERRY_FUEL_CAPACITY_LITERS,
+  LOUISIANA_FERRY_FUEL_PER_LEG_LITERS,
+  LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS,
+  LOUISIANA_FERRY_RESERVE_LITERS,
   LOUISIANA_FERRY_LEG_HOURS,
   LOUISIANA_FERRY_LEG_MS,
   LOUISIANA_FERRY_ROUND_TRIP_HOURS,
@@ -361,7 +366,7 @@ test('closing the game mid-ocean restores the ship at the correct route position
   const player = deckPlayer(first.ferry);
   first.ferry.update(0.05, player.x, player.y, player.z);
   const saved = first.ferry.serialize(first.now(), { x: 0.5, z: -9 }, null);
-  assert.equal(saved.version, 3);
+  assert.equal(saved.version, 4);
   assert.equal(saved.direction, 'outbound');
   assert.equal(saved.destination, 'crescent_city');
   assert.equal(saved.aboard, true);
@@ -563,4 +568,117 @@ test('the wake rig is attached to the hull and follows its speed', () => {
   ferry.update(0.05, player.x, player.y, player.z);
   assert.equal(ferry.phase, 'arriving');
   assert.ok(LOUISIANA_FERRY_ARRIVAL_SECONDS > 0);
+});
+
+test('the 48-hour voyage burns exactly one leg of fuel while moving', () => {
+  const { ferry, advance } = makeFerry();
+  assert.equal(ferry.fuelLiters, LOUISIANA_FERRY_FUEL_CAPACITY_LITERS);
+  boardAndDepart(ferry);
+  const player = deckPlayer(ferry);
+
+  advance(24 * HOUR_MS);
+  ferry.update(0.05, player.x, player.y, player.z);
+  assert.equal(ferry.engineState, 'running');
+  assert.ok(
+    Math.abs(ferry.fuelLiters - (LOUISIANA_FERRY_FUEL_CAPACITY_LITERS - LOUISIANA_FERRY_FUEL_PER_LEG_LITERS / 2)) < 1,
+  );
+
+  advance(24 * HOUR_MS);
+  ferry.update(0.05, player.x, player.y, player.z);
+  assert.equal(ferry.phase, 'arriving');
+  assert.equal(ferry.engineState, 'off');
+  assert.ok(
+    Math.abs(ferry.fuelLiters - (LOUISIANA_FERRY_FUEL_CAPACITY_LITERS - LOUISIANA_FERRY_FUEL_PER_LEG_LITERS)) < 1,
+  );
+});
+
+test('boarding is refused without fuel unless the reserve tank is available', () => {
+  const { ferry } = makeFerry();
+  ferry.fuelLiters = 20;
+  ferry.reserveUsed = true;
+  assert.equal(ferry.clearBoarding(), true);
+  const ramp = ferry.getRampWorldPoint();
+  const refused = ferry.boardFromRamp(
+    ramp.x,
+    ferry.boatY + FERRY_DECK_Y,
+    ramp.z,
+  );
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /cannot sail/i);
+  assert.equal(ferry.aboard, false);
+
+  ferry.reserveUsed = false;
+  const boarded = ferry.boardFromRamp(
+    ramp.x,
+    ferry.boatY + FERRY_DECK_Y,
+    ramp.z,
+  );
+  assert.equal(boarded.ok, true);
+  assert.equal(ferry.reserveUsed, true);
+  assert.ok(ferry.fuelLiters >= LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS);
+  assert.equal(ferry.engineState, 'starting');
+});
+
+test('shutting the engines down freezes fuel and voyage progress until restart', () => {
+  const { ferry, advance } = makeFerry();
+  boardAndDepart(ferry);
+  const player = deckPlayer(ferry);
+  advance(2 * HOUR_MS);
+  ferry.update(0.05, player.x, player.y, player.z);
+  assert.equal(ferry.engineState, 'running');
+  const distanceBefore = ferry.routeDistanceMeters;
+  const fuelBefore = ferry.fuelLiters;
+
+  assert.equal(ferry.shutdownEngine().ok, true);
+  assert.equal(ferry.engineState, 'off');
+  advance(2 * HOUR_MS);
+  ferry.update(0.05, player.x, player.y, player.z);
+  assert.equal(ferry.phase, 'at_sea');
+  assert.equal(ferry.routeDistanceMeters, distanceBefore);
+  assert.equal(ferry.fuelLiters, fuelBefore);
+
+  assert.equal(ferry.startEngine().ok, true);
+  assert.equal(ferry.engineState, 'starting');
+  advance(2 * HOUR_MS);
+  ferry.update(0.05, player.x, player.y, player.z);
+  assert.equal(ferry.engineState, 'running');
+  assert.ok(ferry.routeDistanceMeters > distanceBefore + 1000);
+  assert.ok(ferry.fuelLiters < fuelBefore);
+});
+
+test('fuel, engine state and reserve survive a save and restore', () => {
+  const first = makeFerry();
+  boardAndDepart(first.ferry);
+  const player = deckPlayer(first.ferry);
+  first.advance(12 * HOUR_MS);
+  first.ferry.update(0.05, player.x, player.y, player.z);
+  const savedFuel = first.ferry.fuelLiters;
+  const save = first.ferry.serialize(first.now(), { x: 0, z: -10.5 }, null);
+  assert.equal(save.version, 4);
+  assert.equal(save.fuelLiters, savedFuel);
+  assert.equal(save.engineState, 'running');
+  assert.equal(save.reserveUsed, false);
+
+  const second = makeFerry();
+  second.ferry.restore(save, first.now());
+  assert.equal(second.ferry.phase, 'at_sea');
+  assert.equal(second.ferry.engineState, 'running');
+  assert.equal(second.ferry.fuelLiters, savedFuel);
+  assert.equal(second.ferry.reserveUsed, false);
+});
+
+test('biofuel fills the tank and the one-shot reserve is clamped to capacity', () => {
+  const { ferry } = makeFerry();
+  ferry.fuelLiters = 100;
+  assert.equal(ferry.addFuel(LOUISIANA_FERRY_BIOFUEL_LITERS), LOUISIANA_FERRY_BIOFUEL_LITERS);
+  assert.equal(ferry.fuelLiters, 125);
+  assert.equal(ferry.addFuel(10_000), LOUISIANA_FERRY_FUEL_CAPACITY_LITERS - 125);
+  assert.equal(ferry.fuelLiters, LOUISIANA_FERRY_FUEL_CAPACITY_LITERS);
+
+  ferry.fuelLiters = 10;
+  ferry.reserveUsed = false;
+  assert.equal(ferry.drawReserve(), true);
+  assert.equal(ferry.reserveUsed, true);
+  assert.ok(ferry.fuelLiters >= Math.min(LOUISIANA_FERRY_RESERVE_LITERS + 10, LOUISIANA_FERRY_FUEL_CAPACITY_LITERS));
+  assert.equal(ferry.drawReserve(), false);
 });

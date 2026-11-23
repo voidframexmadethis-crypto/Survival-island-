@@ -27,7 +27,7 @@ function isValidState(raw: unknown): raw is LouisianaFerrySaveState {
   if (!raw || typeof raw !== 'object') return false;
   const state = raw as Partial<LouisianaFerrySaveState>;
   return (
-    (state.version === 2 || state.version === 3) &&
+    (state.version === 2 || state.version === 3 || state.version === 4) &&
     (state.direction === 'outbound' || state.direction === 'return') &&
     typeof state.phase === 'string' &&
     (state.departureAtMs === null || typeof state.departureAtMs === 'number') &&

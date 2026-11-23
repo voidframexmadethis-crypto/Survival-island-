@@ -108,7 +108,14 @@ import {
 import {
   FERRY_DECK_Y,
   FERRY_STERN_Z,
-  LOUISIANA_FERRY_DIRECT_DURATION_MS,
+  LOUISIANA_FERRY_LEG_HOURS,
+  LOUISIANA_FERRY_LEG_MS,
+  LOUISIANA_FERRY_BIOFUEL_LITERS,
+  LOUISIANA_FERRY_BIOFUEL_COCONUTS,
+  LOUISIANA_FERRY_FUEL_CAPACITY_LITERS,
+  LOUISIANA_FERRY_LOW_FUEL_LITERS,
+  LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS,
+  LOUISIANA_FERRY_RESERVE_LITERS,
   LouisianaFerryVoyageSystem,
   formatFerryDuration,
   type LouisianaFerrySaveState,
@@ -768,6 +775,8 @@ export class GameEngine {
   private ferryWakeAccum = 0;
   private ferrySmokeAccum = 0;
   private ferryHornCooldown = 0;
+  private ferryLowFuelNoticeShown = false;
+  private ferryFuelStarvedNoticeShown = false;
   private ferryLastPersistMs = 0;
   private ferryHudAccum = 0;
   private mainlandStuntCooldown = 0;
@@ -7952,6 +7961,11 @@ export class GameEngine {
       this.actionCooldown = 0.55;
       return;
     }
+    if (near && near.kind === 'ferry_fuel') {
+      this.handleFerryFuel();
+      this.actionCooldown = 0.55;
+      return;
+    }
     if (near && near.kind === 'ferry_boarding') {
       if (near.id === 'ferry_disembark') {
         this.completeLouisianaFerryVoyage();
@@ -12940,10 +12954,23 @@ export class GameEngine {
       if (voyage.phase === 'idle' && voyage.direction === 'outbound' && tvPos) {
         const tvDist = Math.hypot(tvPos.x - this.playerX, tvPos.z - this.playerZ);
         if (tvDist < 4.0 && Math.abs(tvPos.y - this.playerY) < 2.8) {
+          if (!voyage.canDepart) {
+            return {
+              id: 'ferry_fuel_dock',
+              label: 'Fuel the Crescent Star',
+              sublabel: `Tank ${voyage.fuelPercent.toFixed(0)}% · need ${LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS} L · coconut biofuel`,
+              kind: 'ferry_fuel',
+              actionCategory: 'use',
+              distance: tvDist,
+              targetX: tvPos.x,
+              targetY: tvPos.y,
+              targetZ: tvPos.z,
+            };
+          }
           return {
             id: 'ferry_dock_tv',
             label: 'Tap the Dock Ferry TV',
-            sublabel: 'Play the departure feed · clears boarding for the Crescent Star',
+            sublabel: `Play the departure feed · fuel ${voyage.fuelPercent.toFixed(0)}% · clears boarding`,
             kind: 'ferry_dock_tv',
             actionCategory: 'use',
             distance: tvDist,
@@ -12956,10 +12983,23 @@ export class GameEngine {
       if (voyage.phase === 'idle' && voyage.direction === 'return') {
         const returnDist = Math.hypot(ramp.x - this.playerX, ramp.z - this.playerZ);
         if (returnDist < 7.5 && Math.abs(this.playerY - deckY) < 4.5) {
+          if (!voyage.canDepart) {
+            return {
+              id: 'ferry_fuel_dock',
+              label: 'Refuel the Crescent Star at the Berth',
+              sublabel: `Tank ${voyage.fuelPercent.toFixed(0)}% · need ${LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS} L · coconut biofuel`,
+              kind: 'ferry_fuel',
+              actionCategory: 'use',
+              distance: returnDist,
+              targetX: ramp.x,
+              targetY: deckY,
+              targetZ: ramp.z,
+            };
+          }
           return {
             id: 'ferry_return_board',
             label: 'Board the Crescent Star for the Island',
-            sublabel: `Crescent City berth · ${formatFerryDuration(LOUISIANA_FERRY_DIRECT_DURATION_MS)} return crossing`,
+            sublabel: `Crescent City berth · ${LOUISIANA_FERRY_LEG_HOURS}-hour return crossing · fuel ${voyage.fuelPercent.toFixed(0)}%`,
             kind: 'ferry_boarding',
             actionCategory: 'use',
             distance: returnDist,
@@ -12978,7 +13018,7 @@ export class GameEngine {
             sublabel:
               voyage.direction === 'outbound'
                 ? 'Walkable deck · living room · bedroom · bathroom'
-                : `Return crossing · ${formatFerryDuration(LOUISIANA_FERRY_DIRECT_DURATION_MS)} back to the island`,
+                : `Return crossing · ${LOUISIANA_FERRY_LEG_HOURS} hours back to the island`,
             kind: 'ferry_boarding',
             actionCategory: 'use',
             distance: rampDist,
@@ -13034,7 +13074,7 @@ export class GameEngine {
           {
             id: 'ferry_sofa',
             label: 'Relax in the Ferry Living Room',
-            sublabel: `Sofa · coffee table · ${formatFerryDuration(LOUISIANA_FERRY_DIRECT_DURATION_MS)} crossing`,
+            sublabel: `Sofa · coffee table · ${LOUISIANA_FERRY_LEG_HOURS}-hour crossing`,
             x: 1.15,
             z: -1.9,
           },
@@ -13058,6 +13098,28 @@ export class GameEngine {
             sublabel: 'Two-tone ship horn · let the channel know you are coming',
             x: 0,
             z: 14.2,
+          },
+          {
+            id:
+              voyage.engineState === 'running' || voyage.engineState === 'starting'
+                ? 'ferry_engine_stop'
+                : 'ferry_engine_start',
+            label:
+              voyage.engineState === 'running'
+                ? 'Shut Down the Crescent Star Engines'
+                : voyage.engineState === 'starting'
+                  ? 'Crescent Star Engines Starting'
+                  : 'Start the Crescent Star Engines',
+            sublabel: `Engines ${voyage.engineState} · ${voyage.fuelLiters.toFixed(0)} L · ${voyage.fuelPercent.toFixed(0)}%${voyage.lowFuel ? ' · LOW FUEL' : ''}`,
+            x: 3.3,
+            z: 13.0,
+          },
+          {
+            id: 'ferry_fuel',
+            label: 'Refuel from the Engine-Room Coconut Press',
+            sublabel: `Biofuel ${LOUISIANA_FERRY_BIOFUEL_LITERS} L per canister · 3 coconuts · tank ${voyage.fuelPercent.toFixed(0)}%`,
+            x: -3.3,
+            z: 13.0,
           },
         ];
         let bestRoom: (typeof roomSpots)[number] | null = null;
@@ -16686,9 +16748,8 @@ export class GameEngine {
   };
 
   private resetLouisianaFerryVoyage(): void {
-    // The live hull is a direct, fixed-step island/mainland shuttle. The old
-    // long-haul route remains only for its isolated tests/legacy saves.
-    this.ferryVoyage.enableDirectCrossing();
+    // Live gameplay uses the wall-clock 48-hour course. It advances regardless
+    // of render FPS, unlike the old fixed-step shuttle which crawled on phones.
     this.ferryVoyage.reset();
     this.ferryDepartureHintShown = false;
     this.ferryDockedNoticeShown = false;
@@ -16696,6 +16757,8 @@ export class GameEngine {
     this.ferryWakeAccum = 0;
     this.ferrySmokeAccum = 0;
     this.ferryHornCooldown = 0;
+    this.ferryLowFuelNoticeShown = false;
+    this.ferryFuelStarvedNoticeShown = false;
     this.ferryHudAccum = 0;
     this.syncLouisianaFerryVisual(0);
     const tv = this.world?.ferryTvScreenMat;
@@ -16728,15 +16791,18 @@ export class GameEngine {
       this.resetLouisianaFerryVoyage();
       return;
     }
-    const supportedVersion = slotSave?.version === 2 || slotSave?.version === 3;
+    const supportedVersion =
+      slotSave?.version === 2 || slotSave?.version === 3 || slotSave?.version === 4;
     const save = supportedVersion
       ? slotSave
       : loadFerryVoyageState(this.currentSlotId);
-    if (!save || (save.version !== 2 && save.version !== 3)) {
+    if (
+      !save ||
+      (save.version !== 2 && save.version !== 3 && save.version !== 4)
+    ) {
       this.resetLouisianaFerryVoyage();
       return;
     }
-    this.ferryVoyage.enableDirectCrossing();
     this.ferryVoyage.restore(save, Date.now());
     this.ferryVoyageCarId = save.carId ?? null;
     if (
@@ -16751,6 +16817,8 @@ export class GameEngine {
     this.ferryWakeAccum = 0;
     this.ferrySmokeAccum = 0;
     this.ferryHudAccum = 0;
+    this.ferryLowFuelNoticeShown = false;
+    this.ferryFuelStarvedNoticeShown = false;
     this.syncLouisianaFerryVisual(0);
 
     const active =
@@ -16830,6 +16898,34 @@ export class GameEngine {
       }
     }
     this.syncLouisianaFerryVisual(dt);
+    const fuelStatus = this.ferryVoyage.getStatus();
+    if (fuelStatus.lowFuel && !this.ferryLowFuelNoticeShown) {
+      this.ferryLowFuelNoticeShown = true;
+      this.toast(
+        `LOW FUEL — Crescent Star has ${fuelStatus.fuelLiters.toFixed(0)} L (${fuelStatus.fuelPercent.toFixed(0)}%). Refuel in the engine room before the tanks run dry.`,
+        'warning',
+      );
+    } else if (
+      !fuelStatus.lowFuel &&
+      fuelStatus.fuelLiters > LOUISIANA_FERRY_LOW_FUEL_LITERS * 1.25
+    ) {
+      this.ferryLowFuelNoticeShown = false;
+    }
+    if (fuelStatus.engineState === 'starved' && !this.ferryFuelStarvedNoticeShown) {
+      this.ferryFuelStarvedNoticeShown = true;
+      this.toast(
+        'The Crescent Star is out of fuel and hove to. Use the engine-room coconut press or draw the emergency reserve.',
+        'warning',
+      );
+    } else if (fuelStatus.engineState !== 'starved') {
+      this.ferryFuelStarvedNoticeShown = false;
+    }
+    if (events.reserveEngaged) {
+      this.toast(
+        'Emergency reserve tank engaged. The Crescent Star can limp to the next port — refuel when you dock.',
+        'discovery',
+      );
+    }
 
     if (this.ferryVoyage.phase === 'at_sea') {
       this.spawnFerryWake(dt);
@@ -16866,9 +16962,11 @@ export class GameEngine {
     if (events.departed) {
       this.ferryDepartureHintShown = true;
       this.toast(
-        `Lines cast off. The Crescent Star is underway — ${formatFerryDuration(LOUISIANA_FERRY_DIRECT_DURATION_MS)} to ${destinationName}.`,
+        `Lines cast off. The Crescent Star is underway — ${LOUISIANA_FERRY_LEG_HOURS} hours to ${destinationName}. The voyage keeps running even if you close the game.`,
         'discovery',
       );
+      this.sound.playFerryEngineStart();
+      this.spawnFerryExhaustBurst(10);
       this.sound.playFerryHorn();
       this.markExploredAroundPlayer();
       this.persistLouisianaFerryVoyage(true);
@@ -16946,12 +17044,13 @@ export class GameEngine {
     this.nearbyInteraction = this.findNearbyInteraction();
     this.updateCamera();
     this.sound.playSteamHiss();
+    this.sound.playFerryEngineStop();
     this.sound.playFerryHorn();
     const arrivedAtCity = this.ferryVoyage.destination === 'crescent_city';
     this.toast(
       arrivedAtCity
-        ? `The Crescent Star is secured in Crescent City. The stern gate is open — head aft and press E to disembark.`
-        : `The Crescent Star is back at the island landing. The stern gate is open — head aft and press E to disembark.`,
+        ? `${LOUISIANA_FERRY_LEG_HOURS} hours later, the Crescent Star is secured in Crescent City. The stern gate is open — head aft and press E to disembark.`
+        : `${LOUISIANA_FERRY_LEG_HOURS} hours later, the Crescent Star is back at the island landing. The stern gate is open — head aft and press E to disembark.`,
       'discovery',
     );
     this.persistLouisianaFerryVoyage(true);
@@ -17021,7 +17120,7 @@ export class GameEngine {
     this.sound.playSteamHiss();
     this.toast(
       atCity
-        ? `You disembark in Crescent City. The Crescent Star is moored at the berth, ready for the ${formatFerryDuration(LOUISIANA_FERRY_DIRECT_DURATION_MS)} return crossing.`
+        ? `You disembark in Crescent City. The Crescent Star is moored at the berth, ready for the ${LOUISIANA_FERRY_LEG_HOURS}-hour return crossing.`
         : 'You disembark at the island landing. The Crescent Star is moored at the pier for the next crossing.',
       'discovery',
     );
@@ -17043,6 +17142,13 @@ export class GameEngine {
     }
     if (this.ferryVoyage.phase !== 'idle') {
       this.toast(this.ferryVoyage.getStatus().label, 'info');
+      return;
+    }
+    if (!this.ferryVoyage.canDepart) {
+      this.toast(
+        `The Crescent Star needs ${LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS} L to sail. Tank: ${this.ferryVoyage.fuelPercent.toFixed(0)}%. Craft coconut biofuel or refuel at the engine room.`,
+        'warning',
+      );
       return;
     }
     if (!this.ferryVoyage.clearBoarding()) {
@@ -17101,6 +17207,75 @@ export class GameEngine {
     this.emitHud();
   }
 
+  /** Refuels from a canister, pressed coconuts, or the emergency reserve. */
+  private handleFerryFuel(): void {
+    const voyage = this.ferryVoyage;
+    if (voyage.fuelLiters >= LOUISIANA_FERRY_FUEL_CAPACITY_LITERS - 0.01) {
+      this.toast(
+        `The Crescent Star tank is already full (${LOUISIANA_FERRY_FUEL_CAPACITY_LITERS} L).`,
+        'info',
+      );
+      return;
+    }
+    const wasStopped =
+      voyage.engineState === 'off' || voyage.engineState === 'starved';
+    let added = 0;
+    let source = '';
+    if (this.getItemCount('coconut_biofuel') > 0) {
+      this.removeItem('coconut_biofuel', 1);
+      added = voyage.addFuel(LOUISIANA_FERRY_BIOFUEL_LITERS);
+      source = 'coconut biofuel canister';
+    } else if (this.getItemCount('coconut') >= LOUISIANA_FERRY_BIOFUEL_COCONUTS) {
+      this.removeItem('coconut', LOUISIANA_FERRY_BIOFUEL_COCONUTS);
+      added = voyage.addFuel(LOUISIANA_FERRY_BIOFUEL_LITERS);
+      source = `${LOUISIANA_FERRY_BIOFUEL_COCONUTS} coconuts pressed in the engine-room press`;
+    } else if (!voyage.reserveUsed && voyage.fuelLiters < LOUISIANA_FERRY_MIN_DEPART_FUEL_LITERS) {
+      const before = voyage.fuelLiters;
+      voyage.drawReserve();
+      added = voyage.fuelLiters - before;
+      source = 'emergency reserve tank';
+    }
+    if (added <= 0) {
+      this.toast(
+        `No biofuel. Craft a Coconut Biofuel Canister (${LOUISIANA_FERRY_BIOFUEL_COCONUTS} coconuts) or draw the dock reserve.`,
+        'warning',
+      );
+      return;
+    }
+    this.sound.playCraftSuccess();
+    this.spawnFerryExhaustBurst(4);
+    let started = false;
+    if (
+      wasStopped &&
+      (voyage.phase === 'at_sea' || voyage.phase === 'departing') &&
+      voyage.fuelLiters > 0
+    ) {
+      const start = voyage.startEngine();
+      if (start.ok) {
+        started = true;
+        this.sound.playFerryEngineStart();
+      }
+    }
+    this.toast(
+      `Added ${added.toFixed(0)} L from the ${source}. Tank ${voyage.fuelLiters.toFixed(0)} L (${voyage.fuelPercent.toFixed(0)}%)${started ? ' — engines restarting automatically' : ''}.`,
+      'craft',
+    );
+    this.persistLouisianaFerryVoyage(true);
+    this.nearbyInteraction = this.findNearbyInteraction();
+    this.emitHud();
+  }
+
+  private spawnFerryExhaustBurst(count = 8): void {
+    const funnel = this.ferryVoyage.ferryLocalToWorld(0, 7.2);
+    this.spawnParticles(
+      funnel.x,
+      this.ferryVoyage.boatY + 6.9,
+      funnel.z,
+      0x9ca3af,
+      count,
+    );
+  }
+
   private handleFerryRoomInteraction(id: string): void {
     if (!this.ferryVoyage.aboard || this.ferryVoyage.phase === 'idle') {
       this.toast('The cabin is only open once the ferry is underway.', 'warning');
@@ -17118,10 +17293,35 @@ export class GameEngine {
         this.syncLouisianaFerryVisual(0);
         const remaining = formatFerryDuration(this.ferryVoyage.getStatus().remainingMs);
         this.toast(
-          `Slept in the cabin. The crossing is still underway — ${remaining} to ${this.ferryVoyage.destination === 'crescent_city' ? 'Crescent City' : 'the island'}.`,
+          `Slept in the cabin. The crossing continues on its real-time clock — ${remaining} to ${this.ferryVoyage.destination === 'crescent_city' ? 'Crescent City' : 'the island'}.`,
           'discovery',
         );
         this.emitHud();
+        break;
+      }
+      case 'ferry_engine_start': {
+        const result = this.ferryVoyage.startEngine();
+        if (!result.ok) {
+          this.toast(result.message, 'warning');
+          break;
+        }
+        this.sound.playFerryEngineStart();
+        this.spawnFerryExhaustBurst();
+        this.toast(result.message, 'info');
+        this.persistLouisianaFerryVoyage(true);
+        this.emitHud();
+        break;
+      }
+      case 'ferry_engine_stop': {
+        const result = this.ferryVoyage.shutdownEngine();
+        this.sound.playFerryEngineStop();
+        this.toast(result.message, 'info');
+        this.persistLouisianaFerryVoyage(true);
+        this.emitHud();
+        break;
+      }
+      case 'ferry_fuel': {
+        this.handleFerryFuel();
         break;
       }
       case 'ferry_horn': {
@@ -17156,7 +17356,7 @@ export class GameEngine {
         break;
       }
       case 'ferry_living_tv': {
-        this.toast(`The ferry TV is playing a Louisiana travelogue for the ${formatFerryDuration(LOUISIANA_FERRY_DIRECT_DURATION_MS)} crossing.`, 'info');
+        this.toast(`The ferry TV is playing a Louisiana travelogue for the ${LOUISIANA_FERRY_LEG_HOURS}-hour crossing.`, 'info');
         break;
       }
       default:
@@ -17342,7 +17542,7 @@ export class GameEngine {
     this.updateCamera();
     this.sound.playSteamHiss();
     this.toast(
-      `The dock crew loads ${car.name}. You walk up the Crescent Star ramp for the ${formatFerryDuration(LOUISIANA_FERRY_DIRECT_DURATION_MS)} crossing.`,
+      `The dock crew loads ${car.name}. You walk up the Crescent Star ramp for the ${LOUISIANA_FERRY_LEG_HOURS}-hour crossing.`,
       'discovery',
     );
     this.emitHud();

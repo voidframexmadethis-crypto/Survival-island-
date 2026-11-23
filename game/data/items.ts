@@ -247,6 +247,16 @@ export const ITEMS: Record<ItemId, ItemDefinition> = {
     healthRestore: 5,
     staminaRestore: 10,
   },
+  coconut_biofuel: {
+    id: 'coconut_biofuel',
+    name: 'Coconut Biofuel Canister',
+    category: 'resource',
+    description: 'Cold-pressed island coconut oil and fermented nectar. One 25 L canister feeds the Crescent Star for roughly thirteen hours of the crossing.',
+    stackable: true,
+    maxStack: 10,
+    iconKey: 'coconut_biofuel',
+    color: '#84cc16',
+  },
   apple: {
     id: 'apple',
     name: 'Wild Apple',

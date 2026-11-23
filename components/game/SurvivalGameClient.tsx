@@ -1803,6 +1803,28 @@ export function SurvivalGameClient() {
                       style={{ width: `${Math.round(hud.ferryVoyage.routeProgress * 100)}%` }}
                     />
                   </div>
+                  <div className="flex items-center justify-between gap-1 text-[9px] font-mono-tabular">
+                    <span className={hud.ferryVoyage.lowFuel ? 'text-red-300' : 'text-lime-300'}>
+                      FUEL {hud.ferryVoyage.fuelPercent.toFixed(0)}% · {hud.ferryVoyage.fuelLiters.toFixed(0)}/{hud.ferryVoyage.fuelCapacityLiters} L
+                    </span>
+                    <span
+                      className={
+                        hud.ferryVoyage.fuelStarved
+                          ? 'text-red-300 uppercase'
+                          : hud.ferryVoyage.engineRunning
+                            ? 'text-lime-300 uppercase'
+                            : 'text-amber-300 uppercase'
+                      }
+                    >
+                      ENG {hud.ferryVoyage.engineState}
+                    </span>
+                  </div>
+                  <div className="h-1 rounded-full bg-teal-950 overflow-hidden">
+                    <div
+                      className={`h-full transition-[width] duration-500 ${hud.ferryVoyage.lowFuel ? 'bg-red-400' : 'bg-lime-400'}`}
+                      style={{ width: `${Math.max(0, Math.min(100, hud.ferryVoyage.fuelPercent))}%` }}
+                    />
+                  </div>
                   <div className="flex items-center justify-between gap-1 text-[9px] text-teal-200/90">
                     <span className="truncate">{hud.ferryVoyage.label}</span>
                     <span className="uppercase shrink-0">

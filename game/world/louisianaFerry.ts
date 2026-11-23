@@ -200,7 +200,7 @@ export function buildLouisianaFerry(): LouisianaFerryHandles {
     ctx.fillText('STAR', 256, 190);
     ctx.fillStyle = '#f5b642';
     ctx.font = 'bold 24px Arial, sans-serif';
-    ctx.fillText('ISLAND  ·  LOUISIANA  ·  DIRECT CROSSING', 256, 232);
+    ctx.fillText('ISLAND  ·  LOUISIANA  ·  48-HOUR CROSSING', 256, 232);
   });
   const nameMat = new THREE.MeshStandardMaterial({
     color: nameTexture ? 0xffffff : 0x123f3b,
