@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  AIR_SHUTTLE_CRUISE_ALTITUDE_FT,
+  AIR_SHUTTLE_CRUISE_ALTITUDE_M,
   AIR_SHUTTLE_LEG_MINUTES,
   AIR_SHUTTLE_LEG_MS,
   AirShuttleVoyageSystem,
@@ -13,6 +15,14 @@ import { applyAirShuttleVisual } from './airShuttleVisual';
 import { buildCrescentClipper } from '../world/crescentClipper';
 
 const CLOCK_START = 1_700_000_000_000;
+
+test('the Crescent Clipper climbs to a 38,000 ft service ceiling', () => {
+  assert.equal(AIR_SHUTTLE_CRUISE_ALTITUDE_FT, 38_000);
+  assert.ok(Math.abs(AIR_SHUTTLE_CRUISE_ALTITUDE_M / 0.3048 - 38_000) < 0.01);
+  assert.ok(Math.abs(AIR_SHUTTLE_CRUISE_ALTITUDE_M - 11_582.4) < 0.01);
+  const shuttle = new AirShuttleVoyageSystem(() => CLOCK_START);
+  assert.equal(shuttle.cruiseAltitude, AIR_SHUTTLE_CRUISE_ALTITUDE_M);
+});
 
 interface ShuttleHarness {
   shuttle: AirShuttleVoyageSystem;

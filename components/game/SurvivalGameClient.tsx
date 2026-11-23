@@ -1892,7 +1892,7 @@ export function SurvivalGameClient() {
                         : 'CRESCENT CITY → ISLAND'}
                     </span>
                     <span>
-                      {hud.airShuttle.altitudeM.toFixed(0)} m · {hud.airShuttle.speedMps.toFixed(0)} m/s
+                      {Math.round(hud.airShuttle.altitudeM / 0.3048).toLocaleString('en-US')} ft · {hud.airShuttle.speedMps.toFixed(0)} m/s
                     </span>
                   </div>
                   {hud.airShuttle.aboard && hud.airShuttle.phase === 'airborne' && (

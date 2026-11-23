@@ -1576,6 +1576,10 @@ export class GameEngine {
     this.settings = settings;
     this.callbacks = callbacks;
     this.sound.configure(settings);
+    // The live hull uses the fixed-step, playable crossing rather than the
+    // wall-clock scenic route. Without this the visible ship sits on a
+    // 48-hour leg and never reads as a moving ferry in a normal session.
+    this.ferryVoyage.enableDirectCrossing();
     this.playerCameraRig.mode = 'first_person';
 
     this.initScene();
@@ -1621,6 +1625,13 @@ export class GameEngine {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.95;
+    // Give every newly-created ground, foliage, vehicle and building texture
+    // proper anisotropic filtering. This keeps road markings, terrain grain and
+    // livery lettering sharp at grazing angles instead of smearing together.
+    const maxAnisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+    if (maxAnisotropy > THREE.Texture.DEFAULT_ANISOTROPY) {
+      THREE.Texture.DEFAULT_ANISOTROPY = maxAnisotropy;
+    }
     // Cap DPR cleanly at <= 2 without redundant canvas reallocations
     ZeroStutterCameraController.applyRendererCaps(
       this.renderer,
@@ -1670,7 +1681,7 @@ export class GameEngine {
       twilight: 0,
     });
     this.scene.environment = this.envTexture;
-    this.scene.environmentIntensity = 0.85;
+    this.scene.environmentIntensity = 1.0;
     this.envSignature = 'init';
 
     const aspect =
@@ -2895,15 +2906,19 @@ export class GameEngine {
       preset !== 'low' &&
       !this.isSoftwareGl;
 
-    // 2048 is the practical sweet spot: 3072 costs ~2.25x the shadow pass for
-    // almost no visible gain at gameplay camera distances.
+    // Ultra gets a 3072 shadow atlas for crisp contact shadows on the hero
+    // attractions; the other presets keep the cheaper 2048 map.
     const shadowMapSize =
-      !this.isTouchDevice && !this.isSoftwareGl && preset !== 'low' ? 2048 : 1024;
+      !this.isTouchDevice && !this.isSoftwareGl && preset !== 'low'
+        ? preset === 'ultra'
+          ? 3072
+          : 2048
+        : 1024;
     const shadowHalfExtent =
       preset === 'ultra'
         ? this.isTouchDevice
           ? 50
-          : 72
+          : 82
         : preset === 'high'
           ? this.isTouchDevice
             ? 44
@@ -2915,14 +2930,14 @@ export class GameEngine {
             : 36;
     const shadowFar =
       preset === 'ultra' && !this.isTouchDevice
-        ? 240
+        ? 290
         : preset === 'high' && !this.isTouchDevice
           ? 195
           : 165;
     const shadowRadius = this.isTouchDevice
       ? 1.0
       : preset === 'ultra'
-        ? 2.2
+        ? 2.6
         : 2.0;
 
     let dpr = 1;
@@ -2938,7 +2953,7 @@ export class GameEngine {
       } else if (preset === 'high') {
         dpr = Math.min(nativeDpr, 1.45);
       } else {
-        dpr = Math.min(nativeDpr, 1.65);
+        dpr = Math.min(nativeDpr, 1.8);
       }
     }
 
@@ -3056,7 +3071,8 @@ export class GameEngine {
     // reflection toggle is off; otherwise every PBR material loses its ambient
     // specular response and the scene flattens out.
     this.scene.environment = this.envTexture;
-    this.scene.environmentIntensity = 0.85;
+    this.scene.environmentIntensity =
+      preset === 'ultra' ? 1.0 : preset === 'high' ? 0.92 : 0.85;
     if (this.world) {
       this.world.setWorldShadowCasting(shadowsOn);
       this.world.setUltraFidelity(preset === 'ultra' && !this.isSoftwareGl);

@@ -17,11 +17,13 @@ import {
   loadLaunchSettings,
   loadObjectives,
   loadRewards,
+  loadSettings,
   saveCheckpoint,
   saveGame,
   saveGameToSlot,
   saveLaunchSettings,
   saveObjectives,
+  saveSettings,
   unlockReward,
 } from './saveManager';
 import {
@@ -392,6 +394,32 @@ test('RollerCoasterRuntime supports wooden, inverted, and log flume coaster type
   assert.ok(flumeId);
   assert.equal(runtime.getHudSummaries()[1].coasterType, 'log_flume');
   runtime.dispose();
+});
+
+test('desktop medium settings receive one cinematic upgrade and respect a later reset', () => {
+  const storage = installMockLocalStorage();
+  storage.set(
+    'survival_island_settings_v1',
+    JSON.stringify({
+      graphicsPreset: 'medium',
+      graphicsQuality: 'medium',
+      drawDistance: 'medium',
+      dynamicAutoFps: true,
+    }),
+  );
+  const upgraded = loadSettings();
+  assert.equal(upgraded.graphicsPreset, 'ultra');
+  assert.equal(upgraded.drawDistance, 'far');
+  assert.equal(upgraded.dynamicAutoFps, false);
+
+  saveSettings({
+    ...upgraded,
+    graphicsPreset: 'medium',
+    graphicsQuality: 'medium',
+    drawDistance: 'medium',
+    dynamicAutoFps: true,
+  });
+  assert.equal(loadSettings().graphicsPreset, 'medium');
 });
 
 test('launchSave persists game snapshot, checkpoint, settings, objectives, and unique rewards safely', () => {

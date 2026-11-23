@@ -40,6 +40,7 @@ export {
 };
 
 const SAVE_INDEX_KEY = 'survival_island_lost_world_saves_v1';
+const PHOTOREAL_GRAPHICS_KEY = 'survival_island_photoreal_graphics_v1';
 const SAVE_SLOT_PREFIX = 'survival_island_slot_v1_';
 const SETTINGS_KEY = 'survival_island_settings_v1';
 const ACTIVE_SESSION_KEY = 'survival_island_active_session_v1';
@@ -150,8 +151,9 @@ export const DEFAULT_SETTINGS: GameSettings = {
 };
 
 export function getDefaultSettingsForDevice(): GameSettings {
-  // Keep Medium as the smooth iPhone-suitable default across mobile and touch devices
-  const defaultPreset: GraphicsPreset = isMobileOrTouchClient() ? 'medium' : 'medium';
+  // Desktop hardware starts on the cinematic preset. Touch devices stay at
+  // Medium so the high-resolution PBR pass does not melt a phone GPU.
+  const defaultPreset: GraphicsPreset = isMobileOrTouchClient() ? 'medium' : 'ultra';
   return {
     ...DEFAULT_SETTINGS,
     ...GRAPHICS_PRESET_PROFILES[defaultPreset],
@@ -176,10 +178,23 @@ export function loadSettings(): GameSettings {
       graphicsPreset?: string;
       graphicsQuality?: string;
     };
-    const normalizedPreset = normalizeGraphicsPreset(
+    let normalizedPreset = normalizeGraphicsPreset(
       parsed.graphicsPreset,
       parsed.graphicsQuality,
     );
+    // Existing desktop saves that still carry the old Medium default get one
+    // automatic upgrade to the cinematic profile. The marker means a later
+    // deliberate choice of Medium is respected.
+    let promotedForPhotorealism = false;
+    if (
+      !isMobileOrTouchClient() &&
+      normalizedPreset === 'medium' &&
+      window.localStorage.getItem(PHOTOREAL_GRAPHICS_KEY) !== '1'
+    ) {
+      normalizedPreset = 'ultra';
+      promotedForPhotorealism = true;
+      window.localStorage.setItem(PHOTOREAL_GRAPHICS_KEY, '1');
+    }
     const prof = GRAPHICS_PRESET_PROFILES[normalizedPreset];
     const merged: GameSettings = {
       ...base,
@@ -187,6 +202,11 @@ export function loadSettings(): GameSettings {
       graphicsPreset: normalizedPreset,
       graphicsQuality: normalizedPreset,
     };
+    if (promotedForPhotorealism) {
+      // The old Medium save also carries Medium draw distance and dynamic FPS;
+      // replace the whole profile, not just its label.
+      Object.assign(merged, prof);
+    }
     if (parsed.shadowsEnabled === undefined) merged.shadowsEnabled = prof.shadowsEnabled;
     if (parsed.waterReflectionsEnabled === undefined) {
       merged.waterReflectionsEnabled = prof.waterReflectionsEnabled;
@@ -213,6 +233,7 @@ export function saveSettings(settings: GameSettings): void {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    window.localStorage.setItem(PHOTOREAL_GRAPHICS_KEY, '1');
     saveLaunchSettings(settings);
   } catch {
     // Ignore storage quota errors gracefully

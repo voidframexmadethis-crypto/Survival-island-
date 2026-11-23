@@ -39,7 +39,9 @@ export const AIR_SHUTTLE_TAKEOFF_SECONDS = 16;
 export const AIR_SHUTTLE_LANDING_SECONDS = 9;
 export const AIR_SHUTTLE_TAXI_IN_SECONDS = 15;
 export const AIR_SHUTTLE_TURNAROUND_SECONDS = 5;
-export const AIR_SHUTTLE_CRUISE_ALTITUDE_M = 210;
+/** Service ceiling and cruise altitude for the Crescent Clipper. */
+export const AIR_SHUTTLE_CRUISE_ALTITUDE_FT = 38_000;
+export const AIR_SHUTTLE_CRUISE_ALTITUDE_M = AIR_SHUTTLE_CRUISE_ALTITUDE_FT * 0.3048;
 
 export interface AirShuttleBase {
   id: AirShuttleBaseId;
