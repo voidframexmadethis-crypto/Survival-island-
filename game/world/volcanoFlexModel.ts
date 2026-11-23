@@ -3,6 +3,7 @@ import {
   VOLCANO_FLEX_HEIGHT_M,
   VOLCANO_FLEX_LOCAL_CHAMBER,
   VOLCANO_FLEX_NAME,
+  buildVolcanoFlexNodes,
   getVolcanoFlexSite,
 } from './volcanoFlexLayout';
 
@@ -98,6 +99,208 @@ function buildPalmTree(
   return palm;
 }
 
+interface TowerSurfaceMaps {
+  map?: THREE.Texture;
+  bumpMap?: THREE.Texture;
+  roughnessMap?: THREE.Texture;
+}
+
+let cachedPaintedMetalMaps: {
+  bumpMap: THREE.CanvasTexture;
+  roughnessMap: THREE.CanvasTexture;
+} | null = null;
+
+/** Fine brushed-metal microdetail for the painted structural steel. */
+function getPaintedMetalMaps(): {
+  bumpMap: THREE.CanvasTexture;
+  roughnessMap: THREE.CanvasTexture;
+} | null {
+  if (typeof document === 'undefined') return null;
+  if (cachedPaintedMetalMaps) return cachedPaintedMetalMaps;
+  const size = 256;
+  const bumpCanvas = document.createElement('canvas');
+  bumpCanvas.width = size;
+  bumpCanvas.height = size;
+  const bumpCtx = bumpCanvas.getContext('2d');
+  const roughCanvas = document.createElement('canvas');
+  roughCanvas.width = size;
+  roughCanvas.height = size;
+  const roughCtx = roughCanvas.getContext('2d');
+  if (!bumpCtx || !roughCtx) return null;
+  bumpCtx.fillStyle = '#8a8a8a';
+  bumpCtx.fillRect(0, 0, size, size);
+  roughCtx.fillStyle = '#b4b4b4';
+  roughCtx.fillRect(0, 0, size, size);
+  for (let i = 0; i < 900; i++) {
+    const x = seeded(i * 1.37) * size;
+    const y = seeded(i * 2.71 + 9) * size;
+    const length = 8 + seeded(i + 43) * 86;
+    const shade = 104 + Math.floor(seeded(i + 88) * 62);
+    bumpCtx.strokeStyle = `rgba(${shade}, ${shade}, ${shade}, 0.22)`;
+    bumpCtx.lineWidth = 0.6 + seeded(i + 17) * 1.1;
+    bumpCtx.beginPath();
+    bumpCtx.moveTo(x, y);
+    bumpCtx.lineTo(x + length, y + (seeded(i + 5) - 0.5) * 0.8);
+    bumpCtx.stroke();
+    const roughShade = 154 + Math.floor(seeded(i + 121) * 58);
+    roughCtx.strokeStyle = `rgba(${roughShade}, ${roughShade}, ${roughShade}, 0.18)`;
+    roughCtx.lineWidth = 0.7;
+    roughCtx.beginPath();
+    roughCtx.moveTo(x, y);
+    roughCtx.lineTo(x + length, y + (seeded(i + 5) - 0.5) * 0.8);
+    roughCtx.stroke();
+  }
+  const bumpMap = new THREE.CanvasTexture(bumpCanvas);
+  bumpMap.wrapS = THREE.RepeatWrapping;
+  bumpMap.wrapT = THREE.RepeatWrapping;
+  bumpMap.repeat.set(2, 16);
+  bumpMap.colorSpace = THREE.NoColorSpace;
+  bumpMap.anisotropy = 4;
+  bumpMap.needsUpdate = true;
+  const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+  roughnessMap.wrapS = THREE.RepeatWrapping;
+  roughnessMap.wrapT = THREE.RepeatWrapping;
+  roughnessMap.repeat.set(2, 16);
+  roughnessMap.colorSpace = THREE.NoColorSpace;
+  roughnessMap.anisotropy = 4;
+  roughnessMap.needsUpdate = true;
+  cachedPaintedMetalMaps = { bumpMap, roughnessMap };
+  return cachedPaintedMetalMaps;
+}
+
+let cachedTowerConcreteMaps: TowerSurfaceMaps | null = null;
+
+/** Cast-in-place concrete with aggregate, trowel variation and damp staining. */
+function getTowerConcreteMaps(): TowerSurfaceMaps | null {
+  if (typeof document === 'undefined') return null;
+  if (cachedTowerConcreteMaps) return cachedTowerConcreteMaps;
+  const size = 512;
+  const colorCanvas = document.createElement('canvas');
+  colorCanvas.width = size;
+  colorCanvas.height = size;
+  const bumpCanvas = document.createElement('canvas');
+  bumpCanvas.width = size;
+  bumpCanvas.height = size;
+  const roughCanvas = document.createElement('canvas');
+  roughCanvas.width = size;
+  roughCanvas.height = size;
+  const colorCtx = colorCanvas.getContext('2d');
+  const bumpCtx = bumpCanvas.getContext('2d');
+  const roughCtx = roughCanvas.getContext('2d');
+  if (!colorCtx || !bumpCtx || !roughCtx) return null;
+
+  const color = colorCtx.createImageData(size, size);
+  const bump = bumpCtx.createImageData(size, size);
+  const rough = roughCtx.createImageData(size, size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const index = (y * size + x) * 4;
+      const grain = seeded(x * 0.71 + y * 3.17 + 7);
+      const aggregate = seeded(Math.floor(x / 3) * 0.91 + Math.floor(y / 3) * 5.3 + 31);
+      const trowel =
+        0.5 +
+        Math.sin(x * 0.027 + y * 0.009) * 0.055 +
+        Math.sin(x * 0.006 - y * 0.021) * 0.045;
+      const fleck = grain > 0.965 ? (grain - 0.965) * 9 : 0;
+      const base = 168 + trowel * 34 + aggregate * 22 + fleck * 250;
+      color.data[index] = Math.max(0, Math.min(255, base));
+      color.data[index + 1] = Math.max(0, Math.min(255, base + 2));
+      color.data[index + 2] = Math.max(0, Math.min(255, base + 5));
+      color.data[index + 3] = 255;
+      const height = Math.max(
+        0,
+        Math.min(255, 116 + grain * 34 + aggregate * 26 + fleck * 130),
+      );
+      bump.data[index] = height;
+      bump.data[index + 1] = height;
+      bump.data[index + 2] = height;
+      bump.data[index + 3] = 255;
+      const roughness = Math.max(0, Math.min(255, 188 + (1 - trowel) * 28 - fleck * 420));
+      rough.data[index] = roughness;
+      rough.data[index + 1] = roughness;
+      rough.data[index + 2] = roughness;
+      rough.data[index + 3] = 255;
+    }
+  }
+  colorCtx.putImageData(color, 0, 0);
+  bumpCtx.putImageData(bump, 0, 0);
+  roughCtx.putImageData(rough, 0, 0);
+
+  // Formwork joints and weather streaks break up the tiled surface.
+  colorCtx.globalAlpha = 0.33;
+  colorCtx.strokeStyle = '#5b6066';
+  colorCtx.lineWidth = 1.4;
+  for (const edge of [0, 128, 256, 384]) {
+    colorCtx.beginPath();
+    colorCtx.moveTo(edge + 0.5, 0);
+    colorCtx.lineTo(edge + 0.5, size);
+    colorCtx.stroke();
+    colorCtx.beginPath();
+    colorCtx.moveTo(0, edge + 0.5);
+    colorCtx.lineTo(size, edge + 0.5);
+    colorCtx.stroke();
+  }
+  colorCtx.globalAlpha = 0.2;
+  for (let i = 0; i < 18; i++) {
+    const x = seeded(i * 6.7 + 3) * size;
+    const stain = colorCtx.createLinearGradient(x, 0, x + 26, size);
+    stain.addColorStop(0, 'rgba(56, 60, 63, 0)');
+    stain.addColorStop(0.5, 'rgba(56, 60, 63, 0.8)');
+    stain.addColorStop(1, 'rgba(56, 60, 63, 0)');
+    colorCtx.fillStyle = stain;
+    colorCtx.fillRect(x, 0, 26, size);
+  }
+  colorCtx.globalAlpha = 1;
+
+  const map = new THREE.CanvasTexture(colorCanvas);
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.repeat.set(2, 2);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = 4;
+  map.needsUpdate = true;
+  const bumpMap = new THREE.CanvasTexture(bumpCanvas);
+  bumpMap.wrapS = THREE.RepeatWrapping;
+  bumpMap.wrapT = THREE.RepeatWrapping;
+  bumpMap.repeat.set(2, 2);
+  bumpMap.colorSpace = THREE.NoColorSpace;
+  bumpMap.anisotropy = 4;
+  bumpMap.needsUpdate = true;
+  const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+  roughnessMap.wrapS = THREE.RepeatWrapping;
+  roughnessMap.wrapT = THREE.RepeatWrapping;
+  roughnessMap.repeat.set(2, 2);
+  roughnessMap.colorSpace = THREE.NoColorSpace;
+  roughnessMap.anisotropy = 4;
+  roughnessMap.needsUpdate = true;
+  cachedTowerConcreteMaps = { map, bumpMap, roughnessMap };
+  return cachedTowerConcreteMaps;
+}
+
+let cachedContactShadowTexture: THREE.CanvasTexture | null = null;
+
+function getContactShadowTexture(): THREE.CanvasTexture | null {
+  if (typeof document === 'undefined') return null;
+  if (cachedContactShadowTexture) return cachedContactShadowTexture;
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  gradient.addColorStop(0, 'rgba(0, 0, 0, 0.72)');
+  gradient.addColorStop(0.58, 'rgba(0, 0, 0, 0.3)');
+  gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  cachedContactShadowTexture = texture;
+  return cachedContactShadowTexture;
+}
+
 function stationSignTexture(): THREE.Texture | null {
   if (typeof document === 'undefined') return null;
   const canvas = document.createElement('canvas');
@@ -150,52 +353,90 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
     site.station.z - site.mountain.z,
   );
 
-  const whiteSteel = new THREE.MeshStandardMaterial({
-    color: 0xe9eef3,
-    roughness: 0.32,
-    metalness: 0.72,
+  const metalMaps = getPaintedMetalMaps();
+  const concreteMaps = getTowerConcreteMaps();
+  const whiteSteel = new THREE.MeshPhysicalMaterial({
+    color: 0xe8ecef,
+    roughness: 0.55,
+    metalness: 0.16,
+    clearcoat: 0.55,
+    clearcoatRoughness: 0.22,
+    bumpMap: metalMaps?.bumpMap ?? null,
+    bumpScale: 0.007,
+    roughnessMap: metalMaps?.roughnessMap ?? null,
+    envMapIntensity: 1.3,
   });
-  const paleSteel = new THREE.MeshStandardMaterial({
-    color: 0xb9c6d2,
-    roughness: 0.42,
-    metalness: 0.62,
+  const paleSteel = new THREE.MeshPhysicalMaterial({
+    color: 0xbcc6ce,
+    roughness: 0.62,
+    metalness: 0.2,
+    clearcoat: 0.42,
+    clearcoatRoughness: 0.26,
+    bumpMap: metalMaps?.bumpMap ?? null,
+    bumpScale: 0.009,
+    roughnessMap: metalMaps?.roughnessMap ?? null,
+    envMapIntensity: 1.2,
   });
-  const redSteel = new THREE.MeshStandardMaterial({
-    color: 0xd21f2b,
-    roughness: 0.3,
-    metalness: 0.62,
+  const redSteel = new THREE.MeshPhysicalMaterial({
+    color: 0xce1b27,
+    roughness: 0.4,
+    metalness: 0.2,
+    clearcoat: 0.78,
+    clearcoatRoughness: 0.14,
+    bumpMap: metalMaps?.bumpMap ?? null,
+    bumpScale: 0.008,
+    roughnessMap: metalMaps?.roughnessMap ?? null,
+    envMapIntensity: 1.42,
   });
-  const darkSteel = new THREE.MeshStandardMaterial({
-    color: 0x25303c,
-    roughness: 0.38,
-    metalness: 0.78,
+  const darkSteel = new THREE.MeshPhysicalMaterial({
+    color: 0x202832,
+    roughness: 0.34,
+    metalness: 0.74,
+    clearcoat: 0.32,
+    clearcoatRoughness: 0.18,
+    envMapIntensity: 1.45,
   });
   const concrete = new THREE.MeshStandardMaterial({
-    color: 0xd4dae0,
-    roughness: 0.86,
-    metalness: 0.05,
+    color: 0xffffff,
+    map: concreteMaps?.map ?? null,
+    bumpMap: concreteMaps?.bumpMap ?? null,
+    bumpScale: 0.035,
+    roughnessMap: concreteMaps?.roughnessMap ?? null,
+    roughness: 0.98,
+    metalness: 0.02,
+    envMapIntensity: 0.65,
   });
   const coreGlass = new THREE.MeshPhysicalMaterial({
     color: 0xa8c7dc,
-    metalness: 0.08,
-    roughness: 0.08,
+    metalness: 0.04,
+    roughness: 0.045,
     transmission: 0.52,
+    thickness: 0.28,
+    ior: 1.5,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.04,
     transparent: true,
-    opacity: 0.58,
+    opacity: 0.62,
     side: THREE.DoubleSide,
     depthWrite: false,
+    envMapIntensity: 1.7,
   });
   const crownGlass = new THREE.MeshPhysicalMaterial({
-    color: 0x172b46,
+    color: 0x162b45,
     emissive: 0x2f6fa8,
     emissiveIntensity: 0.45,
-    metalness: 0.24,
-    roughness: 0.12,
-    transmission: 0.28,
+    metalness: 0.16,
+    roughness: 0.06,
+    transmission: 0.3,
+    thickness: 0.32,
+    ior: 1.5,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.05,
     transparent: true,
-    opacity: 0.76,
+    opacity: 0.8,
     side: THREE.DoubleSide,
     depthWrite: false,
+    envMapIntensity: 1.75,
   });
   const blueGlow = new THREE.MeshStandardMaterial({
     color: 0x7dc8ff,
@@ -220,23 +461,57 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
     color: 0x162638,
     emissive: 0x154d70,
     emissiveIntensity: 0.25,
-    metalness: 0.2,
-    roughness: 0.16,
+    metalness: 0.12,
+    roughness: 0.06,
+    transmission: 0.24,
+    thickness: 0.22,
+    ior: 1.52,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.05,
     transparent: true,
-    opacity: 0.62,
+    opacity: 0.74,
     side: THREE.DoubleSide,
     depthWrite: false,
+    envMapIntensity: 1.7,
   });
 
-  // Broad plaza and a low glass lobby anchor the tower in the island.
+  // Paved plaza, cast-in-place foundation and a low glass lobby anchor the
+  // tower in the island. The foundation profile has a real chamfer so it reads
+  // as concrete rather than a floating cylinder.
+  const plazaPaving = new THREE.Mesh(
+    new THREE.CircleGeometry(38, 72),
+    concrete,
+  );
+  plazaPaving.name = 'tower-plaza-paving';
+  plazaPaving.rotation.x = -Math.PI / 2;
+  plazaPaving.position.y = 0.08;
+  plazaPaving.receiveShadow = true;
+  root.add(plazaPaving);
+
+  const foundationProfile = [
+    new THREE.Vector2(0, -1.2),
+    new THREE.Vector2(25.8, -1.2),
+    new THREE.Vector2(26.35, 0.52),
+    new THREE.Vector2(25.55, 0.95),
+    new THREE.Vector2(0, 0.95),
+  ];
   const foundation = new THREE.Mesh(
-    new THREE.CylinderGeometry(25, 27, 1.4, 64),
+    new THREE.LatheGeometry(foundationProfile, 72),
     concrete,
   );
   foundation.name = 'tower-foundation';
-  foundation.position.y = -0.2;
+  foundation.castShadow = true;
   foundation.receiveShadow = true;
   root.add(foundation);
+
+  const plazaCurb = new THREE.Mesh(
+    new THREE.TorusGeometry(37.7, 0.16, 6, 96),
+    paleSteel,
+  );
+  plazaCurb.name = 'tower-plaza-curb';
+  plazaCurb.rotation.x = Math.PI / 2;
+  plazaCurb.position.y = 0.2;
+  root.add(plazaCurb);
 
   const plazaRim = new THREE.Mesh(
     new THREE.TorusGeometry(24.3, 0.28, 8, 72),
@@ -244,8 +519,27 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
   );
   plazaRim.name = 'tower-plaza-rim';
   plazaRim.rotation.x = Math.PI / 2;
-  plazaRim.position.y = 0.52;
+  plazaRim.position.y = 0.98;
   root.add(plazaRim);
+
+  const contactShadowTexture = getContactShadowTexture();
+  if (contactShadowTexture) {
+    const contactShadow = new THREE.Mesh(
+      new THREE.CircleGeometry(33.5, 64),
+      new THREE.MeshBasicMaterial({
+        map: contactShadowTexture,
+        transparent: true,
+        depthWrite: false,
+        opacity: 0.82,
+        toneMapped: false,
+      }),
+    );
+    contactShadow.name = 'tower-ground-contact-shadow';
+    contactShadow.rotation.x = -Math.PI / 2;
+    contactShadow.position.y = 0.105;
+    contactShadow.renderOrder = 2;
+    root.add(contactShadow);
+  }
 
   const lobby = new THREE.Mesh(
     new THREE.CylinderGeometry(11.2, 11.8, 10.5, 48, 1, true),
@@ -274,6 +568,40 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
   elevatorShaft.name = 'tower-glass-core';
   elevatorShaft.position.y = 8 + (crownFloorY - 8) * 0.5;
   root.add(elevatorShaft);
+
+  // Interior floor bands and warm lift lighting show through the glass core.
+  const coreFloorRings = new THREE.InstancedMesh(
+    new THREE.TorusGeometry(3.22, 0.035, 5, 32),
+    darkSteel,
+    18,
+  );
+  coreFloorRings.name = 'tower-core-floor-rings';
+  const coreFloorLights = new THREE.InstancedMesh(
+    new THREE.TorusGeometry(3.2, 0.018, 4, 32),
+    warmGlow,
+    9,
+  );
+  coreFloorLights.name = 'tower-core-floor-lights';
+  const coreRingMatrix = new THREE.Matrix4();
+  const coreRingQuaternion = new THREE.Quaternion().setFromEuler(
+    new THREE.Euler(Math.PI / 2, 0, 0),
+  );
+  const coreFloorScale = new THREE.Vector3(1, 1, 1);
+  for (let i = 0; i < 18; i++) {
+    const y = 11 + (i / 17) * (crownFloorY - 22);
+    coreRingMatrix.compose(
+      new THREE.Vector3(0, y, 0),
+      coreRingQuaternion,
+      coreFloorScale,
+    );
+    coreFloorRings.setMatrixAt(i, coreRingMatrix);
+    if (i % 2 === 0 && i / 2 < 9) {
+      coreFloorLights.setMatrixAt(i / 2, coreRingMatrix);
+    }
+  }
+  coreFloorRings.instanceMatrix.needsUpdate = true;
+  coreFloorLights.instanceMatrix.needsUpdate = true;
+  detail.add(coreFloorRings, coreFloorLights);
 
   const guideBeams: BeamSpec[] = [];
   for (let i = 0; i < 4; i++) {
@@ -398,6 +726,78 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
   }
   const pylons = makeBeamInstances(pylonBeams, redSteel, 'tower-base-pylons');
   root.add(pylons);
+
+  // Real track brackets clamp the outer spiral to the tower instead of letting
+  // the rails float unsupported. Each arm is placed at an actual ascent or
+  // descent node, so it lands directly beneath a running rail.
+  const trackSupports = new THREE.Group();
+  trackSupports.name = 'tower-track-supports';
+  const supportArms: BeamSpec[] = [];
+  const supportBraces: BeamSpec[] = [];
+  let lastSupportY = -Infinity;
+  for (const node of buildVolcanoFlexNodes()) {
+    const localX = node.position.x - site.mountain.x;
+    const localZ = node.position.z - site.mountain.z;
+    const localY = node.position.y - site.mountain.y;
+    const radius = Math.hypot(localX, localZ);
+    if (localY < latticeBottom + 7 || localY > latticeTop - 1.5) continue;
+    if (Math.abs(radius - VOLCANO_FLEX_LOCAL_CHAMBER.radius) > 0.9) continue;
+    if (localY - lastSupportY < 13.5) continue;
+    lastSupportY = localY;
+    const t = THREE.MathUtils.clamp(
+      (localY - latticeBottom) / (latticeTop - latticeBottom),
+      0,
+      1,
+    );
+    const towerRadius = THREE.MathUtils.lerp(baseRadius, topRadius, t) + 0.28;
+    const angle = Math.atan2(localZ, localX);
+    const armY = localY - 0.68;
+    const armEnd = VOLCANO_FLEX_LOCAL_CHAMBER.radius - 0.34;
+    supportArms.push({
+      start: new THREE.Vector3(
+        Math.cos(angle) * towerRadius,
+        armY,
+        Math.sin(angle) * towerRadius,
+      ),
+      end: new THREE.Vector3(
+        Math.cos(angle) * armEnd,
+        armY,
+        Math.sin(angle) * armEnd,
+      ),
+      radius: 0.075,
+    });
+    supportArms.push({
+      start: new THREE.Vector3(
+        Math.cos(angle) * armEnd,
+        armY,
+        Math.sin(angle) * armEnd,
+      ),
+      end: new THREE.Vector3(
+        Math.cos(angle) * armEnd,
+        localY - 0.14,
+        Math.sin(angle) * armEnd,
+      ),
+      radius: 0.055,
+    });
+    supportBraces.push({
+      start: new THREE.Vector3(
+        Math.cos(angle) * towerRadius,
+        armY - 4.2,
+        Math.sin(angle) * towerRadius,
+      ),
+      end: new THREE.Vector3(
+        Math.cos(angle) * armEnd,
+        armY - 0.02,
+        Math.sin(angle) * armEnd,
+      ),
+      radius: 0.05,
+    });
+  }
+  trackSupports.add(
+    makeBeamInstances(supportArms, redSteel, 'tower-track-support-arms'),
+    makeBeamInstances(supportBraces, redSteel, 'tower-track-support-braces'),
+  );
+  root.add(trackSupports);
 
   // Blue-lit circular observation deck with a white picket crown.
   const crown = new THREE.Group();
@@ -785,34 +1185,49 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
 export function buildVolcanoFlexTrainCar(index: number, front: boolean): THREE.Group {
   const car = new THREE.Group();
   car.name = front ? 'volcano-flex-lead-car' : `volcano-flex-car-${index}`;
-  const armor = new THREE.MeshStandardMaterial({
-    color: 0x0b0b0d,
-    roughness: 0.18,
-    metalness: 0.9,
+  const armor = new THREE.MeshPhysicalMaterial({
+    color: 0x08090b,
+    roughness: 0.2,
+    metalness: 0.86,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.06,
+    envMapIntensity: 2.0,
   });
-  const steel = new THREE.MeshStandardMaterial({
-    color: 0x3f3f46,
-    roughness: 0.28,
+  const steel = new THREE.MeshPhysicalMaterial({
+    color: 0x484c54,
+    roughness: 0.24,
     metalness: 0.95,
+    clearcoat: 0.45,
+    clearcoatRoughness: 0.12,
+    envMapIntensity: 1.85,
   });
-  const trim = new THREE.MeshStandardMaterial({
-    color: 0xc2410c,
-    emissive: 0xff3d00,
-    emissiveIntensity: 1.2,
-    roughness: 0.32,
-    metalness: 0.72,
+  const trim = new THREE.MeshPhysicalMaterial({
+    color: 0xb51622,
+    emissive: 0x650007,
+    emissiveIntensity: 0.32,
+    roughness: 0.24,
+    metalness: 0.3,
+    clearcoat: 0.92,
+    clearcoatRoughness: 0.08,
+    envMapIntensity: 1.8,
   });
-  const seatMat = new THREE.MeshStandardMaterial({
-    color: 0x1a1110,
-    roughness: 0.62,
-    metalness: 0.08,
+  const seatMat = new THREE.MeshPhysicalMaterial({
+    color: 0x160f0e,
+    roughness: 0.56,
+    metalness: 0.04,
+    clearcoat: 0.24,
+    clearcoatRoughness: 0.4,
+    envMapIntensity: 0.8,
   });
-  const lensMat = new THREE.MeshStandardMaterial({
+  const lensMat = new THREE.MeshPhysicalMaterial({
     color: 0x220202,
     emissive: 0xff1a00,
-    emissiveIntensity: 2.8,
-    roughness: 0.13,
-    metalness: 0.4,
+    emissiveIntensity: 1.9,
+    roughness: 0.09,
+    metalness: 0.25,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.03,
+    envMapIntensity: 2.2,
   });
 
   const chassis = new THREE.Mesh(new THREE.BoxGeometry(1.42, 0.22, 2.18), steel);

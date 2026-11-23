@@ -470,6 +470,7 @@ import {
 import { CustomInversion } from '../systems/rollerCoasterSystem';
 import {
   VOLCANO_FLEX_ID,
+  VOLCANO_FLEX_LAYOUT_TAG,
   buildVolcanoFlexCoasterData,
   getVolcanoFlexSite,
 } from '../world/volcanoFlexLayout';
@@ -1306,6 +1307,8 @@ export class GameEngine {
   private amusementParkRuntime!: AmusementParkRuntime;
   private waterpark!: WaterparkRuntime;
   private ridingCoasterId: string | null = null;
+  private coasterBoardPendingId: string | null = null;
+  private coasterBoardCountdown = 0;
   private coasterRideAudio: CoasterRideAudio | null = null;
   private ridingWaterparkId: string | null = null;
   private gameMode: GameMode = 'survival';
@@ -4757,6 +4760,8 @@ export class GameEngine {
     this.clearMovementInputs();
     this.coasterRideAudio?.stop();
     this.ridingCoasterId = null;
+    this.coasterBoardPendingId = null;
+    this.coasterBoardCountdown = 0;
     this.ridingWaterparkId = null;
     this.waterpark?.cancelPhysicalSlide();
     this.waterpark?.resetProgress();
@@ -5305,6 +5310,8 @@ export class GameEngine {
     this.clearMovementInputs();
     this.coasterRideAudio?.stop();
     this.ridingCoasterId = null;
+    this.coasterBoardPendingId = null;
+    this.coasterBoardCountdown = 0;
     this.ridingWaterparkId = null;
     this.waterpark?.cancelPhysicalSlide();
     this.currentDimension = 'overworld';
@@ -5733,6 +5740,8 @@ export class GameEngine {
     this.seatedState = null;
     this.coasterRideAudio?.stop();
     this.ridingCoasterId = null;
+    this.coasterBoardPendingId = null;
+    this.coasterBoardCountdown = 0;
     this.ridingWaterparkId = null;
     this.waterpark?.cancelPhysicalSlide();
     this.waterpark?.exitRide();
@@ -16140,7 +16149,11 @@ export class GameEngine {
           this.coasterRideAudio?.update(rideCam.speedKmh, rideCam.segmentLabel);
         }
 
-        if (rideCam.progressPercent >= 98 && rideCam.segmentLabel === 'Load Station') {
+        if (
+          !this.coasterBoardPendingId &&
+          rideCam.progressPercent >= 98 &&
+          rideCam.segmentLabel === 'Load Station'
+        ) {
           this.exitCoasterRide();
           this.toast('Train arrived back at Load Station — automatically disembarked rider!', 'discovery');
         }
@@ -19864,6 +19877,7 @@ export class GameEngine {
             this.syncDragonDailyGrowth();
             this.updateDragonValleyWorld(dt);
             this.coasterRuntime?.update(dt, this.playerX, this.playerZ);
+            this.updateCoasterBoarding(dt);
             this.amusementParkRuntime?.update(dt);
           }
           this.updateVehicles(dt);
@@ -27196,32 +27210,89 @@ export class GameEngine {
   /**
    * Volcano Flex is part of the island itself, not a demo spawned from the
    * editor. Its station is surveyed 100 ft from the Bayou Thunder deck and the
-   * coaster/environment are rebuilt from the saved themed coaster on every
-   * load. Older saves receive the attraction automatically.
+   * coaster/environment are kept on the current island layout. Saved games from
+   * the old 10-ft placement are migrated in place so the boarding gate, train
+   * and track still line up.
    */
   private ensureVolcanoFlexAttraction(): void {
     if (this.worldType !== 'island') return;
     const site = getVolcanoFlexSite();
-    if (!this.structures.some((structure) => structure.id === 'volcano_flex_station')) {
+    const stationX = site.station.x + 2.8;
+    const stationY = site.station.y;
+    const stationZ = site.station.z + 0.8;
+    const stationRotation = -Math.PI / 2;
+    const station = this.structures.find(
+      (structure) => structure.id === 'volcano_flex_station',
+    );
+    if (station) {
+      const drifted =
+        Math.abs(station.x - stationX) > 0.01 ||
+        Math.abs(station.y - stationY) > 0.01 ||
+        Math.abs(station.z - stationZ) > 0.01 ||
+        Math.abs(station.rotationY - stationRotation) > 0.001;
+      if (drifted) {
+        station.x = stationX;
+        station.y = stationY;
+        station.z = stationZ;
+        station.rotationY = stationRotation;
+        const visual = this.structureVisuals.get(station.id);
+        if (visual) {
+          visual.group.position.set(stationX, stationY, stationZ);
+          visual.group.rotation.y = stationRotation;
+        }
+      }
+    } else {
       this.spawnStructure({
         id: 'volcano_flex_station',
         type: 'coaster_station',
         // The structure footprint sits on the boarding spur east of the
         // surveyed 100-ft gap, so no deck or roof overhangs the waterpark. The
         // south offset keeps its platform posts clear of the custom train.
-        x: site.station.x + 2.8,
-        y: site.station.y,
-        z: site.station.z + 0.8,
-        rotationY: -Math.PI / 2,
+        x: stationX,
+        y: stationY,
+        z: stationZ,
+        rotationY: stationRotation,
       });
     }
     if (!this.coasterRuntime) return;
-    const exists = this.coasterRuntime
-      .getHudSummaries()
-      .some((coaster) => coaster.id === VOLCANO_FLEX_ID);
-    if (!exists) {
-      this.coasterRuntime.addCoasterData(buildVolcanoFlexCoasterData());
+    const expected = buildVolcanoFlexCoasterData();
+    const existing = this.coasterRuntime
+      .exportCoasters()
+      .find((coaster) => coaster.id === VOLCANO_FLEX_ID);
+    if (!existing) {
+      this.coasterRuntime.addCoasterData(expected);
+      return;
     }
+    const staleLayout = !existing.pieceTags?.includes(VOLCANO_FLEX_LAYOUT_TAG);
+    const stationDrift = Math.hypot(
+      existing.stationPos.x - expected.stationPos.x,
+      existing.stationPos.z - expected.stationPos.z,
+    );
+    if (staleLayout || stationDrift > 0.01) {
+      this.coasterRuntime.deleteCoaster(VOLCANO_FLEX_ID);
+      this.coasterRuntime.addCoasterData(expected);
+    }
+  }
+
+  /** Holds the lead seat at the platform for a short, realistic dispatch. */
+  private updateCoasterBoarding(dt: number): void {
+    if (!this.coasterBoardPendingId) return;
+    if (this.ridingCoasterId !== this.coasterBoardPendingId) {
+      this.coasterBoardPendingId = null;
+      this.coasterBoardCountdown = 0;
+      return;
+    }
+    this.coasterBoardCountdown = Math.max(0, this.coasterBoardCountdown - dt);
+    if (this.coasterBoardCountdown > 0) return;
+    const coasterId = this.coasterBoardPendingId;
+    this.coasterBoardPendingId = null;
+    if (!this.coasterRuntime?.dispatchTrain(coasterId, true)) {
+      this.exitCoasterRide();
+      return;
+    }
+    this.cameraShakeTimer = Math.max(this.cameraShakeTimer, 0.12);
+    this.toast('VOLCANO FLEX launch — hold on!', 'discovery');
+    this.emitHud();
   }
 
   public createCoaster(name?: string, withStation = true): string | null {
@@ -27417,6 +27488,8 @@ export class GameEngine {
     if (!this.coasterRuntime) return false;
     if (this.ridingCoasterId === coasterId) {
       this.ridingCoasterId = null;
+      this.coasterBoardPendingId = null;
+      this.coasterBoardCountdown = 0;
       this.coasterRideAudio?.stop();
     }
     const ok = this.coasterRuntime.deleteCoaster(coasterId);
@@ -27685,13 +27758,21 @@ export class GameEngine {
       this.toast('Track validation required before dispatching train!', 'warning');
       return false;
     }
-    this.coasterRuntime.dispatchTrain(coasterId, true);
     this.ridingCoasterId = coasterId;
     if (summary.id === VOLCANO_FLEX_ID) {
+      // Put the rider in the lead seat at the gate, then dispatch on a short
+      // three-second launch countdown. This also guarantees the train starts
+      // from the load station after a saved game or a previous circuit.
+      this.coasterRuntime.resetTrain(coasterId);
+      this.coasterBoardPendingId = coasterId;
+      this.coasterBoardCountdown = 3;
       this.coasterRideAudio ??= new CoasterRideAudio();
       this.coasterRideAudio.start();
+      this.toast('Boarded VOLCANO FLEX — launching in 3 seconds', 'discovery');
+    } else {
+      this.coasterRuntime.dispatchTrain(coasterId, true);
+      this.toast(`Dispatched front row on ${summary.name} — press E to disembark`, 'discovery');
     }
-    this.toast(`Dispatched front row on ${summary.name} — press E to disembark`, 'discovery');
     this.emitHud();
     return true;
   }
@@ -27700,6 +27781,8 @@ export class GameEngine {
     if (!this.ridingCoasterId) return;
     this.coasterRideAudio?.stop();
     this.ridingCoasterId = null;
+    this.coasterBoardPendingId = null;
+    this.coasterBoardCountdown = 0;
     this.camera.rotation.order = 'YXZ';
     this.camera.up.set(0, 1, 0);
     const groundY = this.getPlayerGroundSurfaceY(

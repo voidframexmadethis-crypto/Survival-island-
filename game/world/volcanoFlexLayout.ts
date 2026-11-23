@@ -11,6 +11,8 @@ export const VOLCANO_FLEX_CLEARANCE_M = 30.48;
 export const VOLCANO_FLEX_ID = 'volcano_flex';
 export const VOLCANO_FLEX_NAME = 'VOLCANO FLEX';
 export const VOLCANO_FLEX_INVERSIONS = 15;
+/** Bumped when the island attraction is moved or regraded so old saves migrate. */
+export const VOLCANO_FLEX_LAYOUT_TAG = 'observation_tower_v2';
 export const VOLCANO_FLEX_HEIGHT_M = 274.32; // 900 ft
 
 const STATION_X = WATERPARK_SITE.x + WATERPARK_DECK_HALF_W + VOLCANO_FLEX_CLEARANCE_M;
@@ -40,7 +42,10 @@ export function getVolcanoFlexSite(): VolcanoFlexSite {
     station: { x: STATION_X, y: stationGround, z: STATION_Z, yaw: Math.PI / 2 },
     mountain: {
       x: mountainX,
-      y: getTerrainSurfaceHeight(mountainX, mountainZ) - 2,
+      // The tower now stands directly on the island surface. The old volcano
+      // shell was sunk two metres to bury its skirt; a real foundation should
+      // sit on the grade with its bevel and plaza visible.
+      y: getTerrainSurfaceHeight(mountainX, mountainZ),
       z: mountainZ,
       radius: 55,
       height: VOLCANO_FLEX_HEIGHT_M,
@@ -324,7 +329,14 @@ export function buildVolcanoFlexCoasterData(): SavedCoasterData {
       z: site.station.z,
     },
     nodes: buildVolcanoFlexNodes(),
-    pieceTags: [VOLCANO_FLEX_ID, 'themed', 'volcano', 'lsm', '15_inversions'],
+    pieceTags: [
+      VOLCANO_FLEX_ID,
+      'themed',
+      'observation_tower',
+      'lsm',
+      '15_inversions',
+      VOLCANO_FLEX_LAYOUT_TAG,
+    ],
     closedCircuit: true,
     coasterType: 'air_launch_wide',
   };

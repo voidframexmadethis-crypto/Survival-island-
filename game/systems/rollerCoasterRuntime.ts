@@ -742,51 +742,70 @@ export class RollerCoasterRuntime {
         spinePts.push(p.clone().addScaledVector(up, spineOffset));
       }
 
-      const railMat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(isWooden ? '#78350f' : entry.trackColor),
-        emissive: isVolcanoFlex ? new THREE.Color('#4a070c') : 0x000000,
-        emissiveIntensity: isVolcanoFlex ? 0.5 : 0,
-        roughness: isWooden ? 0.75 : isVolcanoFlex ? 0.34 : 0.28,
-        metalness: isWooden ? 0.05 : isVolcanoFlex ? 0.42 : 0.72,
-      });
-      const spineMat = new THREE.MeshStandardMaterial({
-        color: isWooden ? '#451a03' : isVolcanoFlex ? '#a5151f' : 0x334155,
-        emissive: isVolcanoFlex ? new THREE.Color('#3d0509') : 0x000000,
-        emissiveIntensity: isVolcanoFlex ? 0.55 : 0,
-        roughness: isVolcanoFlex ? 0.38 : 0.65,
-        metalness: isWooden ? 0.1 : isVolcanoFlex ? 0.34 : 0.78,
-      });
+      const railMat = isVolcanoFlex
+        ? new THREE.MeshPhysicalMaterial({
+            color: new THREE.Color(entry.trackColor),
+            roughness: 0.24,
+            metalness: 0.28,
+            clearcoat: 0.9,
+            clearcoatRoughness: 0.08,
+            envMapIntensity: 1.55,
+          })
+        : new THREE.MeshStandardMaterial({
+            color: new THREE.Color(isWooden ? '#78350f' : entry.trackColor),
+            roughness: isWooden ? 0.75 : 0.28,
+            metalness: isWooden ? 0.05 : 0.72,
+          });
+      const spineMat = isVolcanoFlex
+        ? new THREE.MeshPhysicalMaterial({
+            color: 0xa1141f,
+            roughness: 0.3,
+            metalness: 0.3,
+            clearcoat: 0.72,
+            clearcoatRoughness: 0.12,
+            envMapIntensity: 1.4,
+          })
+        : new THREE.MeshStandardMaterial({
+            color: isWooden ? '#451a03' : 0x334155,
+            roughness: 0.65,
+            metalness: isWooden ? 0.1 : 0.78,
+          });
       const tieMat = new THREE.MeshStandardMaterial({
-        color: isWooden ? '#92400e' : isVolcanoFlex ? '#b31622' : 0x1e293b,
-        roughness: isWooden ? 0.8 : 0.45,
-        metalness: isWooden ? 0.05 : isVolcanoFlex ? 0.3 : 0.65,
+        color: isWooden ? '#92400e' : isVolcanoFlex ? '#a3131e' : 0x1e293b,
+        roughness: isWooden ? 0.8 : isVolcanoFlex ? 0.48 : 0.45,
+        metalness: isWooden ? 0.05 : isVolcanoFlex ? 0.22 : 0.65,
       });
       const supportMat = new THREE.MeshStandardMaterial({
-        color: isWooden ? '#57534e' : isVolcanoFlex ? '#c41d29' : 0x64748b,
-        roughness: isVolcanoFlex ? 0.42 : 0.6,
-        metalness: isVolcanoFlex ? 0.35 : 0.4,
+        color: isWooden ? '#57534e' : isVolcanoFlex ? '#b81724' : 0x64748b,
+        roughness: isVolcanoFlex ? 0.4 : 0.6,
+        metalness: isVolcanoFlex ? 0.24 : 0.4,
       });
 
-      const segCount = Math.min(340, Math.max(32, Math.round(totalLength * 1.4)));
+      // The hero coaster gets a much denser sweep and rounder tubes so the
+      // 900-ft helix reads as a smooth fabricated rail, not a faceted preview.
+      const segCount = isVolcanoFlex
+        ? Math.min(1200, Math.max(600, Math.round(totalLength * 1.6)))
+        : Math.min(340, Math.max(32, Math.round(totalLength * 1.4)));
+      const radialSegments = isVolcanoFlex ? 16 : 10;
       const leftCurve = new THREE.CatmullRomCurve3(leftPts);
       const rightCurve = new THREE.CatmullRomCurve3(rightPts);
       const spineCurve = new THREE.CatmullRomCurve3(spinePts);
 
       const railRadius = isLogFlume ? 0.14 : isVolcanoFlex ? 0.085 : isWooden ? 0.09 : 0.055;
       const leftRail = new THREE.Mesh(
-        new THREE.TubeGeometry(leftCurve, segCount, railRadius, 10, false),
+        new THREE.TubeGeometry(leftCurve, segCount, railRadius, radialSegments, false),
         railMat,
       );
       const rightRail = new THREE.Mesh(
-        new THREE.TubeGeometry(rightCurve, segCount, railRadius, 10, false),
+        new THREE.TubeGeometry(rightCurve, segCount, railRadius, radialSegments, false),
         railMat,
       );
       const spineTube = isLogFlume
         ? new THREE.Mesh(new THREE.TubeGeometry(spineCurve, segCount, 0.45, 10, false), new THREE.MeshStandardMaterial({ color: '#0ea5e9', roughness: 0.15, metalness: 0.3, transparent: true, opacity: 0.85 }))
-        : new THREE.Mesh(new THREE.TubeGeometry(spineCurve, segCount, isVolcanoFlex ? 0.17 : isWooden ? 0.16 : 0.125, 10, false), spineMat);
+        : new THREE.Mesh(new THREE.TubeGeometry(spineCurve, segCount, isVolcanoFlex ? 0.17 : isWooden ? 0.16 : 0.125, radialSegments, false), spineMat);
 
-      leftRail.castShadow = false;
-      rightRail.castShadow = false;
+      leftRail.castShadow = isVolcanoFlex;
+      rightRail.castShadow = isVolcanoFlex;
       spineTube.castShadow = !isLogFlume;
       entry.meshGroup.add(leftRail, rightRail, spineTube);
 
@@ -845,7 +864,9 @@ export class RollerCoasterRuntime {
       baseCrossbar.dispose();
       const mergedTies = mergeNormalizedParts(tieParts);
       if (mergedTies) {
-        entry.meshGroup.add(new THREE.Mesh(mergedTies, tieMat));
+        const tieMesh = new THREE.Mesh(mergedTies, tieMat);
+        tieMesh.castShadow = isVolcanoFlex;
+        entry.meshGroup.add(tieMesh);
       }
       const mergedSupports = mergeNormalizedParts(supportParts);
       if (mergedSupports) {
@@ -1082,7 +1103,7 @@ export class RollerCoasterRuntime {
   }
 
   /**
-   * Distance-culls track meshes and the volcanic detail without stopping the
+   * Distance-culls track meshes and the tower detail without stopping the
    * train simulation, so approaching the park never rebuilds anything.
    */
   public setViewDistance(

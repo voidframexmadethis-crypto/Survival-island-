@@ -6,6 +6,7 @@ import {
   VOLCANO_FLEX_HEIGHT_M,
   VOLCANO_FLEX_ID,
   VOLCANO_FLEX_INVERSIONS,
+  VOLCANO_FLEX_LAYOUT_TAG,
   buildVolcanoFlexCoasterData,
   getVolcanoFlexSite,
 } from '../world/volcanoFlexLayout';
@@ -46,6 +47,7 @@ test('the prebuilt track is a closed, valid, 15-inversion launch circuit', () =>
   assert.equal(data.name, 'VOLCANO FLEX');
   assert.equal(data.closedCircuit, true);
   assert.equal(data.trainCarCount, 5);
+  assert.ok(data.pieceTags?.includes(VOLCANO_FLEX_LAYOUT_TAG));
   assert.ok(data.nodes.length > 300);
   assert.ok(data.nodes.some((node) => node.segmentType === 'lsm_launch'));
   assert.ok(
@@ -158,12 +160,16 @@ test('the lattice observation tower, animated elevator and armored lead car are 
   const environment = buildVolcanoFlexEnvironment();
   for (const name of [
     'tower-foundation',
+    'tower-plaza-paving',
+    'tower-plaza-curb',
     'tower-glass-core',
+    'tower-core-floor-rings',
     'tower-lattice',
     'tower-lattice-columns',
     'tower-lattice-braces',
     'tower-lattice-rings',
     'tower-elevator-car',
+    'tower-track-supports',
     'tower-launch-portal',
     'tower-launch-ring',
     'tower-observation-crown',
