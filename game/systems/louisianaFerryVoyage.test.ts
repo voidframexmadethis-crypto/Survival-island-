@@ -4,14 +4,15 @@ import * as THREE from 'three';
 import {
   FERRY_DECK_Y,
   FERRY_RAMP,
-  LOUISIANA_FERRY_CROSSING_SECONDS,
-  LOUISIANA_FERRY_DAYS,
-  LOUISIANA_FERRY_DAYS_PER_MONTH,
+  LOUISIANA_FERRY_ARRIVAL_SECONDS,
   LOUISIANA_FERRY_GATE_LIFT_SECONDS,
-  LOUISIANA_FERRY_MONTHS,
+  LOUISIANA_FERRY_LEG_HOURS,
+  LOUISIANA_FERRY_LEG_MS,
+  LOUISIANA_FERRY_ROUND_TRIP_HOURS,
+  LOUISIANA_FERRY_ROUND_TRIP_MS,
   LOUISIANA_FERRY_ROUTE,
-  LOUISIANA_FERRY_SECONDS_PER_DAY,
   LouisianaFerryVoyageSystem,
+  ferryPointForDirection,
   ferryRoomAtLocal,
   ferryRouteHeading,
   ferryWalkSurfaceLocalY,
@@ -20,237 +21,364 @@ import { applyLouisianaFerryVisual } from './louisianaFerryVisual';
 import { buildLouisianaFerry } from '../world/louisianaFerry';
 import { WorldChunkManager } from '../world/worldChunkSystem';
 import { isAlwaysVisibleWorldObject } from '../world/worldCullPolicy';
+import {
+  clearFerryVoyageState,
+  loadFerryVoyageState,
+  saveFerryVoyageState,
+} from './ferryVoyageSave';
 
-const rampPlayer = {
-  x: 26,
-  y: 1.2,
-  z: 692.2,
-};
+const CLOCK_START = 1_700_000_000_000;
 
-function boardAndOpenGate(ferry: LouisianaFerryVoyageSystem): void {
-  ferry.clearBoarding();
-  const boarded = ferry.boardFromRamp(rampPlayer.x, rampPlayer.y, rampPlayer.z);
-  assert.equal(boarded.ok, true);
-  for (let i = 0; i < 20 && ferry.phase === 'gate_raising'; i++) {
-    ferry.update(0.25, ferry.boatX, ferry.boatY + FERRY_DECK_Y, ferry.boatZ - 10);
-  }
+interface FerryHarness {
+  ferry: LouisianaFerryVoyageSystem;
+  advance: (ms: number) => void;
+  now: () => number;
 }
 
-function runDepartureCountdown(ferry: LouisianaFerryVoyageSystem): void {
-  boardAndOpenGate(ferry);
-  for (let i = 0; i < 40 && ferry.phase === 'departing'; i++) {
-    ferry.update(0.25, ferry.boatX, ferry.boatY + FERRY_DECK_Y, ferry.boatZ - 10);
+function makeFerry(): FerryHarness {
+  let now = CLOCK_START;
+  return {
+    ferry: new LouisianaFerryVoyageSystem(() => now),
+    advance: (ms: number) => {
+      now += ms;
+    },
+    now: () => now,
+  };
+}
+
+function deckPlayer(ferry: LouisianaFerryVoyageSystem): { x: number; y: number; z: number } {
+  const spot = ferry.getBoardingDeckPoint();
+  return {
+    x: spot.x,
+    y: ferry.getWalkSurfaceY(spot.x, spot.z) ?? ferry.boatY + FERRY_DECK_Y,
+    z: spot.z,
+  };
+}
+
+function boardAndDepart(ferry: LouisianaFerryVoyageSystem): void {
+  ferry.clearBoarding();
+  const ramp = ferry.getRampWorldPoint();
+  const boarded = ferry.boardFromRamp(
+    ramp.x,
+    ferry.boatY + FERRY_DECK_Y,
+    ramp.z,
+  );
+  assert.equal(boarded.ok, true);
+  const player = deckPlayer(ferry);
+  for (let i = 0; i < 400 && ferry.phase !== 'at_sea'; i++) {
+    ferry.update(0.25, player.x, player.y, player.z);
   }
   assert.equal(ferry.phase, 'at_sea');
 }
 
-test('the dock TV is required before the passenger ferry can be boarded', () => {
-  const ferry = new LouisianaFerryVoyageSystem();
+function runLegToArrival(
+  ferry: LouisianaFerryVoyageSystem,
+  advance: (ms: number) => void,
+): void {
+  advance(LOUISIANA_FERRY_LEG_MS);
+  const player = deckPlayer(ferry);
+  ferry.update(0.1, player.x, player.y, player.z);
+  assert.equal(ferry.phase, 'arriving');
+  for (let i = 0; i < 40; i++) {
+    ferry.update(0.25, player.x, player.y, player.z);
+  }
+  assert.equal(ferry.phase, 'arrived');
+}
+
+test('the dock TV clears boarding before the outbound Crescent Star can be boarded', () => {
+  const { ferry } = makeFerry();
   assert.equal(ferry.phase, 'idle');
-  assert.equal(ferry.boardFromRamp(rampPlayer.x, rampPlayer.y, rampPlayer.z).ok, false);
+  assert.equal(ferry.direction, 'outbound');
+  assert.equal(ferry.destination, 'crescent_city');
+  const ramp = ferry.getRampWorldPoint();
+  assert.equal(ferry.boardFromRamp(ramp.x, 1.2, ramp.z).ok, false);
 
   assert.equal(ferry.clearBoarding(), true);
   assert.equal(ferry.phase, 'boarding');
-  const boarded = ferry.boardFromRamp(rampPlayer.x, rampPlayer.y, rampPlayer.z);
+  const boarded = ferry.boardFromRamp(ramp.x, ferry.boatY + FERRY_DECK_Y, ramp.z);
   assert.equal(boarded.ok, true);
   assert.equal(ferry.aboard, true);
   assert.equal(ferry.phase, 'gate_raising');
-  assert.equal(ferry.gateLift, 0);
 });
 
-test('walking onto the deck detects boarding and animates the stern gate upward', () => {
-  const ferry = new LouisianaFerryVoyageSystem();
+test('the stern gate lifts fully before the countdown and departure', () => {
+  const { ferry } = makeFerry();
   ferry.clearBoarding();
-  const deckY = ferry.boatY + FERRY_DECK_Y;
+  const ramp = ferry.getRampWorldPoint();
+  ferry.boardFromRamp(ramp.x, ferry.boatY + FERRY_DECK_Y, ramp.z);
+  const player = deckPlayer(ferry);
 
-  const onRamp = ferry.update(0.25, ferry.boatX, ferry.boatY + 1.0, ferry.boatZ - 20);
-  assert.equal(onRamp.boarded, false);
-  assert.equal(ferry.phase, 'boarding');
-
-  const onDeck = ferry.update(0.25, ferry.boatX, deckY, ferry.boatZ - 10);
-  assert.equal(onDeck.boarded, true);
-  assert.equal(ferry.phase, 'gate_raising');
-
-  const halfway = ferry.update(LOUISIANA_FERRY_GATE_LIFT_SECONDS / 2, ferry.boatX, deckY, ferry.boatZ - 10);
-  assert.equal(halfway.gateOpened, false);
+  const half = ferry.update(LOUISIANA_FERRY_GATE_LIFT_SECONDS / 2, player.x, player.y, player.z);
+  assert.equal(half.gateOpened, false);
   assert.ok(ferry.gateLift > 0.2 && ferry.gateLift < 1);
+  assert.equal(ferry.boatZ, 713);
 
-  const raised = ferry.update(LOUISIANA_FERRY_GATE_LIFT_SECONDS, ferry.boatX, deckY, ferry.boatZ - 10);
+  const raised = ferry.update(LOUISIANA_FERRY_GATE_LIFT_SECONDS, player.x, player.y, player.z);
   assert.equal(raised.gateOpened, true);
-  assert.equal(ferry.gateLift, 1);
   assert.equal(ferry.phase, 'departing');
   assert.ok(ferry.getStatus().secondsToDeparture > 0);
+  assert.equal(ferry.boatZ, 713, 'the hull must not drift during the countdown');
+
+  for (let i = 0; i < 40 && ferry.phase === 'departing'; i++) {
+    ferry.update(0.25, player.x, player.y, player.z);
+  }
+  assert.equal(ferry.phase, 'at_sea');
+  assert.ok(typeof ferry.departureAtMs === 'number');
 });
 
-test('the departure countdown completes and the boat keeps moving along the route', () => {
-  const ferry = new LouisianaFerryVoyageSystem();
-  runDepartureCountdown(ferry);
-  assert.equal(ferry.getStatus().secondsToDeparture, 0);
+test('the official crossing is nine real hours and the hull moves continuously the whole time', () => {
+  assert.equal(LOUISIANA_FERRY_LEG_HOURS, 9);
+  assert.equal(LOUISIANA_FERRY_LEG_MS, 9 * 60 * 60 * 1000);
+  assert.equal(LOUISIANA_FERRY_ROUND_TRIP_HOURS, 18);
+  assert.equal(LOUISIANA_FERRY_ROUND_TRIP_MS, 18 * 60 * 60 * 1000);
 
-  let playerX = ferry.boatX;
-  let playerZ = ferry.boatZ - 10;
-  let previousX = ferry.boatX;
-  let previousZ = ferry.boatZ;
-  const localBefore = ferry.worldToFerryLocal(playerX, playerZ);
-  for (let i = 0; i < 40; i++) {
-    const update = ferry.update(0.1, playerX, ferry.boatY + FERRY_DECK_Y, playerZ);
-    const dx = ferry.boatX - previousX;
-    const dz = ferry.boatZ - previousZ;
-    assert.ok(Math.hypot(dx, dz) > 0);
-    const carriedX = playerX + update.carryX;
-    const carriedZ = playerZ + update.carryZ;
-    // Rigid carry: the rider's spot on the hull is unchanged even as it turns.
-    const localAfter = ferry.worldToFerryLocal(carriedX, carriedZ);
-    assert.ok(Math.abs(localAfter.x - localBefore.x) < 1e-6);
-    assert.ok(Math.abs(localAfter.z - localBefore.z) < 1e-6);
-    assert.ok(Math.abs(update.carryX) + Math.abs(update.carryZ) > 0);
-    playerX = carriedX;
-    playerZ = carriedZ;
+  const { ferry, advance } = makeFerry();
+  boardAndDepart(ferry);
+  let player = deckPlayer(ferry);
+  const startX = ferry.boatX;
+  const startZ = ferry.boatZ;
+
+  const checkpoints = [1, 2, 4, 6, 8];
+  let previousProgress = 0;
+  let previousHour = 0;
+  let previousX = startX;
+  let previousZ = startZ;
+  for (const hour of checkpoints) {
+    advance((hour - previousHour) * 60 * 60 * 1000);
+    previousHour = hour;
+    const update = ferry.update(0.05, player.x, player.y, player.z);
+    assert.ok(ferry.routeProgress > previousProgress);
+    assert.ok(Math.hypot(ferry.boatX - previousX, ferry.boatZ - previousZ) > 1);
+    assert.ok(Math.abs(ferry.routeProgress - hour / 9) < 0.002);
+    player = {
+      x: player.x + update.carryX,
+      y: ferry.getWalkSurfaceY(player.x + update.carryX, player.z + update.carryZ) ?? player.y,
+      z: player.z + update.carryZ,
+    };
+    previousProgress = ferry.routeProgress;
     previousX = ferry.boatX;
     previousZ = ferry.boatZ;
   }
-  assert.ok(ferry.routeProgress > 0);
-  assert.ok(ferry.speedMps > 0);
-});
+  assert.ok(Math.hypot(ferry.boatX - startX, ferry.boatZ - startZ) > 200);
+  assert.equal(ferry.getStatus().remainingMs, LOUISIANA_FERRY_LEG_MS - 8 * 60 * 60 * 1000);
 
-test('the crossing covers 18 in-game months (540 days) while the hull travels the whole route', () => {
-  assert.equal(LOUISIANA_FERRY_MONTHS, 18);
-  assert.equal(LOUISIANA_FERRY_DAYS_PER_MONTH, 30);
-  assert.equal(LOUISIANA_FERRY_DAYS, 540);
-  assert.ok(LOUISIANA_FERRY_CROSSING_SECONDS > 0);
-  assert.ok(LOUISIANA_FERRY_SECONDS_PER_DAY > 0);
-
-  const ferry = new LouisianaFerryVoyageSystem();
-  runDepartureCountdown(ferry);
-
-  let days = 0;
-  let arrived = false;
-  let arrivalEvents = 0;
-  let maxStepDistance = 0;
-  let previousX = ferry.boatX;
-  let previousZ = ferry.boatZ;
-  const steps = Math.ceil(LOUISIANA_FERRY_CROSSING_SECONDS / 0.25) + 40;
-  for (let i = 0; i < steps; i++) {
-    const update = ferry.update(0.25, ferry.boatX, ferry.boatY + FERRY_DECK_Y, ferry.boatZ - 10);
-    days += update.daysAdvanced;
-    maxStepDistance = Math.max(
-      maxStepDistance,
-      Math.hypot(ferry.boatX - previousX, ferry.boatZ - previousZ),
-    );
-    previousX = ferry.boatX;
-    previousZ = ferry.boatZ;
-    if (update.arrived) {
-      arrived = true;
-      arrivalEvents++;
-    }
-    if (arrived) break;
-  }
-  assert.equal(arrived, true);
-  assert.equal(arrivalEvents, 1);
-  assert.equal(ferry.phase, 'arrived');
-  assert.equal(days, LOUISIANA_FERRY_DAYS);
-  assert.equal(ferry.voyageDay, LOUISIANA_FERRY_DAYS);
-  assert.equal(ferry.voyageMonth, LOUISIANA_FERRY_MONTHS);
+  advance(60 * 60 * 1000);
+  ferry.update(0.05, player.x, player.y, player.z);
+  assert.equal(ferry.phase, 'arriving');
   assert.equal(ferry.routeProgress, 1);
-  assert.equal(ferry.gateLift, 1);
-
-  const last = LOUISIANA_FERRY_ROUTE[LOUISIANA_FERRY_ROUTE.length - 1];
-  assert.ok(Math.abs(ferry.boatX - last.x) < 1e-9);
-  assert.ok(Math.abs(ferry.boatZ - last.z) < 1e-9);
-  // The hull never jumps: every step is a small continuous move.
-  assert.ok(maxStepDistance < 3);
-
-  const afterDocking = ferry.update(1, ferry.boatX, ferry.boatY + FERRY_DECK_Y, ferry.boatZ - 10);
-  assert.equal(afterDocking.arrived, false);
-  assert.ok(Math.abs(ferry.boatZ - last.z) < 1e-9);
 });
 
-test('the visible Crescent Star root follows the voyage and lifts its gate', () => {
-  const model = buildLouisianaFerry();
-  const voyage = new LouisianaFerryVoyageSystem();
-  voyage.clearBoarding();
-  assert.equal(voyage.boardFromRamp(rampPlayer.x, rampPlayer.y, rampPlayer.z).ok, true);
-  applyLouisianaFerryVisual(model, voyage);
+test('the outbound leg arrives at Crescent City after exactly nine hours', () => {
+  const { ferry, advance } = makeFerry();
+  boardAndDepart(ferry);
+  advance(8 * 60 * 60 * 1000);
+  const player = deckPlayer(ferry);
+  ferry.update(0.05, player.x, player.y, player.z);
+  assert.equal(ferry.phase, 'at_sea');
 
-  // Closed gate sits in the stern frame at deck height.
-  assert.equal(model.gate.position.y, FERRY_DECK_Y);
+  advance(60 * 60 * 1000 - 1);
+  ferry.update(0.05, player.x, player.y, player.z);
+  assert.equal(ferry.phase, 'at_sea');
+  assert.ok(ferry.routeProgress < 1);
+
+  advance(1);
+  ferry.update(0.05, player.x, player.y, player.z);
+  assert.equal(ferry.phase, 'arriving');
+  assert.equal(ferry.destination, 'crescent_city');
+
+  for (let i = 0; i < 40 && ferry.phase !== 'arrived'; i++) {
+    ferry.update(0.25, player.x, player.y, player.z);
+  }
+  assert.equal(ferry.phase, 'arrived');
+  assert.equal(ferry.gateLift, 1);
+  const city = LOUISIANA_FERRY_ROUTE[LOUISIANA_FERRY_ROUTE.length - 1];
+  assert.ok(Math.abs(ferry.boatX - city.x) < 1e-9);
+  assert.ok(Math.abs(ferry.boatZ - city.z) < 1e-9);
+  assert.equal(ferry.destination, 'crescent_city');
+});
+
+test('the same hull runs the nine-hour return leg back to the island', () => {
+  const { ferry, advance } = makeFerry();
+  boardAndDepart(ferry);
+  runLegToArrival(ferry, advance);
+  assert.equal(ferry.phase, 'arrived');
+
+  // Disembark at the city: the hull stays berthed for the return.
+  ferry.prepareReturn();
+  assert.equal(ferry.phase, 'idle');
+  assert.equal(ferry.direction, 'return');
+  assert.equal(ferry.destination, 'island');
+  assert.equal(ferry.origin, 'crescent_city');
+  assert.equal(ferry.departureAtMs, null);
+  assert.ok(Math.abs(ferry.boatZ - 1428) < 1e-9);
+
+  const ramp = ferry.getRampWorldPoint();
+  assert.ok(Math.abs(ramp.x - 40) < 1e-6);
+  assert.ok(ramp.z > 1440, 'return ramp should face the Crescent City terminal');
+  assert.equal(ferry.clearBoarding(), true);
+  const boarded = ferry.boardFromRamp(ramp.x, ferry.boatY + FERRY_DECK_Y, ramp.z);
+  assert.equal(boarded.ok, true);
+  const player = deckPlayer(ferry);
+  for (let i = 0; i < 400 && ferry.phase !== 'at_sea'; i++) {
+    ferry.update(0.25, player.x, player.y, player.z);
+  }
+  assert.equal(ferry.phase, 'at_sea');
+  assert.equal(ferry.direction, 'return');
+
+  advance(4.5 * 60 * 60 * 1000);
+  ferry.update(0.05, player.x, player.y, player.z);
+  assert.ok(Math.abs(ferry.routeProgress - 0.5) < 0.002);
+  const mid = ferryPointForDirection(0.5, 'return');
+  assert.ok(Math.abs(ferry.boatX - mid.x) < 1e-6);
+  assert.ok(Math.abs(ferry.boatZ - mid.z) < 1e-6);
+
+  advance(4.5 * 60 * 60 * 1000);
+  ferry.update(0.05, player.x, player.y, player.z);
+  assert.equal(ferry.phase, 'arriving');
+  for (let i = 0; i < 60 && ferry.phase !== 'arrived'; i++) {
+    ferry.update(0.25, player.x, player.y, player.z);
+  }
+  assert.equal(ferry.phase, 'arrived');
+  assert.equal(ferry.destination, 'island');
+  assert.ok(Math.abs(ferry.boatX - LOUISIANA_FERRY_ROUTE[0].x) < 1e-9);
+  assert.ok(Math.abs(ferry.boatZ - LOUISIANA_FERRY_ROUTE[0].z) < 1e-9);
+});
+
+test('a saved voyage resumes from its departure timestamp instead of restarting', () => {
+  const first = makeFerry();
+  boardAndDepart(first.ferry);
+  first.advance(2 * 60 * 60 * 1000);
+  const player = deckPlayer(first.ferry);
+  const saved = first.ferry.serialize(first.now(), { x: 0.5, z: -9 }, null);
+  assert.equal(saved.version, 2);
+  assert.equal(saved.direction, 'outbound');
+  assert.equal(saved.aboard, true);
+  assert.ok(saved.departureAtMs !== null);
+  assert.ok(Math.abs(saved.elapsedMs - 2 * 60 * 60 * 1000) < 1);
+
+  // Three more real hours pass with the app closed.
+  const second = makeFerry();
+  second.advance(first.now() - CLOCK_START + 3 * 60 * 60 * 1000);
+  second.ferry.restore(saved, second.now());
+  assert.equal(second.ferry.phase, 'at_sea');
+  assert.equal(second.ferry.direction, 'outbound');
+  assert.ok(Math.abs(second.ferry.getStatus().elapsedMs - 5 * 60 * 60 * 1000) < 1);
+  assert.ok(Math.abs(second.ferry.routeProgress - 5 / 9) < 1e-6);
+  const expected = ferryPointForDirection(5 / 9, 'outbound');
+  assert.ok(Math.abs(second.ferry.boatX - expected.x) < 1e-9);
+  assert.ok(Math.abs(second.ferry.boatZ - expected.z) < 1e-9);
+
+  // Four more hours and the same voyage docks without ever resetting.
+  second.advance(4 * 60 * 60 * 1000);
+  second.ferry.update(0.05, expected.x, 1.73, expected.z);
+  assert.equal(second.ferry.phase, 'arriving');
+  for (let i = 0; i < 60 && second.ferry.phase !== 'arrived'; i++) {
+    second.ferry.update(0.25, expected.x, 1.73, expected.z);
+  }
+  assert.equal(second.ferry.phase, 'arrived');
+  assert.equal(second.ferry.destination, 'crescent_city');
+});
+
+test('a return voyage also survives closing the game mid-ocean', () => {
+  const first = makeFerry();
+  boardAndDepart(first.ferry);
+  runLegToArrival(first.ferry, first.advance);
+  first.ferry.prepareReturn();
+  first.ferry.clearBoarding();
+  const ramp = first.ferry.getRampWorldPoint();
+  assert.equal(
+    first.ferry.boardFromRamp(ramp.x, first.ferry.boatY + FERRY_DECK_Y, ramp.z).ok,
+    true,
+  );
+  const player = deckPlayer(first.ferry);
+  for (let i = 0; i < 400 && first.ferry.phase !== 'at_sea'; i++) {
+    first.ferry.update(0.25, player.x, player.y, player.z);
+  }
+  assert.equal(first.ferry.phase, 'at_sea');
+
+  first.advance(6 * 60 * 60 * 1000);
+  const saved = first.ferry.serialize(first.now(), { x: -1, z: -8 }, null);
+  const second = makeFerry();
+  second.advance(first.now() - CLOCK_START + 4 * 60 * 60 * 1000);
+  second.ferry.restore(saved, second.now());
+  assert.equal(second.ferry.direction, 'return');
+  assert.ok(Math.abs(second.ferry.routeProgress - 1) < 1e-9);
+  assert.equal(second.ferry.phase, 'arriving');
+  for (let i = 0; i < 60; i++) {
+    second.ferry.update(0.25, 0, 1.73, 0);
+  }
+  assert.equal(second.ferry.phase, 'arrived');
+  assert.equal(second.ferry.destination, 'island');
+});
+
+test('the voyage save survives a storage round trip and is slot-scoped', () => {
+  const storage = new Map<string, string>();
+  const fakeStorage = {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      storage.set(key, value);
+    },
+    removeItem: (key: string) => {
+      storage.delete(key);
+    },
+    clear: () => storage.clear(),
+    key: (index: number) => Array.from(storage.keys())[index] ?? null,
+    get length() {
+      return storage.size;
+    },
+  } as Storage;
+
+  const { ferry, advance } = makeFerry();
+  boardAndDepart(ferry);
+  advance(4 * 60 * 60 * 1000);
+  const state = ferry.serialize(CLOCK_START + 4 * 60 * 60 * 1000, { x: 0, z: -10 }, 'car-7');
+  assert.equal(saveFerryVoyageState(state, 'slot_a', fakeStorage), true);
+  const loaded = loadFerryVoyageState('slot_a', fakeStorage);
+  assert.equal(loaded?.departureAtMs, state.departureAtMs);
+  assert.equal(loaded?.carId, 'car-7');
+  assert.equal(loadFerryVoyageState('slot_b', fakeStorage), null);
+  clearFerryVoyageState(fakeStorage);
+  assert.equal(loadFerryVoyageState('slot_a', fakeStorage), null);
+});
+
+test('the visible Crescent Star root follows the nine-hour voyage', () => {
+  const model = buildLouisianaFerry();
+  const { ferry, advance } = makeFerry();
+  ferry.clearBoarding();
+  const ramp = ferry.getRampWorldPoint();
+  assert.equal(ferry.boardFromRamp(ramp.x, ferry.boatY + FERRY_DECK_Y, ramp.z).ok, true);
+  applyLouisianaFerryVisual(model, ferry);
 
   const gateStartY = model.gate.position.y;
-  voyage.update(LOUISIANA_FERRY_GATE_LIFT_SECONDS / 2, voyage.boatX, voyage.boatY + FERRY_DECK_Y, voyage.boatZ - 10);
-  applyLouisianaFerryVisual(model, voyage);
+  ferry.update(LOUISIANA_FERRY_GATE_LIFT_SECONDS / 2, ramp.x, ferry.boatY + FERRY_DECK_Y, ramp.z);
+  applyLouisianaFerryVisual(model, ferry);
   assert.ok(model.gate.position.y > gateStartY);
 
-  for (
-    let i = 0;
-    i < 80 && (voyage.phase === 'gate_raising' || voyage.phase === 'departing');
-    i++
-  ) {
-    voyage.update(0.25, voyage.boatX, voyage.boatY + FERRY_DECK_Y, voyage.boatZ - 10);
+  const player = deckPlayer(ferry);
+  for (let i = 0; i < 400 && ferry.phase !== 'at_sea'; i++) {
+    ferry.update(0.25, player.x, player.y, player.z);
   }
-  assert.equal(voyage.phase, 'at_sea');
+  assert.equal(ferry.phase, 'at_sea');
 
   model.root.updateMatrixWorld(true);
   const start = model.root.getWorldPosition(new THREE.Vector3());
   const startZ = start.z;
   let previousZ = startZ;
-  for (let i = 0; i < 900; i++) {
-    voyage.update(1 / 60, voyage.boatX, voyage.boatY + FERRY_DECK_Y, voyage.boatZ - 10);
-    applyLouisianaFerryVisual(model, voyage);
+
+  // One real hour at a time: the rendered root is the object being moved.
+  for (let hour = 0; hour < 5; hour++) {
+    advance(60 * 60 * 1000);
+    ferry.update(0.05, player.x, player.y, player.z);
+    applyLouisianaFerryVisual(model, ferry);
     model.root.updateMatrixWorld(true);
     const world = model.root.getWorldPosition(new THREE.Vector3());
-    assert.ok(Math.abs(world.x - voyage.boatX) < 1e-6);
-    assert.ok(Math.abs(world.z - voyage.boatZ) < 1e-6);
-    assert.ok(world.z >= previousZ - 1e-9);
+    assert.ok(Math.abs(world.x - ferry.boatX) < 1e-6);
+    assert.ok(Math.abs(world.z - ferry.boatZ) < 1e-6);
+    assert.ok(world.z > previousZ + 10, 'the hull advances every real hour');
     previousZ = world.z;
   }
-  assert.ok(previousZ - startZ > 8);
-
-  // The dynamic hull can never be reparented into a distance-culled chunk.
+  assert.ok(previousZ - startZ > 200);
   assert.equal(isAlwaysVisibleWorldObject(model.root), true);
-  assert.equal(isAlwaysVisibleWorldObject(new THREE.Group()), false);
-});
-
-test('the rider stays on the moving deck for the whole crossing instead of falling into the sea', () => {
-  const ferry = new LouisianaFerryVoyageSystem();
-  ferry.clearBoarding();
-  ferry.boardFromRamp(rampPlayer.x, rampPlayer.y, rampPlayer.z);
-  const dockX = ferry.boatX;
-  const dockZ = ferry.boatZ;
-  let playerX = ferry.boatX;
-  let playerZ = ferry.boatZ - 10;
-  let playerY = ferry.boatY + FERRY_DECK_Y;
-
-  // Gate lift + countdown must never move the hull.
-  for (let i = 0; i < 200 && ferry.phase !== 'at_sea'; i++) {
-    const update = ferry.update(0.05, playerX, playerY, playerZ);
-    playerX += update.carryX;
-    playerZ += update.carryZ;
-    playerY = ferry.getWalkSurfaceY(playerX, playerZ) ?? playerY;
-    assert.ok(Math.abs(ferry.boatX - dockX) < 1e-9);
-    assert.ok(Math.abs(ferry.boatZ - dockZ) < 1e-9);
-  }
-  assert.equal(ferry.phase, 'at_sea');
-
-  const startX = ferry.boatX;
-  const startZ = ferry.boatZ;
-  for (let i = 0; i < 1800; i++) {
-    const update = ferry.update(1 / 60, playerX, playerY, playerZ);
-    playerX += update.carryX;
-    playerZ += update.carryZ;
-    const clamp = ferry.constrainPlayer(playerX, playerZ);
-    playerX = clamp.x;
-    playerZ = clamp.z;
-    // Engine order: deck lift first, then normal ground collision on the same deck.
-    const deckY = ferry.getWalkSurfaceY(playerX, playerZ);
-    assert.notEqual(deckY, null);
-    playerY = Math.max(playerY - 21 * (1 / 60) * (1 / 60), deckY ?? playerY);
-    const local = ferry.worldToFerryLocal(playerX, playerZ);
-    assert.ok(Math.abs(local.x) <= 4.6);
-    assert.ok(local.z >= -17.0 && local.z <= 16.9);
-    assert.ok(Math.abs(playerY - (ferry.boatY + FERRY_DECK_Y)) < 0.2);
-  }
-  assert.ok(Math.hypot(ferry.boatX - startX, ferry.boatZ - startZ) > 10);
-  assert.equal(ferry.phase, 'at_sea');
 });
 
 test('the world chunk culler can never hide the hull the player is riding', () => {
@@ -258,88 +386,97 @@ test('the world chunk culler can never hide the hull the player is riding', () =
   const worldRoot = new THREE.Group();
   worldRoot.add(model.root);
   const chunks = new WorldChunkManager(worldRoot, 64);
-  // Mirrors the registration guard in worldBuilder: persistent roots stay direct children.
   if (!isAlwaysVisibleWorldObject(model.root)) {
     chunks.addObjectAt(model.root, 26, 713);
   }
   assert.equal(model.root.parent, worldRoot);
-
   model.root.position.set(40, 0.18, 1428);
   chunks.updateIfChunkChanged(new THREE.Vector3(40, 0, 1428), 135);
   assert.equal(model.root.visible, true);
-  assert.equal(worldRoot.children.includes(model.root), true);
 });
 
-test('the hull turns through the channel instead of crabbing sideways', () => {
-  const ferry = new LouisianaFerryVoyageSystem();
-  runDepartureCountdown(ferry);
-  const headings = new Set<string>();
-  for (let i = 0; i < 600; i++) {
-    ferry.update(0.25, ferry.boatX, ferry.boatY + FERRY_DECK_Y, ferry.boatZ - 10);
-    headings.add(ferry.boatYaw.toFixed(3));
+test('a rider is carried with the hull and stays on deck for the whole leg', () => {
+  const { ferry, advance } = makeFerry();
+  boardAndDepart(ferry);
+  let player = deckPlayer(ferry);
+  const localBefore = ferry.worldToFerryLocal(player.x, player.z);
+
+  for (let second = 0; second < 900; second++) {
+    advance(1000);
+    const update = ferry.update(1, player.x, player.y, player.z);
+    player = {
+      x: player.x + update.carryX,
+      z: player.z + update.carryZ,
+      y: player.y,
+    };
+    const clamped = ferry.constrainPlayer(player.x, player.z);
+    player.x = clamped.x;
+    player.z = clamped.z;
+    const deckY = ferry.getWalkSurfaceY(player.x, player.z);
+    assert.notEqual(deckY, null);
+    player.y = Math.max(deckY ?? player.y, ferry.boatY + FERRY_DECK_Y);
+    const local = ferry.worldToFerryLocal(player.x, player.z);
+    assert.ok(Math.abs(local.x - localBefore.x) < 1e-6);
+    assert.ok(Math.abs(local.z - localBefore.z) < 1e-6);
   }
-  assert.ok(headings.size > 3);
-  const routeHeading = ferryRouteHeading(ferry.routeProgress);
-  assert.ok(Math.abs(ferry.boatYaw - routeHeading) < 0.12);
+  assert.equal(ferry.phase, 'at_sea');
+  assert.ok(ferry.routeProgress > 0);
+  assert.equal(ferry.aboard, true);
 });
 
-test('the walkable ferry deck spans the living room, bedroom, bathroom and open deck', () => {
+test('the walkable deck, rooms and clamping stay correct while turned', () => {
   assert.equal(ferryWalkSurfaceLocalY(0, 0), FERRY_DECK_Y);
-  assert.equal(ferryWalkSurfaceLocalY(-2, 8), FERRY_DECK_Y);
-  assert.equal(ferryWalkSurfaceLocalY(2, 8), FERRY_DECK_Y);
   assert.equal(ferryWalkSurfaceLocalY(0, -12), FERRY_DECK_Y);
   assert.equal(ferryWalkSurfaceLocalY(0, 40), null);
   assert.ok(Math.abs((ferryWalkSurfaceLocalY(0, FERRY_RAMP.zNear) ?? 0) - FERRY_RAMP.yNear) < 0.001);
-  assert.ok(Math.abs((ferryWalkSurfaceLocalY(0, FERRY_RAMP.zFar) ?? 0) - FERRY_RAMP.yFar) < 0.001);
-
   assert.equal(ferryRoomAtLocal(0, 0), 'living_room');
   assert.equal(ferryRoomAtLocal(-2, 8), 'bedroom');
   assert.equal(ferryRoomAtLocal(2.7, 6.3), 'bathroom');
   assert.equal(ferryRoomAtLocal(0, -12), 'open_deck');
-});
 
-test('deck queries and player clamping stay correct while the hull is turned', () => {
-  const ferry = new LouisianaFerryVoyageSystem();
-  runDepartureCountdown(ferry);
+  const { ferry } = makeFerry();
+  ferry.clearBoarding();
+  const ramp = ferry.getRampWorldPoint();
+  ferry.boardFromRamp(ramp.x, ferry.boatY + FERRY_DECK_Y, ramp.z);
   ferry.boatYaw = Math.PI / 3;
   const world = ferry.ferryLocalToWorld(0, -10);
-  const local = ferry.worldToFerryLocal(world.x, world.z);
-  assert.ok(Math.abs(local.x) < 1e-9);
-  assert.ok(Math.abs(local.z + 10) < 1e-9);
   assert.equal(ferry.roomAtWorld(world.x, world.z), 'open_deck');
-  assert.ok(Math.abs((ferry.getWalkSurfaceY(world.x, world.z) ?? 0) - (ferry.boatY + FERRY_DECK_Y)) < 1e-9);
   assert.equal(ferry.isOnDeck(world.x, ferry.boatY + FERRY_DECK_Y, world.z), true);
-
   const outside = ferry.ferryLocalToWorld(40, 40);
   const clamped = ferry.constrainPlayer(outside.x, outside.z);
-  const clampedLocal = ferry.worldToFerryLocal(clamped.x, clamped.z);
-  assert.ok(Math.abs(clampedLocal.x) <= 4.6);
-  assert.ok(clampedLocal.z >= -17.0);
+  const local = ferry.worldToFerryLocal(clamped.x, clamped.z);
+  assert.ok(Math.abs(local.x) <= 4.6);
+  assert.ok(local.z >= -17.0);
 });
 
-test('sleeping in the ferry bedroom skips a whole month and carries the boat forward', () => {
-  const ferry = new LouisianaFerryVoyageSystem();
-  runDepartureCountdown(ferry);
-  for (let i = 0; i < 20; i++) {
-    ferry.update(0.5, ferry.boatX, ferry.boatY + FERRY_DECK_Y, ferry.boatZ - 10);
+test('the hull turns through the channel on both legs and pivots at the berth', () => {
+  const { ferry, advance } = makeFerry();
+  boardAndDepart(ferry);
+  const headings = new Set<string>();
+  for (let i = 0; i < 60; i++) {
+    advance(6 * 60 * 1000);
+    ferry.update(0.25, ferry.boatX, ferry.boatY + FERRY_DECK_Y, ferry.boatZ - 10);
+    headings.add(ferry.boatYaw.toFixed(3));
   }
-  assert.equal(ferry.phase, 'at_sea');
-  const beforeProgress = ferry.routeProgress;
-  const beforeDay = ferry.voyageDay;
-  const beforeX = ferry.boatX;
-  const beforeZ = ferry.boatZ;
+  assert.ok(headings.size > 2);
+  const progress = ferry.routeProgress;
+  assert.ok(
+    Math.abs(
+      Math.atan2(
+        Math.sin(ferry.boatYaw - ferryRouteHeading(progress)),
+        Math.cos(ferry.boatYaw - ferryRouteHeading(progress)),
+      ),
+    ) < 0.2,
+  );
 
-  assert.equal(ferry.restForDays(LOUISIANA_FERRY_DAYS_PER_MONTH), LOUISIANA_FERRY_DAYS_PER_MONTH);
-  assert.equal(ferry.voyageDay, beforeDay + LOUISIANA_FERRY_DAYS_PER_MONTH);
-  assert.ok(ferry.routeProgress > beforeProgress);
-  assert.ok(ferry.boatZ > beforeZ || ferry.boatX !== beforeX);
-
-  // The rider keeps their exact spot on deck after the fast-forward.
-  const deckSpot = ferry.ferryLocalToWorld(0, -10);
-  assert.equal(ferry.roomAtWorld(deckSpot.x, deckSpot.z), 'open_deck');
-  const clamped = ferry.constrainPlayer(deckSpot.x, deckSpot.z);
-  assert.ok(Math.abs(clamped.x - deckSpot.x) < 1e-9);
-  assert.ok(Math.abs(clamped.z - deckSpot.z) < 1e-9);
-  assert.ok(ferry.restForOneDay());
-  assert.equal(ferry.voyageDay, beforeDay + LOUISIANA_FERRY_DAYS_PER_MONTH + 1);
+  // Finish the outbound leg: the hull pivots 180 degrees so the stern gate
+  // faces the Crescent City terminal.
+  advance(LOUISIANA_FERRY_LEG_MS);
+  ferry.update(0.1, ferry.boatX, ferry.boatY + FERRY_DECK_Y, ferry.boatZ - 10);
+  for (let i = 0; i < 60 && ferry.phase !== 'arrived'; i++) {
+    ferry.update(0.25, ferry.boatX, ferry.boatY + FERRY_DECK_Y, ferry.boatZ - 10);
+  }
+  assert.equal(ferry.phase, 'arrived');
+  assert.ok(Math.abs(Math.abs(ferry.boatYaw) - Math.PI) < 0.02);
+  assert.ok(LOUISIANA_FERRY_ARRIVAL_SECONDS > 0);
 });

@@ -108,12 +108,19 @@ import {
 import {
   FERRY_DECK_Y,
   FERRY_STERN_Z,
-  LOUISIANA_FERRY_DAYS,
-  LOUISIANA_FERRY_DAYS_PER_MONTH,
-  LOUISIANA_FERRY_MONTHS,
+  LOUISIANA_FERRY_LEG_MS,
+  LOUISIANA_FERRY_LEG_HOURS,
+  LOUISIANA_FERRY_ROUND_TRIP_HOURS,
   LouisianaFerryVoyageSystem,
+  formatFerryDuration,
+  type LouisianaFerrySaveState,
 } from '../systems/louisianaFerryVoyage';
 import { applyLouisianaFerryVisual } from '../systems/louisianaFerryVisual';
+import {
+  clearFerryVoyageState,
+  loadFerryVoyageState,
+  saveFerryVoyageState,
+} from '../systems/ferryVoyageSave';
 import { getCausewaySurfaceY } from '../systems/islandMainlandTransit';
 import {
   MAINLAND_BUSINESSES,
@@ -760,10 +767,11 @@ export class GameEngine {
   private ferryDepartureHintShown = false;
   private ferryDockedNoticeShown = false;
   private ferryVoyageCarId: string | null = null;
-  private ferryMonthNotice = 0;
   private ferryWakeAccum = 0;
   private ferrySmokeAccum = 0;
   private ferryHornCooldown = 0;
+  private ferryLastPersistMs = 0;
+  private ferryHudAccum = 0;
   private mainlandStuntCooldown = 0;
   private beeGate: BeeGateHandle | null = null;
   private beeGateAnchor: THREE.Group | null = null;
@@ -2032,6 +2040,7 @@ export class GameEngine {
     window.addEventListener('blur', this.onWindowBlur);
     window.addEventListener('pagehide', this.onWindowBlur);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
+    window.addEventListener('pagehide', this.onPageHide);
     this.renderer.domElement.addEventListener('pointerdown', this.onCanvasPointerDown);
   }
 
@@ -2146,8 +2155,14 @@ export class GameEngine {
     this.clearMovementInputs();
   };
 
+  private onPageHide = (): void => {
+    // The nine-hour crossing must survive a closed tab, not just a pause.
+    this.persistLouisianaFerryVoyage(true);
+  };
+
   private onVisibilityChange = (): void => {
     if (document.hidden) {
+      this.persistLouisianaFerryVoyage(true);
       this.clearMovementInputs();
       this.rafPausedByVisibility = true;
       this.fpsController.stop();
@@ -5123,6 +5138,7 @@ export class GameEngine {
     this.mainland.reset();
     this.ferryPickup.reset();
     this.resetLouisianaFerryVoyage();
+    clearFerryVoyageState();
     this.ferryRideActive = false;
     this.ferryArrivalTimer = 0;
     this.ferryBoardingDoorTimer = 0;
@@ -5635,6 +5651,9 @@ export class GameEngine {
       loadedWorldType === 'island' ? save.clearedStructureIds : [],
     );
     this.applyExchangeCosmetics(true);
+    // Resume the Crescent Star on its wall clock. This runs after the saved
+    // player position so a rider can be put back on the moving deck.
+    this.hydrateLouisianaFerryVoyage(save.ferryVoyage ?? null);
     this.applyPlayingCullImmediate();
     this.resetFrameTiming();
     this.emitHud();
@@ -6352,6 +6371,11 @@ export class GameEngine {
       dragonValleySave: DRAGON_VALLEY_SYSTEM.exportSave(this.dragons),
       vikingVillageSave: vikingVillage.exportSave(),
       navigatorCompanion: this.navigatorCompanion?.exportState(),
+      ferryVoyage: this.ferryVoyage.serialize(
+        Date.now(),
+        this.ferryPlayerLocal(),
+        this.ferryVoyageCarId,
+      ),
     };
   }
 
@@ -7933,6 +7957,8 @@ export class GameEngine {
     if (near && near.kind === 'ferry_boarding') {
       if (near.id === 'ferry_disembark') {
         this.completeLouisianaFerryVoyage();
+      } else if (near.id === 'ferry_return_board') {
+        this.handleFerryReturnBoarding();
       } else {
         this.handleFerryBoarding();
       }
@@ -12905,7 +12931,9 @@ export class GameEngine {
     if (this.worldType === 'island' && this.currentDimension === 'overworld') {
       const voyage = this.ferryVoyage.getStatus();
       const tvPos = this.world?.ferryTvPos;
-      if (voyage.phase === 'idle' && tvPos) {
+      const ramp = this.ferryVoyage.getRampWorldPoint();
+      const deckY = this.ferryVoyage.boatY + FERRY_DECK_Y;
+      if (voyage.phase === 'idle' && voyage.direction === 'outbound' && tvPos) {
         const tvDist = Math.hypot(tvPos.x - this.playerX, tvPos.z - this.playerZ);
         if (tvDist < 4.0 && Math.abs(tvPos.y - this.playerY) < 2.8) {
           return {
@@ -12921,50 +12949,74 @@ export class GameEngine {
           };
         }
       }
+      if (voyage.phase === 'idle' && voyage.direction === 'return') {
+        const returnDist = Math.hypot(ramp.x - this.playerX, ramp.z - this.playerZ);
+        if (returnDist < 7.5 && Math.abs(this.playerY - deckY) < 4.5) {
+          return {
+            id: 'ferry_return_board',
+            label: 'Board the Crescent Star for the Island',
+            sublabel: 'Crescent City berth · nine-hour return crossing',
+            kind: 'ferry_boarding',
+            actionCategory: 'use',
+            distance: returnDist,
+            targetX: ramp.x,
+            targetY: deckY,
+            targetZ: ramp.z,
+          };
+        }
+      }
       if (voyage.boardingCleared && voyage.phase === 'boarding') {
-        const rampX = this.ferryVoyage.boatX;
-        const rampZ = this.ferryVoyage.boatZ - 20.2;
-        const rampDist = Math.hypot(rampX - this.playerX, rampZ - this.playerZ);
-        if (rampDist < 5.8 && Math.abs(this.playerY - 1.2) < 2.6) {
+        const rampDist = Math.hypot(ramp.x - this.playerX, ramp.z - this.playerZ);
+        if (rampDist < 6.2 && Math.abs(this.playerY - deckY) < 3.4) {
           return {
             id: 'ferry_board_voyage',
             label: 'Step Aboard the Crescent Star',
-            sublabel: 'Walkable deck · living room · bedroom · bathroom',
+            sublabel:
+              voyage.direction === 'outbound'
+                ? 'Walkable deck · living room · bedroom · bathroom'
+                : 'Return crossing · nine hours back to the island',
             kind: 'ferry_boarding',
             actionCategory: 'use',
             distance: rampDist,
-            targetX: rampX,
-            targetY: 1.7,
-            targetZ: rampZ,
+            targetX: ramp.x,
+            targetY: deckY,
+            targetZ: ramp.z,
           };
         }
       }
       if (voyage.aboard && voyage.phase === 'arrived') {
-        const localX = this.playerX - this.ferryVoyage.boatX;
-        const localZ = this.playerZ - this.ferryVoyage.boatZ;
-        const exitDist = Math.hypot(localX, localZ + 16.4);
+        const local = this.ferryVoyage.worldToFerryLocal(this.playerX, this.playerZ);
+        const exitDist = Math.hypot(local.x, local.z + 16.4);
         if (exitDist < 3.1) {
+          const stern = this.ferryVoyage.ferryLocalToWorld(0, -16.4);
           return {
             id: 'ferry_disembark',
-            label: 'Disembark in Crescent City',
-            sublabel: 'Stern gate open · step onto the Louisiana dock',
+            label:
+              voyage.destination === 'crescent_city'
+                ? 'Disembark in Crescent City'
+                : 'Disembark at the Island Landing',
+            sublabel:
+              voyage.destination === 'crescent_city'
+                ? 'Stern gate open · step onto the Louisiana dock'
+                : 'Stern gate open · step onto the island pier',
             kind: 'ferry_boarding',
             actionCategory: 'use',
             distance: exitDist,
-            targetX: this.ferryVoyage.boatX,
-            targetY: this.ferryVoyage.boatY + FERRY_DECK_Y,
-            targetZ: this.ferryVoyage.boatZ - 16.4,
+            targetX: stern.x,
+            targetY: deckY,
+            targetZ: stern.z,
           };
         }
       }
       if (voyage.aboard && voyage.phase !== 'idle' && voyage.phase !== 'arrived') {
-        const localX = this.playerX - this.ferryVoyage.boatX;
-        const localZ = this.playerZ - this.ferryVoyage.boatZ;
+        const local = this.ferryVoyage.worldToFerryLocal(this.playerX, this.playerZ);
+        const localX = local.x;
+        const localZ = local.z;
         const roomSpots = [
           {
             id: 'ferry_bed',
             label: 'Sleep in the Ferry Bedroom',
-            sublabel: 'Bed · private cabin · sleep through a month of the crossing',
+            sublabel: 'Bed · private cabin · rest during the crossing',
             x: -2.15,
             z: 8.8,
           },
@@ -12978,7 +13030,7 @@ export class GameEngine {
           {
             id: 'ferry_sofa',
             label: 'Relax in the Ferry Living Room',
-            sublabel: 'Sofa · coffee table · 18-month crossing',
+            sublabel: 'Sofa · coffee table · nine-hour crossing',
             x: 1.15,
             z: -1.9,
           },
@@ -13014,6 +13066,7 @@ export class GameEngine {
           }
         }
         if (bestRoom) {
+          const roomWorld = this.ferryVoyage.ferryLocalToWorld(bestRoom.x, bestRoom.z);
           return {
             id: bestRoom.id,
             label: bestRoom.label,
@@ -13021,9 +13074,9 @@ export class GameEngine {
             kind: 'ferry_room',
             actionCategory: 'use',
             distance: bestRoomDist,
-            targetX: this.ferryVoyage.boatX + bestRoom.x,
+            targetX: roomWorld.x,
             targetY: (this.ferryVoyage.getWalkSurfaceY(this.playerX, this.playerZ) ?? this.playerY) + 1.0,
-            targetZ: this.ferryVoyage.boatZ + bestRoom.z,
+            targetZ: roomWorld.z,
           };
         }
       }
@@ -16633,13 +16686,76 @@ export class GameEngine {
     this.ferryDepartureHintShown = false;
     this.ferryDockedNoticeShown = false;
     this.ferryVoyageCarId = null;
-    this.ferryMonthNotice = 0;
     this.ferryWakeAccum = 0;
     this.ferrySmokeAccum = 0;
     this.ferryHornCooldown = 0;
+    this.ferryHudAccum = 0;
     this.syncLouisianaFerryVisual(0);
     const tv = this.world?.ferryTvScreenMat;
     if (tv) tv.emissiveIntensity = 0.85;
+  }
+
+  /** Rider spot relative to the hull, saved so a resumed crossing puts them back on deck. */
+  private ferryPlayerLocal(): { x: number; z: number } {
+    if (!this.ferryVoyage.aboard) return { x: 0, z: -10.5 };
+    return this.ferryVoyage.worldToFerryLocal(this.playerX, this.playerZ);
+  }
+
+  /**
+   * Writes the voyage's wall-clock departure + rider position. Called on every
+   * phase change, periodically at sea, and when the page is hidden, so closing
+   * the game never restarts the nine-hour crossing.
+   */
+  private persistLouisianaFerryVoyage(force = false): void {
+    const now = Date.now();
+    if (!force && now - this.ferryLastPersistMs < 5000) return;
+    this.ferryLastPersistMs = now;
+    saveFerryVoyageState(
+      this.ferryVoyage.serialize(now, this.ferryPlayerLocal(), this.ferryVoyageCarId),
+      this.currentSlotId,
+    );
+  }
+
+  private hydrateLouisianaFerryVoyage(slotSave?: LouisianaFerrySaveState | null): void {
+    if (this.worldType !== 'island') {
+      this.resetLouisianaFerryVoyage();
+      return;
+    }
+    const save =
+      slotSave && slotSave.version === 2
+        ? slotSave
+        : loadFerryVoyageState(this.currentSlotId);
+    if (!save || save.version !== 2) {
+      this.resetLouisianaFerryVoyage();
+      return;
+    }
+    this.ferryVoyage.restore(save, Date.now());
+    this.ferryVoyageCarId = save.carId ?? null;
+    this.ferryDockedNoticeShown = false;
+    this.ferryDepartureHintShown = false;
+    this.ferryWakeAccum = 0;
+    this.ferrySmokeAccum = 0;
+    this.ferryHudAccum = 0;
+    this.syncLouisianaFerryVisual(0);
+
+    const active =
+      this.ferryVoyage.phase === 'at_sea' || this.ferryVoyage.phase === 'arriving';
+    if (active && this.ferryVoyage.aboard) {
+      // The hull is hours away from where it was saved: put the rider back on
+      // its deck instead of leaving them standing in open water.
+      const localX = Math.max(-4.2, Math.min(4.2, save.playerLocalX ?? 0));
+      const localZ = Math.max(-16.8, Math.min(16.8, save.playerLocalZ ?? -10.5));
+      const spot = this.ferryVoyage.ferryLocalToWorld(localX, localZ);
+      this.playerX = spot.x;
+      this.playerZ = spot.z;
+      const deckY = this.ferryVoyage.getWalkSurfaceY(spot.x, spot.z);
+      if (deckY !== null) this.playerY = deckY;
+      this.playerVelY = 0;
+      this.grounded = true;
+      this.isSwimming = false;
+      this.camYaw = this.ferryVoyage.direction === 'outbound' ? 0 : Math.PI;
+    }
+    this.nearbyInteraction = this.findNearbyInteraction();
   }
 
   private syncLouisianaFerryVisual(dt: number): void {
@@ -16688,12 +16804,24 @@ export class GameEngine {
 
     if (this.ferryVoyage.phase === 'at_sea') {
       this.spawnFerryWake(dt);
+      // The nine-hour clock lives in the save, but the readout only needs a
+      // few refreshes per second at most.
+      this.ferryHudAccum += dt;
+      if (this.ferryHudAccum >= 2) {
+        this.ferryHudAccum = 0;
+        this.emitHud();
+      }
+      this.persistLouisianaFerryVoyage(false);
     }
+
+    const destinationName =
+      this.ferryVoyage.destination === 'crescent_city' ? 'Crescent City' : 'the island landing';
 
     if (events.boarded) {
       this.toast('Aboard the Crescent Star. The stern gate is lifting clear.', 'discovery');
       this.sound.playSteamHiss();
       this.ferryDepartureHintShown = false;
+      this.persistLouisianaFerryVoyage(true);
       this.emitHud();
     }
     if (events.gateOpened) {
@@ -16709,23 +16837,12 @@ export class GameEngine {
     if (events.departed) {
       this.ferryDepartureHintShown = true;
       this.toast(
-        `Lines cast off. The Crescent Star is underway — ${LOUISIANA_FERRY_MONTHS} months to Louisiana.`,
+        `Lines cast off. The Crescent Star is underway — ${LOUISIANA_FERRY_LEG_HOURS} hours to ${destinationName}. The voyage keeps running even if you close the game.`,
         'discovery',
       );
       this.sound.playFerryHorn();
       this.markExploredAroundPlayer();
-    }
-    if (events.daysAdvanced > 0) {
-      this.dayCount += events.daysAdvanced;
-      this.stats.daysSurvived = this.dayCount;
-      const month = this.ferryVoyage.voyageMonth;
-      if (month > this.ferryMonthNotice) {
-        this.ferryMonthNotice = month;
-        this.toast(
-          `Month ${month} of ${LOUISIANA_FERRY_MONTHS} at sea · day ${this.ferryVoyage.voyageDay} of ${LOUISIANA_FERRY_DAYS}. The cabin, bathroom and living room are open.`,
-          'info',
-        );
-      }
+      this.persistLouisianaFerryVoyage(true);
       this.emitHud();
     }
     if (events.arrived) {
@@ -16737,7 +16854,8 @@ export class GameEngine {
   /** Foam and funnel smoke make the hull's true speed readable from the deck. */
   private spawnFerryWake(dt: number): void {
     const ferry = this.ferryVoyage;
-    if (ferry.speedMps <= 0.05) return;
+    // ~2 cm/s is the true nine-hour cruise speed; even that leaves a wake.
+    if (ferry.speedMps <= 0.0005) return;
     const c = Math.cos(ferry.boatYaw);
     const s = Math.sin(ferry.boatYaw);
     this.ferryWakeAccum += dt;
@@ -16780,10 +16898,14 @@ export class GameEngine {
     this.updateCamera();
     this.sound.playSteamHiss();
     this.sound.playFerryHorn();
+    const arrivedAtCity = this.ferryVoyage.destination === 'crescent_city';
     this.toast(
-      'The Crescent Star is secured in Crescent City. The stern gate is open — head aft and press E to disembark.',
+      arrivedAtCity
+        ? `${LOUISIANA_FERRY_LEG_HOURS} hours later, the Crescent Star is secured in Crescent City. The stern gate is open — head aft and press E to disembark.`
+        : `${LOUISIANA_FERRY_LEG_HOURS} hours later, the Crescent Star is back at the island landing. The stern gate is open — head aft and press E to disembark.`,
       'discovery',
     );
+    this.persistLouisianaFerryVoyage(true);
     this.emitHud();
   }
 
@@ -16800,25 +16922,38 @@ export class GameEngine {
   }
 
   private completeLouisianaFerryVoyage(): void {
-    const terminal = this.world?.crescentCity?.terminalPos;
-    const cityX = (terminal?.x ?? 40) + 9.5;
-    const cityZ = (terminal?.z ?? 1460) + 2.5;
-    const cityY = this.transitGroundY(cityX, cityZ);
+    const atCity = this.ferryVoyage.destination === 'crescent_city';
     const deliveredCarId = this.ferryVoyageCarId;
-    this.ferryVoyage.reset();
     this.ferryVoyageCarId = null;
     this.ferryDepartureHintShown = false;
     this.ferryDockedNoticeShown = false;
-    this.ferryMonthNotice = 0;
     this.ferryWakeAccum = 0;
     this.ferrySmokeAccum = 0;
-    this.syncLouisianaFerryVisual(0);
-    this.playerX = cityX;
-    this.playerY = cityY + 0.05;
-    this.playerZ = cityZ;
-    this.playerYaw = Math.PI;
+    this.ferryHudAccum = 0;
+
+    if (atCity) {
+      // Leave the same hull berthed at Crescent City ready for the return leg.
+      this.ferryVoyage.prepareReturn();
+      const terminal = this.world?.crescentCity?.terminalPos;
+      const cityX = (terminal?.x ?? 40) + 9.5;
+      const cityZ = (terminal?.z ?? 1460) + 2.5;
+      this.playerX = cityX;
+      this.playerY = this.transitGroundY(cityX, cityZ) + 0.05;
+      this.playerZ = cityZ;
+      this.playerYaw = Math.PI;
+      this.camYaw = 0;
+    } else {
+      // Back at the island: the same hull moors at the pier for the next trip.
+      this.ferryVoyage.reset();
+      const pierX = 26;
+      const pierZ = 684;
+      this.playerX = pierX;
+      this.playerY = this.transitGroundY(pierX, pierZ) + 0.05;
+      this.playerZ = pierZ;
+      this.playerYaw = 0;
+      this.camYaw = 0;
+    }
     this.playerVelY = 0;
-    this.camYaw = 0;
     this.camPitch = -0.12;
     this.grounded = true;
     this.isSwimming = false;
@@ -16829,12 +16964,16 @@ export class GameEngine {
       ? this.vehicles.find((v) => v.id === deliveredCarId)
       : null;
     if (deliveredCar) this.deliverFerryCarToCrescentCity(deliveredCar);
+    this.syncLouisianaFerryVisual(0);
+    this.persistLouisianaFerryVoyage(true);
     this.markExploredAroundPlayer();
     this.nearbyInteraction = this.findNearbyInteraction();
     this.updateCamera();
     this.sound.playSteamHiss();
     this.toast(
-      'Eighteen months later, the Crescent Star docks in Crescent City, Louisiana.',
+      atCity
+        ? 'You disembark in Crescent City. The Crescent Star is moored at the berth, ready for the nine-hour return crossing.'
+        : 'You disembark at the island landing. The Crescent Star is moored at the pier for the next crossing.',
       'discovery',
     );
     this.emitHud();
@@ -16849,6 +16988,10 @@ export class GameEngine {
       this.toast('The car ferry is already running. Finish that pickup first.', 'warning');
       return;
     }
+    if (this.ferryVoyage.direction !== 'outbound') {
+      this.toast('The Crescent Star is berthed in Crescent City. Board her there for the island crossing.', 'info');
+      return;
+    }
     if (this.ferryVoyage.phase !== 'idle') {
       this.toast(this.ferryVoyage.getStatus().label, 'info');
       return;
@@ -16859,6 +17002,7 @@ export class GameEngine {
     }
     this.ferryDepartureHintShown = false;
     this.syncLouisianaFerryVisual(0);
+    this.persistLouisianaFerryVoyage(true);
     this.sound.playCraftSuccess();
     this.toast(
       'The dock TV plays the Crescent Star departure feed. Boarding cleared — walk up the stern ramp.',
@@ -16868,23 +17012,41 @@ export class GameEngine {
     this.emitHud();
   }
 
+  /** The return leg has no island dock TV; the player boards directly at the berth. */
+  private handleFerryReturnBoarding(): void {
+    if (this.ferryVoyage.direction !== 'return') {
+      this.handleFerryBoarding();
+      return;
+    }
+    if (this.ferryVoyage.phase === 'idle') {
+      if (!this.ferryVoyage.clearBoarding()) {
+        this.toast(this.ferryVoyage.getStatus().label, 'warning');
+        return;
+      }
+      this.syncLouisianaFerryVisual(0);
+    }
+    this.handleFerryBoarding();
+  }
+
   private handleFerryBoarding(): void {
     const result = this.ferryVoyage.boardFromRamp(this.playerX, this.playerY, this.playerZ);
     if (!result.ok) {
       this.toast(result.message, 'warning');
       return;
     }
-    this.playerX = this.ferryVoyage.boatX;
-    this.playerZ = this.ferryVoyage.boatZ - 10.5;
+    const deckSpot = this.ferryVoyage.getBoardingDeckPoint();
+    this.playerX = deckSpot.x;
+    this.playerZ = deckSpot.z;
     const deckY = this.ferryVoyage.getWalkSurfaceY(this.playerX, this.playerZ);
     this.playerY = deckY ?? this.playerY;
-    this.playerYaw = Math.PI;
-    this.camYaw = 0;
+    this.playerYaw = this.ferryVoyage.boatYaw + Math.PI;
+    this.camYaw = this.ferryVoyage.boatYaw;
     this.playerVelY = 0;
     this.grounded = true;
     this.isSwimming = false;
     this.seatedState = null;
     this.syncLouisianaFerryVisual(0);
+    this.persistLouisianaFerryVoyage(true);
     this.toast(result.message, 'discovery');
     this.sound.playCarDoorLatch(true);
     this.emitHud();
@@ -16897,34 +17059,20 @@ export class GameEngine {
     }
     switch (id) {
       case 'ferry_bed': {
-        const bedBoatX = this.ferryVoyage.boatX;
-        const bedBoatZ = this.ferryVoyage.boatZ;
-        // Sleeping through a month of the crossing still moves the hull, and
-        // the rider is carried by the exact same delta the voyage produced.
-        const sleptDays = this.ferryVoyage.restForDays(LOUISIANA_FERRY_DAYS_PER_MONTH);
-        if (sleptDays > 0) {
-          this.playerX += this.ferryVoyage.boatX - bedBoatX;
-          this.playerZ += this.ferryVoyage.boatZ - bedBoatZ;
-          const bedClamp = this.ferryVoyage.constrainPlayer(this.playerX, this.playerZ);
-          this.playerX = bedClamp.x;
-          this.playerZ = bedClamp.z;
-          const bedDeck = this.ferryVoyage.getWalkSurfaceY(this.playerX, this.playerZ);
-          if (bedDeck !== null) this.playerY = bedDeck;
-          this.dayCount += sleptDays;
-          this.stats.daysSurvived = this.dayCount;
-          this.vitals.health = this.vitals.maxHealth;
-          this.vitals.stamina = this.vitals.maxStamina;
-          this.vitals.temperatureC = 37.0;
-          this.syncLouisianaFerryVisual(0);
-          this.ferryMonthNotice = this.ferryVoyage.voyageMonth;
-          this.toast(
-            `Slept through a month aboard. Month ${this.ferryVoyage.voyageMonth} of ${LOUISIANA_FERRY_MONTHS} · day ${this.ferryVoyage.voyageDay} of ${LOUISIANA_FERRY_DAYS}.`,
-            'discovery',
-          );
-          this.emitHud();
-        } else {
-          this.toast('The cabin bed is made up, but the crossing is nearly over.', 'info');
-        }
+        // Nine real hours is the official crossing, so the bed restores the
+        // survivor without skipping the wall-clock voyage.
+        this.vitals.health = this.vitals.maxHealth;
+        this.vitals.stamina = this.vitals.maxStamina;
+        this.vitals.temperatureC = 37.0;
+        this.dayCount += 1;
+        this.stats.daysSurvived = this.dayCount;
+        this.syncLouisianaFerryVisual(0);
+        const remaining = formatFerryDuration(this.ferryVoyage.getStatus().remainingMs);
+        this.toast(
+          `Slept in the cabin. The crossing continues on its real-time clock — ${remaining} to ${this.ferryVoyage.destination === 'crescent_city' ? 'Crescent City' : 'the island'}.`,
+          'discovery',
+        );
+        this.emitHud();
         break;
       }
       case 'ferry_horn': {
@@ -16959,7 +17107,7 @@ export class GameEngine {
         break;
       }
       case 'ferry_living_tv': {
-        this.toast('The ferry TV is playing a Louisiana travelogue for the 18-month crossing.', 'info');
+        this.toast(`The ferry TV is playing a Louisiana travelogue for the ${LOUISIANA_FERRY_LEG_HOURS}-hour crossing.`, 'info');
         break;
       }
       default:
@@ -17098,7 +17246,7 @@ export class GameEngine {
   /**
    * The worker-driven car reaches the pier, then the player leaves it with the
    * dock crew and boards the physical Crescent Star. The car is delivered to
-   * Crescent City when the 18-month crossing finishes.
+   * Crescent City when the nine-hour crossing finishes.
    */
   private startCrescentStarFromCar(car: ModularVehicleData): void {
     if (this.activeVehicleId === car.id) this.exitVehicle();
@@ -17114,8 +17262,9 @@ export class GameEngine {
     this.ferryVoyageCarId = car.id;
     this.ferryVoyage.clearBoarding();
 
-    this.playerX = this.ferryVoyage.boatX;
-    this.playerZ = this.ferryVoyage.boatZ - 20.2;
+    const ramp = this.ferryVoyage.getRampWorldPoint();
+    this.playerX = ramp.x;
+    this.playerZ = ramp.z;
     this.playerY = 1.2;
     this.playerVelY = 0;
     this.grounded = true;
@@ -17127,19 +17276,21 @@ export class GameEngine {
       this.toast(boarded.message, 'warning');
       return;
     }
-    this.playerX = this.ferryVoyage.boatX;
-    this.playerZ = this.ferryVoyage.boatZ - 10.5;
+    const deckSpot = this.ferryVoyage.getBoardingDeckPoint();
+    this.playerX = deckSpot.x;
+    this.playerZ = deckSpot.z;
     this.playerY = this.ferryVoyage.getWalkSurfaceY(this.playerX, this.playerZ) ?? this.playerY;
-    this.playerYaw = Math.PI;
-    this.camYaw = 0;
+    this.playerYaw = this.ferryVoyage.boatYaw + Math.PI;
+    this.camYaw = this.ferryVoyage.boatYaw;
     this.camPitch = -0.12;
     this.syncLouisianaFerryVisual(0);
+    this.persistLouisianaFerryVoyage(true);
     this.markExploredAroundPlayer();
     this.nearbyInteraction = this.findNearbyInteraction();
     this.updateCamera();
     this.sound.playSteamHiss();
     this.toast(
-      `The dock crew loads ${car.name}. You walk up the Crescent Star ramp for the 18-month crossing.`,
+      `The dock crew loads ${car.name}. You walk up the Crescent Star ramp for the ${LOUISIANA_FERRY_LEG_HOURS}-hour crossing.`,
       'discovery',
     );
     this.emitHud();
@@ -17516,7 +17667,7 @@ export class GameEngine {
     if (this.ferryPickup.phase !== 'idle') {
       return { ok: false, message: this.ferryPickup.getStatus().label };
     }
-    if (this.ferryVoyage.phase !== 'idle') {
+    if (this.ferryVoyage.phase !== 'idle' || this.ferryVoyage.direction !== 'outbound') {
       return { ok: false, message: this.ferryVoyage.getStatus().label };
     }
     if (this.activeVehicleId) {
@@ -25401,6 +25552,7 @@ export class GameEngine {
     window.removeEventListener('blur', this.onWindowBlur);
     window.removeEventListener('pagehide', this.onWindowBlur);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    window.removeEventListener('pagehide', this.onPageHide);
     this.renderer.domElement.removeEventListener('pointerdown', this.onCanvasPointerDown);
 
     this.p2p?.leaveRoom();

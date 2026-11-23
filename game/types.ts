@@ -1208,6 +1208,7 @@ export interface GameSaveData {
   dragonValleySave?: import('./systems/dragonValleySystem').DragonValleySaveData;
   vikingVillageSave?: import('./systems/vikingVillageSystem').VikingVillageSaveData;
   navigatorCompanion?: NavigatorCompanionSaveData;
+  ferryVoyage?: import('./systems/louisianaFerryVoyage').LouisianaFerrySaveState;
 }
 
 export interface CarcassSaveData {
@@ -1568,11 +1569,12 @@ export interface HUDStateSnapshot {
   ferryVoyage?: {
     phase: string;
     label: string;
-    voyageDay: number;
-    voyageDays: number;
-    voyageMonth: number;
-    voyageMonths: number;
+    direction: 'outbound' | 'return';
+    destination: 'island' | 'crescent_city';
     routeProgress: number;
+    elapsedMs: number;
+    remainingMs: number;
+    durationMs: number;
     secondsToDeparture: number;
     gateLift: number;
     boatX: number;

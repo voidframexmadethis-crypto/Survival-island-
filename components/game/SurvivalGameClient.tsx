@@ -78,6 +78,7 @@ import {
 import { ITEMS, isActiveWeaponItem, isAmmoItem, isFirearmItem } from '@/game/data/items';
 import { STAGE_1_MISSIONS } from '@/game/data/missions';
 import { GameEngine } from '@/game/engine/GameEngine';
+import { formatFerryDuration } from '@/game/systems/louisianaFerryVoyage';
 import {
   DEFAULT_SETTINGS,
   createNewSaveSlotId,
@@ -1790,8 +1791,10 @@ export function SurvivalGameClient() {
                     </span>
                     <span className="font-mono-tabular text-amber-300 shrink-0">
                       {hud.ferryVoyage.aboard
-                        ? `M${hud.ferryVoyage.voyageMonth}/${hud.ferryVoyage.voyageMonths}`
-                        : 'BOARD'}
+                        ? formatFerryDuration(hud.ferryVoyage.remainingMs)
+                        : hud.ferryVoyage.direction === 'return'
+                          ? 'RETURN'
+                          : 'BOARD'}
                     </span>
                   </div>
                   <div className="h-1 rounded-full bg-teal-950 overflow-hidden">
@@ -1806,13 +1809,23 @@ export function SurvivalGameClient() {
                       {hud.ferryVoyage.room?.replace('_', ' ') ?? 'deck'}
                     </span>
                   </div>
+                  <div className="flex items-center justify-between gap-1 text-[9px] text-teal-300/80 font-mono-tabular">
+                    <span>
+                      {hud.ferryVoyage.destination === 'crescent_city'
+                        ? 'ISLAND → CRESCENT CITY'
+                        : 'CRESCENT CITY → ISLAND'}
+                    </span>
+                    <span>
+                      {hud.ferryVoyage.speedMps.toFixed(2)} m/s
+                    </span>
+                  </div>
                   {hud.ferryVoyage.aboard && hud.ferryVoyage.phase === 'at_sea' && (
                     <div className="flex items-center justify-between gap-1 text-[9px] text-teal-300/80 font-mono-tabular">
                       <span>
-                        {hud.ferryVoyage.speedMps.toFixed(1)} m/s · underway
+                        {formatFerryDuration(hud.ferryVoyage.elapsedMs)} elapsed
                       </span>
                       <span>
-                        {hud.ferryVoyage.boatX.toFixed(0)}, {hud.ferryVoyage.boatZ.toFixed(0)}
+                        {hud.ferryVoyage.boatX.toFixed(1)}, {hud.ferryVoyage.boatZ.toFixed(1)}
                       </span>
                     </div>
                   )}
