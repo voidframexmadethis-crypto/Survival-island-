@@ -1867,6 +1867,20 @@ export function SurvivalGameClient() {
                     value={hud.vitals.stamina}
                     barColor="bg-lime-500"
                   />
+                  {hud.isSwimming && (
+                    <VitalBar
+                      icon={
+                        <Droplets
+                          className={`w-3 h-3 sm:w-3.5 sm:h-3.5 ${
+                            hud.swimBreath <= 28 ? 'text-rose-400' : 'text-cyan-400'
+                          }`}
+                        />
+                      }
+                      label={hud.isUnderwater ? 'Breath' : 'Swim'}
+                      value={hud.swimBreath}
+                      barColor={hud.swimBreath <= 28 ? 'bg-rose-500' : 'bg-cyan-500'}
+                    />
+                  )}
 
                   {hud.finalIsland && (
                     <div className="rounded border border-amber-500/45 bg-amber-950/70 px-2 py-1 text-[10px] space-y-0.5">

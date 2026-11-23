@@ -422,7 +422,7 @@ import {
   WaterparkRuntime,
   type PhysicalSlideSnapshot,
 } from '../systems/waterparkRuntime';
-import { getWaterparkSurfaceY } from '../world/waterparkLayout';
+import { getWaterparkSurfaceY, WATERPARK_SITE } from '../world/waterparkLayout';
 import {
   sanitizePark,
   type AmusementParkDeliveryPayload,
@@ -434,6 +434,7 @@ import {
   getVolcanoFlexSite,
 } from '../world/volcanoFlexLayout';
 import { CoasterRideAudio } from '../systems/coasterRideAudio';
+import { stepSwimPhysics } from '../systems/swimmingPhysics';
 import { RealisticOcean } from '../world/RealisticOcean';
 import {
   applyRealisticMeshLightingPass,
@@ -1013,6 +1014,12 @@ export class GameEngine {
   private playerYaw = Math.PI;
   private grounded = true;
   private isSwimming = false;
+  private isUnderwater = false;
+  private swimBreath = 100;
+  private swimDiveHold = false;
+  private swimKickTimer = 0;
+  private swimStrokePhase = 0;
+  private drownWarnCooldown = 0;
   private isSprinting = false;
   private isCrouching = false;
   private currentEyeHeight = 1.62;
@@ -2250,14 +2257,20 @@ export class GameEngine {
       } else if (this.seatedState) {
         this.standUp();
       } else if (!e.repeat) {
-        const now = performance.now();
-        if (now - this.lastSpaceTapMs < 280) {
-          this.lastSpaceTapMs = 0;
-          this.togglePlayerFlight();
+        if (this.isSwimming) {
+          // Keep Space dedicated to surfacing while in the water; double-tap
+          // flight should never fire from a swim kick.
+          this.triggerJump();
         } else {
-          this.lastSpaceTapMs = now;
-          if (!this.flightAndTeleport.flying) {
-            this.triggerJump();
+          const now = performance.now();
+          if (now - this.lastSpaceTapMs < 280) {
+            this.lastSpaceTapMs = 0;
+            this.togglePlayerFlight();
+          } else {
+            this.lastSpaceTapMs = now;
+            if (!this.flightAndTeleport.flying) {
+              this.triggerJump();
+            }
           }
         }
       }
@@ -2305,7 +2318,11 @@ export class GameEngine {
         } else {
           this.vehicleDescendHold = true;
         }
-      } else {
+      } else if (this.isSwimming) {
+        // GTA-style dive: hold crouch/control to swim below the surface.
+        this.swimDiveHold = true;
+        this.isCrouching = false;
+      } else if (!e.repeat) {
         this.setCrouch(!this.isCrouching);
       }
     } else if (e.code === 'KeyE') {
@@ -2381,6 +2398,7 @@ export class GameEngine {
     }
     if (e.code === 'KeyC' || e.code === 'ControlLeft') {
       this.vehicleDescendHold = false;
+      this.swimDiveHold = false;
     }
   };
 
@@ -2518,6 +2536,45 @@ export class GameEngine {
     this.updateStructureLightPool(cx, cz, maxDistSq, inOverworld);
   }
 
+  /** Keeps the heavy waterpark and coaster meshes out of the renderer when far away. */
+  private updateAttractionVisibility(cx: number, cz: number, maxDist: number): void {
+    if (this.currentDimension !== 'overworld') {
+      this.waterpark?.setVisible(false);
+      this.coasterRuntime?.setViewDistance(cx, cz, 0, 0, 0);
+      return;
+    }
+    if (this.worldType === 'flat') {
+      this.waterpark?.setVisible(false);
+      this.coasterRuntime?.setViewDistance(cx, cz, Math.max(280, maxDist), 0, 0);
+      return;
+    }
+    if (this.mode === 'menu') {
+      this.waterpark?.setVisible(false);
+      this.coasterRuntime?.setViewDistance(cx, cz, 0, 0, 0);
+      return;
+    }
+    const waterparkForced = Boolean(
+      this.ridingWaterparkId ||
+        this.waterpark?.isActive ||
+        this.waterpark?.isPhysicallySliding,
+    );
+    const wpDx = cx - WATERPARK_SITE.x;
+    const wpDz = cz - WATERPARK_SITE.z;
+    const waterparkRange = this.isSoftwareGl
+      ? 300
+      : Math.min(420, Math.max(300, maxDist + 80));
+    this.waterpark?.setVisible(
+      waterparkForced || wpDx * wpDx + wpDz * wpDz <= waterparkRange * waterparkRange,
+    );
+    this.coasterRuntime?.setViewDistance(
+      cx,
+      cz,
+      Math.max(360, maxDist),
+      820,
+      380,
+    );
+  }
+
   private registerWorldPerformanceObjects(): void {
     this.worldPerfManager.dispose();
     if (!this.world) return;
@@ -2602,6 +2659,7 @@ export class GameEngine {
         : Math.min(this.effectiveMaxDrawDistance, 220);
       this.world.cullWorldByDistance(0, 0, cullDist, undefined, this.maxActivePointLights);
       this.cullPlacedObjectsByDistance(0, 0, cullDist);
+      this.updateAttractionVisibility(0, 0, cullDist);
     }
     this.shadowLastCamX = NaN;
     this.shadowUpdateFrame = 0;
@@ -2615,6 +2673,7 @@ export class GameEngine {
       const cullDist = Math.max(this.effectiveMaxDrawDistance, 210);
       this.world.cullWorldByDistance(0, 740, cullDist, undefined, this.maxActivePointLights);
       this.cullPlacedObjectsByDistance(0, 740, cullDist);
+      this.updateAttractionVisibility(0, 740, cullDist);
     }
     this.shadowLastCamX = NaN;
     this.shadowUpdateFrame = 0;
@@ -2633,6 +2692,11 @@ export class GameEngine {
         this.maxActivePointLights,
       );
       this.cullPlacedObjectsByDistance(this.playerX, this.playerZ, this.effectiveMaxDrawDistance);
+      this.updateAttractionVisibility(
+        this.playerX,
+        this.playerZ,
+        this.effectiveMaxDrawDistance,
+      );
     }
     this.shadowLastCamX = NaN;
     this.shadowUpdateFrame = 0;
@@ -3536,6 +3600,12 @@ export class GameEngine {
     }
     if (this.seatedState) {
       this.standUp();
+      return;
+    }
+    if (this.isSwimming) {
+      // Space gives a GTA-style surface kick instead of a dry-land jump.
+      this.swimKickTimer = 0.34;
+      this.isCrouching = false;
       return;
     }
     const jumpMult = this.modSystem?.tweaks.jumpMultiplier ?? 1;
@@ -11233,7 +11303,7 @@ export class GameEngine {
       !this.isCrouching &&
       (creativeNoNeeds || this.vitals.stamina > 2);
 
-    this.isSprinting = wantSprint && !this.isSwimming;
+    this.isSprinting = wantSprint;
 
     if (creativeNoNeeds) {
       this.vitals.health = this.vitals.maxHealth;
@@ -11242,7 +11312,10 @@ export class GameEngine {
       this.vitals.stamina = this.vitals.maxStamina;
       this.vitals.temperatureC = 37.0;
     } else if (this.isSprinting) {
-      this.vitals.stamina = Math.max(0, this.vitals.stamina - dt * 15);
+      this.vitals.stamina = Math.max(
+        0,
+        this.vitals.stamina - dt * (this.isSwimming ? 7.5 : 15),
+      );
     } else {
       this.vitals.stamina = Math.min(
         this.vitals.maxStamina,
@@ -11436,10 +11509,13 @@ export class GameEngine {
         : 1;
     // Responsive Minecraft-like pace: brisk 7.6 m/s walk, 10.8 m/s sprint, smooth analog scaling
     const analogWalkSpeed = THREE.MathUtils.lerp(4.2, 7.6, inputMag);
+    const swimSprint = this.isSprinting && this.vitals.stamina > 2;
     let baseSpeed = this.dragonFlight.flying
       ? this.dragonFlight.flySpeed * 0.45
       : (this.isSwimming
-          ? 5.0
+          ? swimSprint
+            ? 5.3
+            : 3.35
           : this.wallRunTimer > 0
             ? 12.2
             : this.isSprinting
@@ -11827,6 +11903,12 @@ export class GameEngine {
     }
     const newWaterY = this.inSpacePlanet ? -999 : getWaterLevelAt(this.playerX, this.playerZ);
     this.isSwimming = !this.inSpacePlanet && !isFlat && newSurfaceY < newWaterY - 0.45;
+    if (!this.isSwimming) {
+      this.isUnderwater = false;
+      this.swimDiveHold = false;
+      this.swimKickTimer = 0;
+      this.swimBreath = Math.min(100, this.swimBreath + dt * 22);
+    }
     if (this.dragonFlight.flying) {
       const ascend = this.keys['Space'] ? 1 : 0;
       const descend =
@@ -11838,14 +11920,52 @@ export class GameEngine {
       this.playerVelY = 0;
       this.grounded = false;
       this.isSwimming = false;
+      this.isUnderwater = false;
     } else if (this.isSwimming) {
-      const swimTargetY = newWaterY - 0.72 + Math.sin(this.elapsed * 3.5) * 0.06;
-      const nextSwimY = THREE.MathUtils.damp(this.playerY, swimTargetY, 8, dt);
-      this.playerY = Math.max(newSurfaceY, Number.isFinite(nextSwimY) ? nextSwimY : swimTargetY);
-      this.playerVelY = 0;
+      this.swimKickTimer = Math.max(0, this.swimKickTimer - dt);
+      if (this.drownWarnCooldown > 0) {
+        this.drownWarnCooldown = Math.max(0, this.drownWarnCooldown - dt);
+      }
+      const diveHeld =
+        this.swimDiveHold ||
+        Boolean(this.keys['ControlLeft'] || this.keys['ControlRight'] || this.keys['KeyC']);
+      const ascendHeld =
+        Boolean(this.keys['Space'] || this.touchFlyAscend) || this.swimKickTimer > 0;
+      const swim = stepSwimPhysics({
+        y: this.playerY,
+        waterLevel: newWaterY,
+        solidFloorY: newSurfaceY,
+        dt,
+        dive: diveHeld,
+        ascend: ascendHeld && !diveHeld,
+        moving: inputMag > 0.08,
+        breath: this.swimBreath,
+        health: this.vitals.health,
+      });
+      this.swimStrokePhase += dt * (this.isSprinting ? 10.5 : 6.8) * (0.45 + inputMag);
+      const surfaceBob =
+        swim.underwater || diveHeld ? 0 : Math.sin(this.swimStrokePhase * 0.55) * 0.045;
+      this.playerY = Math.max(newSurfaceY, swim.y + surfaceBob);
+      this.playerVelY = swim.verticalVelocity;
+      this.swimBreath = swim.breath;
+      this.isUnderwater = swim.underwater;
+      this.vitals.health = swim.health;
       this.grounded = false;
+      this.isCrouching = false;
       this.wallRunTimer = 0;
       this.wallRunSide = 0;
+      if (swim.damage > 0 && this.drownWarnCooldown <= 0) {
+        this.drownWarnCooldown = 1.6;
+        this.toast('Lungs burning! Swim up for air!', 'warning');
+      } else if (
+        swim.underwater &&
+        swim.breath <= 28 &&
+        swim.breath > 0 &&
+        this.drownWarnCooldown <= 0
+      ) {
+        this.drownWarnCooldown = 7;
+        this.toast('Low air — surface with Space.', 'warning');
+      }
     } else if (this.wallRunTimer > 0) {
       // Wall-run holds elevation cleanly with very light gravity drop
       this.playerVelY = Math.max(this.playerVelY - 4.2 * dt, -0.35);
@@ -15040,6 +15160,12 @@ export class GameEngine {
       dt,
     );
     h.headGroup.rotation.x = THREE.MathUtils.clamp(-this.camPitch * 0.55, -0.45, 0.45);
+    h.bodyGroup.rotation.x = THREE.MathUtils.damp(
+      h.bodyGroup.rotation.x,
+      this.isSwimming ? (this.isUnderwater ? 1.28 : 0.92) : 0,
+      8,
+      dt,
+    );
 
     const eqItemId = this.getEquippedItemId();
     const hasGun = Boolean(eqItemId && isFirearmItem(eqItemId));
@@ -15092,15 +15218,20 @@ export class GameEngine {
 
     const isMoving = this.currentSpeedMps > 0.35;
     if (this.isSwimming) {
-      const stroke = Math.sin(this.elapsed * 6.5) * 0.75;
-      h.armL.rotation.x = -1.2 + stroke;
-      h.armR.rotation.x = -1.2 - stroke;
-      h.legL.rotation.x = -0.35 + stroke * 0.5;
-      h.legR.rotation.x = -0.35 - stroke * 0.5;
+      const stroke = Math.sin(this.swimStrokePhase);
+      const pull = Math.cos(this.swimStrokePhase);
+      h.armL.rotation.x = -1.65 + stroke * 0.82;
+      h.armR.rotation.x = -1.65 - stroke * 0.82;
+      h.armL.rotation.z = -0.42 + pull * 0.22;
+      h.armR.rotation.z = 0.42 - pull * 0.22;
+      h.legL.rotation.x = -0.28 + stroke * 0.5;
+      h.legR.rotation.x = -0.28 - stroke * 0.5;
     } else if (isMoving) {
       const swing = Math.sin(this.walkBobPhase) * (this.isSprinting ? 0.78 : 0.55);
       h.armL.rotation.x = swing;
       h.armR.rotation.x = hasGun ? -1.32 + this.camPitch * 0.55 : -swing;
+      h.armL.rotation.z = THREE.MathUtils.damp(h.armL.rotation.z, 0, 12, dt);
+      h.armR.rotation.z = THREE.MathUtils.damp(h.armR.rotation.z, 0, 12, dt);
       h.legL.rotation.x = -swing;
       h.legR.rotation.x = swing;
     } else {
@@ -15111,6 +15242,8 @@ export class GameEngine {
         10,
         dt,
       );
+      h.armL.rotation.z = THREE.MathUtils.damp(h.armL.rotation.z, 0, 12, dt);
+      h.armR.rotation.z = THREE.MathUtils.damp(h.armR.rotation.z, 0, 12, dt);
       h.legL.rotation.x = THREE.MathUtils.damp(h.legL.rotation.x, 0, 10, dt);
       h.legR.rotation.x = THREE.MathUtils.damp(h.legR.rotation.x, 0, 10, dt);
     }
@@ -15892,6 +16025,8 @@ export class GameEngine {
       playerYaw: this.playerYaw,
       cameraViewMode: this.playerCameraRig.mode,
       isSwimming: this.isSwimming,
+      isUnderwater: this.isUnderwater,
+      swimBreath: Math.round(this.swimBreath),
       isSprinting: this.isSprinting,
       isCrouching: this.isCrouching,
       isFlying: this.flightAndTeleport.flying,
@@ -17603,6 +17738,7 @@ export class GameEngine {
               }
             }
             this.updateStructureLightPool(this.playerX, this.playerZ, maxDistSq, inOverworld);
+            this.updateAttractionVisibility(this.playerX, this.playerZ, maxDist);
           }
 
           // Lightweight Grand Finale Pack proximity check (Resort Corner Tiki Lounge + Zone Boss/Loot)

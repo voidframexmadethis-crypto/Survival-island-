@@ -64,6 +64,8 @@ interface ActiveCoasterEntry {
   estPeakSpeedKmh: number;
   inversionsCount: number;
   theme: 'volcano_flex' | null;
+  hudNodesCache?: SavedCoasterNode[];
+  validationCache?: { valid: boolean; errors: string[] };
 }
 
 const TRACK_COLORS = [
@@ -164,6 +166,7 @@ export class RollerCoasterRuntime {
   private cachedHudSummaries: CoasterHudSummaryItem[] | null = null;
   private hudCacheDirty = true;
   private themeElapsed = 0;
+  private themeSimAccum = 0;
   private themedEnvironments = new Map<string, VolcanoFlexEnvironment>();
 
   constructor(scene: THREE.Scene) {
@@ -681,6 +684,8 @@ export class RollerCoasterRuntime {
 
   private rebuildEntryGeometry(entry: ActiveCoasterEntry): void {
     this.hudCacheDirty = true;
+    entry.hudNodesCache = undefined;
+    entry.validationCache = undefined;
     this.disposeEntryMesh(entry);
     entry.meshGroup = new THREE.Group();
     entry.meshGroup.name = `Coaster_${entry.id}`;
@@ -954,13 +959,33 @@ export class RollerCoasterRuntime {
 
   public update(dt: number, playerX?: number, playerZ?: number): void {
     this.themeElapsed += dt;
+    const hasCoords = typeof playerX === 'number' && typeof playerZ === 'number';
+    let themeNear = false;
     for (const entry of this.coasters.values()) {
       if (entry.theme !== 'volcano_flex') continue;
       const themed = this.themedEnvironments.get(entry.id);
-      themed?.update(dt, this.themeElapsed, entry.train.speed * 3.6);
+      if (!themed) continue;
+      const dx = entry.stationPos.x - (playerX ?? entry.stationPos.x);
+      const dz = entry.stationPos.z - (playerZ ?? entry.stationPos.z);
+      const near = !hasCoords || dx * dx + dz * dz <= 360 * 360;
+      themed.setDetailVisible(near);
+      if (near) themeNear = true;
+    }
+    if (themeNear) {
+      this.themeSimAccum += dt;
+      if (this.themeSimAccum >= 1 / 30) {
+        for (const entry of this.coasters.values()) {
+          if (entry.theme !== 'volcano_flex') continue;
+          this.themedEnvironments
+            .get(entry.id)
+            ?.update(this.themeSimAccum, this.themeElapsed, entry.train.speed * 3.6);
+        }
+        this.themeSimAccum = 0;
+      }
+    } else {
+      this.themeSimAccum = 0;
     }
     let anyMoved = false;
-    const hasCoords = typeof playerX === 'number' && typeof playerZ === 'number';
     for (const entry of this.coasters.values()) {
       if (!entry.running || entry.samples.length < 2) continue;
       const total = entry.samples[entry.samples.length - 1].distance;
@@ -1050,13 +1075,46 @@ export class RollerCoasterRuntime {
     };
   }
 
+  /**
+   * Distance-culls track meshes and the volcanic detail without stopping the
+   * train simulation, so approaching the park never rebuilds anything.
+   */
+  public setViewDistance(
+    playerX: number,
+    playerZ: number,
+    maxTrackDist = 340,
+    maxEnvironmentDist = 780,
+    maxDetailDist = 360,
+  ): void {
+    const trackSq = maxTrackDist * maxTrackDist;
+    const envSq = maxEnvironmentDist * maxEnvironmentDist;
+    const detailSq = maxDetailDist * maxDetailDist;
+    for (const entry of this.coasters.values()) {
+      const dx = entry.stationPos.x - playerX;
+      const dz = entry.stationPos.z - playerZ;
+      const distSq = dx * dx + dz * dz;
+      entry.meshGroup.visible = maxTrackDist > 0 && distSq <= trackSq;
+      const themed = this.themedEnvironments.get(entry.id);
+      if (themed) {
+        themed.root.visible =
+          maxEnvironmentDist > 0 &&
+          (entry.theme === 'volcano_flex' ? distSq <= envSq : distSq <= trackSq);
+        themed.setDetailVisible(maxDetailDist > 0 && distSq <= detailSq);
+      }
+    }
+  }
+
   public getHudSummaries(): CoasterHudSummaryItem[] {
     if (!this.hudCacheDirty && this.cachedHudSummaries) {
       return this.cachedHudSummaries;
     }
     const out: CoasterHudSummaryItem[] = [];
     for (const entry of this.coasters.values()) {
-      const val = validateTrack(entry.editor.nodes);
+      const val =
+        entry.validationCache ??
+        (entry.validationCache = validateTrack(entry.editor.nodes));
+      const nodes =
+        entry.hudNodesCache ?? (entry.hudNodesCache = entry.editor.nodes.map(cloneNode));
       const total =
         entry.samples.length >= 2
           ? entry.samples[entry.samples.length - 1].distance
@@ -1081,7 +1139,7 @@ export class RollerCoasterRuntime {
         lateralG: entry.train.lateralG,
         segmentLabel: current ? getSegmentDisplayLabel(current.segmentType) : 'Load Station',
         coasterType: entry.coasterType,
-        nodes: entry.editor.nodes.map(cloneNode),
+        nodes,
       });
     }
     this.cachedHudSummaries = out;

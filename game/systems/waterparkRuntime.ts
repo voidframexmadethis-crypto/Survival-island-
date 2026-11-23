@@ -201,6 +201,8 @@ export class WaterparkRuntime {
   private disposed = false;
   private elapsed = 0;
   private waveTimer = 0;
+  private waveNormalsTimer = 0;
+  private tubeTimer = 0;
   private bucketPhase = 0;
   private bucketDumpAge = 999;
   private particleCursor = 0;
@@ -793,9 +795,27 @@ export class WaterparkRuntime {
     if (this.physicalCooldown > 0) {
       this.physicalCooldown = Math.max(0, this.physicalCooldown - frameTime);
     }
+    const hasPlayer =
+      typeof playerX === 'number' && typeof playerY === 'number' && typeof playerZ === 'number';
+    const dx = (playerX ?? WATERPARK_SITE.x) - WATERPARK_SITE.x;
+    const dz = (playerZ ?? WATERPARK_SITE.z) - WATERPARK_SITE.z;
+    const forced = Boolean(this.active || this.physical);
+    const animate = this.visible && (forced || !hasPlayer || dx * dx + dz * dz <= 340 * 340);
+    if (!animate) {
+      // The park is outside the draw radius. Keep ride records intact and skip
+      // every wave, tube, particle and bucket deformation until it is in range.
+      this.waveTimer = 0;
+      this.waveNormalsTimer = 0;
+      this.tubeTimer = 0;
+      return;
+    }
     this.elapsed += frameTime;
     this.animateWavePool(frameTime);
-    this.updateInnerTubes();
+    this.tubeTimer += frameTime;
+    if (this.tubeTimer >= 1 / 24) {
+      this.tubeTimer = 0;
+      this.updateInnerTubes();
+    }
     this.updateBucket(frameTime, playerX, playerY, playerZ);
     this.updateParticles(frameTime);
 
@@ -1062,7 +1082,8 @@ export class WaterparkRuntime {
 
   private animateWavePool(dt: number): void {
     this.waveTimer += dt;
-    if (this.waveTimer < 0.045) return;
+    this.waveNormalsTimer += dt;
+    if (this.waveTimer < 0.06) return;
     this.waveTimer = 0;
     const geo = this.handles.waveGeometry;
     const base = this.handles.waveBasePositions;
@@ -1079,7 +1100,12 @@ export class WaterparkRuntime {
         Math.sin((bx + bz) * 0.23 + this.elapsed * 1.1) * 0.08;
     }
     attr.needsUpdate = true;
-    geo.computeVertexNormals();
+    // Vertex normals are far more expensive than the 627 position updates and
+    // are visually indistinguishable above ~5 Hz for this broad swell.
+    if (this.waveNormalsTimer >= 0.2) {
+      this.waveNormalsTimer = 0;
+      geo.computeVertexNormals();
+    }
   }
 
   private updateInnerTubes(): void {

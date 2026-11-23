@@ -82,6 +82,36 @@ test('the prebuilt track is a closed, valid, 15-inversion launch circuit', () =>
   runtime.dispose();
 });
 
+test('coaster detail is distance-culled and HUD node data is reused', () => {
+  const scene = new THREE.Scene();
+  const runtime = new RollerCoasterRuntime(scene);
+  const id = runtime.addCoasterData(buildVolcanoFlexCoasterData());
+  assert.ok(id);
+  const first = runtime.getHudSummaries().find((entry) => entry.id === id);
+  assert.ok(first);
+  assert.ok(first.nodes.length > 300);
+
+  runtime.setViewDistance(0, 0, 0, 0, 0);
+  const track = scene.getObjectByName(`Coaster_${id}`);
+  const environment = scene.getObjectByName('volcano-flex-environment');
+  assert.ok(track);
+  assert.ok(environment);
+  assert.equal(track.visible, false);
+  assert.equal(environment.visible, false);
+
+  const site = getVolcanoFlexSite();
+  runtime.setViewDistance(site.station.x, site.station.z, 340, 780, 360);
+  assert.equal(track.visible, true);
+  assert.equal(environment.visible, true);
+
+  runtime.dispatchTrain(id, true);
+  runtime.update(1 / 60, site.station.x, site.station.z);
+  const second = runtime.getHudSummaries().find((entry) => entry.id === id);
+  assert.ok(second);
+  assert.equal(second.nodes, first.nodes, 'HUD snapshots must not clone 444 nodes every tick');
+  runtime.dispose();
+});
+
 test('the train launches, completes every inversion, brakes and returns to the station', () => {
   const runtime = new RollerCoasterRuntime(new THREE.Scene());
   const id = runtime.addCoasterData(buildVolcanoFlexCoasterData());

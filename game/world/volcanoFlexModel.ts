@@ -8,6 +8,8 @@ import {
 export interface VolcanoFlexEnvironment {
   root: THREE.Group;
   update: (dt: number, elapsed: number, speedKmh: number) => void;
+  /** Hides the costly chamber, lava and particle detail at long range. */
+  setDetailVisible: (visible: boolean) => void;
   dispose: () => void;
 }
 
@@ -122,6 +124,9 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
   const root = new THREE.Group();
   root.name = 'volcano-flex-environment';
   root.position.set(site.mountain.x, site.mountain.y, site.mountain.z);
+  const interior = new THREE.Group();
+  interior.name = 'volcano-interior-detail';
+  root.add(interior);
 
   const height = VOLCANO_FLEX_HEIGHT_M;
   const stationDirection = new THREE.Vector3(
@@ -161,7 +166,7 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
   );
   chamber.name = 'volcano-inner-chamber';
   chamber.position.y = (height - 30) * 0.5;
-  root.add(chamber);
+  interior.add(chamber);
 
   // Jagged interior buttresses make the chamber read as volcanic rock rather
   // than a smooth cylinder when the train passes close to the wall.
@@ -183,7 +188,7 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
       Math.sin(angle) * radius,
     );
     buttress.rotation.z = (seeded(i + 4) - 0.5) * 0.28;
-    root.add(buttress);
+    interior.add(buttress);
   }
 
   const craterRim = new THREE.Mesh(
@@ -212,7 +217,7 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
   lavaPool.name = 'volcano-lava-pool';
   lavaPool.rotation.x = -Math.PI / 2;
   lavaPool.position.y = 0.55;
-  root.add(lavaPool);
+  interior.add(lavaPool);
 
   const lavaRiverPoints = [
     new THREE.Vector3(-24, 1.1, 2),
@@ -231,7 +236,7 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
     lavaMat,
   );
   lavaRiver.name = 'volcano-lava-river';
-  root.add(lavaRiver);
+  interior.add(lavaRiver);
 
   const lavaFallCurve = new THREE.CatmullRomCurve3([
     new THREE.Vector3(25, height - 30, -10),
@@ -250,7 +255,7 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
     lavaFallMat,
   );
   lavaFall.name = 'volcano-lava-fall';
-  root.add(lavaFall);
+  interior.add(lavaFall);
 
   // Glowing fissures crawl up the chamber walls.
   const crackPositions: number[] = [];
@@ -279,7 +284,7 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
     }),
   );
   cracks.name = 'volcano-glowing-cracks';
-  root.add(cracks);
+  interior.add(cracks);
 
   // Embers swirl inside the chamber and stream from the crater.
   const emberCount = 520;
@@ -308,7 +313,7 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
     }),
   );
   embers.name = 'volcano-embers';
-  root.add(embers);
+  interior.add(embers);
 
   const smokeCount = 180;
   const smokePositions = new Float32Array(smokeCount * 3);
@@ -359,7 +364,7 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
   const chamberGlow = new THREE.PointLight(0xff4d00, 4.2, 115, 1.8);
   chamberGlow.name = 'volcano-chamber-glow';
   chamberGlow.position.set(0, 24, 0);
-  root.add(chamberGlow);
+  interior.add(chamberGlow);
   const craterGlow = new THREE.PointLight(0xff7a18, 5.6, 170, 1.7);
   craterGlow.name = 'volcano-crater-glow';
   craterGlow.position.set(0, height + 3, 0);
@@ -367,7 +372,7 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
   const lavaGlow = new THREE.PointLight(0xff9a3c, 3.1, 52, 1.8);
   lavaGlow.name = 'volcano-lava-glow';
   lavaGlow.position.set(0, 2.5, 0);
-  root.add(lavaGlow);
+  interior.add(lavaGlow);
 
   // Blacked-out tunnel mouth and an outward-facing arch at the launch portal.
   const portal = new THREE.Group();
@@ -539,6 +544,10 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
     bombs.instanceMatrix.needsUpdate = true;
   };
 
+  const setDetailVisible = (visible: boolean) => {
+    interior.visible = visible;
+  };
+
   const dispose = () => {
     root.traverse((object) => {
       if (object instanceof THREE.Mesh || object instanceof THREE.Points || object instanceof THREE.LineSegments) {
@@ -551,7 +560,7 @@ export function buildVolcanoFlexEnvironment(): VolcanoFlexEnvironment {
     root.parent?.remove(root);
   };
 
-  return { root, update, dispose };
+  return { root, update, setDetailVisible, dispose };
 }
 
 /** Detailed five-car train with an armored Vader-inspired lead car. */
