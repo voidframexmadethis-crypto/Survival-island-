@@ -1,4 +1,5 @@
 import type { ItemId } from '../types';
+import { AIR_SHUTTLE_CABIN, canStandAt } from './airShuttleCabinLayout';
 
 export type CabinCrewAgentId = 'amara' | 'celeste';
 
@@ -30,6 +31,7 @@ export interface CabinCrewOrder {
     | 'picking_up'
     | 'to_table'
     | 'served'
+    | 'collecting_queued'
     | 'collecting'
     | 'collected'
     | 'done';
@@ -71,12 +73,17 @@ interface CrewAgent {
   carrying: boolean;
 }
 
-const GALLEY: CabinCrewPoint = { x: -0.82, z: 3.22 };
-const AMARA_HOME: CabinCrewPoint = { x: 0.04, z: 1.35 };
-const CELESTE_HOME: CabinCrewPoint = { x: 0.45, z: -2.42 };
-const AISLE_FRONT_Z = 2.82;
+/** Stand clear of the counter, not inside it. */
+const GALLEY: CabinCrewPoint = { x: -0.34, z: 3.2 };
+const AMARA_HOME: CabinCrewPoint = { x: -0.15, z: 1.4 };
+const CELESTE_HOME: CabinCrewPoint = { x: 0.12, z: -2.35 };
+const AISLE_FRONT_Z = 3.0;
 const AISLE_REAR_Z = -2.62;
-const WALK_SPEED = 0.82;
+const WALK_SPEED = 0.78;
+const CREW_RADIUS = 0.18;
+const NO_DOORS = { bedroomOpen: false, bathroomOpen: false } as const;
+
+export const CABIN_CREW_HEAD_HEIGHT = 1.45;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -84,6 +91,11 @@ function clamp(value: number, min: number, max: number): number {
 
 function distance(a: CabinCrewPoint, b: CabinCrewPoint): number {
   return Math.hypot(a.x - b.x, a.z - b.z);
+}
+
+/** Aisle-side service position, far enough from the table to avoid clipping. */
+function tableServicePoint(tableX: number, tableZ: number): CabinCrewPoint {
+  return { x: clamp(tableX * 0.12, -0.1, 0.1), z: tableZ + 0.65 };
 }
 
 /**
@@ -212,16 +224,18 @@ export class AirShuttleCabinCrewSystem {
     const plate = this.plates.find((entry) => entry.id === plateId);
     if (!plate || !plate.dirty) return false;
     const order = this.orders.find((entry) => entry.id === plate.orderId);
-    const preferred = order ? this.agents[order.agentId] : null;
-    const agent =
-      preferred && !preferred.task
-        ? preferred
-        : (Object.values(this.agents).find((entry) => !entry.task) ?? null);
-    if (!agent || !order) return false;
-    plate.dirty = true;
+    if (!order) return false;
+    const preferred = this.agents[order.agentId];
+    // Keep one attendant owning the table. If she is still walking back from
+    // the delivery, queue the clear instead of sending the other maid into
+    // the same narrow aisle where they would block each other.
+    if (preferred.task) {
+      order.phase = 'collecting_queued';
+      return true;
+    }
     order.phase = 'collecting';
-    agent.task = { orderId: order.id, phase: 'collecting', timer: 0 };
-    agent.path = this.pathTo(agent, { x: plate.tableX, z: plate.tableZ + 0.38 });
+    preferred.task = { orderId: order.id, phase: 'collecting', timer: 0 };
+    preferred.path = this.pathTo(preferred, tableServicePoint(plate.tableX, plate.tableZ));
     return true;
   }
 
@@ -296,8 +310,20 @@ export class AirShuttleCabinCrewSystem {
         remaining -= dist;
         agent.path.shift();
       } else {
-        agent.x += (dx / dist) * remaining;
-        agent.z += (dz / dist) * remaining;
+        const stepX = (dx / dist) * remaining;
+        const stepZ = (dz / dist) * remaining;
+        const nextX = agent.x + stepX;
+        const nextZ = agent.z + stepZ;
+        if (canStandAt(nextX, nextZ, NO_DOORS, CREW_RADIUS)) {
+          agent.x = nextX;
+          agent.z = nextZ;
+        } else if (canStandAt(nextX, agent.z, NO_DOORS, CREW_RADIUS)) {
+          agent.x = nextX;
+        } else if (canStandAt(agent.x, nextZ, NO_DOORS, CREW_RADIUS)) {
+          agent.z = nextZ;
+        } else {
+          agent.path.shift();
+        }
         remaining = 0;
       }
     }
@@ -320,7 +346,7 @@ export class AirShuttleCabinCrewSystem {
     }
     if (task.phase === 'returning' || task.phase === 'to_galley_return') {
       const order = this.orders.find((entry) => entry.id === task.orderId);
-      if (order) order.phase = 'done';
+      if (order && order.phase !== 'collecting_queued') order.phase = 'done';
       agent.task = null;
       agent.carrying = false;
       this.assignQueued(agent);
@@ -332,6 +358,21 @@ export class AirShuttleCabinCrewSystem {
 
   private assignQueued(agent: CrewAgent): void {
     if (agent.task) return;
+    const collection = this.orders.find(
+      (entry) => entry.agentId === agent.id && entry.phase === 'collecting_queued',
+    );
+    if (collection) {
+      const plate = this.plates.find((entry) => entry.orderId === collection.id);
+      if (plate?.dirty) {
+        collection.phase = 'collecting';
+        agent.task = { orderId: collection.id, phase: 'collecting', timer: 0 };
+        agent.path = this.pathTo(
+          agent,
+          tableServicePoint(plate.tableX, plate.tableZ),
+        );
+        return;
+      }
+    }
     const queued = this.orders.find(
       (entry) => entry.agentId === agent.id && entry.phase === 'queued',
     );
@@ -348,10 +389,7 @@ export class AirShuttleCabinCrewSystem {
       agent.carrying = true;
       order.phase = 'to_table';
       task.phase = 'to_table';
-      agent.path = this.pathTo(agent, {
-        x: order.tableX,
-        z: order.tableZ + 0.38,
-      });
+      agent.path = this.pathTo(agent, tableServicePoint(order.tableX, order.tableZ));
       return;
     }
     if (task.phase === 'serving') {
@@ -399,14 +437,33 @@ export class AirShuttleCabinCrewSystem {
         const dist = Math.hypot(dx, dz);
         if (dist > 0.0001 && dist < 0.46) {
           const push = (0.46 - dist) * 0.5;
+          const ax = a.x;
+          const az = a.z;
+          const bx = b.x;
+          const bz = b.z;
           a.x -= (dx / dist) * push;
           a.z -= (dz / dist) * push;
           b.x += (dx / dist) * push;
           b.z += (dz / dist) * push;
+          if (!canStandAt(a.x, a.z, NO_DOORS, CREW_RADIUS)) {
+            a.x = ax;
+            a.z = az;
+          }
+          if (!canStandAt(b.x, b.z, NO_DOORS, CREW_RADIUS)) {
+            b.x = bx;
+            b.z = bz;
+          }
         }
       }
-      list[i].x = clamp(list[i].x, -1.04, 1.04);
-      list[i].z = clamp(list[i].z, -5.9, 3.45);
     }
   }
+}
+
+/**
+ * Ceiling clearance check used by the visual and gameplay tests. The maids
+ * stand with their feet on the cabin floor and their heads well below the
+ * finished headliner.
+ */
+export function cabinCrewHeadY(): number {
+  return AIR_SHUTTLE_CABIN.floorTopY + CABIN_CREW_HEAD_HEIGHT;
 }

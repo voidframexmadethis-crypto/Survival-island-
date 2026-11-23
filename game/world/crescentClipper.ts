@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { AIR_SHUTTLE_CABIN } from '../systems/airShuttleCabinLayout';
 import { markAlwaysVisibleWorldObject } from './worldCullPolicy';
 
 export interface CrescentClipperHandles {
@@ -202,30 +203,37 @@ export function buildCrescentClipper(): CrescentClipperHandles {
   };
 
   // ---- Fuselage ----------------------------------------------------------
-  addCylinder(1.55, 15, 0, 2.4, 0.4, hullMat);
-  const nose = new THREE.Mesh(new THREE.ConeGeometry(1.55, 2.2, 18), hullMat);
+  // The flying-boat hull is stretched vertically so the walkable cabin has a
+  // genuine 2.52 m floor-to-ceiling height instead of a decorative shell.
+  const fuselage = addCylinder(1.8, 15, 0, 3.2, 0.4, hullMat);
+  fuselage.scale.y = 1.22;
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(1.8, 2.2, 18), hullMat);
   nose.rotation.x = Math.PI / 2;
-  nose.position.set(0, 2.4, 8.2);
+  nose.scale.y = 1.22;
+  nose.position.set(0, 3.2, 8.2);
   nose.castShadow = true;
   root.add(nose);
-  const tailCone = new THREE.Mesh(new THREE.ConeGeometry(1.55, 2.4, 18), hullMat);
+  const tailCone = new THREE.Mesh(new THREE.ConeGeometry(1.8, 2.4, 18), hullMat);
   tailCone.rotation.x = -Math.PI / 2;
-  tailCone.position.set(0, 2.4, -8.0);
+  tailCone.scale.y = 1.22;
+  tailCone.position.set(0, 3.2, -8.0);
   tailCone.castShadow = true;
   root.add(tailCone);
-  addCylinder(1.58, 1.6, 0, 2.4, 2.6, hullTrimMat);
-  addCylinder(1.58, 0.7, 0, 2.4, -4.6, goldMat);
+  const forwardBand = addCylinder(1.83, 1.6, 0, 3.2, 2.6, hullTrimMat);
+  forwardBand.scale.y = 1.22;
+  const aftBand = addCylinder(1.83, 0.7, 0, 3.2, -4.6, goldMat);
+  aftBand.scale.y = 1.22;
 
   // ---- High wing and tail -------------------------------------------------
-  addBox(23, 0.22, 3.8, 0, 3.55, 1.0, hullMat);
-  addBox(23.2, 0.05, 0.2, 0, 3.68, 2.55, goldMat);
+  addBox(23, 0.22, 3.8, 0, 5.5, 1.0, hullMat);
+  addBox(23.2, 0.05, 0.2, 0, 5.63, 2.55, goldMat);
   for (const side of [-1, 1]) {
-    addBox(2.4, 0.2, 2.8, side * 11.1, 3.55, 1.0, hullTrimMat);
-    addBox(0.34, 0.24, 3.4, side * 6.6, 3.55, 1.0, frameMat);
+    addBox(2.4, 0.2, 2.8, side * 11.1, 5.5, 1.0, hullTrimMat);
+    addBox(0.34, 0.24, 3.4, side * 6.6, 5.5, 1.0, frameMat);
   }
-  addBox(8.4, 0.2, 2.4, 0, 3.1, -7.3, hullMat);
-  addBox(0.22, 3.5, 2.5, 0, 4.35, -7.35, hullTrimMat);
-  addBox(0.06, 0.9, 2.0, 0, 4.1, -7.4, goldMat);
+  addBox(8.4, 0.2, 2.4, 0, 4.95, -7.3, hullMat);
+  addBox(0.22, 3.5, 2.5, 0, 5.3, -7.35, hullTrimMat);
+  addBox(0.06, 0.9, 2.0, 0, 5.3, -7.4, goldMat);
 
   // ---- Twin floats and struts --------------------------------------------
   for (const side of [-1, 1]) {
@@ -240,19 +248,19 @@ export function buildCrescentClipper(): CrescentClipperHandles {
     addBox(0.12, 0.9, 1.0, floatX, 0.95, -4.9, floatMat);
     for (const strutZ of [-2.8, 1.9, 4.2]) {
       const strut = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.07, 0.09, 1.9, 6),
+        new THREE.CylinderGeometry(0.07, 0.09, 4.15, 6),
         frameMat,
       );
-      strut.position.set(floatX, 1.5, strutZ);
+      strut.position.set(floatX, 3.2, strutZ);
       strut.rotation.z = side * 0.28;
       strut.castShadow = true;
       root.add(strut);
     }
   }
   for (const side of [-1, 1]) {
-    const strut = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 2.4, 6), frameMat);
-    strut.position.set(side * 4.0, 2.8, 1.0);
-    strut.rotation.z = side * 0.55;
+    const strut = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 4.4, 6), frameMat);
+    strut.position.set(side * 4.0, 3.45, 1.0);
+    strut.rotation.z = side * 0.58;
     strut.castShadow = true;
     root.add(strut);
   }
@@ -260,11 +268,12 @@ export function buildCrescentClipper(): CrescentClipperHandles {
   // ---- Engines and propellers --------------------------------------------
   const propellers: THREE.Object3D[] = [];
   for (const side of [-1, 1]) {
-    addCylinder(0.46, 3.1, side * 5.2, 3.25, 1.5, hullTrimMat);
-    addCylinder(0.3, 0.5, side * 5.2, 3.25, 3.35, frameMat);
-    addCylinder(0.26, 0.9, side * 5.2, 3.0, 2.7, engineGlowMat);
+    addBox(0.42, 0.55, 2.4, side * 5.2, 5.1, 1.5, frameMat);
+    addCylinder(0.46, 3.1, side * 5.2, 4.8, 1.5, hullTrimMat);
+    addCylinder(0.3, 0.5, side * 5.2, 4.8, 3.35, frameMat);
+    addCylinder(0.26, 0.9, side * 5.2, 4.55, 2.7, engineGlowMat);
     const propeller = new THREE.Group();
-    propeller.position.set(side * 5.2, 3.25, 3.65);
+    propeller.position.set(side * 5.2, 4.8, 3.65);
     propeller.add(
       new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.7, 10), goldMat),
     );
@@ -280,12 +289,25 @@ export function buildCrescentClipper(): CrescentClipperHandles {
 
   // ---- Cabin, cockpit and gull-wing door ---------------------------------
   const cabinSeats: THREE.Object3D[] = [];
-  addBox(2.55, 0.08, 9.6, 0, 2.02, 1.3, interiorMat);
-  addBox(2.45, 0.025, 9.2, 0, 2.08, 1.2, carpetMat);
-  addBox(2.55, 0.08, 9.6, 0, 3.72, 1.3, hullTrimMat);
+  addBox(2.55, 0.08, 9.6, 0, AIR_SHUTTLE_CABIN.floorY, 1.3, interiorMat);
+  addBox(2.45, 0.025, 9.2, 0, AIR_SHUTTLE_CABIN.floorTopY - 0.02, 1.2, carpetMat);
+  addBox(2.55, 0.08, 9.6, 0, AIR_SHUTTLE_CABIN.ceilingY + 0.04, 1.3, hullTrimMat);
+  addBox(2.55, 0.08, 3.55, 0, AIR_SHUTTLE_CABIN.ceilingY + 0.04, -4.7, hullTrimMat);
+  // Solid cockpit and aft bulkheads make the movement limits visible.
+  addBox(2.38, 2.52, 0.1, 0, 3.36, 3.62, hullTrimMat);
+  addBox(2.38, 2.52, 0.1, 0, 3.36, -6.27, hullTrimMat);
+  addBox(1.4, 0.65, 0.04, 0, 3.73, 3.56, glassMat);
   for (const side of [-1, 1]) {
+    // Continuous finished side walls close the gap between the flat floor /
+    // ceiling and the curved outer hull, so no daylight leaks through the
+    // enlarged cabin. The glazing is recessed behind the wall line.
+    addBox(0.06, 0.82, 9.3, side * 1.2, 2.5, 1.25, woodMat);
+    addBox(0.08, 0.74, 9.4, side * 1.16, 4.25, 1.25, hullTrimMat);
+    addBox(0.08, 0.08, 9.4, side * 1.17, 3.94, 1.25, goldMat);
     for (let i = 0; i < 5; i++) {
-      addBox(0.06, 0.62, 1.15, side * 1.5, 3.22, -2.2 + i * 1.65, glassMat);
+      const windowZ = -2.2 + i * 1.65;
+      addBox(0.06, 0.9, 1.12, side * 1.78, 3.44, windowZ, glassMat);
+      addBox(0.025, 0.9, 1.08, side * 1.21, 3.44, windowZ, glassMat);
     }
   }
   // Cockpit windshield and frame.
@@ -320,7 +342,7 @@ export function buildCrescentClipper(): CrescentClipperHandles {
     }
   }
   for (const [tableIndex, tableZ] of [1.85, 0.45].entries()) {
-    const tableX = tableIndex === 0 ? 0.55 : -0.55;
+    const tableX = tableIndex === 0 ? 0.62 : -0.63;
     const tableTop = new THREE.Mesh(
       new THREE.CylinderGeometry(0.3, 0.3, 0.055, 18),
       goldMat,
@@ -336,44 +358,45 @@ export function buildCrescentClipper(): CrescentClipperHandles {
   }
 
   // ---- Couch and live cabin TV -------------------------------------------
-  addBox(0.64, 0.22, 1.9, 0.9, 2.36, -1.95, seatMat);
-  addBox(0.18, 0.9, 1.9, 1.18, 2.82, -1.95, seatMat);
-  addBox(0.55, 0.12, 0.55, 0.88, 2.5, -2.55, goldMat);
-  addBox(0.55, 0.12, 0.55, 0.88, 2.5, -1.45, goldMat);
-  addBox(0.08, 0.92, 1.62, -1.3, 3.06, -1.95, frameMat);
+  addBox(0.64, 0.22, 1.4, 0.9, 2.36, -1.42, seatMat);
+  addBox(0.18, 0.9, 1.4, 1.18, 2.82, -1.42, seatMat);
+  addBox(0.55, 0.12, 0.5, 0.88, 2.5, -1.96, goldMat);
+  addBox(0.55, 0.12, 0.5, 0.88, 2.5, -0.88, goldMat);
+  addBox(0.08, 0.92, 1.62, -1.3, 3.5, -1.55, frameMat);
   const cabinTv = new THREE.Mesh(new THREE.PlaneGeometry(1.48, 0.78), cabinTvMat);
-  cabinTv.position.set(-1.345, 3.06, -1.95);
+  cabinTv.position.set(-1.345, 3.5, -1.55);
   cabinTv.rotation.y = Math.PI / 2;
   root.add(cabinTv);
-  addBox(0.12, 0.12, 1.2, -1.16, 2.5, -1.95, frameMat);
+  addBox(0.12, 0.12, 1.2, -1.16, 2.82, -1.55, frameMat);
 
   // ---- Rear partition, private bedroom and bathroom ---------------------
-  addBox(1.08, 1.58, 0.1, -0.73, 2.9, -2.9, hullTrimMat);
-  addBox(0.62, 1.58, 0.1, 0.96, 2.9, -2.9, hullTrimMat);
-  addBox(1.35, 0.2, 0.1, 0.05, 3.72, -2.9, hullTrimMat);
-  addBox(2.6, 0.08, 3.55, 0, 2.08, -4.7, carpetMat);
-  addBox(0.1, 1.58, 3.55, 0.28, 2.9, -4.7, hullTrimMat);
-  addBox(0.5, 1.5, 0.08, 0.28, 2.9, -3.05, frameMat);
+  addBox(2.55, 0.08, 3.45, 0, AIR_SHUTTLE_CABIN.floorTopY - 0.02, -4.63, carpetMat);
+  // Full-height partition with two real door openings, one per aft room.
+  addBox(0.18, 2.52, 0.1, -1.19, 3.36, AIR_SHUTTLE_CABIN.rearPartitionZ, hullTrimMat);
+  addBox(0.18, 2.52, 0.1, 1.19, 3.36, AIR_SHUTTLE_CABIN.rearPartitionZ, hullTrimMat);
+  addBox(0.64, 2.52, 0.1, 0, 3.36, AIR_SHUTTLE_CABIN.rearPartitionZ, hullTrimMat);
+  addBox(2.56, 0.46, 0.1, 0, 4.39, AIR_SHUTTLE_CABIN.rearPartitionZ, hullTrimMat);
+  addBox(0.08, 2.52, 3.3, 0, 3.36, -4.62, hullTrimMat);
 
   // Bedroom: bed, pillows, blanket, nightstand and lamp.
   addBox(1.14, 0.22, 2.0, -0.55, 2.2, -5.0, frameMat);
   addBox(1.08, 0.28, 1.9, -0.55, 2.4, -5.0, bedMat);
-  addBox(1.08, 0.1, 1.0, -0.55, 2.57, -5.45, blanketMat);
-  addBox(0.45, 0.16, 0.32, -0.85, 2.61, -4.25, whiteMat);
-  addBox(0.45, 0.16, 0.32, -0.3, 2.61, -4.25, whiteMat);
+  addBox(1.08, 0.1, 1.0, -0.55, 2.57, -4.65, blanketMat);
+  addBox(0.45, 0.16, 0.32, -0.85, 2.61, -5.55, whiteMat);
+  addBox(0.45, 0.16, 0.32, -0.3, 2.61, -5.55, whiteMat);
   addBox(1.2, 0.75, 0.1, -0.55, 2.85, -6.02, woodMat);
-  addBox(0.36, 0.38, 0.36, 0.08, 2.28, -5.1, woodMat);
+  addBox(0.36, 0.38, 0.36, -0.95, 2.28, -4.3, woodMat);
   const bedLamp = new THREE.Mesh(
     new THREE.CylinderGeometry(0.12, 0.16, 0.3, 8),
     bedroomLampMat,
   );
-  bedLamp.position.set(0.08, 2.62, -5.1);
+  bedLamp.position.set(-0.95, 2.62, -4.3);
   root.add(bedLamp);
   const bathroomLight = new THREE.Mesh(
     new THREE.BoxGeometry(0.5, 0.04, 0.28),
     bathroomLightMat,
   );
-  bathroomLight.position.set(0.82, 3.68, -4.55);
+  bathroomLight.position.set(0.82, AIR_SHUTTLE_CABIN.ceilingY - 0.12, -4.55);
   root.add(bathroomLight);
   addBox(1.15, 0.035, 1.6, -0.58, 2.11, -4.9, carpetMat);
 
@@ -400,24 +423,25 @@ export function buildCrescentClipper(): CrescentClipperHandles {
   addBox(0.18, 0.05, 0.28, -1.02, 2.85, 3.18, cabinTvMat);
   addBox(0.3, 0.18, 0.24, -1.02, 2.66, 2.78, bathMat);
   for (const lightZ of [2.2, 0.6, -1.4, -4.0]) {
-    addBox(0.6, 0.035, 0.16, 0, 3.69, lightZ, bedroomLampMat);
+    addBox(0.6, 0.035, 0.16, 0, AIR_SHUTTLE_CABIN.ceilingY - 0.08, lightZ, bedroomLampMat);
   }
+  addBox(1.8, 0.035, 0.12, 0, AIR_SHUTTLE_CABIN.ceilingY - 0.08, 1.3, bedroomLampMat);
   const bedroomDoor = new THREE.Group();
-  bedroomDoor.position.set(0.28, 2.1, -3.55);
-  addBox(0.045, 1.48, 0.82, 0, 0.74, 0.41, woodMat, bedroomDoor);
-  addBox(0.06, 0.06, 0.16, 0.05, 0.72, 0.7, goldMat, bedroomDoor);
+  bedroomDoor.position.set(-1.1, AIR_SHUTTLE_CABIN.floorTopY, AIR_SHUTTLE_CABIN.rearPartitionZ);
+  addBox(0.78, 2.04, 0.045, 0.39, 1.02, 0, woodMat, bedroomDoor);
+  addBox(0.06, 0.06, 0.16, 0.68, 0.98, 0.04, goldMat, bedroomDoor);
   root.add(bedroomDoor);
   const bathroomDoor = new THREE.Group();
-  bathroomDoor.position.set(0.28, 2.1, -4.62);
-  addBox(0.045, 1.48, 0.82, 0, 0.74, 0.41, woodMat, bathroomDoor);
-  addBox(0.06, 0.06, 0.16, -0.05, 0.72, 0.7, goldMat, bathroomDoor);
+  bathroomDoor.position.set(1.1, AIR_SHUTTLE_CABIN.floorTopY, AIR_SHUTTLE_CABIN.rearPartitionZ);
+  addBox(0.78, 2.04, 0.045, -0.39, 1.02, 0, woodMat, bathroomDoor);
+  addBox(0.06, 0.06, 0.16, -0.68, 0.98, 0.04, goldMat, bathroomDoor);
   root.add(bathroomDoor);
 
   // ---- Xbox console and service plate ------------------------------------
-  addBox(0.22, 0.26, 0.62, -1.16, 2.6, -1.95, frameMat);
-  addBox(0.03, 0.16, 0.16, -1.28, 2.6, -1.95, xboxMat);
+  addBox(0.22, 0.26, 0.62, -1.16, 2.6, -1.55, frameMat);
+  addBox(0.03, 0.16, 0.16, -1.28, 2.6, -1.55, xboxMat);
   const servicePlate = new THREE.Group();
-  servicePlate.position.set(0.55, 2.56, 1.85);
+  servicePlate.position.set(0.62, 2.56, 1.85);
   const plateDish = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.16, 0.025, 16), whiteMat);
   servicePlate.add(plateDish);
   const curry = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), goldMat);
@@ -492,7 +516,7 @@ export function buildCrescentClipper(): CrescentClipperHandles {
 
   // ---- Deployable boarding stairs ---------------------------------------
   const stairs = new THREE.Group();
-  stairs.position.set(-1.5, 2.02, 2.25);
+  stairs.position.set(-1.8, 2.02, 2.25);
   for (let step = 0; step < 4; step++) {
     addBox(0.7, 0.07, 0.92, -0.3 - step * 0.27, -0.16 - step * 0.28, 0, frameMat, stairs);
     addBox(0.06, 0.4, 0.06, -0.3 - step * 0.27, 0.06 - step * 0.28, -0.4, goldMat, stairs);
@@ -525,18 +549,23 @@ export function buildCrescentClipper(): CrescentClipperHandles {
   landingGear.add(noseWheel);
   root.add(landingGear);
 
+  // Raised entry fairing supports the tall gull-wing door where the curved
+  // hull falls away toward the roof.
+  addBox(0.5, 2.48, 1.42, -1.5, 3.38, 2.25, hullMat);
+  addBox(0.54, 0.1, 1.48, -1.5, 4.58, 2.25, goldMat);
+  addBox(0.54, 0.1, 1.48, -1.5, 2.16, 2.25, hullTrimMat);
   // The port-side gull wing door hinges at the roof and lifts outward/up.
   const door = new THREE.Group();
-  door.position.set(-1.48, 3.58, 2.25);
-  addBox(0.1, 1.9, 1.15, 0, -0.98, 0, hullMat, door);
-  addBox(0.06, 0.72, 0.78, 0.05, -0.45, 0, glassMat, door);
-  addBox(0.1, 0.12, 1.15, 0, -1.9, 0, goldMat, door);
+  door.position.set(-1.78, 4.52, 2.25);
+  addBox(0.1, 2.3, 1.15, 0, -1.15, 0, hullMat, door);
+  addBox(0.06, 0.9, 0.78, 0.05, -0.58, 0, glassMat, door);
+  addBox(0.1, 0.12, 1.15, 0, -2.3, 0, goldMat, door);
   root.add(door);
 
   // ---- Livery and lights --------------------------------------------------
   for (const side of [-1, 1]) {
     const board = new THREE.Mesh(new THREE.PlaneGeometry(4.8, 1.8), nameMat);
-    board.position.set(side * 1.53, 2.75, -1.5);
+    board.position.set(side * 1.79, 3.1, -1.5);
     board.rotation.y = side > 0 ? Math.PI / 2 : -Math.PI / 2;
     root.add(board);
   }
@@ -545,19 +574,19 @@ export function buildCrescentClipper(): CrescentClipperHandles {
       new THREE.SphereGeometry(0.16, 8, 6),
       side < 0 ? navRedMat : navGreenMat,
     );
-    light.position.set(side * 11.6, 3.62, 1.0);
+    light.position.set(side * 11.6, 5.57, 1.0);
     root.add(light);
   }
   const tailLight = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 6), navGreenMat);
-  tailLight.position.set(0, 3.1, -8.5);
+  tailLight.position.set(0, 5.0, -8.5);
   root.add(tailLight);
   const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 6), beaconMat);
-  beacon.position.set(0, 5.15, -7.4);
+  beacon.position.set(0, 6.0, -7.4);
   root.add(beacon);
 
   // Warm cabin spill so the cockpit reads at night.
   const cabinGlow = new THREE.PointLight(0xffd6a0, 7, 12, 2);
-  cabinGlow.position.set(0, 3.2, 1.8);
+  cabinGlow.position.set(0, 4.15, 1.8);
   root.add(cabinGlow);
 
   return {

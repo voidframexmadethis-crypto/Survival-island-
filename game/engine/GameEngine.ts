@@ -133,6 +133,14 @@ import {
 import { applyAirShuttleVisual } from '../systems/airShuttleVisual';
 import { AirShuttleCabinCrewSystem } from '../systems/airShuttleCabinCrew';
 import {
+  AIR_SHUTTLE_CABIN,
+  cabinCameraLocalY,
+  canStandAt,
+  maxCabinJumpFeetY,
+  resolveCabinMove,
+  type CabinDoorState,
+} from '../systems/airShuttleCabinLayout';
+import {
   clearAirShuttleState,
   loadAirShuttleState,
   saveAirShuttleState,
@@ -796,8 +804,9 @@ export class GameEngine {
   private airShuttleHudAccum = 0;
   private airShuttleSprayAccum = 0;
   private airShuttleLocalX = 0;
-  private airShuttleLocalY = 2.1;
+  private airShuttleLocalY = AIR_SHUTTLE_CABIN.floorTopY;
   private airShuttleLocalZ = 3.2;
+  private airShuttleCabinVelY = 0;
   private airShuttleBoardingAnim = 0;
   private airShuttleSeatedKind: 'seat' | 'couch' | 'bed' | 'bath' | null = null;
   private airShuttleSeatIndex = 0;
@@ -3666,6 +3675,18 @@ export class GameEngine {
       this.gameOver ||
       this.cinematicActive
     ) {
+      return;
+    }
+    if (this.airShuttle.aboard) {
+      if (this.airShuttleSeatedKind) {
+        this.handleAirShuttleStand();
+      } else if (
+        this.airShuttleBoardingAnim <= 0 &&
+        this.airShuttleLocalY <= AIR_SHUTTLE_CABIN.floorTopY + 0.02
+      ) {
+        this.airShuttleCabinVelY = 5.2;
+        this.grounded = false;
+      }
       return;
     }
     if (this.activeVehicleId) {
@@ -8020,11 +8041,23 @@ export class GameEngine {
         this.airShuttleTvOn = true;
         this.callbacks.onOpenStation('air_shuttle_entertainment');
       } else if (near.id === 'air_shuttle_bedroom_door') {
-        this.airShuttleBedroomDoorOpen = !this.airShuttleBedroomDoorOpen;
-        this.toast(`Bedroom door ${this.airShuttleBedroomDoorOpen ? 'opened' : 'closed'}.`, 'info');
+        const next = !this.airShuttleBedroomDoorOpen;
+        const probe = { bedroomOpen: next, bathroomOpen: this.airShuttleBathroomDoorOpen };
+        if (!next && !canStandAt(this.airShuttleLocalX, this.airShuttleLocalZ, probe)) {
+          this.toast('Step clear of the bedroom doorway before closing it.', 'warning');
+        } else {
+          this.airShuttleBedroomDoorOpen = next;
+          this.toast(`Bedroom door ${next ? 'opened' : 'closed'}.`, 'info');
+        }
       } else if (near.id === 'air_shuttle_bathroom_door') {
-        this.airShuttleBathroomDoorOpen = !this.airShuttleBathroomDoorOpen;
-        this.toast(`Bathroom door ${this.airShuttleBathroomDoorOpen ? 'opened' : 'closed'}.`, 'info');
+        const next = !this.airShuttleBathroomDoorOpen;
+        const probe = { bedroomOpen: this.airShuttleBedroomDoorOpen, bathroomOpen: next };
+        if (!next && !canStandAt(this.airShuttleLocalX, this.airShuttleLocalZ, probe)) {
+          this.toast('Step clear of the bathroom doorway before closing it.', 'warning');
+        } else {
+          this.airShuttleBathroomDoorOpen = next;
+          this.toast(`Bathroom door ${next ? 'opened' : 'closed'}.`, 'info');
+        }
       } else if (near.id === 'air_shuttle_lamp') {
         this.airShuttleBedroomLampOn = !this.airShuttleBedroomLampOn;
         this.toast(`Reading lamp ${this.airShuttleBedroomLampOn ? 'on' : 'off'}.`, 'info');
@@ -13105,7 +13138,7 @@ export class GameEngine {
         label: `Turn Cabin TV ${this.airShuttleTvOn ? 'Off' : 'On'}`,
         sublabel: 'Live television above the couch',
         localX: -1.02,
-        localZ: -1.95,
+        localZ: -1.55,
         range: 1.35,
         priority: 1,
       },
@@ -13114,7 +13147,7 @@ export class GameEngine {
         label: 'Open Xbox Series X Dashboard',
         sublabel: 'Entertainment menu · Minecraft availability is labeled honestly',
         localX: -1.02,
-        localZ: -1.45,
+        localZ: -1.35,
         range: 1.25,
         priority: 1.2,
       },
@@ -13122,33 +13155,33 @@ export class GameEngine {
         id: 'air_shuttle_bedroom_door',
         label: `${this.airShuttleBedroomDoorOpen ? 'Close' : 'Open'} Bedroom Door`,
         sublabel: 'Private aft bedroom',
-        localX: 0.28,
-        localZ: -3.55,
-        range: 0.68,
+        localX: -0.71,
+        localZ: -2.58,
+        range: 0.78,
       },
       {
         id: 'air_shuttle_bathroom_door',
         label: `${this.airShuttleBathroomDoorOpen ? 'Close' : 'Open'} Bathroom Door`,
         sublabel: 'Marble bathroom · warm towels',
-        localX: 0.28,
-        localZ: -4.62,
-        range: 0.68,
+        localX: 0.71,
+        localZ: -2.58,
+        range: 0.78,
       },
       {
         id: 'air_shuttle_lamp',
         label: `Turn Reading Lamp ${this.airShuttleBedroomLampOn ? 'Off' : 'On'}`,
         sublabel: 'Bedroom nightstand lighting',
-        localX: 0.08,
-        localZ: -5.1,
-        range: 0.75,
+        localX: -0.95,
+        localZ: -4.3,
+        range: 0.95,
       },
       {
         id: 'air_shuttle_sink',
         label: 'Wash at the Marble Sink',
         sublabel: 'Cold water and fresh towels',
-        localX: 0.82,
-        localZ: -4.25,
-        range: 0.75,
+        localX: 0.62,
+        localZ: -3.6,
+        range: 0.72,
       },
       {
         id: 'air_shuttle_address',
@@ -13163,7 +13196,7 @@ export class GameEngine {
         label: 'Relax on the Couch',
         sublabel: 'Live cabin TV on the port wall',
         localX: 0.9,
-        localZ: -1.95,
+        localZ: -1.42,
         range: 0.8,
       },
       {
@@ -13171,16 +13204,16 @@ export class GameEngine {
         label: 'Lie on the Private Bed',
         sublabel: 'Aft bedroom · turned-down bed and reading lamp',
         localX: -0.55,
-        localZ: -5.0,
-        range: 1.0,
+        localZ: -3.68,
+        range: 0.82,
       },
       {
         id: 'air_shuttle_bath',
         label: 'Use the Marble Bathroom',
         sublabel: 'Warm towels, marble sink and hot water',
-        localX: 0.82,
-        localZ: -4.8,
-        range: 0.9,
+        localX: 0.68,
+        localZ: -3.5,
+        range: 0.8,
       },
     ];
     const rows = [2.55, 1.15, -0.25];
@@ -16176,21 +16209,21 @@ export class GameEngine {
           _vec3C.set(0, 2.86, -2.0);
           lookLocal = true;
         } else if (seated === 'couch') {
-          _vec3A.set(0.86, 3.22, -1.95);
-          _vec3C.set(-1.35, 3.04, -1.95);
+          _vec3A.set(0.86, 3.22, -1.42);
+          _vec3C.set(-1.35, 3.32, -1.55);
           lookLocal = true;
         } else if (seated === 'bed') {
-          _vec3A.set(-0.55, 3.2, -5.0);
-          _vec3C.set(0.35, 2.88, -2.8);
+          _vec3A.set(-0.55, 3.32, -4.55);
+          _vec3C.set(0.25, 2.95, -2.8);
           lookLocal = true;
         } else if (seated === 'bath') {
-          _vec3A.set(0.82, 3.2, -4.8);
-          _vec3C.set(0.82, 2.82, -5.9);
+          _vec3A.set(0.78, 3.24, -3.55);
+          _vec3C.set(0.82, 2.8, -5.2);
           lookLocal = true;
         } else {
           _vec3A.set(
             this.airShuttleLocalX,
-            this.airShuttleLocalY + 1.42,
+            cabinCameraLocalY(this.airShuttleLocalY),
             this.airShuttleLocalZ,
           );
         }
@@ -17316,14 +17349,22 @@ export class GameEngine {
     }
   }
 
+  private airShuttleDoorState(): CabinDoorState {
+    return {
+      bedroomOpen: this.airShuttleBedroomDoorOpen,
+      bathroomOpen: this.airShuttleBathroomDoorOpen,
+    };
+  }
+
   private resetAirShuttleVoyage(): void {
     this.airShuttle.reset();
     this.airShuttleLastPersistMs = 0;
     this.airShuttleHudAccum = 0;
     this.airShuttleSprayAccum = 0;
     this.airShuttleLocalX = 0;
-    this.airShuttleLocalY = 2.1;
+    this.airShuttleLocalY = AIR_SHUTTLE_CABIN.floorTopY;
     this.airShuttleLocalZ = 3.2;
+    this.airShuttleCabinVelY = 0;
     this.airShuttleBoardingAnim = 0;
     this.airShuttleSeatedKind = null;
     this.airShuttleSeatIndex = 0;
@@ -17349,8 +17390,8 @@ export class GameEngine {
     const rig = this.world?.crescentClipper;
     if (!rig) return;
     applyAirShuttleVisual(rig, this.airShuttle, dt);
-    rig.bedroomDoor.rotation.y = this.airShuttleBedroomDoorOpen ? -1.12 : 0;
-    rig.bathroomDoor.rotation.y = this.airShuttleBathroomDoorOpen ? 1.12 : 0;
+    rig.bedroomDoor.rotation.y = this.airShuttleBedroomDoorOpen ? 1.57 : 0;
+    rig.bathroomDoor.rotation.y = this.airShuttleBathroomDoorOpen ? -1.57 : 0;
     rig.bedroomLampMat.emissiveIntensity = this.airShuttleBedroomLampOn ? 1.1 : 0.02;
     rig.bathroomLightMat.emissiveIntensity = this.airShuttleBathroomLightOn ? 1.0 : 0.02;
     if (!this.airShuttleTvOn) rig.cabinTvMat.emissiveIntensity = 0.02;
@@ -17379,8 +17420,9 @@ export class GameEngine {
     this.airShuttleHudAccum = 0;
     this.airShuttleSprayAccum = 0;
     this.airShuttleLocalX = 0;
-    this.airShuttleLocalY = 2.1;
+    this.airShuttleLocalY = AIR_SHUTTLE_CABIN.floorTopY;
     this.airShuttleLocalZ = 3.2;
+    this.airShuttleCabinVelY = 0;
     this.airShuttleBoardingAnim = 0;
     this.airShuttleSeatedKind = null;
     this.airShuttleSeatIndex = 0;
@@ -17541,6 +17583,7 @@ export class GameEngine {
     this.airShuttleLocalX = -2.15;
     this.airShuttleLocalY = 0.55;
     this.airShuttleLocalZ = 2.05;
+    this.airShuttleCabinVelY = 0;
     this.airShuttleBoardingAnim = 1.35;
     this.airShuttleSeatedKind = null;
     this.airShuttleSeatIndex = 0;
@@ -17596,7 +17639,7 @@ export class GameEngine {
       const t = 1 - this.airShuttleBoardingAnim / total;
       const eased = t * t * (3 - 2 * t);
       this.airShuttleLocalX = THREE.MathUtils.lerp(-2.15, 0, eased);
-      this.airShuttleLocalY = THREE.MathUtils.lerp(0.55, 2.1, eased);
+      this.airShuttleLocalY = THREE.MathUtils.lerp(0.55, AIR_SHUTTLE_CABIN.floorTopY, eased);
       this.airShuttleLocalZ = THREE.MathUtils.lerp(2.05, 3.2, eased);
     } else {
       let moveRight = 0;
@@ -17625,17 +17668,63 @@ export class GameEngine {
         const sprinting =
           this.keys['ShiftLeft'] || this.keys['ShiftRight'] || this.keys['key_shift'];
         const speed = sprinting ? 2.55 : 1.55;
-        this.airShuttleLocalX += localDX * speed * inputMag * dt;
-        this.airShuttleLocalZ += localDZ * speed * inputMag * dt;
-        const rearCabin = this.airShuttleLocalZ < -2.95;
-        const maxX = rearCabin ? 1.02 : 0.3;
-        this.airShuttleLocalX = THREE.MathUtils.clamp(this.airShuttleLocalX, -maxX, maxX);
-        this.airShuttleLocalZ = THREE.MathUtils.clamp(this.airShuttleLocalZ, -6.0, 3.55);
-        this.airShuttleLocalY = 2.1;
-        this.currentSpeedMps = speed * inputMag;
+        const fromX = this.airShuttleLocalX;
+        const fromZ = this.airShuttleLocalZ;
+        const move = resolveCabinMove(
+          fromX,
+          fromZ,
+          localDX * speed * inputMag * dt,
+          localDZ * speed * inputMag * dt,
+          this.airShuttleDoorState(),
+        );
+        this.airShuttleLocalX = move.x;
+        this.airShuttleLocalZ = move.z;
+        const travelled = Math.hypot(move.x - fromX, move.z - fromZ) / Math.max(dt, 0.0001);
+        this.currentSpeedMps = travelled;
       } else {
         this.currentSpeedMps = 0;
       }
+
+      // The cabin has its own floor and solid ceiling. Jumping is a real
+      // capsule arc clamped below the finished panels, not a hidden no-op.
+      if (!this.airShuttleSeatedKind) {
+        const floor = AIR_SHUTTLE_CABIN.floorTopY;
+        const maxFeet = maxCabinJumpFeetY();
+        this.airShuttleLocalY += this.airShuttleCabinVelY * dt;
+        this.airShuttleCabinVelY -= 18 * dt;
+        if (this.airShuttleLocalY <= floor) {
+          this.airShuttleLocalY = floor;
+          this.airShuttleCabinVelY = 0;
+          this.grounded = true;
+        }
+        if (this.airShuttleLocalY >= maxFeet) {
+          this.airShuttleLocalY = maxFeet;
+          if (this.airShuttleCabinVelY > 0) this.airShuttleCabinVelY = 0;
+        }
+        this.grounded = this.airShuttleLocalY <= floor + 0.01;
+      } else {
+        this.airShuttleLocalY = AIR_SHUTTLE_CABIN.floorTopY;
+        this.airShuttleCabinVelY = 0;
+      }
+    }
+
+    // Defensive clamp: even if a seat or a saved state points outside the
+    // shell, the feet and body can never end up in a wall.
+    if (!this.airShuttleSeatedKind) {
+      const safe = resolveCabinMove(
+        this.airShuttleLocalX,
+        this.airShuttleLocalZ,
+        0,
+        0,
+        this.airShuttleDoorState(),
+      );
+      this.airShuttleLocalX = safe.x;
+      this.airShuttleLocalZ = safe.z;
+      this.airShuttleLocalY = THREE.MathUtils.clamp(
+        this.airShuttleLocalY,
+        AIR_SHUTTLE_CABIN.floorTopY,
+        maxCabinJumpFeetY(),
+      );
     }
 
     const rig = this.world?.crescentClipper;
@@ -17657,7 +17746,6 @@ export class GameEngine {
       this.playerZ = world.z;
     }
     this.playerVelY = 0;
-    this.grounded = true;
     this.isSwimming = false;
     this.isUnderwater = false;
     if (this.airShuttleSeatedKind === 'bed') {
@@ -17705,8 +17793,8 @@ export class GameEngine {
     if (plate) {
       rig.servicePlate.position.set(plate.tableX, 2.56, plate.tableZ);
     }
-    rig.bedroomDoor.rotation.y = this.airShuttleBedroomDoorOpen ? -1.12 : 0;
-    rig.bathroomDoor.rotation.y = this.airShuttleBathroomDoorOpen ? 1.12 : 0;
+    rig.bedroomDoor.rotation.y = this.airShuttleBedroomDoorOpen ? 1.57 : 0;
+    rig.bathroomDoor.rotation.y = this.airShuttleBathroomDoorOpen ? -1.57 : 0;
     rig.bedroomLampMat.emissiveIntensity = this.airShuttleBedroomLampOn ? 1.1 : 0.02;
     rig.bathroomLightMat.emissiveIntensity = this.airShuttleBathroomLightOn ? 1.0 : 0.02;
     if (!this.airShuttleTvOn) rig.cabinTvMat.emissiveIntensity = 0.02;
@@ -17725,21 +17813,22 @@ export class GameEngine {
       label = `seat ${index + 1}`;
     } else if (kind === 'couch') {
       x = 0.9;
-      z = -1.95;
+      z = -1.42;
       label = 'the couch';
     } else if (kind === 'bed') {
       x = -0.55;
       z = -5.0;
       label = 'the private bed';
     } else {
-      x = 0.82;
-      z = -4.8;
+      x = 0.78;
+      z = -3.55;
       label = 'the marble bathroom';
     }
     this.airShuttleSeatedKind = kind;
     this.airShuttleSeatIndex = index;
     this.airShuttleLocalX = x;
-    this.airShuttleLocalY = 2.1;
+    this.airShuttleLocalY = AIR_SHUTTLE_CABIN.floorTopY;
+    this.airShuttleCabinVelY = 0;
     this.airShuttleLocalZ = z;
     this.camPitch = kind === 'bed' ? -0.12 : -0.04;
     this.toast(`You settle into ${label}.`, 'info');
@@ -17758,15 +17847,24 @@ export class GameEngine {
   }
 
   private handleAirShuttleStand(): void {
-    if (!this.airShuttleSeatedKind) return;
-    const z = this.airShuttleLocalZ;
+    const kind = this.airShuttleSeatedKind;
+    if (!kind) return;
+    const row = [2.55, 1.15, -0.25][Math.floor(this.airShuttleSeatIndex / 2)] ?? 2.55;
+    const spots = {
+      seat: { x: 0, z: row },
+      couch: { x: 0.18, z: -1.18 },
+      bed: { x: -0.55, z: -3.62 },
+      bath: { x: 0.62, z: -3.48 },
+    } as const;
+    const spot = spots[kind];
     this.airShuttleSeatedKind = null;
-    this.airShuttleLocalX = 0;
-    this.airShuttleLocalZ = THREE.MathUtils.clamp(z + 0.55, -5.5, 3.4);
-    this.airShuttleLocalY = 2.1;
+    this.airShuttleLocalX = spot.x;
+    this.airShuttleLocalZ = spot.z;
+    this.airShuttleLocalY = AIR_SHUTTLE_CABIN.floorTopY;
+    this.airShuttleCabinVelY = 0;
     this.camYaw = this.airShuttle.planeYaw;
     this.camPitch = -0.04;
-    this.toast('You stand and step back into the aisle.', 'info');
+    this.toast('You stand and step clear of the furniture.', 'info');
     this.nearbyInteraction = this.findNearbyInteraction();
     this.emitHud();
   }
@@ -17799,8 +17897,8 @@ export class GameEngine {
     if (!this.airShuttle.aboard) return;
     const local = this.getAirShuttleLocalPosition();
     const tables = [
-      { x: 0.55, z: 1.85 },
-      { x: -0.55, z: 0.45 },
+      { x: 0.62, z: 1.85 },
+      { x: -0.63, z: 0.45 },
     ];
     const table = tables.reduce((best, entry) => {
       const d = Math.hypot(local.x - entry.x, local.z - entry.z);
