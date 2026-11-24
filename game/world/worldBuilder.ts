@@ -12,6 +12,11 @@ import {
   buildHilltopMotorAtelier,
   type MotorAtelierWorkerHandle,
 } from './hilltopMotorAtelier';
+import {
+  buildCustomCarShop,
+  type CustomCarShopHandles,
+} from './customCarShop';
+import { CUSTOM_SHOP_ROUTE, JUNKYARD_CAVE } from '../systems/customCarShop';
 import { buildLouisianaFerry, type LouisianaFerryHandles } from './louisianaFerry';
 import { buildCrescentClipper, type CrescentClipperHandles } from './crescentClipper';
 import { buildSeaplaneBase, type SeaplaneBaseHandles } from './seaplaneBase';
@@ -95,6 +100,7 @@ import {
   TAIGA_VILLAGE_POS,
   TERRAIN_SEGS,
   TERRAIN_SIZE,
+  CUSTOM_SHOP_POS,
   TRAIL_RUINS_POS,
   TRIAL_CHAMBERS_POS,
   ISLAND_UFO_POS,
@@ -281,6 +287,7 @@ export interface WorldHandles {
   garageBenchPos: THREE.Vector3;
   garageMaid: { group: THREE.Group; armL: THREE.Group; armR: THREE.Group };
   garageCrew: MotorAtelierWorkerHandle[];
+  customCarShop: CustomCarShopHandles;
   armoryChest: ShipwreckChestHandle;
   wheatfieldPos: THREE.Vector3;
   caveCeilings: CaveCeilingCluster[];
@@ -314,6 +321,13 @@ export interface WorldHandles {
   /** Removes/restores terrain triangles for the currently streamed cave mouths. */
   setCaveOpenings: (openings: readonly CaveTerrainOpening[]) => void;
   dispose: () => void;
+}
+
+function isOnCustomShopTowRoute(x: number, z: number): boolean {
+  for (const point of CUSTOM_SHOP_ROUTE) {
+    if (Math.hypot(x - point.x, z - point.z) < 6.5) return true;
+  }
+  return false;
 }
 
 function seededRand(seed: number): () => number {
@@ -410,6 +424,10 @@ export function buildIslandWorld(
     const onGaragePadArea =
       Math.abs(x - VEHICLE_GARAGE_POS.x) < 19.5 &&
       Math.abs(z - VEHICLE_GARAGE_POS.z) < 7.4;
+    const onCustomShopPadArea =
+      Math.abs(x - CUSTOM_SHOP_POS.x) < 6.4 &&
+      z - CUSTOM_SHOP_POS.z >= -5.0 &&
+      z - CUSTOM_SHOP_POS.z <= 8.5;
     const segDist = (ax: number, az: number, bx: number, bz: number) => {
       const dx = bx - ax;
       const dz = bz - az;
@@ -437,6 +455,8 @@ export function buildIslandWorld(
       c.setHex(0x7c5832); // rich cultivated wheatfield loam
     } else if (onGaragePadArea) {
       c.setHex(0x6b6761); // leveled compacted concrete & gravel garage apron
+    } else if (onCustomShopPadArea) {
+      c.setHex(0x5e5a51); // worn custom-shop concrete and oil-stained forecourt
     } else if (onHouseRamp || onGarageDriveway) {
       c.setHex(0xa89274); // wide crushed-gravel driveways & trail connectors
     } else if (biome === 'frozen_river') {
@@ -4077,6 +4097,11 @@ export function buildIslandWorld(
   const garagePos = motorAtelier.position;
   const garageBenchPos = motorAtelier.benchPos;
 
+  // E2. Bayou Royal Customs — a two-person restoration shop roughly 50 ft east
+  // of the atelier, with a live tow route to the Cave 12 salvage yard.
+  const customCarShop = buildCustomCarShop(woodTex, colliders);
+  overworldGroup.add(customCarShop.group);
+
   // Base Armory Supply Chest tucked neatly beside the East flank of the Motor Atelier.
   const armoryX = VEHICLE_GARAGE_POS.x + 21.6;
   const armoryZ = VEHICLE_GARAGE_POS.z - 2.4;
@@ -5386,6 +5411,15 @@ export function buildIslandWorld(
     if (Math.hypot(x - HILL_HOUSE_POS.x, z - HILL_HOUSE_POS.z) < 16.5) continue;
     if (Math.hypot(x - VEHICLE_GARAGE_POS.x, z - VEHICLE_GARAGE_POS.z) < 26.0) continue;
     if (
+      Math.abs(x - CUSTOM_SHOP_POS.x) < 8.4 &&
+      z - CUSTOM_SHOP_POS.z >= -6.0 &&
+      z - CUSTOM_SHOP_POS.z <= 10.0
+    ) {
+      continue; // Keep the customs shop, forecourt and tow-truck route clear.
+    }
+    if (Math.hypot(x - JUNKYARD_CAVE.x, z - JUNKYARD_CAVE.z) < 9.5) continue;
+    if (isOnCustomShopTowRoute(x, z)) continue;
+    if (
       x >= VEHICLE_GARAGE_POS.x - 24 &&
       x <= VEHICLE_GARAGE_POS.x + 24 &&
       z >= VEHICLE_GARAGE_POS.z - 9 &&
@@ -6165,6 +6199,16 @@ export function buildIslandWorld(
       return false;
     }
     if (
+      px >= CUSTOM_SHOP_POS.x - 7.0 &&
+      px <= CUSTOM_SHOP_POS.x + 7.0 &&
+      pz >= CUSTOM_SHOP_POS.z - 5.6 &&
+      pz <= CUSTOM_SHOP_POS.z + 9.2
+    ) {
+      return false;
+    }
+    if (Math.hypot(px - JUNKYARD_CAVE.x, pz - JUNKYARD_CAVE.z) < 8.5) return false;
+    if (isOnCustomShopTowRoute(px, pz)) return false;
+    if (
       distanceToSegment2D(
         px,
         pz,
@@ -6769,6 +6813,15 @@ export function buildIslandWorld(
     if (isInBowlingAlleyClearZone(bx, bz)) continue;
     if (Math.hypot(bx - HILL_HOUSE_POS.x, bz - HILL_HOUSE_POS.z) < 16.5) continue;
     if (Math.hypot(bx - VEHICLE_GARAGE_POS.x, bz - VEHICLE_GARAGE_POS.z) < 18.5) continue;
+    if (
+      Math.abs(bx - CUSTOM_SHOP_POS.x) < 8.0 &&
+      bz - CUSTOM_SHOP_POS.z >= -5.8 &&
+      bz - CUSTOM_SHOP_POS.z <= 9.6
+    ) {
+      continue;
+    }
+    if (Math.hypot(bx - JUNKYARD_CAVE.x, bz - JUNKYARD_CAVE.z) < 10) continue;
+    if (isOnCustomShopTowRoute(bx, bz)) continue;
 
     if (sbPlaced < shoreBoulderCount && bBiome === 'beach' && by >= -0.35 && by <= 1.55) {
       dummy.position.set(bx, by - 0.14, bz);
@@ -7706,6 +7759,7 @@ gl_Position = projectionMatrix * mvPosition;`,
       armR: garageMaid.armR,
     },
     garageCrew: motorAtelier.crew,
+    customCarShop,
     armoryChest,
     wheatfieldPos: new THREE.Vector3(WHEATFIELD_POS.x, wheatY, WHEATFIELD_POS.z),
     caveCeilings,

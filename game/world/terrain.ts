@@ -132,6 +132,9 @@ export function isInBowlingAlleyClearZone(x: number, z: number): boolean {
 }
 export const VEHICLE_GARAGE_POS = { x: 0, z: 144 };
 export const VEHICLE_GARAGE_Y = 3.25;
+/** Bayou Royal Customs: about 50 ft east of the atelier's outer wall. */
+export const CUSTOM_SHOP_POS = { x: 40.5, z: 144 };
+export const CUSTOM_SHOP_Y = 3.4;
 export const UNDERGROUND_ELEVATOR_POS = { x: -34, z: 152 };
 export const UNDERGROUND_ELEVATOR_KIOSK_POS = {
   x: UNDERGROUND_ELEVATOR_POS.x - 5.45,
@@ -277,6 +280,12 @@ export function isTerrainProtectedAt(x: number, z: number): boolean {
   if (
     Math.abs(x - VEHICLE_GARAGE_POS.x) < 20.2 &&
     Math.abs(z - VEHICLE_GARAGE_POS.z) < 7.6
+  ) {
+    return true;
+  }
+  if (
+    Math.abs(x - CUSTOM_SHOP_POS.x) < 7.2 &&
+    Math.abs(z - CUSTOM_SHOP_POS.z) < 6.5
   ) {
     return true;
   }
@@ -658,7 +667,21 @@ export function getOverworldStructureSurfaceY(
     }
   }
 
-  // 2. Hilltop House East Access Ramp (continuous analytical ramp bridging 7.5m terrain step)
+  // 2. Bayou Royal Customs shop pad and forecourt.
+  const bayouDx = x - CUSTOM_SHOP_POS.x;
+  const bayouDz = z - CUSTOM_SHOP_POS.z;
+  if (Math.abs(bayouDx) <= 6.35 && bayouDz >= -4.95 && bayouDz <= 8.2) {
+    const shopTop = CUSTOM_SHOP_Y + 0.02;
+    if (Math.abs(bayouDz) <= 4.85) {
+      if (sweepFootY >= shopTop - 1.65 && shopTop > bestY) bestY = shopTop;
+    }
+    if (bayouDz > 4.85) {
+      const apronTop = shopTop - (bayouDz - 4.85) * 0.05;
+      if (sweepFootY >= apronTop - 1.65 && apronTop > bestY) bestY = apronTop;
+    }
+  }
+
+  // 3. Hilltop House East Access Ramp (continuous analytical ramp bridging 7.5m terrain step)
   const hdx = x - HILL_HOUSE_POS.x;
   const hdzAbs = Math.abs(z - HILL_HOUSE_POS.z);
   if (hdx >= 6.4 && hdx <= 21.5 && hdzAbs <= 2.9) {
@@ -669,7 +692,7 @@ export function getOverworldStructureSurfaceY(
     }
   }
 
-  // 3. Saturn V Concrete Launch Pad & Boarding Ramp
+  // 4. Saturn V Concrete Launch Pad & Boarding Ramp
   const sdx = x - SATURN_ROCKET_POS.x;
   const sdz = z - SATURN_ROCKET_POS.z;
   const saturnDistSq = sdx * sdx + sdz * sdz;
@@ -690,7 +713,7 @@ export function getOverworldStructureSurfaceY(
     }
   }
 
-  // 4. Badlands Surface Mineshaft Plank Deck
+  // 5. Badlands Surface Mineshaft Plank Deck
   const mdx = x - BADLANDS_MINESHAFT_POS.x;
   const mdz = z - BADLANDS_MINESHAFT_POS.z;
   if (Math.abs(mdx) <= 1.95 && Math.abs(mdz) <= 8.3) {
@@ -700,7 +723,7 @@ export function getOverworldStructureSurfaceY(
     }
   }
 
-  // 5. Swamp Hut Raised Wooden Deck
+  // 6. Swamp Hut Raised Wooden Deck
   const swdx = x - SWAMP_HUT_POS.x;
   const swdz = z - SWAMP_HUT_POS.z;
   if (Math.abs(swdx) <= 2.65 && Math.abs(swdz) <= 2.65) {
@@ -710,7 +733,7 @@ export function getOverworldStructureSurfaceY(
     }
   }
 
-  // 6. Resort Corner Tiki Lounge Deck
+  // 7. Resort Corner Tiki Lounge Deck
   const rcdx = x - RESORT_CORNER_POS.x;
   const rcdz = z - RESORT_CORNER_POS.z;
   if (Math.abs(rcdx) <= 5.8 && Math.abs(rcdz) <= 4.3) {
@@ -720,7 +743,7 @@ export function getOverworldStructureSurfaceY(
     }
   }
 
-  // 7. Ruined Castle Obsidian Throne Dais
+  // 8. Ruined Castle Obsidian Throne Dais
   const csdx = x - RUINED_CASTLE_POS.x;
   const csdz = z - RUINED_CASTLE_POS.z;
   if (Math.abs(csdx) <= 3.3 && csdz >= -9.3 && csdz <= -3.7) {
@@ -1925,6 +1948,17 @@ export function getBaseTerrainHeight(x: number, z: number): number {
     if (eastDrive.distSq < 29.16) {
       const eBlend = 1 - smoothstep(2.4, 5.4, Math.sqrt(eastDrive.distSq));
       h = h * (1 - eBlend * 0.8) + VEHICLE_GARAGE_Y * (eBlend * 0.8);
+    }
+  }
+
+  // Bayou Royal Customs level pad east of the Motor Atelier.
+  if (x >= 30 && x <= 52 && z >= 134 && z <= 156) {
+    const csdx = Math.max(0, Math.abs(x - CUSTOM_SHOP_POS.x) - 6.1);
+    const csdz = Math.max(0, Math.abs(z - CUSTOM_SHOP_POS.z) - 4.7);
+    const csDistSq = csdx * csdx + csdz * csdz;
+    if (csDistSq < 16) {
+      const csBlend = 1 - smoothstep(0.8, 4.0, Math.sqrt(csDistSq));
+      h = h * (1 - csBlend) + CUSTOM_SHOP_Y * csBlend;
     }
   }
 

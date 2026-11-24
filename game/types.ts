@@ -366,6 +366,10 @@ export interface ModularVehicleData {
   name: string;
   paintColor: string;
   accentColor?: string;
+  /** Optional hand-laid pinstripe colour for custom restoration builds. */
+  customStripeColor?: string;
+  /** Optional leather/upholstery colour for custom restoration builds. */
+  interiorColor?: string;
   preset?: string;
   rimColor?: string;
   horsepower?: number;

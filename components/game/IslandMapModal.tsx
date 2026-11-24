@@ -12,6 +12,7 @@ import {
   CAUSEWAY_ISLAND_POINT,
   CAUSEWAY_PATH,
 } from '@/game/systems/islandMainlandTransit';
+import { JUNKYARD_CAVE } from '@/game/systems/customCarShop';
 import {
   AUTUMN_GROVE_POS,
   BADLANDS_MINESHAFT_POS,
@@ -20,6 +21,7 @@ import {
   CHERRY_GROVE_POS,
   CORAL_REEF_POS,
   CRESCENT_CITY_POS,
+  CUSTOM_SHOP_POS,
   DEAD_OAK_POS,
   DESERT_PYRAMID_POS,
   DESERT_VILLAGE_POS,
@@ -455,6 +457,8 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
         { label: 'Farmer Market', pos: FARMER_POS, color: '#4ade80' },
         { label: 'Hilltop House', pos: HILL_HOUSE_POS, color: '#fb923c' },
         { label: 'Motor Atelier', pos: VEHICLE_GARAGE_POS, color: '#38bdf8' },
+        { label: 'Bayou Royal Customs', pos: CUSTOM_SHOP_POS, color: '#c08a3e' },
+        { label: 'Cave 12 Junkyard', pos: JUNKYARD_CAVE, color: '#b45309' },
         { label: 'Ferry Call Box', pos: FERRY_CALL_POS, color: '#38bdf8' },
         { label: 'Island Ferry Pier', pos: FERRY_DOCK_CAR_STOP, color: '#f59e0b' },
         { label: 'River Bridge West', pos: CAUSEWAY_GATEWAY_POINT, color: '#fbbf24' },

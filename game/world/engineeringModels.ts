@@ -1081,9 +1081,24 @@ function buildCustomStreetShowCar(
     roughness: 0.62,
     metalness: 0.3,
   });
-  const leatherMat = createAutomotiveLeatherMaterial(isDeville ? 0xe7dcc8 : 0x262626);
-  const seatBolsterMat = createAutomotiveLeatherMaterial(isDeville ? 0xd8cab2 : 0x18181b);
+  const interiorHex = vehicle.interiorColor
+    ? new THREE.Color(vehicle.interiorColor).getHex()
+    : isDeville
+      ? 0xe7dcc8
+      : 0x262626;
+  const bolsterHex = new THREE.Color(interiorHex).multiplyScalar(0.84).getHex();
+  const leatherMat = createAutomotiveLeatherMaterial(interiorHex);
+  const seatBolsterMat = createAutomotiveLeatherMaterial(bolsterHex);
   const carpetMat = createAutomotiveCarpetMaterial(isDeville ? 0x292524 : 0x18181b);
+  const stripeMat = vehicle.customStripeColor
+    ? new THREE.MeshStandardMaterial({
+        color: new THREE.Color(vehicle.customStripeColor).getHex(),
+        metalness: 0.48,
+        roughness: 0.22,
+        emissive: new THREE.Color(vehicle.customStripeColor).getHex(),
+        emissiveIntensity: 0.06,
+      })
+    : null;
   const dashMat = isDeville ? createWalnutWoodMaterial() : createCarbonFiberMaterial();
   const dashPadMat = new THREE.MeshStandardMaterial({
     color: isDeville ? 0x2b211b : 0x111827,
@@ -1094,7 +1109,7 @@ function buildCustomStreetShowCar(
   const headlightMat = new THREE.MeshStandardMaterial({
     color: 0xfef9c3,
     emissive: 0xfef08a,
-    emissiveIntensity: 1.5,
+    emissiveIntensity: vehicle.customStripeColor ? 2.1 : 1.5,
     roughness: 0.14,
   });
   const amberSignalMat = new THREE.MeshStandardMaterial({
@@ -1278,6 +1293,34 @@ function buildCustomStreetShowCar(
   hood.position.set(0, lowerBodyH + 0.15, 0.82 + frontBodyLen * 0.5);
   handles.chassisGroup.add(hood);
 
+  // Hand-laid custom pinstripes: twin stripes over the nose, trunk and flanks.
+  if (stripeMat) {
+    [-0.22, 0.22].forEach((sx) => {
+      const hoodStripe = new THREE.Mesh(
+        new THREE.BoxGeometry(0.105, 0.009, Math.max(1.0, frontBodyLen - 0.2)),
+        stripeMat,
+      );
+      hoodStripe.position.set(
+        sx,
+        lowerBodyH + 0.206,
+        0.82 + frontBodyLen * 0.5,
+      );
+      handles.chassisGroup.add(hoodStripe);
+    });
+    [-0.95, 0.95].forEach((sx) => {
+      [0.41, 0.5].forEach((sy) => {
+        [1.42, -1.64].forEach((sz) => {
+          const flankStripe = new THREE.Mesh(
+            new THREE.BoxGeometry(0.012, 0.032, sz > 0 ? 0.92 : 1.05),
+            stripeMat,
+          );
+          flankStripe.position.set(sx, sy, sz);
+          handles.chassisGroup.add(flankStripe);
+        });
+      });
+    });
+  }
+
   // Animated Hinged Contoured Trunk Lid (pivoted at rear deck front edge so it swings UP smoothly!)
   const trunkHinge = new THREE.Group();
   trunkHinge.position.set(0, lowerBodyH + 0.16, rearStartZ);
@@ -1292,6 +1335,16 @@ function buildCustomStreetShowCar(
   );
   trunkChromeTrim.position.set(0, 0.02, -(rearLen - 0.1));
   trunkHinge.add(trunkPanel, trunkChromeTrim);
+  if (stripeMat) {
+    [-0.22, 0.22].forEach((sx) => {
+      const trunkStripe = new THREE.Mesh(
+        new THREE.BoxGeometry(0.105, 0.009, Math.max(0.8, rearLen - 0.2)),
+        stripeMat,
+      );
+      trunkStripe.position.set(sx, 0.043, -(rearLen - 0.06) * 0.5);
+      trunkHinge.add(trunkStripe);
+    });
+  }
   handles.chassisGroup.add(trunkHinge);
   handles.trunkLid = trunkHinge;
 
@@ -1318,7 +1371,10 @@ function buildCustomStreetShowCar(
   shifterGate.position.set(0, 0.445, 0.24);
   const shifter = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.22, 8), chromeMat);
   shifter.position.set(0, 0.52, 0.24);
-  const shifterKnob = new THREE.Mesh(new THREE.SphereGeometry(0.036, 10, 10), chromeMat);
+  const shifterKnob = new THREE.Mesh(
+    new THREE.SphereGeometry(0.036, 10, 10),
+    stripeMat ?? chromeMat,
+  );
   shifterKnob.position.set(0, 0.63, 0.24);
 
   const droptopSwitchGroup = new THREE.Group();
