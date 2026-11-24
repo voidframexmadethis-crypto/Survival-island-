@@ -1164,6 +1164,8 @@ export interface BackpackCompartmentEntry {
   quantity: number;
 }
 
+export type DayNightMode = 'cycle' | 'day' | 'night';
+
 export interface GameSaveData {
   version: number;
   slotId: string;
@@ -1182,6 +1184,7 @@ export interface GameSaveData {
   };
   dayCount: number;
   timeOfDay: number;
+  dayNightMode?: DayNightMode;
   weather?: WeatherType;
   inventory: InventorySlot[];
   backpackCompartments?: BackpackCompartmentEntry[];

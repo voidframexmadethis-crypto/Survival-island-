@@ -96,8 +96,10 @@ import {
 } from '@/game/systems/saveManager';
 import {
   ActiveModal,
+  DayNightMode,
   FlatSurfaceStyle,
   GameMode,
+  GameSaveData,
   GameSettings,
   HUDStateSnapshot,
   ItemId,
@@ -1005,6 +1007,7 @@ export function SurvivalGameClient() {
     gameMode: GameMode;
     flatSurfaceStyle?: FlatSurfaceStyle;
     playerGender?: 'boy' | 'girl';
+    dayNightMode?: DayNightMode;
   }) => {
     if (launchPendingRef.current || (!engineRef.current && !engineFactoryRef.current)) return;
     engineRef.current?.unlockAudio();
@@ -1026,6 +1029,7 @@ export function SurvivalGameClient() {
           flatSurfaceStyle: opts.flatSurfaceStyle,
           gameMode: safeMode,
           playerGender: opts.playerGender ?? 'boy',
+          dayNightMode: opts.dayNightMode ?? 'cycle',
         });
         if (opts.worldType === 'island') {
           engine.ensurePlayerHasGun(true);
@@ -1088,6 +1092,74 @@ export function SurvivalGameClient() {
         setEngineReady(true);
       }
     }, 48);
+  };
+
+  const handleImportIsland = async (
+    file: File,
+  ): Promise<{ ok: boolean; message: string }> => {
+    if (file.size > 16 * 1024 * 1024) {
+      return {
+        ok: false,
+        message: 'That island file is over 16 MB. Export a smaller save and retry.',
+      };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      return { ok: false, message: 'That file is not valid JSON.' };
+    }
+    const data = parsed as Partial<GameSaveData> | null;
+    if (
+      !data ||
+      typeof data !== 'object' ||
+      !data.player ||
+      typeof data.player !== 'object' ||
+      !data.player.vitals ||
+      !Number.isFinite(data.player.x) ||
+      !Number.isFinite(data.player.y) ||
+      !Number.isFinite(data.player.z) ||
+      !Array.isArray(data.inventory) ||
+      !Array.isArray(data.structures) ||
+      !Array.isArray(data.visitedBiomes) ||
+      !Array.isArray(data.completedMissionIds) ||
+      !data.stats ||
+      typeof data.stats !== 'object' ||
+      !Number.isFinite(data.dayCount) ||
+      !Number.isFinite(data.timeOfDay) ||
+      typeof data.version !== 'number'
+    ) {
+      return {
+        ok: false,
+        message: 'Upload a Survival Island save exported from the game.',
+      };
+    }
+    if (data.worldType !== 'island') {
+      return {
+        ok: false,
+        message: 'Island Site only accepts island saves. Load flat-park saves from their own slot.',
+      };
+    }
+    const worldType: WorldType = 'island';
+    const slotId = createNewSaveSlotId(worldType);
+    const imported: GameSaveData = {
+      ...(data as GameSaveData),
+      slotId,
+      savedAt: Date.now(),
+      worldName:
+        data.worldName?.trim() ||
+        file.name.replace(/\.json$/i, '').trim() ||
+        'Imported Island',
+    };
+    if (!saveGameToSlot(imported)) {
+      return { ok: false, message: 'No free save slots. Delete a world and retry.' };
+    }
+    refreshSaves();
+    handleContinueGame(slotId);
+    return {
+      ok: true,
+      message: `Imported ${imported.worldName}. Opening your island…`,
+    };
   };
 
   const handleSaveNow = (slotId?: string) => {
@@ -1545,6 +1617,8 @@ export function SurvivalGameClient() {
           onCreateWorld={handleStartNewGame}
           onOpenMultiplayer={() => setActiveModal('multiplayer')}
           onOpenExchange={() => setActiveModal('exchange')}
+          onOpenMarketplaceUpload={() => setActiveModal('custom_marketplace')}
+          onImportIsland={handleImportIsland}
           onOpenMods={() => setActiveModal('mods')}
           onOpenSettings={() => setActiveModal('settings')}
           onOpenControls={() => setActiveModal('controls')}

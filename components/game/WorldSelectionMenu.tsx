@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import {
   Box,
   ChevronRight,
+  Clock3,
   Compass,
   Gamepad2,
   Grid,
@@ -11,6 +12,7 @@ import {
   Lock,
   LogOut,
   MapPin,
+  Moon,
   Music,
   Play,
   Plus,
@@ -20,13 +22,17 @@ import {
   Skull,
   Sparkles,
   Store,
+  Sun,
   Trash2,
   Trees,
   Trophy,
+  Upload,
   Users,
+  X,
   Zap,
 } from 'lucide-react';
 import {
+  DayNightMode,
   FlatSurfaceStyle,
   GameMode,
   PlayerGender,
@@ -48,7 +54,10 @@ interface WorldSelectionMenuProps {
     gameMode: GameMode;
     flatSurfaceStyle?: FlatSurfaceStyle;
     playerGender?: PlayerGender;
+    dayNightMode?: DayNightMode;
   }) => void;
+  onImportIsland?: (file: File) => Promise<{ ok: boolean; message: string }>;
+  onOpenMarketplaceUpload?: () => void;
   onOpenMultiplayer: () => void;
   onOpenExchange: () => void;
   onOpenMods: () => void;
@@ -99,6 +108,8 @@ export function WorldSelectionMenu({
   onCreateWorld,
   onOpenMultiplayer,
   onOpenExchange,
+  onImportIsland,
+  onOpenMarketplaceUpload,
   onOpenMods,
   onOpenSettings,
   onOpenControls,
@@ -111,6 +122,10 @@ export function WorldSelectionMenu({
   const [flatSurfaceStyle, setFlatSurfaceStyle] = useState<FlatSurfaceStyle>('turf_grid');
   const [playerGender, setPlayerGender] = useState<PlayerGender>('boy');
   const [worldNameInput, setWorldNameInput] = useState('');
+  const [dayNightMode, setDayNightMode] = useState<DayNightMode>('cycle');
+  const [islandSiteOpen, setIslandSiteOpen] = useState(false);
+  const [islandSiteMessage, setIslandSiteMessage] = useState('');
+  const [islandSiteBusy, setIslandSiteBusy] = useState(false);
 
   const handleSelectWorldType = (nextType: WorldType) => {
     setSelectedWorldType(nextType);
@@ -153,7 +168,27 @@ export function WorldSelectionMenu({
       gameMode: effectiveMode,
       flatSurfaceStyle: selectedWorldType === 'flat' ? flatSurfaceStyle : undefined,
       playerGender,
+      dayNightMode: selectedWorldType === 'island' ? dayNightMode : undefined,
     });
+  };
+
+  const handleIslandUpload = async (file: File | undefined) => {
+    if (!file) return;
+    if (!onImportIsland) {
+      setIslandSiteMessage('Island importing is not available in this build.');
+      return;
+    }
+    setIslandSiteBusy(true);
+    setIslandSiteMessage('Reading island file…');
+    try {
+      const result = await onImportIsland(file);
+      setIslandSiteMessage(result.message);
+      if (result.ok) setIslandSiteOpen(false);
+    } catch {
+      setIslandSiteMessage('That file is not a valid Survival Island save.');
+    } finally {
+      setIslandSiteBusy(false);
+    }
   };
 
   const renderWorldBadge = (wt?: WorldType) =>
@@ -322,6 +357,41 @@ export function WorldSelectionMenu({
                   </span>
                   <span className="block break-words text-[11px] font-medium leading-snug text-stone-300">
                     Gun Skins &amp; Tactical Backpack Skins · Cosmetic Only
+                  </span>
+                </span>
+              </button>
+              {onOpenMarketplaceUpload && (
+                <button
+                  type="button"
+                  onClick={onOpenMarketplaceUpload}
+                  className="island-wood-plank flex min-h-[56px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-emerald-500/70 px-4 py-3 text-sm font-bold text-emerald-200"
+                >
+                  <Upload className="h-5 w-5 shrink-0 text-emerald-300" />
+                  <span className="block min-w-0 flex-1 text-left">
+                    <span className="block break-words uppercase leading-tight tracking-wide">
+                      MARKETPLACE UPLOAD
+                    </span>
+                    <span className="block break-words text-[11px] font-medium leading-snug text-stone-300">
+                      Upload gun &amp; backpack skins · Phone or desktop
+                    </span>
+                  </span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setIslandSiteMessage('');
+                  setIslandSiteOpen(true);
+                }}
+                className="island-wood-plank flex min-h-[56px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-emerald-500/70 px-4 py-3 text-sm font-bold text-emerald-200"
+              >
+                <Upload className="h-5 w-5 shrink-0 text-emerald-300" />
+                <span className="block min-w-0 flex-1 text-left">
+                  <span className="block break-words uppercase leading-tight tracking-wide">
+                    ISLAND SITE
+                  </span>
+                  <span className="block break-words text-[11px] font-medium leading-snug text-stone-300">
+                    Import &amp; upload your own custom islands
                   </span>
                 </span>
               </button>
@@ -780,6 +850,53 @@ export function WorldSelectionMenu({
                     </div>
                   )}
 
+                  {selectedWorldType !== 'flat' && (
+                    <div className="space-y-2 rounded-xl border border-stone-700/70 bg-stone-900/55 p-3">
+                      <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+                        <Clock3 className="h-3.5 w-3.5" />
+                        <span>Island Daylight</span>
+                      </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      <button
+                        type="button"
+                        onClick={() => setDayNightMode('day')}
+                        className={`flex min-h-[48px] items-center gap-2 rounded-lg border px-3 text-left transition cursor-pointer ${
+                          dayNightMode === 'day'
+                            ? 'border-amber-300 bg-amber-500/20 text-amber-100'
+                            : 'border-stone-700 bg-stone-950/60 text-stone-300 hover:border-amber-500/60'
+                        }`}
+                      >
+                        <Sun className="h-4 w-4 shrink-0 text-amber-300" />
+                        <span className="text-xs font-bold">Permanent Day</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDayNightMode('cycle')}
+                        className={`flex min-h-[48px] items-center gap-2 rounded-lg border px-3 text-left transition cursor-pointer ${
+                          dayNightMode === 'cycle'
+                            ? 'border-emerald-300 bg-emerald-500/20 text-emerald-100'
+                            : 'border-stone-700 bg-stone-950/60 text-stone-300 hover:border-emerald-500/60'
+                        }`}
+                      >
+                        <Clock3 className="h-4 w-4 shrink-0 text-emerald-300" />
+                        <span className="text-xs font-bold">Normal Day/Night Cycle</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDayNightMode('night')}
+                        className={`flex min-h-[48px] items-center gap-2 rounded-lg border px-3 text-left transition cursor-pointer ${
+                          dayNightMode === 'night'
+                            ? 'border-sky-300 bg-sky-500/20 text-sky-100'
+                            : 'border-stone-700 bg-stone-950/60 text-stone-300 hover:border-sky-500/60'
+                        }`}
+                      >
+                        <Moon className="h-4 w-4 shrink-0 text-sky-300" />
+                        <span className="text-xs font-bold">Permanent Night</span>
+                      </button>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex flex-col items-stretch justify-between gap-3 border-t border-stone-700/50 pt-3 sm:flex-row sm:items-center">
                     <div className="flex min-w-0 items-start gap-2 text-[11px] leading-relaxed text-stone-300">
                       <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
@@ -916,6 +1033,67 @@ export function WorldSelectionMenu({
           <span className="min-w-0 break-words">Mobile: Virtual Thumbstick &amp; Touch Camera</span>
         </div>
       </div>
+
+      {islandSiteOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4">
+          <div className="island-stone-slab relative w-full max-w-lg rounded-3xl border border-emerald-500/60 bg-stone-950 p-5 shadow-2xl sm:p-6">
+            <button
+              type="button"
+              onClick={() => setIslandSiteOpen(false)}
+              className="absolute right-3 top-3 flex h-10 w-10 items-center justify-center rounded-xl border border-stone-700 bg-stone-900 text-stone-300 hover:bg-stone-800"
+              aria-label="Close Island Site"
+            >
+              <X className="h-5 w-5" />
+            </button>
+            <div className="flex items-center gap-3 pr-12">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-emerald-400/50 bg-emerald-500/10 text-emerald-300">
+                <Upload className="h-5 w-5" />
+              </span>
+              <div>
+                <div className="font-display text-xl font-black tracking-wide text-stone-50">
+                  ISLAND SITE
+                </div>
+                <div className="text-[11px] text-stone-300">
+                  Import and upload your own custom islands
+                </div>
+              </div>
+            </div>
+
+            <p className="mt-4 text-xs leading-relaxed text-stone-300">
+              Upload a Survival Island save file exported from the game. The
+              island becomes a new save slot, so your existing worlds are never
+              overwritten. Custom structures, vehicles, progress and daylight
+              settings travel with it.
+            </p>
+
+            <label className="mt-4 flex min-h-[88px] cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-emerald-500/50 bg-emerald-950/20 px-4 py-5 text-center transition hover:border-emerald-300 hover:bg-emerald-950/35">
+              <Upload className="h-6 w-6 text-emerald-300" />
+              <span className="text-sm font-bold text-emerald-100">
+                Choose an island file
+              </span>
+              <span className="text-[10.5px] text-stone-400">
+                .json Survival Island save · imported as a new slot
+              </span>
+              <input
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                disabled={islandSiteBusy}
+                onChange={(event) => {
+                  void handleIslandUpload(event.target.files?.[0]);
+                  event.currentTarget.value = '';
+                }}
+              />
+            </label>
+
+            {islandSiteMessage ? (
+              <div className="mt-3 rounded-lg border border-stone-700 bg-stone-900/80 px-3 py-2 text-[11px] leading-snug text-stone-200">
+                {islandSiteMessage}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

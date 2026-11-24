@@ -280,6 +280,7 @@ import {
   CustomModAsset,
   CustomModScript,
   DEFAULT_HUD_BAR_SLOTS,
+  DayNightMode,
   DimensionId,
   FlatSurfaceStyle,
   PortalLinkState,
@@ -1363,6 +1364,7 @@ export class GameEngine {
   // warm IBL make the live 3D island backdrop read as a cinematic hero shot.
   // Starting/loading a world sets the real gameplay time explicitly.
   private timeOfDay = 0.71;
+  private dayNightMode: DayNightMode = 'cycle';
   private activeGraphicsPreset: GraphicsPreset = 'medium';
   private inventory: InventorySlot[] = [];
   private backpackCompartments: BackpackCompartmentEntry[] = [];
@@ -4999,6 +5001,16 @@ export class GameEngine {
     return `Day ${this.dayCount}: Expand homestead, craft gear & survive`;
   }
 
+  public setDayNightMode(mode: DayNightMode): void {
+    this.dayNightMode = mode === 'day' || mode === 'night' ? mode : 'cycle';
+    if (this.dayNightMode === 'day') this.timeOfDay = 0.42;
+    if (this.dayNightMode === 'night') this.timeOfDay = 0.84;
+  }
+
+  public getDayNightMode(): DayNightMode {
+    return this.dayNightMode;
+  }
+
   public startNewWorldState(
     slotId = 'slot_1',
     playCinematic = true,
@@ -5008,6 +5020,7 @@ export class GameEngine {
       flatSurfaceStyle?: FlatSurfaceStyle;
       gameMode?: GameMode;
       playerGender?: PlayerGender;
+      dayNightMode?: DayNightMode;
     },
   ): void {
     this.currentSlotId = slotId;
@@ -5057,6 +5070,7 @@ export class GameEngine {
     }
 
     this.applyWorldEnvironment(nextWorldType, nextSurfaceStyle);
+    this.setDayNightMode(options?.dayNightMode ?? 'cycle');
     this.coasterRuntime?.clearAll();
     this.structureManager?.resetCleared();
 
@@ -5674,6 +5688,7 @@ export class GameEngine {
     }
     this.dayCount = save.dayCount;
     this.timeOfDay = save.timeOfDay;
+    this.setDayNightMode(save.dayNightMode ?? 'cycle');
     this.lastIsNight =
       Math.sin((this.timeOfDay - 0.25) * Math.PI * 2) < -0.05;
     this.weather = loadedWorldType === 'flat' ? 'clear' : (save.weather || 'clear');
@@ -6692,6 +6707,7 @@ export class GameEngine {
       },
       dayCount: this.dayCount,
       timeOfDay: this.timeOfDay,
+      dayNightMode: this.dayNightMode,
       weather: this.worldType === 'flat' ? 'clear' : this.weather,
       inventory: this.inventory.map((s) => ({ ...s })),
       backpackCompartments: this.backpackCompartments.map((c) => ({ ...c })),
@@ -11680,15 +11696,18 @@ export class GameEngine {
     this.surfaceWetness = 0;
     setShaderWetness(0);
     if (this.mode === 'playing' && !this.gameOver && !this.cinematicActive) {
-      // Full day-night cycle scaled by mod dayLengthMultiplier
-      const dayLenMult = Math.max(0.2, this.modSystem?.tweaks.dayLengthMultiplier ?? 1);
-      this.timeOfDay += dt / (300 * dayLenMult);
-      if (this.timeOfDay >= 1) {
-        this.timeOfDay -= 1;
-        this.dayCount += 1;
-        this.stats.daysSurvived = this.dayCount;
-        if (!isFlat) {
-          this.toast(`Day ${this.dayCount} Dawn`, 'info');
+      // Full day-night cycle unless the player locked the island to daylight
+      // or night from the world selector.
+      if (this.dayNightMode === 'cycle') {
+        const dayLenMult = Math.max(0.2, this.modSystem?.tweaks.dayLengthMultiplier ?? 1);
+        this.timeOfDay += dt / (300 * dayLenMult);
+        if (this.timeOfDay >= 1) {
+          this.timeOfDay -= 1;
+          this.dayCount += 1;
+          this.stats.daysSurvived = this.dayCount;
+          if (!isFlat) {
+            this.toast(`Day ${this.dayCount} Dawn`, 'info');
+          }
         }
       }
 

@@ -3,10 +3,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FileBox, ImageIcon, Upload } from 'lucide-react';
 import { buildSculptedBackpackMesh, SkinCatalogItem } from '@/game/data/exchangeCatalog';
 import { applySafeStandardMaps, ensureGeometryHasUv } from '@/game/world/textures';
 import { createSafeWebGLRenderer } from '@/game/world/webglUtils';
 import { extractPayhipCheckoutUrl } from './PayhipMarketplaceModal';
+import {
+  MARKETPLACE_UPLOAD_MAX_BYTES,
+  checkMarketplaceUploadFile,
+  formatMarketplaceUploadSize,
+} from '@/game/systems/marketplaceUploads';
 
 function buildSculptedWeaponPreviewMesh(item: SkinCatalogItem): {
   group: THREE.Group;
@@ -117,6 +123,10 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
   const [uploadSlot, setUploadSlot] = useState<'backpack' | 'weapon'>('backpack');
   const [uploadMediaUrl, setUploadMediaUrl] = useState('');
   const [uploadMediaKind, setUploadMediaKind] = useState<'image' | 'glb' | 'none'>('none');
+  const [uploadFileName, setUploadFileName] = useState('');
+  const [uploadFileSize, setUploadFileSize] = useState(0);
+  const [uploadError, setUploadError] = useState('');
+  const [uploadDragActive, setUploadDragActive] = useState(false);
   const [payhipProductIdInput, setPayhipProductIdInput] = useState('');
 
   // "+ Checkout" state (for pasting your Payhip embedded checkout)
@@ -294,23 +304,55 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
 
   if (!isOpen) return null;
 
-  const handlePhoneFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const clearUploadFile = () => {
+    setUploadMediaUrl('');
+    setUploadMediaKind('none');
+    setUploadFileName('');
+    setUploadFileSize(0);
+    setUploadError('');
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
-    const isGlb = file.name.toLowerCase().endsWith('.glb');
+  const applyUploadFile = (file: File | undefined) => {
+    if (!file) return;
+    const check = checkMarketplaceUploadFile(file);
+    if (!check.ok) {
+      clearUploadFile();
+      setUploadError(check.message);
+      setStatusMsg(check.message);
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setUploadMediaUrl(reader.result);
-        setUploadMediaKind(isGlb ? 'glb' : 'image');
-        if (!uploadName.trim()) {
-          setUploadName(file.name.replace(/\.[^/.]+$/, ''));
-        }
-        setStatusMsg(`Selected "${file.name}" from phone.`);
+      if (typeof reader.result !== 'string') {
+        setUploadError('Could not read that file. Try another image or model.');
+        return;
       }
+      setUploadMediaUrl(reader.result);
+      setUploadMediaKind(check.kind);
+      setUploadFileName(file.name);
+      setUploadFileSize(file.size);
+      setUploadError('');
+      if (!uploadName.trim()) {
+        setUploadName(file.name.replace(/\.[^/.]+$/, ''));
+      }
+      setStatusMsg(`Selected "${file.name}" from phone.`);
+    };
+    reader.onerror = () => {
+      setUploadError('Could not read that file. Try another image or model.');
     };
     reader.readAsDataURL(file);
+  };
+
+  const handlePhoneFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    applyUploadFile(e.target.files?.[0]);
+  };
+
+  const handleUploadDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setUploadDragActive(false);
+    applyUploadFile(e.dataTransfer.files?.[0]);
   };
 
   const handleSaveSkinFromPhone = (e: React.FormEvent) => {
@@ -343,6 +385,10 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
     setUploadName('');
     setUploadMediaUrl('');
     setUploadMediaKind('none');
+    setUploadFileName('');
+    setUploadFileSize(0);
+    setUploadError('');
+    setUploadDragActive(false);
     setPayhipProductIdInput('');
     if (fileInputRef.current) fileInputRef.current.value = '';
     setActiveTool('none');
@@ -436,7 +482,7 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*,.glb"
+          accept="image/png,image/jpeg,image/webp,image/gif,.glb,.gltf"
           onChange={handlePhoneFileChange}
           className="hidden"
         />
@@ -447,44 +493,126 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
             onSubmit={handleSaveSkinFromPhone}
             className="grid grid-cols-1 gap-2.5 border-b border-zinc-800 bg-zinc-900/90 p-3.5 sm:grid-cols-12"
           >
+            <div className="flex items-start justify-between gap-3 sm:col-span-12">
+              <div>
+                <div className="text-xs font-black uppercase tracking-wider text-emerald-300">
+                  Marketplace Upload Panel
+                </div>
+                <p className="mt-0.5 text-[11px] leading-snug text-zinc-400">
+                  Add a gun or backpack skin from this device. Images and self-contained 3D
+                  models up to {formatMarketplaceUploadSize(MARKETPLACE_UPLOAD_MAX_BYTES)}.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTool('none')}
+                className="rounded-lg bg-zinc-800 px-3 py-1.5 text-[11px] font-bold text-zinc-200 hover:bg-zinc-700"
+              >
+                Cancel
+              </button>
+            </div>
+
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setUploadDragActive(true);
+              }}
+              onDragLeave={() => setUploadDragActive(false)}
+              onDrop={handleUploadDrop}
+              className={`rounded-xl border-2 border-dashed p-3 transition sm:col-span-12 ${
+                uploadDragActive
+                  ? 'border-emerald-300 bg-emerald-950/40'
+                  : 'border-zinc-700 bg-zinc-950/70'
+              }`}
+            >
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900">
+                  {uploadMediaKind === 'image' && uploadMediaUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={uploadMediaUrl}
+                      alt={uploadName || 'Uploaded skin preview'}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : uploadMediaKind === 'glb' ? (
+                    <FileBox className="h-8 w-8 text-emerald-300" />
+                  ) : (
+                    <ImageIcon className="h-8 w-8 text-zinc-500" />
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-xs font-bold text-zinc-100">
+                    {uploadFileName || 'Drop a skin file here'}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-zinc-400">
+                    {uploadFileName
+                      ? `${uploadMediaKind === 'glb' ? '3D model' : 'Image'} · ${formatMarketplaceUploadSize(uploadFileSize)}`
+                      : 'PNG, JPG, WEBP, GIF, GLB or GLTF'}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/70 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-bold text-emerald-200 hover:bg-emerald-500/20"
+                    >
+                      <Upload className="h-3.5 w-3.5" />
+                      {uploadFileName ? 'Replace file' : 'Choose file'}
+                    </button>
+                    {uploadFileName ? (
+                      <button
+                        type="button"
+                        onClick={clearUploadFile}
+                        className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-[11px] font-bold text-zinc-300 hover:bg-zinc-800"
+                      >
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {uploadError ? (
+              <div
+                role="alert"
+                className="rounded-lg border border-red-500/50 bg-red-950/40 px-3 py-2 text-[11px] text-red-200 sm:col-span-12"
+              >
+                {uploadError}
+              </div>
+            ) : null}
+
             <input
               type="text"
               value={uploadName}
               onChange={(e) => setUploadName(e.target.value)}
               placeholder="Skin name"
+              aria-label="Skin name"
               className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-white sm:col-span-4"
             />
 
             <select
               value={uploadSlot}
               onChange={(e) => setUploadSlot(e.target.value as 'backpack' | 'weapon')}
+              aria-label="Skin slot"
               className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-white sm:col-span-3"
             >
               <option value="backpack">Backpack Skin</option>
               <option value="weapon">Gun Skin</option>
             </select>
 
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="rounded-lg border border-dashed border-emerald-500/70 bg-zinc-950 px-3 py-2 text-xs font-bold text-emerald-300 sm:col-span-3"
-            >
-              {uploadMediaKind === 'none'
-                ? 'Pick Phone File'
-                : `File Ready (${uploadMediaKind})`}
-            </button>
-
             <input
               type="text"
               value={payhipProductIdInput}
               onChange={(e) => setPayhipProductIdInput(e.target.value)}
               placeholder="Payhip Product ID (optional)"
-              className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-white sm:col-span-2"
+              aria-label="Payhip Product ID"
+              className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-white sm:col-span-5"
             />
 
             <button
               type="submit"
-              className="rounded-lg bg-emerald-500 px-4 py-2 text-xs font-black uppercase text-black hover:bg-emerald-400 sm:col-span-12"
+              className="rounded-lg bg-emerald-500 px-4 py-2.5 text-xs font-black uppercase text-black hover:bg-emerald-400 sm:col-span-12"
             >
               Save Skin to Marketplace
             </button>
