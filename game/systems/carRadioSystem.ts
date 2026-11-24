@@ -74,6 +74,10 @@ export interface CarAudioProfile {
   /** Extra 58/64 Hz trunk shelf and peak, in dB. */
   trunkShelfDb: number;
   trunkPeakDb: number;
+  /** Cabin low-end gain while the player is inside the car. */
+  cabinBoost: number;
+  /** Stylised in-game SPL rating shown on the radio deck. */
+  splDb: number;
   /** Wave-shaper drive for the parallel subwoofer. */
   subDrive: number;
   /** Whether the metallic sheet-metal rattle voice may fire. */
@@ -87,6 +91,8 @@ export const AUDIO_PROFILES: Record<CarType, CarAudioProfile> = {
     shake: 0.5,
     trunkShelfDb: 18,
     trunkPeakDb: 7,
+    cabinBoost: 12,
+    splDb: 154,
     subDrive: 1.15,
     rattle: false,
   },
@@ -97,6 +103,8 @@ export const AUDIO_PROFILES: Record<CarType, CarAudioProfile> = {
     shake: 0.08,
     trunkShelfDb: 11,
     trunkPeakDb: 4,
+    cabinBoost: 20,
+    splDb: 168,
     subDrive: 1.05,
     rattle: false,
   },
@@ -106,6 +114,8 @@ export const AUDIO_PROFILES: Record<CarType, CarAudioProfile> = {
     shake: 1.0,
     trunkShelfDb: 18,
     trunkPeakDb: 7,
+    cabinBoost: 30,
+    splDb: 176,
     // Stay clean: the subwoofer is not the noise source, the trunk panel is.
     subDrive: 1.2,
     rattle: true,
@@ -116,6 +126,9 @@ export const AUDIO_PROFILES: Record<CarType, CarAudioProfile> = {
     shake: 1.8,
     trunkShelfDb: 18,
     trunkPeakDb: 7,
+    // Blue DONK: the loudest car in the game — the 182 dB showcase build.
+    cabinBoost: 48,
+    splDb: 182,
     subDrive: 1.25,
     rattle: true,
   },
@@ -125,6 +138,8 @@ export const AUDIO_PROFILES: Record<CarType, CarAudioProfile> = {
     shake: 0.1,
     trunkShelfDb: 0,
     trunkPeakDb: 0,
+    cabinBoost: 1,
+    splDb: 108,
     subDrive: 1.0,
     rattle: false,
   },
@@ -454,6 +469,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
   userPaused: false,
   spatialAttenuation: 1,
   stereoVolume: 0.78,
+  cabinInside: false,
   customTrackName: null as string | null,
   customAudioEl: null as HTMLAudioElement | null,
 
@@ -524,9 +540,11 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       this.limiter = this.audioCtx.createDynamicsCompressor();
       this.limiter.threshold.value = -2.5;
       this.limiter.knee.value = 0;
-      this.limiter.ratio.value = 14;
-      this.limiter.attack.value = 0.002;
-      this.limiter.release.value = 0.12;
+      // Brick-wall ratio with no attack delay: the Blue DONK runs a much hotter
+      // sub gain and its peaks still land under full scale, so nothing clips.
+      this.limiter.ratio.value = 20;
+      this.limiter.attack.value = 0;
+      this.limiter.release.value = 0.1;
 
       this.carPanner = this.audioCtx.createPanner();
       this.carPanner.panningModel = 'HRTF';
@@ -562,6 +580,10 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
         );
         this.trunkBassSystem.setRattleMultiplier(
           this.activeCarType === 'donk' ? 1.65 : 1,
+        );
+        this.trunkBassSystem.setCabinBassBoost(
+          this.cabinInside,
+          profile.cabinBoost,
         );
       }
       rumbleFilter.connect(this.bassFilter);
@@ -615,7 +637,11 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
    * cabin the stereo keeps its normal loudness/attenuation.
    */
   setCabinBassBoost(insideCar: boolean): void {
-    this.trunkBassSystem?.setCabinBassBoost(insideCar);
+    this.cabinInside = Boolean(insideCar);
+    this.trunkBassSystem?.setCabinBassBoost(
+      this.cabinInside,
+      AUDIO_PROFILES[this.activeCarType].cabinBoost,
+    );
   },
 
   bassBoost: false,
@@ -672,6 +698,10 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     this.trunkBassSystem?.setCabinRattleEnabled(oldSchool);
     this.trunkBassSystem?.setRattleMultiplier(carType === 'donk' ? 1.65 : 1);
     this.trunkBassSystem?.setSubBoost(profile.trunkShelfDb, profile.trunkPeakDb);
+    this.trunkBassSystem?.setCabinBassBoost(
+      this.cabinInside,
+      profile.cabinBoost,
+    );
     const boost = this.bassBoost ? 1 : 0;
     const now = this.audioCtx?.currentTime ?? 0;
     if (this.bassFilter && this.audioCtx) {

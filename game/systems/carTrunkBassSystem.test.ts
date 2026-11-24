@@ -316,3 +316,25 @@ test('step converts sub-bass hits into rattle bursts and respects proximity', ()
   assert.equal(system.rattleBursts, 3);
   system.dispose();
 });
+
+test('cabin bass boost takes the hot Blue DONK gain and reverts to unity outside', () => {
+  const graph = makeMockGraph();
+  const input = { kind: 'input', connect() {}, disconnect() {} };
+  const output = { kind: 'output', connect() {}, disconnect() {} };
+  const system = new CarTrunkBassSystem();
+  system.attachGraph(
+    graph.ctx as unknown as AudioContext,
+    input as unknown as AudioNode,
+    output as unknown as AudioNode,
+  );
+
+  const gainValues = () =>
+    graph.gains.map((g) => (g as unknown as { gain: MockParam }).gain.value);
+
+  system.setCabinBassBoost(true, 48);
+  assert.equal(gainValues().filter((v) => v === 48).length, 1);
+
+  system.setCabinBassBoost(false, 48);
+  assert.equal(gainValues().filter((v) => v === 48).length, 0);
+  system.dispose();
+});

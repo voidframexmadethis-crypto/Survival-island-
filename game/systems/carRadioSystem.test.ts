@@ -152,6 +152,17 @@ test('lowrider profiles get the loudest clean bass and never rattle', () => {
   assert.equal(shouldEnableTrunkRattle('lowrider', false), false);
 });
 
+test('Blue DONK is the loudest car and carries the 182 dB showcase', () => {
+  assert.equal(resolveCarAudioType({ preset: 'donk' }), 'donk');
+  const donk = AUDIO_PROFILES.donk;
+  assert.equal(donk.splDb, 182);
+  assert.equal(donk.cabinBoost, 48);
+  for (const other of ['classic', 'lowrider', 'tahoe', 'supercar'] as const) {
+    assert.ok(donk.cabinBoost > AUDIO_PROFILES[other].cabinBoost);
+    assert.ok(donk.splDb > AUDIO_PROFILES[other].splDb);
+  }
+});
+
 test('stereoOutputGain is silent at zero, ramps up, and drives a loud cabin mix', () => {
   assert.equal(stereoOutputGain(0), 0);
   assert.ok(stereoOutputGain(0.5) < stereoOutputGain(0.75));

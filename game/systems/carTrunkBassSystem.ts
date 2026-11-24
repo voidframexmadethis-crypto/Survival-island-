@@ -160,13 +160,14 @@ export class CarTrunkBassSystem {
   }
 
   /**
-   * 20x low-end for the driver only. Applied to a bass-only parallel branch
-   * ahead of the cabin limiter, so it never clips the radio output.
+   * Low-end for the driver only. Applied to a bass-only parallel branch ahead
+   * of the cabin limiter, so it never clips the radio output. The Blue DONK
+   * passes a much hotter gain than the other profiles so it is the loudest car.
    */
-  public setCabinBassBoost(insideCar: boolean): void {
+  public setCabinBassBoost(insideCar: boolean, gain = CABIN_BASS_GAIN): void {
     if (!this.ctx || !this.cabinBassGain) return;
     this.cabinBassGain.gain.setTargetAtTime(
-      insideCar ? CABIN_BASS_GAIN : 1,
+      insideCar ? Math.max(1, gain) : 1,
       this.ctx.currentTime,
       0.06,
     );

@@ -251,6 +251,16 @@ export function CarRadioModal({
                 >
                   {`${carAudioType.toUpperCase()} EQ · 100Hz +${(6 * audioProfile.bass).toFixed(1)}dB · 48Hz +${(5 * audioProfile.low).toFixed(1)}dB`}
                 </span>
+                <span
+                  title="Stylised in-game SPL showcase rating, not a real sound-pressure measurement"
+                  className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                    carAudioType === 'donk'
+                      ? 'bg-amber-400 text-slate-950'
+                      : 'bg-slate-800 border border-white/10 text-stone-300'
+                  }`}
+                >
+                  {`${audioProfile.splDb} dB${carAudioType === 'donk' ? ' SHOWCASE' : ' SPL'}`}
+                </span>
               </div>
               <h2 className="text-sm sm:text-base font-black text-white truncate">
                 {car.name || 'Vehicle Stereo'}
