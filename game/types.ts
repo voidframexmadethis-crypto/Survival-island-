@@ -487,6 +487,8 @@ export interface ActiveVehicleHudState {
   hydraulicCornerLocked?: Record<'fl' | 'fr' | 'rl' | 'rr', boolean>;
   hydraulicFrontLocked?: boolean;
   hydraulicRearLocked?: boolean;
+  hydraulicSideLocked?: boolean;
+  hydraulicSideLockSide?: 'left' | 'right';
   hydraulicHopMode?: 'three' | 'front' | 'rear' | 'all' | null;
   hasAirbagSuspension: boolean;
   airbagSpeed: number;

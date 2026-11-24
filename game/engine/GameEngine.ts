@@ -499,10 +499,12 @@ import {
   type HydraulicControlState,
 } from '../systems/hydraulicControls';
 import {
+  DEFAULT_LOWRIDER_RIG_SPEC,
   LOWRIDER_CORNERS,
   adjustLowriderCorner,
   createLowriderControls,
   createLowriderRigState,
+  createLowriderVehicleRigSpec,
   impulseLowriderCorner,
   launchLowriderFullHop,
   lowriderContactCount,
@@ -515,9 +517,11 @@ import {
   stepLowriderRig,
   toggleLowriderAxleLock,
   toggleLowriderCornerLock,
+  toggleLowriderSideLock,
   toggleLowriderThreeWheel,
   type LowriderControls,
   type LowriderCorner,
+  type LowriderRigSpec,
   type LowriderRigState,
 } from '../systems/lowriderSuspension';
 import {
@@ -1596,12 +1600,15 @@ export class GameEngine {
   private liftButtonPressTimer = 0;
   private readonly _tapNdc = new THREE.Vector2();
   private hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
-  /** Dedicated four-corner Cadillac rig, simulated independently of the body mesh. */
-  private cadillacRig: LowriderRigState = createLowriderRigState();
-  private cadillacControls: LowriderControls = createLowriderControls();
-  private cadillacHopMode: 'three' | 'front' | 'rear' | 'all' | null = null;
-  private cadillacHopTimer = 0;
-  private cadillacHopNextPulse = 0;
+  /** Shared four-corner rig used by every hydraulic lowrider in the fleet. */
+  private lowriderRig: LowriderRigState = createLowriderRigState();
+  private lowriderControls: LowriderControls = createLowriderControls();
+  private lowriderRigSpec: LowriderRigSpec = DEFAULT_LOWRIDER_RIG_SPEC;
+  private lowriderHopMode: 'three' | 'front' | 'rear' | 'all' | null = null;
+  private lowriderHopTimer = 0;
+  private lowriderHopNextPulse = 0;
+  private lowriderSideSwayTimer = 0;
+  private lowriderSideSwayDir: 'left' | 'right' = 'left';
   private trunkBassPulse = 0;
   private trunkBassPressure = 0;
   private chestThumpPulse = 0;
@@ -2494,6 +2501,14 @@ export class GameEngine {
       this.triggerHydraulicAction('full_hop');
     } else if (activeHasHyd && e.code === 'KeyJ') {
       this.triggerHydraulicAction('three_wheel_hop');
+    } else if (activeHasHyd && (e.code === 'Digit6' || e.code === 'Numpad6')) {
+      this.triggerHydraulicAction('front_lock');
+    } else if (activeHasHyd && (e.code === 'Digit7' || e.code === 'Numpad7')) {
+      this.triggerHydraulicAction('rear_lock');
+    } else if (activeHasHyd && (e.code === 'Digit8' || e.code === 'Numpad8')) {
+      this.triggerHydraulicAction('side_lock');
+    } else if (activeHasHyd && (e.code === 'Digit9' || e.code === 'Numpad9')) {
+      this.triggerHydraulicAction('full_hop');
     } else if (
       activeVehicle &&
       (activeVehicle.hasConvertibleTop || activeVehicle.preset === 'cadillac_coupe_deville') &&
@@ -16897,7 +16912,7 @@ export class GameEngine {
           canFloat: specs.canFloat,
           canFly: specs.canFly,
           hasHydraulics: this.vehicleHasHydraulics(av),
-          hydraulicStyle: this.isCadillacLowrider(av)
+          hydraulicStyle: this.usesLowriderRig(av)
             ? 'cadillac_lowrider'
             : this.isAirbagVehicle(av)
               ? 'airbag_coilover'
@@ -16905,34 +16920,45 @@ export class GameEngine {
                 ? 'up_down_side'
                 : 'full_bounce',
           hydraulicMode: this.hydraulicMode,
-          hydraulicSelectedCorner: this.isCadillacLowrider(av)
-            ? this.cadillacControls.selectedCorner
+          hydraulicSelectedCorner: this.usesLowriderRig(av)
+            ? this.lowriderControls.selectedCorner
             : undefined,
-          hydraulicWheelClearance: this.isCadillacLowrider(av)
-            ? lowriderWheelClearances(this.cadillacRig)
+          hydraulicWheelClearance: this.usesLowriderRig(av)
+            ? lowriderWheelClearances(this.lowriderRig)
             : undefined,
-          hydraulicWheelContact: this.isCadillacLowrider(av)
+          hydraulicWheelContact: this.usesLowriderRig(av)
             ? {
-                fl: this.cadillacRig.corners.fl.contact,
-                fr: this.cadillacRig.corners.fr.contact,
-                rl: this.cadillacRig.corners.rl.contact,
-                rr: this.cadillacRig.corners.rr.contact,
+                fl: this.lowriderRig.corners.fl.contact,
+                fr: this.lowriderRig.corners.fr.contact,
+                rl: this.lowriderRig.corners.rl.contact,
+                rr: this.lowriderRig.corners.rr.contact,
               }
             : undefined,
-          hydraulicContactCount: this.isCadillacLowrider(av)
-            ? lowriderContactCount(this.cadillacRig)
+          hydraulicContactCount: this.usesLowriderRig(av)
+            ? lowriderContactCount(this.lowriderRig)
             : undefined,
-          hydraulicCornerLocked: this.isCadillacLowrider(av)
-            ? { ...this.cadillacControls.locked }
+          hydraulicCornerLocked: this.usesLowriderRig(av)
+            ? { ...this.lowriderControls.locked }
             : undefined,
-          hydraulicFrontLocked: this.isCadillacLowrider(av)
-            ? this.cadillacControls.locked.fl && this.cadillacControls.locked.fr
+          hydraulicFrontLocked: this.usesLowriderRig(av)
+            ? this.lowriderControls.locked.fl && this.lowriderControls.locked.fr
             : undefined,
-          hydraulicRearLocked: this.isCadillacLowrider(av)
-            ? this.cadillacControls.locked.rl && this.cadillacControls.locked.rr
+          hydraulicRearLocked: this.usesLowriderRig(av)
+            ? this.lowriderControls.locked.rl && this.lowriderControls.locked.rr
             : undefined,
-          hydraulicHopMode: this.isCadillacLowrider(av)
-            ? this.cadillacHopMode
+          hydraulicSideLocked: this.usesLowriderRig(av)
+            ? (this.lowriderControls.locked.fl && this.lowriderControls.locked.rl) ||
+              (this.lowriderControls.locked.fr && this.lowriderControls.locked.rr)
+            : undefined,
+          hydraulicSideLockSide: this.usesLowriderRig(av)
+            ? this.lowriderControls.locked.fl && this.lowriderControls.locked.rl
+              ? 'left'
+              : this.lowriderControls.locked.fr && this.lowriderControls.locked.rr
+                ? 'right'
+                : undefined
+            : undefined,
+          hydraulicHopMode: this.usesLowriderRig(av)
+            ? this.lowriderHopMode
             : null,
           hasAirbagSuspension: this.isAirbagVehicle(av),
           airbagSpeed: av.airbagSpeed ?? 1.0,
@@ -16977,8 +17003,8 @@ export class GameEngine {
               av.preset === 'chevy_tahoe' || av.preset === 'chevy_2000_sub'
                 ? Math.max(0.075, 0.38 + (av.suspensionOffset ?? -0.3))
                 : Math.max(0.26, 0.38 + (av.suspensionOffset ?? 0));
-            const avgHeave = this.isCadillacLowrider(av)
-              ? this.cadillacRig.bodyHeave
+            const avgHeave = this.usesLowriderRig(av)
+              ? this.lowriderRig.bodyHeave
               : (this.hydCorners.fl +
                   this.hydCorners.fr +
                   this.hydCorners.rl +
@@ -23552,14 +23578,17 @@ export class GameEngine {
           }
         : { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
-    this.cadillacRig = createLowriderRigState();
-    this.cadillacControls = createLowriderControls();
-    this.cadillacHopMode = null;
-    this.cadillacHopTimer = 0;
-    this.cadillacHopNextPulse = 0;
-    if (this.isCadillacLowrider(v) && parkedThreeWheel) {
-      this.cadillacControls.selectedCorner = 'rl';
-      toggleLowriderThreeWheel(this.cadillacControls, 'rl');
+    this.lowriderRig = createLowriderRigState();
+    this.lowriderControls = createLowriderControls();
+    this.lowriderRigSpec = this.lowriderSpecFor(v);
+    this.lowriderHopMode = null;
+    this.lowriderHopTimer = 0;
+    this.lowriderHopNextPulse = 0;
+    this.lowriderSideSwayTimer = 0;
+    this.lowriderSideSwayDir = 'left';
+    if (this.usesLowriderRig(v) && parkedThreeWheel) {
+      this.lowriderControls.selectedCorner = 'rl';
+      toggleLowriderThreeWheel(this.lowriderControls, 'rl');
     }
     this.trunkBassPulse = 0;
     this.trunkBassPressure = 0;
@@ -23583,7 +23612,7 @@ export class GameEngine {
       this.emitHud();
       return true;
     }
-    const extraHint = this.isCadillacLowrider(v)
+    const extraHint = this.usesLowriderRig(v)
       ? ' · [Space] Front Hop · [Z] Rear Hop · [H] 3-Wheel · [N] Full Hop · [J] 3-Wheel Hop · Wheel Controls in HUD'
       : v.preset === 'donk'
         ? ' · [Space/Z/Q/R] Hydraulics (Up / Down / Side-to-Side)'
@@ -23656,11 +23685,21 @@ export class GameEngine {
   }
 
   /**
-   * The Coupe DeVille runs the full four-corner hydraulic rig rather than the
-   * generic airbag body-only path. This is the car with real wheel lift.
+   * Every hydraulic lowrider runs the same real four-corner rig: independent
+   * actuators, per-vehicle spring rates, chassis attitude and ballistic hops.
+   * The rig is never a wheel-only visual overlay.
    */
-  private isCadillacLowrider(v?: ModularVehicleData | null): boolean {
-    return Boolean(v && v.preset === 'cadillac_coupe_deville');
+  private usesLowriderRig(v?: ModularVehicleData | null): boolean {
+    return this.vehicleHasHydraulics(v);
+  }
+
+  /**
+   * Builds each car's hydraulic package from its real proportions and mass.
+   * Extended bubble vans and DONKs get more wheel travel; heavy Cadillacs and
+   * Town Cars get softer, slower body response.
+   */
+  private lowriderSpecFor(v: ModularVehicleData): LowriderRigSpec {
+    return createLowriderVehicleRigSpec(v);
   }
 
   private vehicleHasHydraulics(v?: ModularVehicleData | null): boolean {
@@ -23759,11 +23798,14 @@ export class GameEngine {
     this.hydraulicControls = createHydraulicControlState();
     this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
-    this.cadillacRig = createLowriderRigState();
-    this.cadillacControls = createLowriderControls();
-    this.cadillacHopMode = null;
-    this.cadillacHopTimer = 0;
-    this.cadillacHopNextPulse = 0;
+    this.lowriderRig = createLowriderRigState();
+    this.lowriderControls = createLowriderControls();
+    this.lowriderRigSpec = DEFAULT_LOWRIDER_RIG_SPEC;
+    this.lowriderHopMode = null;
+    this.lowriderHopTimer = 0;
+    this.lowriderHopNextPulse = 0;
+    this.lowriderSideSwayTimer = 0;
+    this.lowriderSideSwayDir = 'left';
     this.trunkBassPulse = 0;
     this.trunkBassPressure = 0;
     this.chestThumpPulse = 0;
@@ -23961,16 +24003,16 @@ export class GameEngine {
   }
 
   /**
-   * Coupe DeVille controls drive real per-corner actuators. The four wheels
-   * have independent lift, axle locks preserve their commanded height, hops
-   * add velocity, and the full hop launches the whole chassis ballistically.
+   * Every lowrider uses these same per-corner actuators. The four wheels have
+   * independent travel, axle/side locks preserve commanded height, hops add
+   * velocity, and the full hop launches the whole chassis ballistically.
    */
-  private handleCadillacHydraulicAction(
+  private handleLowriderHydraulicAction(
     action: string,
     av: ModularVehicleData,
   ): boolean {
-    const rig = this.cadillacRig;
-    const controls = this.cadillacControls;
+    const rig = this.lowriderRig;
+    const controls = this.lowriderControls;
     const speed = THREE.MathUtils.clamp(av.airbagSpeed ?? 1, 0.25, 2);
     const pressure = THREE.MathUtils.clamp(av.airbagLockLevel ?? 1, 0.4, 1.4);
     const pump = 4.8 * (0.75 + speed * 0.4) * pressure;
@@ -23983,6 +24025,16 @@ export class GameEngine {
       rl_lower: ['rl', -1],
       rr_raise: ['rr', 1],
       rr_lower: ['rr', -1],
+    } as const;
+    const sectionMap = {
+      front_raise: ['fl', 'fr', 1],
+      front_lower: ['fl', 'fr', -1],
+      rear_raise: ['rl', 'rr', 1],
+      rear_lower: ['rl', 'rr', -1],
+      left_raise: ['fl', 'rl', 1],
+      left_lower: ['fl', 'rl', -1],
+      right_raise: ['fr', 'rr', 1],
+      right_lower: ['fr', 'rr', -1],
     } as const;
     const selectMap = {
       select_fl: 'fl',
@@ -23997,19 +24049,19 @@ export class GameEngine {
       lock_rr: 'rr',
     } as const;
     const stopHop = () => {
-      this.cadillacHopMode = null;
-      this.cadillacHopTimer = 0;
+      this.lowriderHopMode = null;
+      this.lowriderHopTimer = 0;
     };
     const startHop = (mode: 'three' | 'front' | 'rear' | 'all', corners: LowriderCorner[]) => {
-      if (this.cadillacHopMode === mode) {
+      if (this.lowriderHopMode === mode) {
         stopHop();
         this.toast(`${av.name}: ${mode === 'three' ? '3-wheel' : mode} hop released`, 'info');
         this.emitHud();
         return;
       }
-      this.cadillacHopMode = mode;
-      this.cadillacHopTimer = 1.55;
-      this.cadillacHopNextPulse = 0.3;
+      this.lowriderHopMode = mode;
+      this.lowriderHopTimer = 1.55;
+      this.lowriderHopNextPulse = 0.3;
       pumpLowriderCorners(rig, corners, pump);
       this.sound.playHydraulicPump('bounce');
       this.spawnParticles(av.x, av.y + 0.35, av.z, 0xfbbf24, 8);
@@ -24022,6 +24074,22 @@ export class GameEngine {
       const [corner, direction] = cornerMap[action as keyof typeof cornerMap];
       if (!adjustLowriderCorner(controls, corner, direction)) {
         this.toast(`${av.name}: ${corner.toUpperCase()} cylinder is locked`, 'info');
+        return true;
+      }
+      this.hydraulicMode = 'level';
+      this.sound.playHydraulicPump(direction > 0 ? 'up' : 'down');
+      this.emitHud();
+      return true;
+    }
+
+    if (action in sectionMap) {
+      const [first, second, direction] = sectionMap[action as keyof typeof sectionMap];
+      let changed = false;
+      for (const corner of [first, second] as LowriderCorner[]) {
+        if (adjustLowriderCorner(controls, corner, direction)) changed = true;
+      }
+      if (!changed) {
+        this.toast(`${av.name}: That hydraulic section is locked`, 'info');
         return true;
       }
       this.hydraulicMode = 'level';
@@ -24095,6 +24163,26 @@ export class GameEngine {
       return true;
     }
 
+    if (action === 'side_lock') {
+      const side: 'left' | 'right' =
+        controls.stance === 'right'
+          ? 'right'
+          : controls.stance === 'left'
+            ? 'left'
+            : controls.selectedCorner === 'fr' || controls.selectedCorner === 'rr'
+              ? 'right'
+              : 'left';
+      const locked = toggleLowriderSideLock(controls, side);
+      this.hydraulicLocked = false;
+      this.sound.playHydraulicPump(locked ? 'lock' : 'unlock');
+      this.toast(
+        `${av.name}: ${side === 'left' ? 'Left' : 'Right'} side ${locked ? 'locked' : 'unlocked'} — hops still active`,
+        locked ? 'discovery' : 'info',
+      );
+      this.emitHud();
+      return true;
+    }
+
     if (action === 'three_wheel') {
       const raised = toggleLowriderThreeWheel(controls, controls.selectedCorner);
       this.hydraulicMode = raised ? 'three_wheel' : 'level';
@@ -24119,6 +24207,23 @@ export class GameEngine {
       } else {
         setLowriderSide(controls, side);
         this.hydraulicMode = action;
+        this.lowriderSideSwayDir = side;
+      }
+      this.sound.playHydraulicPump('up');
+      this.emitHud();
+      return true;
+    }
+
+    if (action === 'side_to_side') {
+      if (this.hydraulicMode === 'side_to_side') {
+        this.hydraulicMode = 'level';
+        resumeLowriderLevel(controls);
+      } else {
+        this.hydraulicMode = 'side_to_side';
+        this.lowriderSideSwayDir =
+          controls.stance === 'right' ? 'right' : 'left';
+        setLowriderSide(controls, this.lowriderSideSwayDir);
+        this.lowriderSideSwayTimer = 0.8;
       }
       this.sound.playHydraulicPump('up');
       this.emitHud();
@@ -24151,9 +24256,9 @@ export class GameEngine {
         action === 'bounce_soft' ? 0.66 : action === 'bounce_hard' ? 1.55 : 1.1;
       const corners: LowriderCorner[] =
         controls.stance === 'three_wheel' ? [controls.selectedCorner] : [...LOWRIDER_CORNERS];
-      this.cadillacHopMode = controls.stance === 'three_wheel' ? 'three' : 'all';
-      this.cadillacHopTimer = 1.0;
-      this.cadillacHopNextPulse = 0.32;
+      this.lowriderHopMode = controls.stance === 'three_wheel' ? 'three' : 'all';
+      this.lowriderHopTimer = 1.0;
+      this.lowriderHopNextPulse = 0.32;
       pumpLowriderCorners(rig, corners, pump * power);
       this.sound.playHydraulicPump('bounce');
       this.spawnParticles(av.x, av.y + 0.3, av.z, 0xfbbf24, 7);
@@ -24170,7 +24275,7 @@ export class GameEngine {
         this.toast(`${av.name}: Wait for the car to land before the next full hop`, 'info');
         return true;
       }
-      if (!launchLowriderFullHop(rig, pressure)) {
+      if (!launchLowriderFullHop(rig, pressure, this.lowriderRigSpec)) {
         this.toast(`${av.name}: Full hop is still recharging`, 'info');
         return true;
       }
@@ -24188,6 +24293,7 @@ export class GameEngine {
       stopHop();
       resetLowriderControls(controls);
       this.hydraulicLocked = false;
+      this.lowriderSideSwayTimer = 0;
       this.hydraulicMode = 'level';
       av.hydraulicStance = undefined;
       this.sound.playHydraulicPump('down');
@@ -24199,30 +24305,39 @@ export class GameEngine {
     return false;
   }
 
-  /** Runs the repeated pump while a hop control is held/toggled on. */
-  private updateCadillacHydraulicBurst(dt: number, av: ModularVehicleData): void {
-    if (!this.cadillacHopMode) return;
-    this.cadillacHopTimer -= dt;
-    this.cadillacHopNextPulse -= dt;
-    if (this.cadillacHopTimer <= 0) {
-      this.cadillacHopMode = null;
-      this.cadillacHopTimer = 0;
+  /** Runs repeated hop pumps and the automatic left/right sway while active. */
+  private updateLowriderHydraulicBurst(dt: number, av: ModularVehicleData): void {
+    if (this.hydraulicMode === 'side_to_side') {
+      this.lowriderSideSwayTimer -= dt;
+      if (this.lowriderSideSwayTimer <= 0) {
+        this.lowriderSideSwayDir =
+          this.lowriderSideSwayDir === 'left' ? 'right' : 'left';
+        setLowriderSide(this.lowriderControls, this.lowriderSideSwayDir);
+        this.lowriderSideSwayTimer = 0.8;
+      }
+    }
+    if (!this.lowriderHopMode) return;
+    this.lowriderHopTimer -= dt;
+    this.lowriderHopNextPulse -= dt;
+    if (this.lowriderHopTimer <= 0) {
+      this.lowriderHopMode = null;
+      this.lowriderHopTimer = 0;
       return;
     }
-    if (this.cadillacHopNextPulse > 0) return;
-    this.cadillacHopNextPulse = 0.36;
+    if (this.lowriderHopNextPulse > 0) return;
+    this.lowriderHopNextPulse = 0.36;
     const speed = THREE.MathUtils.clamp(av.airbagSpeed ?? 1, 0.25, 2);
     const pressure = THREE.MathUtils.clamp(av.airbagLockLevel ?? 1, 0.4, 1.4);
     const pump = 4.8 * (0.75 + speed * 0.4) * pressure;
-    const controls = this.cadillacControls;
-    if (this.cadillacHopMode === 'front') {
-      pumpLowriderCorners(this.cadillacRig, ['fl', 'fr'], pump);
-    } else if (this.cadillacHopMode === 'rear') {
-      pumpLowriderCorners(this.cadillacRig, ['rl', 'rr'], pump);
-    } else if (this.cadillacHopMode === 'three') {
-      impulseLowriderCorner(this.cadillacRig, controls.selectedCorner, pump);
+    const controls = this.lowriderControls;
+    if (this.lowriderHopMode === 'front') {
+      pumpLowriderCorners(this.lowriderRig, ['fl', 'fr'], pump);
+    } else if (this.lowriderHopMode === 'rear') {
+      pumpLowriderCorners(this.lowriderRig, ['rl', 'rr'], pump);
+    } else if (this.lowriderHopMode === 'three') {
+      impulseLowriderCorner(this.lowriderRig, controls.selectedCorner, pump);
     } else {
-      pumpLowriderCorners(this.cadillacRig, LOWRIDER_CORNERS, pump * 0.7);
+      pumpLowriderCorners(this.lowriderRig, LOWRIDER_CORNERS, pump * 0.7);
     }
     this.sound.playHydraulicPump('bounce');
   }
@@ -24237,6 +24352,7 @@ export class GameEngine {
       | 'drop'
       | 'front_lock'
       | 'rear_lock'
+      | 'side_lock'
       | 'side_to_side'
       | 'coil_bounce'
       | 'three_wheel'
@@ -24282,8 +24398,8 @@ export class GameEngine {
     this.sound.unlock();
     const isDonk = this.isDonkHydraulicVehicle(av);
     const isAirbag = this.isAirbagVehicle(av);
-    if (this.isCadillacLowrider(av)) {
-      if (this.handleCadillacHydraulicAction(action, av)) return;
+    if (this.usesLowriderRig(av)) {
+      if (this.handleLowriderHydraulicAction(action, av)) return;
     }
     if (!isAirbag && this.handleSectionHydraulicAction(action, av)) return;
 
@@ -25102,17 +25218,18 @@ export class GameEngine {
       const bob = Math.sin(this.elapsed * 3.2 + v.x * 0.2) * 0.08;
       v.y = THREE.MathUtils.damp(v.y, newWaterY - 0.12 + bob, 8, dt);
       v.vy = 0;
-    } else if (this.isCadillacLowrider(v)) {
+    } else if (this.usesLowriderRig(v)) {
       // Real four-corner hydraulic rig: actuators move each wheel, axle hops
       // pump while held, and a full hop launches the root under gravity.
-      this.updateCadillacHydraulicBurst(dt, v);
-      stepLowriderRig(this.cadillacRig, this.cadillacControls, dt, {
+      this.updateLowriderHydraulicBurst(dt, v);
+      stepLowriderRig(this.lowriderRig, this.lowriderControls, dt, {
         speed: v.airbagSpeed,
         pressure: v.airbagLockLevel,
+        spec: this.lowriderRigSpec,
       });
-      if (this.cadillacRig.rootHeight > 0 || this.cadillacRig.rootVelocity > 0) {
-        v.y = floorY + this.cadillacRig.rootHeight;
-        v.vy = this.cadillacRig.rootVelocity;
+      if (this.lowriderRig.rootHeight > 0 || this.lowriderRig.rootVelocity > 0) {
+        v.y = floorY + this.lowriderRig.rootHeight;
+        v.vy = this.lowriderRig.rootVelocity;
       } else {
         // On the road the normal vehicle vertical physics stays untouched.
         v.vy -= 20 * dt;
@@ -25323,13 +25440,13 @@ export class GameEngine {
     const activeHasHyd = this.vehicleHasHydraulics(activeV);
     const activeIsDonk = this.isDonkHydraulicVehicle(activeV);
     const activeIsAirbag = this.isAirbagVehicle(activeV);
-    const activeIsCadillac = this.isCadillacLowrider(activeV);
+    const activeUsesRig = this.usesLowriderRig(activeV);
     const airbagSpeed = THREE.MathUtils.clamp(activeV?.airbagSpeed ?? 1.0, 0.25, 2.0);
     const airbagLock = THREE.MathUtils.clamp(activeV?.airbagLockLevel ?? 1.0, 0.4, 1.4);
     const sideWave = Math.sin(this.elapsed * (2.6 + airbagSpeed * 3.4));
 
     let tFl = 0, tFr = 0, tRl = 0, tRr = 0;
-    if (activeHasHyd && !activeIsCadillac) {
+    if (activeHasHyd && !activeUsesRig) {
       if (activeIsAirbag) {
         if (this.hydraulicMode === 'lock_up') {
           tFl = tFr = tRl = tRr = 0.72 * airbagLock;
@@ -25384,7 +25501,7 @@ export class GameEngine {
     // Independent section heights take over when the player has raised the
     // front, rear or either side. These targets are held while bouncing, so a
     // locked rear never sinks back to stock height.
-    if (!activeIsAirbag && !activeIsCadillac && hasManualHydraulicHeight(this.hydraulicControls)) {
+    if (!activeIsAirbag && !activeUsesRig && hasManualHydraulicHeight(this.hydraulicControls)) {
       const manual = hydraulicCornerTargets(this.hydraulicControls);
       tFl = manual.fl;
       tFr = manual.fr;
@@ -25405,7 +25522,7 @@ export class GameEngine {
     const minClamp = activeIsAirbag ? -0.32 : activeIsDonk ? -0.26 : -0.2;
     const maxClamp = activeIsAirbag ? 1.48 : activeIsDonk ? 0.72 : 1.55;
 
-    if (!activeIsCadillac && (activeHasHyd || this.hydVel.fl !== 0 || this.hydVel.fr !== 0 || this.hydVel.rl !== 0 || this.hydVel.rr !== 0 || this.hydCorners.fl !== 0 || this.hydCorners.fr !== 0 || this.hydCorners.rl !== 0 || this.hydCorners.rr !== 0)) {
+    if (!activeUsesRig && (activeHasHyd || this.hydVel.fl !== 0 || this.hydVel.fr !== 0 || this.hydVel.rl !== 0 || this.hydVel.rr !== 0 || this.hydCorners.fl !== 0 || this.hydCorners.fr !== 0 || this.hydCorners.rl !== 0 || this.hydCorners.rr !== 0)) {
       this.hydVel.fl += ((tFl - this.hydCorners.fl) * stiffness - this.hydVel.fl * damping) * dt;
       this.hydCorners.fl = THREE.MathUtils.clamp(this.hydCorners.fl + this.hydVel.fl * dt, minClamp, maxClamp);
       this.hydVel.fr += ((tFr - this.hydCorners.fr) * stiffness - this.hydVel.fr * damping) * dt;
@@ -25591,7 +25708,7 @@ export class GameEngine {
         danceState.enabled = true;
         this.vehicleDanceStates.set(v.id, danceState);
       }
-      if (!activeIsCadillac && danceState && (danceState.enabled || v.hydraulicsDanceEnabled)) {
+      if ((!isActive || !activeHasHyd) && danceState && (danceState.enabled || v.hydraulicsDanceEnabled)) {
         danceState.enabled = Boolean(v.hydraulicsDanceEnabled);
         stepGarageHydraulicsDance(
           {
@@ -25612,16 +25729,25 @@ export class GameEngine {
         for (const wc of handles.wheelCorners) {
           wc.obj.position.y = wc.baseY;
         }
-      } else if (isActive && activeIsCadillac) {
-        // Every tire is driven by its own actuator state. The chassis heave and
-        // attitude come from the same spring simulation, not a decorative pose.
-        const rig = this.cadillacRig;
+      } else if (isActive && activeHasHyd) {
+        // Every hydraulic lowrider uses the same four-corner rig. The body is
+        // sprung on the average actuator extension, then pitched and rolled by
+        // the actual corner loads; the tyres keep their contact patch unless a
+        // corner is deliberately pumped clear of the road.
+        const rig = this.lowriderRig;
+        const bodyLift = rig.bodyHeave;
         handles.chassisGroup.position.y =
-          Math.max(minChassisY, baseBodyY + rig.bodyHeave) + showBassPulse * 0.02;
+          Math.max(minChassisY, baseBodyY + bodyLift) + showBassPulse * 0.02;
         handles.chassisGroup.rotation.x = rig.pitch;
         handles.chassisGroup.rotation.z = rig.roll;
         for (const wc of handles.wheelCorners) {
-          wc.obj.position.y = wc.baseY + rig.corners[wc.corner].lift;
+          // Suspension travel raises the body first. Only the part of a corner's
+          // stroke beyond the body lift is visible as the tyre leaving the road.
+          const tyreClearance = Math.max(
+            0,
+            rig.corners[wc.corner].lift - Math.max(0, bodyLift),
+          );
+          wc.obj.position.y = wc.baseY + tyreClearance;
         }
       } else if (isActive && activeHasHyd) {
         const { fl, fr, rl, rr } = this.hydCorners;

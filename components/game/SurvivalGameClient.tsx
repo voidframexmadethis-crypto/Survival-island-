@@ -3311,6 +3311,34 @@ export function SurvivalGameClient() {
                           </button>
                           <button
                             type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('front_raise')}
+                            className="min-h-[32px] px-2.5 py-1 rounded-lg bg-stone-900 border border-stone-700 text-stone-200 text-[11px] font-bold"
+                          >
+                            Front +
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('front_lower')}
+                            className="min-h-[32px] px-2.5 py-1 rounded-lg bg-stone-900 border border-stone-700 text-stone-200 text-[11px] font-bold"
+                          >
+                            Front −
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('rear_raise')}
+                            className="min-h-[32px] px-2.5 py-1 rounded-lg bg-stone-900 border border-stone-700 text-stone-200 text-[11px] font-bold"
+                          >
+                            Rear +
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('rear_lower')}
+                            className="min-h-[32px] px-2.5 py-1 rounded-lg bg-stone-900 border border-stone-700 text-stone-200 text-[11px] font-bold"
+                          >
+                            Rear −
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => engineRef.current?.triggerHydraulicAction('front_hop')}
                             className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
                               hud.activeVehicle.hydraulicHopMode === 'front'
@@ -3403,6 +3431,28 @@ export function SurvivalGameClient() {
                             }`}
                           >
                             Rear Lock
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('side_lock')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicSideLocked
+                                ? 'bg-sky-400 border-sky-100 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            Side Lock
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('side_to_side')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicMode === 'side_to_side'
+                                ? 'bg-amber-400 border-amber-100 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            Side to Side
                           </button>
                           <button
                             type="button"

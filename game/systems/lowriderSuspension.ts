@@ -1,3 +1,6 @@
+import type { ModularVehicleData } from '../types';
+import { resolveVehicleProfile } from './vehicleProfiles';
+
 /**
  * Four-corner lowrider hydraulic suspension.
  *
@@ -73,6 +76,154 @@ export const LOWRIDER_FULL_HOP_LAUNCH = 5.1;
 const FULL_HOP_COOLDOWN = 0.42;
 const MAX_ROOT_HEIGHT = 1.55;
 const CONTACT_EPSILON = 0.004;
+
+/**
+ * Per-vehicle hydraulic tuning. A long, heavy Cadillac moves more slowly and
+ * carries more travel than a short mini truck; the spring rates and ballistic
+ * hop are derived from those dimensions instead of being identical fleet-wide.
+ */
+export interface LowriderRigSpec {
+  maxWheelLift: number;
+  wheelSpring: number;
+  wheelDamping: number;
+  bodySpring: number;
+  bodyDamping: number;
+  /** Fraction of average actuator travel the sprung body follows. */
+  bodyFollow: number;
+  hopLaunch: number;
+  gravity: number;
+  maxRootHeight: number;
+  minBodyTrim: number;
+  maxBodyTrim: number;
+}
+
+export interface LowriderRigSpecInput {
+  wheelRadiusM?: number;
+  wheelbaseM?: number;
+  trackWidthM?: number;
+  massKg?: number;
+  centerOfGravityM?: number;
+  suspensionStiffness?: number;
+  /** Extra travel for tall show builds, e.g. a DONK. */
+  travelScale?: number;
+}
+
+export const DEFAULT_LOWRIDER_RIG_SPEC: LowriderRigSpec = {
+  maxWheelLift: LOWRIDER_MAX_WHEEL_LIFT,
+  wheelSpring: WHEEL_SPRING,
+  wheelDamping: WHEEL_DAMPING,
+  bodySpring: BODY_SPRING,
+  bodyDamping: BODY_DAMPING,
+  bodyFollow: 0.92,
+  hopLaunch: LOWRIDER_FULL_HOP_LAUNCH,
+  gravity: GRAVITY,
+  maxRootHeight: MAX_ROOT_HEIGHT,
+  minBodyTrim: LOWRIDER_MIN_BODY_TRIM,
+  maxBodyTrim: LOWRIDER_MAX_BODY_TRIM,
+};
+
+/**
+ * Derives spring, damper, travel and hop values from the actual car package.
+ * Heavier cars need more spring force and respond more slowly; a longer
+ * wheelbase adds usable travel while a taller centre of gravity reduces hop.
+ */
+export function deriveLowriderRigSpec(
+  input: LowriderRigSpecInput = {},
+): LowriderRigSpec {
+  const wheelRadius = clamp(input.wheelRadiusM ?? 0.36, 0.26, 0.66);
+  const wheelbase = clamp(input.wheelbaseM ?? 2.8, 2.1, 3.6);
+  const trackWidth = clamp(input.trackWidthM ?? 1.9, 1.5, 2.3);
+  const mass = clamp(input.massKg ?? 1850, 1150, 2900);
+  const cog = clamp(input.centerOfGravityM ?? 0.54, 0.38, 0.72);
+  const stiffness = clamp(input.suspensionStiffness ?? 5.8, 3.5, 9);
+  const travelScale = clamp(input.travelScale ?? 1, 0.8, 1.35);
+
+  const massRatio = mass / 1850;
+  const lengthRatio = wheelbase / 2.8;
+  const trackRatio = trackWidth / 1.9;
+  const stiffnessRatio = stiffness / 5.8;
+  const travel =
+    (0.52 + (wheelRadius - 0.36) * 0.42 + (lengthRatio - 1) * 0.12) *
+    travelScale;
+
+  return {
+    maxWheelLift: clamp(travel, 0.46, 0.82),
+    wheelSpring: WHEEL_SPRING * (0.82 + massRatio * 0.22) * (0.9 + trackRatio * 0.1),
+    wheelDamping: WHEEL_DAMPING * Math.sqrt(massRatio) * (0.92 + stiffnessRatio * 0.08),
+    bodySpring: BODY_SPRING * (0.88 + stiffnessRatio * 0.12),
+    bodyDamping: BODY_DAMPING * Math.sqrt(massRatio),
+    bodyFollow: clamp(0.9 + (0.6 - cog) * 0.18, 0.86, 0.96),
+    hopLaunch:
+      LOWRIDER_FULL_HOP_LAUNCH *
+      clamp(1.06 - (massRatio - 1) * 0.22 - (cog - 0.52) * 0.18, 0.86, 1.14),
+    gravity: GRAVITY + clamp((mass - 1850) / 220, -1.2, 1.6),
+    maxRootHeight: MAX_ROOT_HEIGHT,
+    minBodyTrim: LOWRIDER_MIN_BODY_TRIM,
+    maxBodyTrim: LOWRIDER_MAX_BODY_TRIM,
+  };
+}
+
+/** All hydraulic lowrider packages, tuned from their preset dimensions. */
+export const LOWRIDER_FLEET_PRESETS = [
+  'cadillac_coupe_deville',
+  'lowrider',
+  'town_car',
+  'mini_truck',
+  'el_camino',
+  'donk',
+  'chevy_tahoe',
+  'chevy_2000_sub',
+  'van_90s',
+] as const;
+
+const FLEET_MASS_KG: Record<string, number> = {
+  cadillac_coupe_deville: 2150,
+  lowrider: 1880,
+  town_car: 2050,
+  mini_truck: 1450,
+  el_camino: 1810,
+  donk: 1960,
+  chevy_tahoe: 2480,
+  chevy_2000_sub: 2600,
+  van_90s: 2360,
+};
+
+const FLEET_CENTER_OF_GRAVITY_M: Record<string, number> = {
+  mini_truck: 0.5,
+  lowrider: 0.54,
+  cadillac_coupe_deville: 0.54,
+  town_car: 0.55,
+  el_camino: 0.6,
+  donk: 0.6,
+  chevy_tahoe: 0.65,
+  chevy_2000_sub: 0.66,
+  van_90s: 0.68,
+};
+
+const FLEET_TRAVEL_SCALE: Record<string, number> = {
+  donk: 1.22,
+  el_camino: 1.22,
+  chevy_tahoe: 1.18,
+  chevy_2000_sub: 1.18,
+  van_90s: 1.14,
+};
+
+/** Resolves the actual suspension package for a spawned lowrider or hydraulic truck. */
+export function createLowriderVehicleRigSpec(
+  vehicle: Pick<ModularVehicleData, 'id' | 'name' | 'preset' | 'carId'>,
+): LowriderRigSpec {
+  const profile = resolveVehicleProfile(vehicle);
+  const preset = vehicle.preset ?? '';
+  return deriveLowriderRigSpec({
+    wheelRadiusM: profile.wheelRadius,
+    wheelbaseM: profile.wheelBaseZ * 2,
+    trackWidthM: profile.trackWidthX,
+    massKg: FLEET_MASS_KG[preset] ?? 1850,
+    centerOfGravityM: FLEET_CENTER_OF_GRAVITY_M[preset] ?? 0.54,
+    suspensionStiffness: profile.handling.suspensionStiffness,
+    travelScale: FLEET_TRAVEL_SCALE[preset] ?? 1,
+  });
+}
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.max(min, Math.min(max, value));
@@ -177,6 +328,18 @@ export function toggleLowriderAxleLock(
   return next;
 }
 
+/** Locks or releases the left or right pair without touching the other side. */
+export function toggleLowriderSideLock(
+  controls: LowriderControls,
+  side: 'left' | 'right',
+): boolean {
+  const corners: LowriderCorner[] =
+    side === 'left' ? ['fl', 'rl'] : ['fr', 'rr'];
+  const next = !corners.every((corner) => controls.locked[corner]);
+  for (const corner of corners) controls.locked[corner] = next;
+  return next;
+}
+
 export function setLowriderBodyTrim(
   controls: LowriderControls,
   delta: number,
@@ -272,10 +435,11 @@ export function pumpLowriderCorners(
 export function launchLowriderFullHop(
   rig: LowriderRigState,
   power = 1,
+  spec: LowriderRigSpec = DEFAULT_LOWRIDER_RIG_SPEC,
 ): boolean {
   if (rig.rootHeight > 0.06 || rig.hopCooldown > 0) return false;
   rig.rootVelocity = clamp(
-    LOWRIDER_FULL_HOP_LAUNCH * power,
+    spec.hopLaunch * power,
     3.2,
     7.2,
   );
@@ -298,6 +462,8 @@ interface StepOptions {
   speed?: number;
   /** 0.4 .. 1.4 lock-up pressure. */
   pressure?: number;
+  /** Car-specific spring/damper/travel package. */
+  spec?: LowriderRigSpec;
 }
 
 /** Advances the four actuators, the sprung body and the whole-car arc. */
@@ -309,6 +475,7 @@ export function stepLowriderRig(
 ): LowriderRigState {
   const speed = clamp(options.speed ?? 1, 0.25, 2);
   const pressure = clamp(options.pressure ?? 1, 0.4, 1.4);
+  const spec = options.spec ?? DEFAULT_LOWRIDER_RIG_SPEC;
   const dtSafe = clamp(dt, 0, 1 / 30);
   // Sub-step so the stiff show-car springs stay stable at low frame rates.
   const steps = Math.max(1, Math.ceil(dtSafe / (1 / 120)));
@@ -322,10 +489,10 @@ export function stepLowriderRig(
     // Whole-car ballistic arc. This is the only way all four tires can leave
     // the road at once; the wheel actuators remain attached underneath.
     if (rig.rootHeight > 0 || rig.rootVelocity > 0) {
-      rig.rootVelocity -= GRAVITY * h;
+      rig.rootVelocity -= spec.gravity * h;
       rig.rootHeight += rig.rootVelocity * h;
-      if (rig.rootHeight >= MAX_ROOT_HEIGHT) {
-        rig.rootHeight = MAX_ROOT_HEIGHT;
+      if (rig.rootHeight >= spec.maxRootHeight) {
+        rig.rootHeight = spec.maxRootHeight;
         rig.rootVelocity = Math.min(0, rig.rootVelocity);
       }
       if (rig.rootHeight <= 0) {
@@ -341,18 +508,14 @@ export function stepLowriderRig(
 
     for (const corner of LOWRIDER_CORNERS) {
       const state = rig.corners[corner];
-      const target = clamp(
-        controls.targets[corner],
-        0,
-        LOWRIDER_MAX_WHEEL_LIFT,
-      );
+      const target = clamp(controls.targets[corner], 0, spec.maxWheelLift);
       // A locked corner holds its commanded height exactly, allowing the body
       // to be trimmed around it without the corner drifting.
       const springTarget = controls.locked[corner]
-        ? controls.targets[corner]
+        ? clamp(controls.targets[corner], 0, spec.maxWheelLift)
         : target;
-      const stiffness = WHEEL_SPRING * (0.72 + speed * 0.38) * pressure;
-      const damping = WHEEL_DAMPING * (0.82 + speed * 0.18);
+      const stiffness = spec.wheelSpring * (0.72 + speed * 0.38) * pressure;
+      const damping = spec.wheelDamping * (0.82 + speed * 0.18);
       const accel = (springTarget - state.lift) * stiffness - state.velocity * damping;
       state.velocity = clamp(
         state.velocity + accel * h,
@@ -362,7 +525,7 @@ export function stepLowriderRig(
       state.lift = clamp(
         state.lift + state.velocity * h,
         LOWRIDER_MIN_WHEEL_LIFT,
-        LOWRIDER_MAX_WHEEL_LIFT,
+        spec.maxWheelLift,
       );
       if (state.lift <= 0 && state.velocity < 0) {
         // Tire meets the road: stop the downward travel instead of sinking the
@@ -382,17 +545,17 @@ export function stepLowriderRig(
         rig.corners.rr.lift) /
       4;
     const bodyGoal = clamp(
-      controls.bodyTarget + averageLift * 0.16,
-      LOWRIDER_MIN_BODY_TRIM - 0.06,
-      LOWRIDER_MAX_BODY_TRIM + 0.18,
+      controls.bodyTarget + averageLift * spec.bodyFollow,
+      spec.minBodyTrim - 0.06,
+      spec.maxBodyTrim + 0.18,
     );
     rig.bodyVelocity +=
-      ((bodyGoal - rig.bodyHeave) * BODY_SPRING - rig.bodyVelocity * BODY_DAMPING) * h;
+      ((bodyGoal - rig.bodyHeave) * spec.bodySpring - rig.bodyVelocity * spec.bodyDamping) * h;
     rig.bodyHeave += rig.bodyVelocity * h;
     rig.bodyHeave = clamp(
       rig.bodyHeave,
-      LOWRIDER_MIN_BODY_TRIM - 0.08,
-      LOWRIDER_MAX_BODY_TRIM + 0.22,
+      spec.minBodyTrim - 0.08,
+      spec.maxBodyTrim + 0.22,
     );
 
     // Chassis attitude follows the corner loads. A raised corner leans the
@@ -405,9 +568,12 @@ export function stepLowriderRig(
     const rollTarget = airborne
       ? rig.roll * 0.98
       : clamp((rightLift - leftLift) * 0.3, -0.2, 0.2);
+    // Positive rotation.x drops the +Z nose, so a raised front axle needs a
+    // negative pitch angle. This is the chassis attitude, not a decorative
+    // body pose: it comes from the same four corner states as the wheels.
     const pitchTarget = airborne
-      ? clamp(-rig.rootVelocity * 0.012 + (frontLift - rearLift) * 0.1, -0.14, 0.14)
-      : clamp((frontLift - rearLift) * 0.2, -0.16, 0.16);
+      ? clamp(-rig.rootVelocity * 0.012 + (rearLift - frontLift) * 0.18, -0.14, 0.14)
+      : clamp((rearLift - frontLift) * 0.28, -0.18, 0.18);
     rig.roll += (rollTarget - rig.roll) * Math.min(1, 9 * h);
     rig.pitch += (pitchTarget - rig.pitch) * Math.min(1, 9 * h);
   }

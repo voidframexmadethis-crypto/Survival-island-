@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   LOWRIDER_CORNERS,
+  LOWRIDER_FLEET_PRESETS,
   LOWRIDER_MAX_WHEEL_LIFT,
   adjustLowriderCorner,
   createLowriderControls,
   createLowriderRigState,
+  createLowriderVehicleRigSpec,
   impulseLowriderCorner,
   launchLowriderFullHop,
   lowriderContactCount,
@@ -20,8 +22,11 @@ import {
   stepLowriderRig,
   toggleLowriderAxleLock,
   toggleLowriderCornerLock,
+  toggleLowriderSideLock,
   toggleLowriderThreeWheel,
 } from './lowriderSuspension';
+import { createVehicleFromPreset } from './modularVehicle';
+import { isThreeWheelHydraulicVehicle } from './classicHydraulics';
 
 const FRAME = 1 / 60;
 
@@ -30,10 +35,11 @@ function run(
   controls: ReturnType<typeof createLowriderControls>,
   seconds: number,
   onStep?: (elapsed: number) => void,
+  spec?: ReturnType<typeof createLowriderVehicleRigSpec>,
 ): void {
   const frames = Math.ceil(seconds / FRAME);
   for (let i = 0; i < frames; i++) {
-    stepLowriderRig(rig, controls, FRAME);
+    stepLowriderRig(rig, controls, FRAME, { spec });
     onStep?.((i + 1) * FRAME);
   }
 }
@@ -318,3 +324,138 @@ test('normal driving state is restored after hydraulics and the hop remains boun
   run(rig, controls, 2.0);
   assert.equal(rig.rootHeight, 0);
 });
+
+test('body follows full suspension travel and pitches with a front lift', () => {
+  const rig = createLowriderRigState();
+  const controls = createLowriderControls();
+  for (const corner of LOWRIDER_CORNERS) {
+    setLowriderCornerTarget(controls, corner, 0.52);
+  }
+  run(rig, controls, 1.6);
+  assert.ok(
+    rig.bodyHeave > 0.38,
+    `body must rise with the actuators, got ${rig.bodyHeave.toFixed(3)}`,
+  );
+  assert.ok(Math.abs(rig.pitch) < 0.01);
+
+  // Front-only extension raises the nose: positive rotation.x would drop it.
+  for (const corner of ['rl', 'rr'] as const) {
+    setLowriderCornerTarget(controls, corner, 0);
+  }
+  run(rig, controls, 1.4);
+  assert.ok(rig.pitch < -0.015, `front lift must raise the nose, got ${rig.pitch.toFixed(3)}`);
+  assert.ok(rig.bodyHeave > 0.15);
+});
+
+test('side lock holds a raised side through repeated hops', () => {
+  const rig = createLowriderRigState();
+  const controls = createLowriderControls();
+  setLowriderCornerTarget(controls, 'fl', 0.42);
+  setLowriderCornerTarget(controls, 'rl', 0.42);
+  run(rig, controls, 1.4);
+  assert.equal(toggleLowriderSideLock(controls, 'left'), true);
+  assert.equal(adjustLowriderCorner(controls, 'fl', 1), false);
+  assert.equal(controls.locked.fr, false, 'right side must remain independently adjustable');
+
+  for (let i = 0; i < 3; i++) {
+    pumpLowriderCorners(rig, ['fl', 'rl'], 3.2);
+    run(rig, controls, 0.45);
+    run(rig, controls, 0.8);
+  }
+  run(rig, controls, 0.8);
+  assert.ok(Math.abs(rig.corners.fl.lift - 0.42) < 0.02);
+  assert.ok(Math.abs(rig.corners.rl.lift - 0.42) < 0.02);
+  assert.ok(rig.corners.fr.lift < 0.01);
+  assert.ok(rig.corners.rr.lift < 0.01);
+  assert.equal(toggleLowriderSideLock(controls, 'left'), false);
+});
+
+test('fleet tuning uses each vehicle’s dimensions and mass instead of fixed values', () => {
+  const specs = LOWRIDER_FLEET_PRESETS.map((preset) => {
+    const vehicle = createVehicleFromPreset(`tune_${preset}`, preset, 0, 0, 0);
+    return { preset, spec: createLowriderVehicleRigSpec(vehicle) };
+  });
+  const travels = new Set(specs.map(({ spec }) => spec.maxWheelLift.toFixed(3)));
+  const hops = new Set(specs.map(({ spec }) => spec.hopLaunch.toFixed(3)));
+  assert.ok(travels.size >= 3, 'suspension travel must differ between vehicle packages');
+  assert.ok(hops.size >= 3, 'hop energy must differ between heavy and light cars');
+  const mini = specs.find(({ preset }) => preset === 'mini_truck')!.spec;
+  const cadillac = specs.find(({ preset }) => preset === 'cadillac_coupe_deville')!.spec;
+  assert.ok(mini.bodySpring > cadillac.bodySpring, 'lighter mini truck settles faster');
+  assert.ok(cadillac.wheelDamping > mini.wheelDamping, 'heavier Cadillac needs more damping');
+});
+
+for (const preset of LOWRIDER_FLEET_PRESETS) {
+  test(`${preset}: complete hydraulic cycle and return to driving height`, () => {
+    const vehicle = createVehicleFromPreset(`fleet_${preset}`, preset, 0, 0, 0);
+    const spec = createLowriderVehicleRigSpec(vehicle);
+    const rig = createLowriderRigState();
+    const controls = createLowriderControls();
+    assert.ok(Number.isFinite(spec.maxWheelLift));
+    assert.ok(spec.maxWheelLift >= 0.46 && spec.maxWheelLift <= 0.82);
+
+    // All four corners raise the sprung body, then lower it back down.
+    for (const corner of LOWRIDER_CORNERS) {
+      setLowriderCornerTarget(controls, corner, spec.maxWheelLift * 0.86);
+    }
+    run(rig, controls, 1.7, undefined, spec);
+    const raisedBody = rig.bodyHeave;
+    assert.ok(raisedBody > 0.3, `${preset} body must rise, got ${raisedBody.toFixed(3)}`);
+    resetLowriderControls(controls);
+    run(rig, controls, 2.5, undefined, spec);
+    assert.ok(rig.bodyHeave < 0.01, `${preset} body must lower`);
+    assert.equal(lowriderContactCount(rig), 4);
+
+    // Front and rear axle hops move their own end and settle.
+    for (const axle of ['front', 'rear'] as const) {
+      const corners = axle === 'front' ? (['fl', 'fr'] as const) : (['rl', 'rr'] as const);
+      pumpLowriderCorners(rig, corners, 5.6);
+      let peak = 0;
+      run(rig, controls, 0.36, () => {
+        peak = Math.max(peak, lowriderCornerClearance(rig, corners[0]));
+      }, spec);
+      assert.ok(peak > 0.2, `${preset} ${axle} hop must lift a tyre, peak ${peak.toFixed(3)}`);
+      run(rig, controls, 2.0, undefined, spec);
+      assert.equal(lowriderContactCount(rig), 4);
+    }
+
+    // Three-wheel stance is supported by all traditional lowrider models.
+    if (isThreeWheelHydraulicVehicle(preset)) {
+      toggleLowriderThreeWheel(controls, 'rl');
+      run(rig, controls, 1.6, undefined, spec);
+      assert.ok(rig.corners.rl.lift > 0.3, `${preset} three-wheel must lift rl`);
+      assert.equal(lowriderContactCount(rig), 3);
+      toggleLowriderThreeWheel(controls, 'rl');
+      run(rig, controls, 1.8, undefined, spec);
+    }
+
+    // Repeated side hops and a full four-wheel launch remain stable.
+    setLowriderSide(controls, 'left');
+    run(rig, controls, 1.2, undefined, spec);
+    assert.ok(rig.roll < -0.02, `${preset} left lift must roll body`);
+    setLowriderSide(controls, 'right');
+    run(rig, controls, 1.5, undefined, spec);
+    assert.ok(rig.roll > 0.02, `${preset} right lift must roll body`);
+    resetLowriderControls(controls);
+    run(rig, controls, 2.0, undefined, spec);
+
+    for (let hop = 0; hop < 3; hop++) {
+      assert.equal(launchLowriderFullHop(rig, 1, spec), true, `${preset} hop ${hop + 1}`);
+      run(rig, controls, 1.5, undefined, spec);
+      assert.equal(rig.rootHeight, 0);
+      assert.equal(lowriderContactCount(rig), 4);
+    }
+
+    // Driving state: stock height, all tyres down, no residual motion.
+    resetLowriderControls(controls);
+    run(rig, controls, 2.4, undefined, spec);
+    assert.equal(lowriderContactCount(rig), 4);
+    assert.equal(rig.rootHeight, 0);
+    assert.ok(Math.abs(rig.bodyHeave) < 0.01);
+    assert.ok(Math.abs(rig.pitch) < 0.01);
+    assert.ok(Math.abs(rig.roll) < 0.01);
+    for (const corner of LOWRIDER_CORNERS) {
+      assert.ok(Math.abs(rig.corners[corner].lift) < 0.01);
+    }
+  });
+}
