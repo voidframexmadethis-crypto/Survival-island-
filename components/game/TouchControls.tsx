@@ -137,7 +137,7 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
     };
   }, []);
 
-  const maxRadius = isCompact ? 34 : 46;
+  const maxRadius = isCompact ? 38 : 54;
 
   const resetPedals = useCallback(() => {
     const prev = pedalStateRef.current;
@@ -179,13 +179,8 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
     const isDeflected = mag > 2;
     if (isDeflected !== knobDeflectedRef.current) {
       knobDeflectedRef.current = isDeflected;
-      if (isDeflected) {
-        knob.classList.remove('border-amber-200');
-        knob.classList.add('border-emerald-300', 'ring-2', 'ring-emerald-400/50');
-      } else {
-        knob.classList.remove('border-emerald-300', 'ring-2', 'ring-emerald-400/50');
-        knob.classList.add('border-amber-200');
-      }
+      knob.classList.toggle('is-deflected', isDeflected);
+      joyPadRef.current?.classList.toggle('is-deflected', isDeflected);
     }
   }, [maxRadius]);
 
@@ -483,7 +478,7 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
       <div
         id="joystick-pad"
         data-safe-zone="player-controls"
-        className="joystick-pad pointer-events-auto absolute bottom-[72px] sm:bottom-[86px] left-1 sm:left-4 safe-bottom safe-left flex flex-col items-start gap-1.5"
+        className="joystick-pad player-controls-left pointer-events-auto absolute bottom-[72px] sm:bottom-[86px] left-1 sm:left-4 flex flex-col items-start gap-2 landscape:gap-3"
       >
         {/* Floating Teleport Popover (opens above left pad so it never stretches across narrow screens) */}
         {onTeleportBiome && tpOpen && (
@@ -532,7 +527,7 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
           </form>
         )}
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-2 landscape:gap-3">
           {!isDriving && !mirroredJoystickOnly && (
             <>
               <button
@@ -624,10 +619,10 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
           )}
         </div>
 
-        <div className="flex items-end gap-1.5 sm:gap-2">
+        <div className="flex items-end gap-2 landscape:gap-3">
           <div
             ref={joyPadRef}
-            className="relative w-24 h-24 sm:w-32 sm:h-32 shrink-0 rounded-full bg-stone-950/75 border-2 border-amber-500/45 flex items-center justify-center touch-surface shadow-2xl"
+            className="xbox-stick relative w-28 h-28 sm:w-36 sm:h-36 shrink-0 rounded-full border-2 flex items-center justify-center touch-surface"
             style={{ touchAction: 'none' }}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
@@ -640,17 +635,20 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
               resetJoystick(true);
             }}
           >
+            <span className="xbox-stick-well" aria-hidden="true" />
+            <span className="xbox-stick-gate" aria-hidden="true" />
             <div
               ref={knobRef}
-              className="w-10 h-10 sm:w-14 sm:h-14 rounded-full bg-amber-500 border-2 border-amber-200 shadow-xl flex items-center justify-center pointer-events-none will-change-transform"
+              className="xbox-stick-knob relative w-12 h-12 sm:w-16 sm:h-16 rounded-full flex items-center justify-center pointer-events-none will-change-transform"
               style={{
                 transform: 'perspective(180px) translate(0px, 0px) rotateX(0deg) rotateY(0deg)',
               }}
             >
+              <span className="xbox-stick-grip" aria-hidden="true" />
               {isDriving ? (
-                <Car className="w-5 h-5 sm:w-6 sm:h-6 text-stone-950" />
+                <Car className="relative z-10 w-4 h-4 sm:w-5 sm:h-5 text-white/35" />
               ) : (
-                <Footprints className="w-5 h-5 sm:w-6 sm:h-6 text-stone-950" />
+                <Footprints className="relative z-10 w-4 h-4 sm:w-5 sm:h-5 text-white/35" />
               )}
             </div>
             {gamepadConnected && (
@@ -722,7 +720,7 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
         <div
           id="combat-controls"
           data-safe-zone="player-controls"
-          className="action-wheel pointer-events-auto absolute bottom-[72px] sm:bottom-[86px] right-1 sm:right-4 safe-bottom safe-right flex flex-col items-end gap-1.5 sm:gap-2"
+          className="action-wheel player-controls-right pointer-events-auto absolute bottom-[72px] sm:bottom-[86px] right-1 sm:right-4 flex flex-col items-end gap-2 landscape:gap-3"
         >
           {isDriving ? (
             <div id="vehicle-touch-pedals" className="flex flex-col items-end gap-1.5 sm:gap-2">
@@ -865,7 +863,7 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
           ) : (
             <>
               {/* Compact Utility Row: Backpack, Craft, Build */}
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-2 landscape:gap-3">
                 {onOpenBackpack && (
                   <button
                     type="button"
@@ -914,7 +912,7 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
               </div>
 
               {/* Thumb Arc: Reload + Kick + Jump + Primary Action */}
-              <div className="flex items-end gap-1.5 sm:gap-2">
+              <div className="flex items-end gap-2 landscape:gap-3">
                 {showReload && onReload && (
                   <button
                     type="button"
