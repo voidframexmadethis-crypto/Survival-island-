@@ -4,11 +4,26 @@ import { resolveVehicleProfile } from './vehicleProfiles';
 /**
  * Four-corner lowrider hydraulic suspension.
  *
- * Each corner is an independent spring/damper actuator: commands move the
- * wheel vertically relative to the chassis, and hops inject real velocity into
- * that actuator. A full-car hop launches the whole chassis on a ballistic arc
- * under gravity, so every tire leaves the ground and the vehicle returns to the
- * road rather than being pinned by a visual offset.
+ * Completed feature set:
+ *  - Independent FL/FR/RL/RR actuator travel, per-corner and axle/side locks.
+ *  - Front/rear/side hops, three-wheel stance, rhythmic pump bursts, a short
+ *    whole-car Bounce, and a larger ballistic Full Hop.
+ *  - Per-vehicle spring rates, damping, travel and hop energy derived from the
+ *    real wheelbase, track, mass and centre of gravity.
+ *  - A sprung body that follows actuator travel with underdamped compression
+ *    and rebound, plus pitch/roll from the actual corner loads.
+ *  - Ground-contact and wheel-clearance state consumed by the HUD.
+ *
+ * The game uses this deterministic in-house rig for every hydraulic vehicle;
+ * it does not run a second Cannon-es/Rapier controller. Hydraulic/airbag audio
+ * lives in soundEngine, and driving squat/dive/roll tuning lives in
+ * vehicleProfiles and the vehicle render loop.
+ *
+ * Each corner is a spring/damper actuator: commands move the wheel vertically
+ * relative to the chassis, and hops inject real velocity into that actuator. A
+ * full-car hop launches the whole chassis on a ballistic arc under gravity, so
+ * every tire leaves the ground and the vehicle returns to the road rather than
+ * being pinned by a visual offset.
  *
  * Coordinates: `corner.lift` is wheel-centre displacement above its resting
  * contact position (positive = wheel moves up into the arch). `rootHeight` is
