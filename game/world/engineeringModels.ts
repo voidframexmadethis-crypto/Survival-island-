@@ -6,6 +6,7 @@ import {
 } from '../types';
 import { GarageVehicleSpec } from '../systems/undergroundElevator';
 import { createVehicleFromPreset } from '../systems/modularVehicle';
+import { FACILITY_ENGRAVING_BY_ID } from '../systems/restorationFacility';
 import {
   buildRealLifeCarRig,
   buildSilhouetteGeometry,
@@ -3532,6 +3533,356 @@ function buildSpecialtyGarageCar(
   }
 }
 
+const ENGRAVING_TEXTURE_CACHE = new Map<string, THREE.Texture | null>();
+
+function createEngravingTexture(designId: string): THREE.Texture | null {
+  if (typeof document === 'undefined') return null;
+  if (ENGRAVING_TEXTURE_CACHE.has(designId)) {
+    return ENGRAVING_TEXTURE_CACHE.get(designId) ?? null;
+  }
+  const design = FACILITY_ENGRAVING_BY_ID.get(designId);
+  if (!design) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.clearRect(0, 0, 512, 256);
+  ctx.strokeStyle = design.color;
+  ctx.fillStyle = design.color;
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.shadowColor = design.color;
+  ctx.shadowBlur = 7;
+  const cx = 256;
+  const cy = 128;
+  switch (design.motif) {
+    case 'skull':
+      ctx.beginPath();
+      ctx.arc(cx, cy - 10, 58, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(cx - 22, cy - 16, 12, 0, Math.PI * 2);
+      ctx.arc(cx + 22, cy - 16, 12, 0, Math.PI * 2);
+      ctx.stroke();
+      for (let i = -2; i <= 2; i++) {
+        ctx.beginPath();
+        ctx.moveTo(cx + i * 16, cy + 34);
+        ctx.lineTo(cx + i * 16, cy + 56);
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.moveTo(cx - 86, cy - 58);
+      ctx.lineTo(cx - 132, cy - 8);
+      ctx.moveTo(cx + 86, cy - 58);
+      ctx.lineTo(cx + 132, cy - 8);
+      ctx.stroke();
+      break;
+    case 'crown':
+      ctx.beginPath();
+      ctx.moveTo(cx - 92, cy + 34);
+      ctx.lineTo(cx - 92, cy - 42);
+      ctx.lineTo(cx - 42, cy - 4);
+      ctx.lineTo(cx, cy - 62);
+      ctx.lineTo(cx + 42, cy - 4);
+      ctx.lineTo(cx + 92, cy - 42);
+      ctx.lineTo(cx + 92, cy + 34);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx - 96, cy + 50);
+      ctx.lineTo(cx + 96, cy + 50);
+      ctx.stroke();
+      [cx - 52, cx, cx + 52].forEach((x) => {
+        ctx.beginPath();
+        ctx.arc(x, cy + 16, 7, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      break;
+    case 'flames':
+      for (let i = -2; i <= 2; i++) {
+        ctx.beginPath();
+        ctx.moveTo(cx + i * 42 - 30, cy + 62);
+        ctx.bezierCurveTo(
+          cx + i * 42 - 10,
+          cy + 10,
+          cx + i * 42 + 34,
+          cy + 4,
+          cx + i * 42 + 18,
+          cy - 66 - Math.abs(i) * 10,
+        );
+        ctx.bezierCurveTo(
+          cx + i * 42 + 50,
+          cy - 8,
+          cx + i * 42 + 28,
+          cy + 34,
+          cx + i * 42 + 30,
+          cy + 62,
+        );
+        ctx.stroke();
+      }
+      break;
+    case 'roses':
+      for (let i = 0; i < 3; i++) {
+        const x = cx - 58 + i * 58;
+        const y = cy + (i % 2 === 0 ? 4 : -16);
+        ctx.beginPath();
+        for (let r = 10; r <= 40; r += 10) {
+          ctx.arc(x, y, r, 0.2 + i, Math.PI * 1.6 + i);
+        }
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x, y + 40);
+        ctx.quadraticCurveTo(x - 26, y + 74, x - 8, y + 98);
+        ctx.stroke();
+      }
+      break;
+    case 'nautical':
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        const inner = i % 2 === 0 ? 34 : 66;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(a) * 88, cy + Math.sin(a) * 88);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(a - 0.24) * inner, cy + Math.sin(a - 0.24) * inner);
+        ctx.lineTo(cx + Math.cos(a) * 96, cy + Math.sin(a) * 96);
+        ctx.lineTo(cx + Math.cos(a + 0.24) * inner, cy + Math.sin(a + 0.24) * inner);
+        ctx.stroke();
+      }
+      break;
+    case 'dice':
+      [-58, 58].forEach((ox, index) => {
+        ctx.save();
+        ctx.translate(cx + ox, cy + (index === 0 ? 12 : -12));
+        ctx.rotate(index === 0 ? -0.18 : 0.18);
+        ctx.strokeRect(-46, -46, 92, 92);
+        const pips = index === 0 ? [-20, 0, 20] : [-20, 20];
+        pips.forEach((p) => {
+          ctx.beginPath();
+          ctx.arc(p, p * (index === 0 ? 1 : -1), 6, 0, Math.PI * 2);
+          ctx.fill();
+        });
+        ctx.restore();
+      });
+      break;
+    case 'gator':
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + 8, 104, 34, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      for (let i = -4; i <= 4; i++) {
+        ctx.beginPath();
+        ctx.moveTo(cx + i * 22, cy - 24);
+        ctx.lineTo(cx + i * 22 + 10, cy - 58);
+        ctx.lineTo(cx + i * 22 + 20, cy - 24);
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.arc(cx - 34, cy - 4, 8, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    case 'scallops':
+      for (let row = 0; row < 2; row++) {
+        for (let i = -3; i <= 3; i++) {
+          ctx.beginPath();
+          ctx.arc(cx + i * 58, cy + (row === 0 ? -18 : 44), 44, Math.PI, 0);
+          ctx.stroke();
+        }
+      }
+      break;
+    default:
+      for (let i = -2; i <= 2; i++) {
+        ctx.beginPath();
+        ctx.arc(cx + i * 62, cy - 12, 48, Math.PI * 0.15, Math.PI * 0.95);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(cx + i * 62, cy + 38, 30, Math.PI * 1.15, Math.PI * 1.95);
+        ctx.stroke();
+      }
+      break;
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  ENGRAVING_TEXTURE_CACHE.set(designId, texture);
+  return texture;
+}
+
+function addEngravingDetails(
+  vehicle: ModularVehicleData,
+  handles: ModularVehicleMeshHandles,
+): void {
+  if (!vehicle.engravingDesign) return;
+  const design = FACILITY_ENGRAVING_BY_ID.get(vehicle.engravingDesign);
+  if (!design) return;
+  const texture = createEngravingTexture(design.id);
+  if (!texture) return;
+  const color = new THREE.Color(vehicle.engravingColor ?? design.color);
+  const decalMaterial = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -3,
+    toneMapped: false,
+  });
+  const backingMaterial = new THREE.MeshStandardMaterial({
+    color: 0x1a1a1d,
+    roughness: 0.26,
+    metalness: 0.92,
+  });
+  const longBody =
+    vehicle.preset === 'lowrider' ||
+    vehicle.preset === 'donk' ||
+    vehicle.preset === 'slab' ||
+    vehicle.preset === 'cadillac_coupe_deville' ||
+    vehicle.preset === 'town_car';
+  const frontZ = longBody ? 2.3 : 1.85;
+  const rearZ = longBody ? -2.22 : -1.82;
+  const bumperY = 0.56;
+
+  const bumperPlate = (z: number, facingBack: boolean, width: number) => {
+    const backing = new THREE.Mesh(
+      new THREE.BoxGeometry(width, 0.2, 0.035),
+      backingMaterial,
+    );
+    backing.position.set(0, bumperY, z);
+    const decal = new THREE.Mesh(
+      new THREE.PlaneGeometry(width - 0.04, 0.18),
+      decalMaterial,
+    );
+    decal.position.set(0, bumperY, z + (facingBack ? -0.021 : 0.021));
+    if (facingBack) decal.rotation.y = Math.PI;
+    handles.chassisGroup.add(backing, decal);
+  };
+  bumperPlate(frontZ + 0.03, false, 1.35);
+  bumperPlate(rearZ - 0.03, true, 1.45);
+
+  [-1, 1].forEach((side) => {
+    const backing = new THREE.Mesh(
+      new THREE.BoxGeometry(0.035, 0.58, 1.0),
+      backingMaterial,
+    );
+    backing.position.set(side * 0.93, 0.78, -1.18);
+    const decal = new THREE.Mesh(new THREE.PlaneGeometry(0.96, 0.54), decalMaterial);
+    decal.position.set(side * 0.95, 0.78, -1.18);
+    decal.rotation.y = side < 0 ? -Math.PI / 2 : Math.PI / 2;
+    handles.chassisGroup.add(backing, decal);
+  });
+
+  const wheelScale = vehicle.wheelScale ?? 1;
+  for (const corner of handles.wheelCorners) {
+    const side = corner.corner.endsWith('l') ? -1 : 1;
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.29 * wheelScale, 0.028 * wheelScale, 8, 32),
+      new THREE.MeshStandardMaterial({
+        color,
+        emissive: color,
+        emissiveIntensity: 0.65,
+        roughness: 0.2,
+        metalness: 0.9,
+      }),
+    );
+    ring.rotation.y = Math.PI / 2;
+    ring.position.set(side * 0.1 * wheelScale, 0, 0);
+    corner.obj.add(ring);
+    const cap = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.1 * wheelScale, 0.1 * wheelScale, 0.025, 20),
+      new THREE.MeshStandardMaterial({
+        color,
+        emissive: color,
+        emissiveIntensity: 0.5,
+        metalness: 0.94,
+        roughness: 0.18,
+      }),
+    );
+    cap.rotation.z = Math.PI / 2;
+    cap.position.set(side * 0.14 * wheelScale, 0, 0);
+    corner.obj.add(cap);
+  }
+}
+
+function addRestorationRaceHardware(
+  vehicle: ModularVehicleData,
+  handles: ModularVehicleMeshHandles,
+): void {
+  const group = handles.chassisGroup;
+  const steel = new THREE.MeshStandardMaterial({
+    color: 0x1b1d21,
+    roughness: 0.28,
+    metalness: 0.88,
+  });
+  const castBlack = new THREE.MeshStandardMaterial({
+    color: 0x0c0d0f,
+    roughness: 0.52,
+    metalness: 0.55,
+  });
+  const chrome = createChromeMaterial('#e5e7eb');
+
+  const tube = (
+    ax: number,
+    ay: number,
+    az: number,
+    bx: number,
+    by: number,
+    bz: number,
+    radius = 0.045,
+  ) => {
+    const start = new THREE.Vector3(ax, ay, az);
+    const end = new THREE.Vector3(bx, by, bz);
+    const delta = end.clone().sub(start);
+    const length = delta.length();
+    if (length < 0.01) return;
+    const mesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(radius, radius, length, 10),
+      steel,
+    );
+    mesh.position.copy(start).addScaledVector(delta, 0.5);
+    mesh.quaternion.setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      delta.normalize(),
+    );
+    group.add(mesh);
+  };
+
+  if (vehicle.rollCage) {
+    for (const side of [-1, 1]) {
+      tube(side * 0.7, 0.2, 0.58, side * 0.66, 1.42, 0.4);
+      tube(side * 0.7, 0.2, -0.95, side * 0.66, 1.42, -0.95);
+      tube(side * 0.66, 1.42, 0.4, side * 0.66, 1.42, -0.95);
+      tube(side * 0.72, 0.52, 0.52, side * 0.72, 0.68, -0.9, 0.038);
+      tube(side * 0.66, 1.42, -0.95, side * 0.56, 0.3, -1.72, 0.038);
+    }
+    tube(-0.66, 1.14, -0.95, 0.66, 1.14, -0.95, 0.04);
+  }
+
+  if (vehicle.hoodBlower) {
+    const block = new THREE.Mesh(
+      new THREE.BoxGeometry(0.48, 0.28, 0.54),
+      castBlack,
+    );
+    block.position.set(0, 0.9, 1.46);
+    const caseMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.58, 0.18, 0.62),
+      chrome,
+    );
+    caseMesh.position.set(0, 1.11, 1.46);
+    const hat = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.14, 0.38), chrome);
+    hat.position.set(0, 1.25, 1.46);
+    group.add(block, caseMesh, hat);
+    for (const side of [-1, 1]) {
+      const stack = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.068, 0.078, 0.16, 12),
+        chrome,
+      );
+      stack.position.set(side * 0.13, 1.38, 1.46);
+      group.add(stack);
+    }
+  }
+}
+
 export function createModularVehicleMesh(
   vehicle: ModularVehicleData,
 ): ModularVehicleMeshHandles {
@@ -3693,6 +4044,13 @@ export function createModularVehicleMesh(
         chassisGroup.add(roofSpot);
       });
     }
+  }
+
+  if (vehicle.rollCage || vehicle.hoodBlower) {
+    addRestorationRaceHardware(vehicle, handles);
+  }
+  if (vehicle.engravingDesign) {
+    addEngravingDetails(vehicle, handles);
   }
 
   const noShadowSet = new Set<THREE.Object3D>([

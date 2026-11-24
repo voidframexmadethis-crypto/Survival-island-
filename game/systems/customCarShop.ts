@@ -1,5 +1,11 @@
 import { CUSTOM_SHOP_POS, VEHICLE_GARAGE_POS } from '../world/terrain';
 import type { VehiclePresetKey } from './modularVehicle';
+import {
+  createRestorationFacilityState,
+  getRestorationFacilitySnapshot,
+  type RestorationFacilitySnapshot,
+  type RestorationFacilityState,
+} from './restorationFacility';
 
 /**
  * Bayou Royal Customs is a separate restoration shop east of the Motor Atelier.
@@ -44,7 +50,17 @@ export const CUSTOM_SHOP_WORKERS = [
   },
 ] as const;
 
-export type CustomShopWorkerId = (typeof CUSTOM_SHOP_WORKERS)[number]['id'];
+export const FACILITY_NIGHT_WORKER = {
+  id: 'midge',
+  name: 'Midge',
+  role: 'Night-shift restoration mechanic',
+  uniformColor: 0x3f5d55,
+  accentColor: 0xd6b36a,
+} as const;
+
+export type CustomShopWorkerId =
+  | (typeof CUSTOM_SHOP_WORKERS)[number]['id']
+  | typeof FACILITY_NIGHT_WORKER['id'];
 
 export const CUSTOM_SHOP_TRIP_OUT_SECONDS = 7.5;
 export const CUSTOM_SHOP_LOAD_SECONDS = 2.4;
@@ -654,6 +670,127 @@ export const UNDERCARRIAGE_OPTIONS: readonly UndercarriageOption[] = [
 
 export type UndercarriageId = (typeof UNDERCARRIAGE_OPTIONS)[number]['id'];
 
+export interface EngineBuildOption {
+  id: string;
+  label: string;
+  shortLabel: string;
+  detail: string;
+  /** Multiplier applied to the finished car's drive force. */
+  powerMultiplier: number;
+  horsepower: number;
+  /** 0..1 — how much the exhaust owns the shop when it first fires. */
+  loudness: number;
+  sound: string;
+  /** A blower poking through the hood. */
+  hoodBlower: boolean;
+  /** Race builds leave the shop with a cage unless the player declines it. */
+  includesRollCage: boolean;
+}
+
+/**
+ * Duke and Rae will build anything from a smooth cruiser motor to a ridiculous
+ * blown stroker. The player picks the flavour; the crew handles the machining.
+ */
+export const ENGINE_BUILD_OPTIONS: readonly EngineBuildOption[] = [
+  {
+    id: 'sweet_350',
+    label: 'Sweet 350 Small Block',
+    shortLabel: 'Sweet 350',
+    detail:
+      'Mild cam, fresh heads and a smooth idle — enough torque to cruise the bayou all night.',
+    powerMultiplier: 1.02,
+    horsepower: 380,
+    loudness: 0.32,
+    sound: 'a soft, even lope you can talk over',
+    hoodBlower: false,
+    includesRollCage: false,
+  },
+  {
+    id: 'supercharged_383',
+    label: 'Supercharged 383',
+    shortLabel: 'Blown 383',
+    detail:
+      'Forged bottom end, ported heads and a polished blower tucked under the stock hood.',
+    powerMultiplier: 1.24,
+    horsepower: 640,
+    loudness: 0.72,
+    sound: 'a tight blower whine over a hard small-block bark',
+    hoodBlower: false,
+    includesRollCage: false,
+  },
+  {
+    id: 'twin_turbo_427',
+    label: 'Twin-Turbo 427',
+    shortLabel: 'Twin-Turbo 427',
+    detail:
+      'Twin 76 mm turbos, billet wheels and a fat intercooler hiding behind the grille.',
+    powerMultiplier: 1.38,
+    horsepower: 900,
+    loudness: 0.85,
+    sound: 'turbo spool followed by a wastegate cackle',
+    hoodBlower: false,
+    includesRollCage: true,
+  },
+  {
+    id: 'one_off_billet',
+    label: 'One-Off Billet 572',
+    shortLabel: 'Billet 572',
+    detail:
+      'Tall-deck 572 machined in-house on individual throttle bodies, then dyno-tuned to the car.',
+    powerMultiplier: 1.46,
+    horsepower: 1000,
+    loudness: 0.9,
+    sound: 'a mechanical ITB scream that gets meaner with revs',
+    hoodBlower: false,
+    includesRollCage: true,
+  },
+  {
+    id: 'black_stroker_496',
+    label: 'Black 496 Stroker with 6-71 Blower',
+    shortLabel: 'Blown 496',
+    detail:
+      'Blacked-out 496 stroker, forged crank and a 6-71 blower sitting proud through the hood.',
+    powerMultiplier: 1.55,
+    horsepower: 1100,
+    loudness: 1,
+    sound: 'a window-rattling blower whine and straight-pipe crackle',
+    hoodBlower: true,
+    includesRollCage: true,
+  },
+] as const;
+
+export type EngineId = (typeof ENGINE_BUILD_OPTIONS)[number]['id'];
+
+export type RollCageId = 'none' | 'four_point' | 'six_point';
+
+export interface RollCageOption {
+  id: RollCageId;
+  label: string;
+  detail: string;
+  bars: boolean;
+}
+
+export const ROLL_CAGE_OPTIONS: readonly RollCageOption[] = [
+  {
+    id: 'none',
+    label: 'No Cage',
+    detail: 'Stock cabin with no bars — clean and easy to get in and out of.',
+    bars: false,
+  },
+  {
+    id: 'four_point',
+    label: 'Four-Point Street Cage',
+    detail: 'Tig-welded four-point cage with door bars, hidden behind the upholstery.',
+    bars: true,
+  },
+  {
+    id: 'six_point',
+    label: 'Six-Point Race Cage',
+    detail: 'Six-point cage tied into the frame with door bars and a harness bar.',
+    bars: true,
+  },
+] as const;
+
 export interface CustomShopBuild {
   donorSource: DonorSource;
   donorCarId: DonorCarId;
@@ -664,6 +801,8 @@ export interface CustomShopBuild {
   interiorId: InteriorId;
   headlightId: HeadlightId;
   undercarriageId: UndercarriageId;
+  engineId: EngineId;
+  rollCageId: RollCageId;
 }
 
 export type CustomShopBuildOptionKey =
@@ -675,7 +814,9 @@ export type CustomShopBuildOptionKey =
   | 'roofId'
   | 'interiorId'
   | 'headlightId'
-  | 'undercarriageId';
+  | 'undercarriageId'
+  | 'engineId'
+  | 'rollCageId';
 
 export const DEFAULT_CUSTOM_BUILD: CustomShopBuild = {
   donorSource: 'cave',
@@ -687,6 +828,8 @@ export const DEFAULT_CUSTOM_BUILD: CustomShopBuild = {
   interiorId: 'cream_leather',
   headlightId: 'led_halo',
   undercarriageId: 'show_frame',
+  engineId: 'sweet_350',
+  rollCageId: 'none',
 };
 
 export function createCustomShopBuild(
@@ -730,6 +873,70 @@ export interface NpcBuildPlan {
   requestedDonor: DonorCarOption;
   actualDonor: DonorCarOption;
   surprise: boolean;
+  requestedEngine: EngineBuildOption;
+}
+
+const ENGINE_REQUEST_RULES: readonly {
+  engineId: EngineId;
+  patterns: readonly RegExp[];
+}[] = [
+  {
+    engineId: 'black_stroker_496',
+    patterns: [
+      /\bblack\b[^.]*\b(stroker|motor|block|engine)\b/,
+      /\bstroker\b/,
+      /\b6[- ]?71\b/,
+      /\bblower\b/,
+      /through the hood/,
+      /\bloud(er)?\b/,
+      /ridiculous|insane|crazy|wild/,
+      /race (motor|engine)/,
+    ],
+  },
+  {
+    engineId: 'one_off_billet',
+    patterns: [
+      /one[- ]?off/,
+      /custom (engine|motor|build)/,
+      /\bbillet\b/,
+      /\b572\b/,
+      /shop[- ]?built/,
+    ],
+  },
+  {
+    engineId: 'twin_turbo_427',
+    patterns: [/\bturbo/, /twin[- ]?turbo/, /\b427\b/],
+  },
+  {
+    engineId: 'supercharged_383',
+    patterns: [/supercharg/, /\bs\/c\b/, /\b383\b/, /\bblown\b/],
+  },
+  {
+    engineId: 'sweet_350',
+    patterns: [/\bsweet\b/, /\bmild\b/, /mellow/, /cruise/, /\b350\b/, /stock(ish)?/],
+  },
+];
+
+export function matchEngineRequest(message: string): EngineBuildOption | null {
+  const text = message.toLowerCase().replace(/[^a-z0-9\s/-]/g, ' ').replace(/\s+/g, ' ');
+  for (const rule of ENGINE_REQUEST_RULES) {
+    if (rule.patterns.some((pattern) => pattern.test(text))) {
+      return ENGINE_BUILD_OPTIONS.find((engine) => engine.id === rule.engineId) ?? null;
+    }
+  }
+  return null;
+}
+
+export function matchRollCageRequest(message: string): RollCageOption | null {
+  const text = message.toLowerCase();
+  if (/\bno\s+(roll\s*)?cage\b|\bcage delete\b/.test(text)) {
+    return ROLL_CAGE_OPTIONS.find((option) => option.id === 'none') ?? null;
+  }
+  if (/\b(roll\s*)?cage\b|\bcage it\b|\bbars\b/.test(text)) {
+    const sixPoint = ROLL_CAGE_OPTIONS.find((option) => option.id === 'six_point');
+    return sixPoint ?? null;
+  }
+  return null;
 }
 
 /**
@@ -739,6 +946,8 @@ export interface NpcBuildPlan {
 export function createNpcBuild(
   message: string,
   random: () => number = Math.random,
+  engineId?: EngineId,
+  rollCageId?: RollCageId,
 ): NpcBuildPlan | null {
   const wantsSurprise = /surprise|you pick|your pick|whatever|dealer'?s choice/i.test(message);
   const requested = wantsSurprise ? pickOption(DONOR_CARS, random) : matchDonorRequest(message);
@@ -748,6 +957,16 @@ export function createNpcBuild(
   const actualDonor = surprise
     ? alternatives[Math.min(alternatives.length - 1, Math.floor(random() * alternatives.length))]
     : requested;
+  const requestedEngine = findOption(
+    ENGINE_BUILD_OPTIONS,
+    engineId ?? matchEngineRequest(message)?.id ?? pickOption(ENGINE_BUILD_OPTIONS, random).id,
+  );
+  const requestedCage = findOption(
+    ROLL_CAGE_OPTIONS,
+    rollCageId ??
+      matchRollCageRequest(message)?.id ??
+      (requestedEngine.includesRollCage ? 'six_point' : 'none'),
+  );
   const build: CustomShopBuild = {
     donorSource: random() < 0.35 ? 'freight' : 'cave',
     donorCarId: actualDonor.id,
@@ -758,8 +977,10 @@ export function createNpcBuild(
     interiorId: pickOption(INTERIOR_OPTIONS, random).id,
     headlightId: pickOption(HEADLIGHT_OPTIONS, random).id,
     undercarriageId: pickOption(UNDERCARRIAGE_OPTIONS, random).id,
+    engineId: requestedEngine.id as EngineId,
+    rollCageId: requestedCage.id,
   };
-  return { build, requestedDonor: requested, actualDonor, surprise };
+  return { build, requestedDonor: requested, actualDonor, surprise, requestedEngine };
 }
 
 function findOption<T extends { id: string }>(
@@ -783,6 +1004,8 @@ export interface ResolvedCustomShopBuild {
   interior: InteriorOption;
   headlights: HeadlightOption;
   undercarriage: UndercarriageOption;
+  engine: EngineBuildOption;
+  rollCage: RollCageOption;
   wheelScaleFactor: number;
   convertibleTop: boolean;
   accessories: string[];
@@ -809,10 +1032,12 @@ export function resolveCustomShopBuild(
     UNDERCARRIAGE_OPTIONS,
     build.undercarriageId,
   );
+  const engine = findOption(ENGINE_BUILD_OPTIONS, build.engineId);
+  const rollCage = findOption(ROLL_CAGE_OPTIONS, build.rollCageId);
   return {
     build,
     vehicleId: CUSTOM_SHOP_VEHICLE_ID,
-    name: `Bayou Royal ${donor.name}`,
+    name: `Bayou Royal ${donor.name} — ${engine.shortLabel}`,
     donorSource,
     damage,
     donor,
@@ -823,6 +1048,8 @@ export function resolveCustomShopBuild(
     interior,
     headlights,
     undercarriage,
+    engine,
+    rollCage,
     wheelScaleFactor: rims.scaleFactor,
     convertibleTop: roof.convertible,
     accessories: [
@@ -833,6 +1060,8 @@ export function resolveCustomShopBuild(
       `${steeringWheel.label} and rebuilt column`,
       `${roof.label}`,
       `${headlights.label}`,
+      `${engine.label}: ${engine.detail}`,
+      `${rollCage.label}: ${rollCage.detail}`,
       'New dash pad, glovebox liner and door handles',
       'Fresh chrome, mirrors, weatherstrip and badges',
     ],
@@ -1572,6 +1801,12 @@ export function markCustomShopComplete(state: CustomShopState): void {
   state.cargo.deliveredCrateIds = [...state.cargo.crateIds];
 }
 
+/** Clears a finished job so the NPC crew can take another car in. */
+export function resetCustomShopJob(state: CustomShopState): void {
+  const fresh = createCustomShopState(state.build);
+  Object.assign(state, fresh);
+}
+
 /**
  * Advances the autonomous salvage/restoration loop and the parallel Crescent
  * City parts run. State is mutated for the render loop; events let GameEngine
@@ -1736,7 +1971,7 @@ export function getCustomShopOverallProgress(state: CustomShopState): number {
 export function getCustomShopPhaseLabel(state: CustomShopState): string {
   switch (state.phase) {
     case 'idle':
-      return 'Waiting for a build sheet';
+      return 'Bay open · crew between jobs';
     case 'outbound':
       return 'Shop truck heading to Cave 12 Salvage';
     case 'loading':
@@ -1905,6 +2140,25 @@ export const CUSTOM_SHOP_PAINT_BOOTH = {
   doorZ: 3.75,
 } as const;
 
+/**
+ * The automatic expansion annex sits east of the paint booth. Its shell is
+ * wired into the shop from the start; bays, lighting, equipment stations and
+ * the engraving studio appear as the player installs facility systems. The
+ * breezeway south of the booth keeps the freight road and forecourt clear.
+ */
+export const CUSTOM_SHOP_EXPANSION = {
+  west: 14.4,
+  east: 36.0,
+  north: -4.6,
+  south: 4.6,
+  doorWest: 15.4,
+  doorEast: 20.4,
+  bayCenters: [18.2, 23.0, 27.8] as const,
+  engravingStudioX: 33.2,
+  engravingPad: { x: 33.2, z: 1.35 } as const,
+  displayPad: { x: 27.8, z: 2.55 } as const,
+} as const;
+
 const PAINT_BOOTH_ROUTE: readonly { x: number; z: number }[] = [
   { x: 0, z: 0.35 },
   { x: 0, z: 6.4 },
@@ -2024,10 +2278,12 @@ export interface RestorationShopHudState {
   donorSource: DonorSource;
   completed: boolean;
   started: boolean;
+  facility: RestorationFacilitySnapshot;
 }
 
 export function getRestorationShopHudState(
   state: CustomShopState,
+  facility: RestorationFacilityState = createRestorationFacilityState(),
 ): RestorationShopHudState {
   const stage = getCustomShopStage(state);
   return {
@@ -2054,6 +2310,7 @@ export function getRestorationShopHudState(
     donorSource: state.build.donorSource,
     completed: state.completed,
     started: state.phase !== 'idle',
+    facility: getRestorationFacilitySnapshot(facility),
   };
 }
 

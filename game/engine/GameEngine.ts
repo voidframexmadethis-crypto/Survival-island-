@@ -445,9 +445,11 @@ import {
   CUSTOM_SHOP_VEHICLE_ID,
   DONOR_CARS,
   DONOR_SOURCES,
+  ENGINE_BUILD_OPTIONS,
   HEADLIGHT_OPTIONS,
   INTERIOR_OPTIONS,
   PAINT_OPTIONS,
+  ROLL_CAGE_OPTIONS,
   RIM_OPTIONS,
   ROOF_OPTIONS,
   STEERING_WHEEL_OPTIONS,
@@ -458,6 +460,9 @@ import {
   beginCustomShopRestoration,
   createCustomShopState,
   createNpcBuild,
+  matchDonorRequest,
+  matchEngineRequest,
+  matchRollCageRequest,
   getCargoSupplyLabel,
   getCustomShopFreightRoutePoint,
   getCustomShopLiftOffset,
@@ -473,13 +478,46 @@ import {
   getRestorationShopHudState as buildRestorationShopHudState,
   isCustomShopTrunkOpen,
   markCustomShopComplete,
+  resetCustomShopJob,
   resolveCustomShopBuild,
   type CustomShopBuild,
   type CustomShopBuildOptionKey,
   type CustomShopEvent,
   type CustomShopState,
+  type EngineId,
+  type NpcBuildPlan,
   type RestorationShopHudState,
 } from '../systems/customCarShop';
+import {
+  FACILITY_ENGRAVING_BY_ID,
+  FACILITY_ENGRAVING_DESIGNS,
+  FACILITY_FEATURES,
+  advanceFacilityEngraving,
+  appraiseFacilityVehicle,
+  createRestorationFacilityState,
+  formatFacilityTime as formatFacilityChallengeTime,
+  getFacilityEquipmentCount,
+  getFacilityExpansionLevel,
+  getFacilityStats,
+  getRestorationFacilitySnapshot,
+  hasFacilityFeature,
+  installFacilityFeature,
+  reassignFacilityVehicle,
+  recordFacilityCompletion,
+  recordFacilityPartReceived,
+  consumeFacilityPart,
+  recordFacilityPhoto,
+  recycleFacilitySalvage,
+  restoreRestorationFacilityState,
+  setFacilityDisplay,
+  awardFacilityMechanicXp,
+  startFacilityChallenge,
+  startFacilityEngraving,
+  type FacilityEngravingDesign,
+  type FacilityFeature,
+  type RestorationFacilitySnapshot,
+  type RestorationFacilityState,
+} from '../systems/restorationFacility';
 import {
   createGarageDanceState,
   ELEVATOR_EXOTIC_LIFT,
@@ -1696,9 +1734,18 @@ export class GameEngine {
   private customShopState: CustomShopState = createCustomShopState();
   private customShopSpawned = false;
   private customShopCourtesySpawned = false;
+  private pendingCustomShopCar: string | null = null;
   private customShopPaintFxAt = -Infinity;
   private customShopToastAt = -Infinity;
   private customShopStatusKey = '';
+  private restorationFacility: RestorationFacilityState = createRestorationFacilityState();
+  private restorationJobId = '';
+  private facilityExpansionApplied = -1;
+  private facilityEquipmentApplied = -1;
+  private facilityEngravingApplied = false;
+  private facilityDisplayApplied = false;
+  private facilityNightShiftApplied = false;
+  private restorationShopStartTab: 'terminal' | 'facility' | 'vehicles' = 'terminal';
 
   // Creature Taming & Mounting & Sandbox
   private mountedCreatureId: string | null = null;
@@ -5763,6 +5810,18 @@ export class GameEngine {
     }
 
     this.clearKineticAndVehicleWorld();
+    // Vehicle-world reset clears transient shop state; restore the player's
+    // permanent facility after it so saves keep every installed system.
+    if (save.restorationFacility) {
+      this.restorationFacility = restoreRestorationFacilityState(
+        save.restorationFacility,
+      );
+      this.facilityExpansionApplied = -1;
+      this.facilityEquipmentApplied = -1;
+      this.facilityEngravingApplied = false;
+      this.facilityDisplayApplied = false;
+      this.facilityNightShiftApplied = false;
+    }
     if (Array.isArray(save.kineticNodes) && save.kineticNodes.length > 0) {
       for (const kn of save.kineticNodes) {
         this.spawnKineticNodeInstance({
@@ -6650,6 +6709,19 @@ export class GameEngine {
         modules: v.modules.map((m) => ({ ...m })),
         cargoItems: v.cargoItems.map((c) => ({ ...c })),
       })),
+      restorationFacility: {
+        ...this.restorationFacility,
+        installedFeatureIds: [...this.restorationFacility.installedFeatureIds],
+        mechanics: this.restorationFacility.mechanics.map((mechanic) => ({ ...mechanic })),
+        parts: this.restorationFacility.parts.map((part) => ({ ...part })),
+        photos: this.restorationFacility.photos.map((photo) => ({ ...photo })),
+        vehicles: Object.fromEntries(
+          Object.entries(this.restorationFacility.vehicles).map(([id, record]) => [
+            id,
+            { ...record, photos: record.photos.map((photo) => ({ ...photo })) },
+          ]),
+        ),
+      },
       coasters: this.coasterRuntime?.exportCoasters() || [],
       amusementParks: this.amusementParkRuntime?.serialize() || [],
       waterpark: this.waterpark?.serialize(),
@@ -8392,6 +8464,13 @@ export class GameEngine {
       return;
     }
     if (near && near.kind === 'restoration_shop') {
+      this.restorationShopStartTab =
+        near.id === 'restoration_facility_station'
+          ? 'facility'
+          : near.id === 'restoration_engraving_studio' ||
+              near.id === 'restoration_display_pad'
+            ? 'vehicles'
+            : 'terminal';
       this.callbacks.onOpenStation('restoration_shop');
       this.actionCooldown = 0.4;
       return;
@@ -13985,6 +14064,104 @@ export class GameEngine {
       }
     }
 
+    // Physical equipment in the automatic expansion wing. Walking up to a
+    // fitted system opens the facility panel; the engraving and display pads
+    // open the player's own car records so finished cars can be handled there.
+    if (
+      this.worldType === 'island' &&
+      this.currentDimension === 'overworld' &&
+      this.world?.customCarShop &&
+      !this.activeVehicleId
+    ) {
+      const shop = this.world.customCarShop;
+      const wing = shop.facilityExpansion;
+      let best:
+        | {
+            id: string;
+            label: string;
+            sublabel: string;
+            tab: 'facility' | 'vehicles';
+            x: number;
+            z: number;
+            distance: number;
+          }
+        | null = null;
+      const consider = (
+        id: string,
+        label: string,
+        sublabel: string,
+        tab: 'facility' | 'vehicles',
+        x: number,
+        z: number,
+        range: number,
+      ) => {
+        const distance = Math.hypot(this.playerX - x, this.playerZ - z);
+        if (distance <= range && (!best || distance < best.distance)) {
+          best = { id, label, sublabel, tab, x, z, distance };
+        }
+      };
+      wing.stations.forEach((station, index) => {
+        if (!station.visible) return;
+        const featureId = wing.stationFeatureIds[index];
+        if (!featureId || !hasFacilityFeature(this.restorationFacility, featureId)) {
+          return;
+        }
+        consider(
+          'restoration_facility_station',
+          `Inspect ${wing.stationLabels[index]}`,
+          'Fitted system · open the facility panel',
+          'facility',
+          shop.position.x + 16.6 + index * 1.9,
+          shop.position.z - 3.85,
+          2.7,
+        );
+      });
+      if (hasFacilityFeature(this.restorationFacility, 'engraving_studio')) {
+        consider(
+          'restoration_engraving_studio',
+          'Royal Engraving studio',
+          'Finished cars · bumper, quarter and wheel designs',
+          'vehicles',
+          wing.engravingPad.x,
+          wing.engravingPad.z,
+          4.2,
+        );
+      }
+      if (this.restorationFacility.displayedVehicleIds.length > 0) {
+        consider(
+          'restoration_display_pad',
+          'Finished vehicle display',
+          `${this.restorationFacility.displayedVehicleIds.length} on display · manage cars`,
+          'vehicles',
+          wing.displayPad.x,
+          wing.displayPad.z,
+          4.2,
+        );
+      }
+      const chosen = best as {
+        id: string;
+        label: string;
+        sublabel: string;
+        tab: 'facility' | 'vehicles';
+        x: number;
+        z: number;
+        distance: number;
+      } | null;
+      if (chosen) {
+        return {
+          id: chosen.id,
+          label: chosen.label,
+          sublabel: chosen.sublabel,
+          kind: 'restoration_shop',
+          actionCategory: 'craft',
+          distance: chosen.distance,
+          targetX: chosen.x,
+          targetY: this.playerY,
+          targetZ: chosen.z,
+        };
+      }
+    }
+
     // Crescent Clipper seaplane. Boarding is the only trigger: once the
     // player is inside, the doors close and the automatic flight starts.
     if (this.worldType === 'island' && this.currentDimension === 'overworld') {
@@ -17623,7 +17800,10 @@ export class GameEngine {
       isNight,
       nocturnalActiveCount: this.nocturnalActiveCount,
       nearbyInteraction: this.nearbyInteraction,
-      restorationShop: buildRestorationShopHudState(this.customShopState),
+      restorationShop: buildRestorationShopHudState(
+        this.customShopState,
+        this.restorationFacility,
+      ),
       nearbyCarcass,
       inventory: this.cachedHudInventory,
       hotbarItemIds: [...this.hotbarItemIds],
@@ -18240,55 +18420,373 @@ export class GameEngine {
     this.spawnParticles(car.x - 0.8, car.y + 0.6, car.z, wash.accentColor, 6);
   }
 
+  /**
+   * Which tab the terminal should open on when the player interacts with the
+   * bay desk, a fitted equipment station, the engraver or the display pad.
+   */
+  public getRestorationShopStartTab(): 'terminal' | 'facility' | 'vehicles' {
+    return this.restorationShopStartTab;
+  }
+
   /** First line the shop computer prints when the terminal opens. */
   public getRestorationShopGreeting(): string {
     const state = this.customShopState;
     const resolved = resolveCustomShopBuild(state.build);
     if (state.completed) {
-      return `That ${resolved.name} is done, aligned and sitting in the bay with the keys in it. Take it out and enjoy it. The red deep-water ship is still on its slow 30-minute run, but your car needed nothing from it.`;
+      const car = this.vehicles.find(
+        (vehicle) => vehicle.id === CUSTOM_SHOP_VEHICLE_ID,
+      );
+      const inBay =
+        car &&
+        Math.hypot(car.x - CUSTOM_SHOP_POS.x, car.z - CUSTOM_SHOP_POS.z) < 8;
+      return `That ${resolved.name} is ${car ? (inBay ? 'done, aligned and sitting in the bay' : 'out on the road') : 'out of the shop'}. Name another car and the crew will clear the bay, sweep up and start again.`;
     }
     if (state.phase !== 'idle') {
       return `${getCustomShopPhaseLabel(state)}. The crew is on it — tell me if you want something else, but this one is already moving.`;
     }
-    return "Bayou Royal Customs terminal online. There's a teal '64 Impala parked out front with the keys in it — take it for a spin while we talk. Tell me what kind of car you want Duke and Rae to build: year, make and model is enough. The fast barge makes the island in 30 seconds; the red deep-water ship takes 30 minutes, but it only carries background stock.";
+    return "Bayou Royal Customs terminal online. There's a teal '64 Impala parked out front with the keys in it — take it for a spin while we talk. Tell me what kind of car you want Duke and Rae to build: year, make and model is enough. Then tell me what's going under the hood — sweet and mild, supercharged, twin-turbo, a black stroker with a blower through the hood, or a one-off billet motor. Ask for a roll cage too if you want one. The fast barge makes the island in 30 seconds; the red deep-water ship takes 30 minutes, but it only carries background stock.";
   }
 
   /**
    * The only player-facing shop interface: a shop computer chat. The player
-   * names a car; the NPCs pick the spec, route and all the work.
+   * names a car, the computer asks what engine they want, then the NPCs pick
+   * the rest of the spec, the route and all the work.
    */
   public chatWithRestorationShop(message: string): string {
     const text = message.trim();
     if (!text) return 'Say a car — for example “64 Impala”, “Box Chevy”, “Regal” or “surprise me”.';
     const state = this.customShopState;
-    const resolved = resolveCustomShopBuild(state.build);
-    if (state.completed) {
-      return `The ${resolved.name} is finished. Keys are in it — take it out. I can't start another build until this one leaves the shop.`;
-    }
-    if (state.phase !== 'idle') {
+    if (state.phase !== 'idle' && !state.completed) {
       return `${getCustomShopPhaseLabel(state)}. Duke and Rae are already working; I'll holler when it's done.`;
     }
-    const plan = createNpcBuild(text);
+
+    const engineMention = matchEngineRequest(text);
+    const cageMention = matchRollCageRequest(text);
+    const shopPicksEngine =
+      /surprise|you pick|your pick|whatever|dealer'?s choice|your call|don'?t care/i.test(text);
+
+    // The car is already in hand and we're waiting on the engine answer.
+    if (this.pendingCustomShopCar) {
+      const pendingCar = this.pendingCustomShopCar;
+      const changedCar = matchDonorRequest(text);
+      if (!engineMention && !shopPicksEngine && changedCar) {
+        this.pendingCustomShopCar = text;
+        return `Switched to a ${changedCar.name}. Now what engine? Sweet 350, supercharged, twin-turbo, black stroker with a blower through the hood, or a one-off billet?`;
+      }
+      if (!engineMention && !shopPicksEngine) {
+        return 'I still need an engine before Duke rolls the truck out: sweet 350, supercharged, twin-turbo, black stroker with a blower through the hood, or a one-off billet. Add “with a cage” if you want bars.';
+      }
+      const plan = createNpcBuild(
+        pendingCar,
+        Math.random,
+        engineMention?.id as EngineId | undefined,
+        cageMention?.id,
+      );
+      this.pendingCustomShopCar = null;
+      if (!plan) {
+        return 'I lost the car somewhere in the paperwork. Name it again — year, make and model — and I\'ll ask about the engine.';
+      }
+      return this.orderRestorationBuild(plan);
+    }
+
+    const plan = createNpcBuild(
+      text,
+      Math.random,
+      engineMention?.id as EngineId | undefined,
+      cageMention?.id,
+    );
     if (!plan) {
       return 'I need a real car to tell the crew. Try “64 Impala”, “74 Caprice”, “87 Regal”, “96 Impala SS”, “79 Coupe de Ville”, “El Camino”, “Town Car” — or say “surprise me”.';
     }
+    if (!engineMention && !shopPicksEngine) {
+      this.pendingCustomShopCar = text;
+      return `A ${plan.requestedDonor.name}. What's going under the hood? You can go sweet — a smooth 350 — or full ridiculous: a supercharged small block, twin turbos, a black 496 stroker with a 6-71 blower sticking through the hood, or a one-off billet motor. Say “with a cage” if you want bars. The more engine you ask for, the louder this thing leaves the shop.`;
+    }
+    return this.orderRestorationBuild(plan);
+  }
+
+  /** Starts the crew once both the car and engine are settled. */
+  private orderRestorationBuild(plan: NpcBuildPlan): string {
+    const state = this.customShopState;
+    if (state.completed) this.prepareCustomShopForNextJob();
     state.build = plan.build;
     if (!this.startRestorationBuild()) {
       return 'The bay is busy right now. Give the crew a minute and ask me again.';
     }
+    const resolved = resolveCustomShopBuild(plan.build);
     const route =
       plan.build.donorSource === 'freight'
-        ? 'the wrapped auction shell arrives on the fast barge in about 30 seconds'
+        ? 'The wrapped auction shell arrives on the fast barge in about 30 seconds'
         : 'Duke is taking the shop truck to Cave 12';
+    const noiseLine =
+      resolved.engine.loudness >= 0.95
+        ? ' That one is ridiculous — it will be the loudest thing on the bayou.'
+        : resolved.engine.loudness >= 0.8
+          ? ' It is properly loud; you will hear it before you see it.'
+          : resolved.engine.loudness >= 0.5
+            ? ' It has a healthy bark without rattling the terminal windows.'
+            : ' It stays sweet and quiet enough to hear the radio.';
+    const engineLine = `${resolved.engine.label} — ${resolved.engine.detail} It'll fire with ${resolved.engine.sound}.${noiseLine}`;
+    const cageLine = resolved.rollCage.bars
+      ? ` ${resolved.rollCage.label} is going in while the interior is apart.`
+      : ' No cage, clean cabin.';
     if (plan.surprise) {
-      return `You asked for a ${plan.requestedDonor.shortName}, but Duke found a ${plan.actualDonor.name} instead and he's already loading it. Trust me — you'll love it. ${route}. The crew is picking the paint, rims, wheel, roof and interior themselves.`;
+      return `You asked for a ${plan.requestedDonor.shortName}, but Duke found a ${plan.actualDonor.name} instead and he's already loading it. Trust me — you'll love it. ${engineLine}${cageLine} ${route}. The crew is picking the paint, rims, wheel, roof and interior themselves.`;
     }
-    return `Done — a ${plan.actualDonor.name}. ${route}. Duke and Rae are handling the teardown, hydraulics, engine, paint booth, interior, roof, wheels, alignment and road test. Close the terminal and we'll get to work.`;
+    return `Done — a ${plan.actualDonor.name}. ${engineLine}${cageLine} ${route}. Duke and Rae are handling the teardown, hydraulics, engine, paint booth, interior, roof, wheels, alignment and road test. Close the terminal and we'll get to work.`;
   }
 
   /** Live shop state for the terminal and HUD. */
   public getRestorationShopHudState(): RestorationShopHudState {
-    return buildRestorationShopHudState(this.customShopState);
+    return buildRestorationShopHudState(
+      this.customShopState,
+      this.restorationFacility,
+    );
+  }
+
+  /** Live facility state for the management tabs. */
+  public getRestorationFacilitySnapshot(): RestorationFacilitySnapshot {
+    return getRestorationFacilitySnapshot(this.restorationFacility);
+  }
+
+  public getRestorationEngravingDesigns(): readonly FacilityEngravingDesign[] {
+    return FACILITY_ENGRAVING_DESIGNS;
+  }
+
+  public getRestorationFacilityFeatures(): readonly FacilityFeature[] {
+    return FACILITY_FEATURES;
+  }
+
+  /** Every player-owned vehicle with its facility record, if it has one. */
+  public getRestorationFacilityVehicles(): {
+    id: string;
+    name: string;
+    active: boolean;
+    distanceToShop: number;
+    engravingDesign: string | null;
+    record: RestorationFacilitySnapshot['records'][number] | null;
+  }[] {
+    const shop = this.world?.customCarShop;
+    return this.vehicles
+      .filter((vehicle) => !vehicle.displayOnly)
+      .slice(0, 48)
+      .map((vehicle) => {
+        const record = this.restorationFacility.vehicles[vehicle.id] ?? null;
+        return {
+          id: vehicle.id,
+          name: vehicle.name,
+          active: this.activeVehicleId === vehicle.id,
+          distanceToShop: shop
+            ? Math.hypot(vehicle.x - shop.position.x, vehicle.z - shop.position.z)
+            : 0,
+          engravingDesign: vehicle.engravingDesign ?? null,
+          record: record
+            ? { ...record, photos: record.photos.map((photo) => ({ ...photo })) }
+            : null,
+        };
+      });
+  }
+
+  public selectRestorationFacilityVehicle(vehicleId: string): boolean {
+    const vehicle = this.vehicles.find((candidate) => candidate.id === vehicleId);
+    if (!vehicle) return false;
+    this.restorationFacility.selectedVehicleId = vehicleId;
+    this.restorationFacility.lastMessage = `${vehicle.name} selected in reception.`;
+    this.emitHud();
+    return true;
+  }
+
+  public installRestorationFacilityFeature(featureId: string): {
+    ok: boolean;
+    reason?: string;
+    expansionChanged: boolean;
+    level: number;
+  } {
+    const result = installFacilityFeature(this.restorationFacility, featureId);
+    if (!result.ok) {
+      this.toast(result.reason ?? 'That system cannot be installed.', 'info');
+      return result;
+    }
+    const shop = this.world?.customCarShop;
+    if (shop) this.applyFacilityExpansion(shop);
+    const stats = getFacilityStats(this.restorationFacility);
+    if (result.expansionChanged) {
+      this.toast(
+        `${result.feature?.name} installed. The annex auto-expanded to ${stats.bays} bays with new lighting, equipment space and worker paths.`,
+        'craft',
+      );
+      this.spawnParticles(
+        CUSTOM_SHOP_POS.x + 25,
+        (shop?.groundY ?? 3.4) + 1.2,
+        CUSTOM_SHOP_POS.z,
+        0xd6a34a,
+        24,
+      );
+    } else {
+      this.toast(
+        `${result.feature?.name} installed. Facility speed ${Math.round(
+          stats.buildSpeedMultiplier * 100,
+        )}% · quality +${Math.round(stats.qualityBonus)} · ${stats.bays} bays.`,
+        'craft',
+      );
+    }
+    this.emitHud();
+    return result;
+  }
+
+  public appraiseRestorationFacilityVehicle(vehicleId: string): {
+    ok: boolean;
+    reason?: string;
+  } {
+    const vehicle = this.vehicles.find((candidate) => candidate.id === vehicleId);
+    if (!vehicle) return { ok: false, reason: 'That vehicle is not in your collection.' };
+    const existing = this.restorationFacility.vehicles[vehicle.id];
+    const condition =
+      existing?.conditionScore ??
+      Math.round(35 + 65 * Math.min(1, vehicle.hp / Math.max(1, vehicle.maxHp)));
+    const baseValue =
+      9000 + (vehicle.horsepower ?? 350) * 26 + (vehicle.turboBoost ?? 1) * 3800;
+    const result = appraiseFacilityVehicle(this.restorationFacility, {
+      vehicleId: vehicle.id,
+      name: vehicle.name,
+      conditionScore: condition,
+      baseValue,
+    });
+    if (result.ok) {
+      this.toast(
+        `${vehicle.name}: condition ${result.record?.conditionScore}/100, appraised at $${result.record?.appraisedValue.toLocaleString()}.`,
+        'discovery',
+      );
+    } else {
+      this.toast(result.reason ?? 'Install the appraisal system first.', 'info');
+    }
+    this.emitHud();
+    return { ok: result.ok, reason: result.reason };
+  }
+
+  public recycleRestorationFacilityParts(): {
+    ok: boolean;
+    reason?: string;
+    recycled: number;
+    recovered: number;
+  } {
+    const result = recycleFacilitySalvage(this.restorationFacility);
+    this.toast(
+      result.ok
+        ? `Parts recycling: ${result.recycled} assemblies broken down into ${result.recovered} recovered units.`
+        : result.reason ?? 'Nothing to recycle.',
+      result.ok ? 'craft' : 'info',
+    );
+    this.emitHud();
+    return result;
+  }
+
+  public startRestorationFacilityChallenge(): { ok: boolean; reason?: string } {
+    const result = startFacilityChallenge(this.restorationFacility, this.elapsed);
+    if (result.ok) {
+      this.toast(
+        'Personal restoration challenge started. Finish the next build under 4:00 for a facility record.',
+        'discovery',
+      );
+    } else {
+      this.toast(result.reason ?? 'The challenge cannot start right now.', 'info');
+    }
+    this.emitHud();
+    return result;
+  }
+
+  public setRestorationFacilityDisplay(vehicleId: string, displayed: boolean): boolean {
+    const vehicle = this.vehicles.find((candidate) => candidate.id === vehicleId);
+    if (!vehicle) return false;
+    if (this.activeVehicleId === vehicle.id) {
+      this.toast('Park the car before moving it onto the display pad.', 'info');
+      return false;
+    }
+    const result = setFacilityDisplay(this.restorationFacility, vehicleId, displayed);
+    if (!result.ok) {
+      this.toast(result.reason ?? 'The display area is not available.', 'info');
+      return false;
+    }
+    const shop = this.world?.customCarShop;
+    if (shop) {
+      const target = displayed
+        ? shop.facilityExpansion.displayPad
+        : new THREE.Vector3(
+            shop.position.x + 18.5,
+            getTerrainHeight(shop.position.x + 18.5, shop.position.z + 3.0) + 0.12,
+            shop.position.z + 3.0,
+          );
+      vehicle.x = target.x;
+      vehicle.y = target.y;
+      vehicle.z = target.z;
+      vehicle.yaw = displayed ? Math.PI : -Math.PI / 2;
+      vehicle.vx = 0;
+      vehicle.vy = 0;
+      vehicle.vz = 0;
+      const mesh = this.vehicleMeshes.get(vehicle.id);
+      if (mesh) {
+        mesh.root.position.set(vehicle.x, vehicle.y, vehicle.z);
+        mesh.root.rotation.set(0, vehicle.yaw, 0);
+      }
+      this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle });
+    }
+    this.toast(
+      displayed
+        ? `${vehicle.name} is on the presentation pad.`
+        : `${vehicle.name} rolled back to the delivery row.`,
+      'craft',
+    );
+    this.emitHud();
+    return true;
+  }
+
+  public startRestorationFacilityEngraving(
+    vehicleId: string,
+    designId: string,
+  ): { ok: boolean; reason?: string } {
+    const vehicle = this.vehicles.find((candidate) => candidate.id === vehicleId);
+    if (!vehicle) return { ok: false, reason: 'That vehicle is not in your collection.' };
+    if (this.activeVehicleId === vehicle.id) {
+      return { ok: false, reason: 'Park the car at the facility before engraving it.' };
+    }
+    const shop = this.world?.customCarShop;
+    if (!shop) return { ok: false, reason: 'The engraving studio is not available.' };
+    if (
+      Math.hypot(vehicle.x - shop.position.x, vehicle.z - shop.position.z) > 90
+    ) {
+      return { ok: false, reason: 'Bring the car onto the Bayou Royal property first.' };
+    }
+    const result = startFacilityEngraving(
+      this.restorationFacility,
+      vehicleId,
+      designId,
+      this.elapsed,
+    );
+    if (!result.ok) {
+      this.toast(result.reason ?? 'The engraver cannot take that job.', 'info');
+      return result;
+    }
+    const pad = shop.facilityExpansion.engravingPad;
+    vehicle.x = pad.x;
+    vehicle.y = pad.y;
+    vehicle.z = pad.z;
+    vehicle.yaw = Math.PI;
+    vehicle.vx = 0;
+    vehicle.vy = 0;
+    vehicle.vz = 0;
+    const mesh = this.vehicleMeshes.get(vehicle.id);
+    if (mesh) {
+      mesh.root.position.set(vehicle.x, vehicle.y, vehicle.z);
+      mesh.root.rotation.set(0, vehicle.yaw, 0);
+    }
+    this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle });
+    const design = FACILITY_ENGRAVING_BY_ID.get(designId);
+    this.toast(
+      `The engraver is laying out ${design?.label ?? 'a custom design'} on ${vehicle.name}. Bumpers, quarters and wheel faces.`,
+      'craft',
+    );
+    this.emitHud();
+    return result;
   }
 
   /** Changes one build-sheet choice while the shop is still idle. */
@@ -18308,6 +18806,8 @@ export class GameEngine {
       interiorId: INTERIOR_OPTIONS,
       headlightId: HEADLIGHT_OPTIONS,
       undercarriageId: UNDERCARRIAGE_OPTIONS,
+      engineId: ENGINE_BUILD_OPTIONS,
+      rollCageId: ROLL_CAGE_OPTIONS,
     };
     if (!catalog[key].some((option) => option.id === value)) return false;
     state.build = { ...state.build, [key]: value } as CustomShopBuild;
@@ -18320,6 +18820,11 @@ export class GameEngine {
     const state = this.customShopState;
     if (state.phase !== 'idle' || state.completed) return false;
     if (!beginCustomShopRestoration(state, this.elapsed, state.build)) return false;
+    this.restorationJobId = `job-${Math.floor(this.elapsed)}-${this.restorationFacility.jobsCompleted + 1}`;
+    if (hasFacilityFeature(this.restorationFacility, 'approval_gate')) {
+      const approval = resolveCustomShopBuild(state.build);
+      this.restorationFacility.lastMessage = `Player approved ${approval.engine.label}, ${approval.paint.label}, ${approval.rims.label} and ${approval.rollCage.label}.`;
+    }
     const shop = this.world?.customCarShop;
     if (shop) {
       // The lift stays empty until the tow truck or barge actually brings the
@@ -18341,12 +18846,112 @@ export class GameEngine {
       );
     } else {
       this.toast(
-        `Duke & Rae are rolling out to Cave 12 for a ${resolved.donor.name}. They picked ${resolved.paint.label}, ${resolved.rims.label}, ${resolved.steeringWheel.label} and ${resolved.roof.label} themselves. It needs ${resolved.damage.summary.toLowerCase()}`,
+        `Duke & Rae are rolling out to Cave 12 for a ${resolved.donor.name}. It's getting the ${resolved.engine.label}${resolved.rollCage.bars ? ` and a ${resolved.rollCage.label.toLowerCase()}` : ''}. They picked ${resolved.paint.label}, ${resolved.rims.label}, ${resolved.steeringWheel.label} and ${resolved.roof.label} themselves. It needs ${resolved.damage.summary.toLowerCase()}`,
         'craft',
       );
     }
     this.emitHud();
     return true;
+  }
+
+  private applyFacilityExpansion(
+    shop: NonNullable<WorldHandles['customCarShop']>,
+  ): void {
+    const level = getFacilityExpansionLevel(this.restorationFacility);
+    const equipment = getFacilityEquipmentCount(this.restorationFacility);
+    const engraving = hasFacilityFeature(
+      this.restorationFacility,
+      'engraving_studio',
+    );
+    const displayArea = hasFacilityFeature(
+      this.restorationFacility,
+      'display_area',
+    );
+    const nightShift = hasFacilityFeature(
+      this.restorationFacility,
+      'night_shift',
+    );
+    if (
+      level === this.facilityExpansionApplied &&
+      equipment === this.facilityEquipmentApplied &&
+      engraving === this.facilityEngravingApplied &&
+      displayArea === this.facilityDisplayApplied &&
+      nightShift === this.facilityNightShiftApplied
+    ) {
+      return;
+    }
+    this.facilityExpansionApplied = level;
+    this.facilityEquipmentApplied = equipment;
+    this.facilityEngravingApplied = engraving;
+    this.facilityDisplayApplied = displayArea;
+    this.facilityNightShiftApplied = nightShift;
+    shop.facilityExpansion.setLevel(
+      level,
+      equipment,
+      engraving,
+      displayArea,
+      nightShift,
+    );
+    this.customShopStatusKey = '';
+  }
+
+  private rebuildFacilityVehicleMesh(vehicle: ModularVehicleData): void {
+    const oldMesh = this.vehicleMeshes.get(vehicle.id);
+    if (oldMesh) {
+      this.scene.remove(oldMesh.root);
+      this.disposeObject3D(oldMesh.root);
+    }
+    const rebuilt = createModularVehicleMesh(vehicle);
+    this.extractVehicleUnderglowLight(vehicle.id, rebuilt);
+    rebuilt.root.position.set(vehicle.x, vehicle.y, vehicle.z);
+    rebuilt.root.rotation.y = vehicle.yaw;
+    for (const sw of rebuilt.steerWheels) sw.rotation.order = 'YXZ';
+    this.attachVehicleShadowDisc(vehicle.id, rebuilt.root);
+    applyRealisticMeshLightingPass(rebuilt.root, {
+      shadowsEnabled: this.effectiveShadowsEnabled,
+      envMapIntensity: 1.0,
+    });
+    this.scene.add(rebuilt.root);
+    this.vehicleMeshes.set(vehicle.id, rebuilt);
+  }
+
+  private updateFacilityEngraving(
+    shop: NonNullable<WorldHandles['customCarShop']>,
+    dt: number,
+  ): void {
+    const done = advanceFacilityEngraving(this.restorationFacility, dt);
+    if (!done) return;
+    const vehicle = this.vehicles.find(
+      (candidate) => candidate.id === done.job.vehicleId,
+    );
+    if (vehicle) {
+      vehicle.engravingDesign = done.design.id;
+      vehicle.engravingColor = done.design.color;
+      const pad = shop.facilityExpansion.engravingPad;
+      vehicle.x = pad.x;
+      vehicle.y = pad.y;
+      vehicle.z = pad.z;
+      vehicle.yaw = Math.PI;
+      vehicle.vx = 0;
+      vehicle.vy = 0;
+      vehicle.vz = 0;
+      this.rebuildFacilityVehicleMesh(vehicle);
+      this.spawnParticles(
+        pad.x,
+        pad.y + 0.8,
+        pad.z,
+        parseInt(done.design.color.replace('#', ''), 16),
+        18,
+      );
+      this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle });
+      this.toast(
+        `${vehicle.name} engraved with ${done.design.label} — the design is cut into the bumpers, quarter panels and wheel faces.`,
+        'craft',
+      );
+    } else {
+      this.toast(`${done.design.label} engraving finished.`, 'craft');
+    }
+    this.emitHud();
   }
 
   /**
@@ -18357,7 +18962,10 @@ export class GameEngine {
   private updateCustomShop(dt: number): void {
     const shop = this.world?.customCarShop;
     if (!shop) return;
+    this.applyFacilityExpansion(shop);
+    this.updateFacilityEngraving(shop, dt);
     const state = this.customShopState;
+    const facilityStats = getFacilityStats(this.restorationFacility);
     const playerDistance = Math.hypot(
       this.playerX - CUSTOM_SHOP_POS.x,
       this.playerZ - CUSTOM_SHOP_POS.z,
@@ -18395,11 +19003,15 @@ export class GameEngine {
     if (state.phase === 'idle') {
       this.setCustomShopStatus(shop, state);
       this.animateCustomShopWorkers(shop, state, dt);
+      this.animateFacilityWorker(shop, dt);
       this.animateCustomShopLift(shop, state, dt);
       return;
     }
 
-    const events = advanceCustomShopState(state, dt);
+    const events = advanceCustomShopState(
+      state,
+      dt * facilityStats.buildSpeedMultiplier,
+    );
     for (const event of events) this.handleCustomShopEvent(event);
     shop.liftPlatform.visible = !state.completed;
 
@@ -18407,6 +19019,7 @@ export class GameEngine {
     this.animateCustomShopFreight(shop, state, dt);
     this.animateCustomShopLift(shop, state, dt);
     this.animateCustomShopWorkers(shop, state, dt);
+    this.animateFacilityWorker(shop, dt);
     this.setCustomShopStatus(shop, state);
 
     if (
@@ -18442,6 +19055,61 @@ export class GameEngine {
       CUSTOM_FREIGHT_SHIP_MOORING.z - startZ,
     );
     shop.redCargoShip.rotation.z = Math.sin(this.elapsed * 0.42) * 0.01;
+  }
+
+  /**
+   * A finished car frees the bay: the crew parks it in the delivery row and
+   * the brain resets to idle so the next terminal request can start a job.
+   */
+  private prepareCustomShopForNextJob(): void {
+    const shop = this.world?.customCarShop;
+    const state = this.customShopState;
+    const car = this.vehicles.find(
+      (vehicle) => vehicle.id === CUSTOM_SHOP_VEHICLE_ID,
+    );
+    if (car && shop) {
+      if (this.activeVehicleId === car.id) this.exitVehicle();
+      const oldId = car.id;
+      const newId = `veh_bayou_royal_delivered_${Date.now().toString(36)}`;
+      car.id = newId;
+      car.x = shop.position.x + 16.5;
+      car.z = shop.position.z + 3.0;
+      car.y = getTerrainHeight(car.x, car.z) + 0.12;
+      car.yaw = -Math.PI / 2;
+      car.vx = 0;
+      car.vy = 0;
+      car.vz = 0;
+      const mesh = this.vehicleMeshes.get(oldId);
+      if (mesh) {
+        this.vehicleMeshes.delete(oldId);
+        this.vehicleMeshes.set(newId, mesh);
+        mesh.root.position.set(car.x, car.y, car.z);
+        mesh.root.rotation.set(0, car.yaw, 0);
+      }
+      const shadow = this.vehicleShadowDiscs.get(oldId);
+      if (shadow) {
+        this.vehicleShadowDiscs.delete(oldId);
+        this.vehicleShadowDiscs.set(newId, shadow);
+      }
+      this.vehicleRattleCache.delete(oldId);
+      this.vehicleAudioTuningCache.delete(oldId);
+      reassignFacilityVehicle(this.restorationFacility, oldId, newId);
+      this.p2p?.broadcast({ type: 'vehicle_upsert', vehicle: car });
+      this.toast(
+        `${car.name} rolled out to the delivery row. Duke swept the bay and Rae is ready for the next car.`,
+        'info',
+      );
+    }
+    this.customShopSpawned = false;
+    this.customShopStatusKey = '';
+    resetCustomShopJob(state);
+    shop?.liftCar.position.set(0, 0.46, 0.35);
+    if (shop) {
+      shop.liftCar.visible = false;
+      shop.liftPlatform.visible = true;
+      shop.towDonor.visible = false;
+    }
+    this.emitHud();
   }
 
   private ensureCustomShopCourtesyCar(
@@ -18823,6 +19491,50 @@ export class GameEngine {
     }
   }
 
+  /** Midge works the expansion wing through the night once the player fits it. */
+  private animateFacilityWorker(
+    shop: NonNullable<WorldHandles['customCarShop']>,
+    dt: number,
+  ): void {
+    const worker = shop.facilityWorker;
+    if (!worker.group.visible) return;
+    const stops = [
+      { x: 18.2, z: 4.3 },
+      { x: 22.6, z: 2.8 },
+      { x: 27.2, z: -2.4 },
+      { x: 31.1, z: 1.3 },
+      { x: 10.1, z: 7.5 },
+    ];
+    const target = stops[Math.floor(this.elapsed / 11) % stops.length];
+    const dx = target.x - worker.group.position.x;
+    const dz = target.z - worker.group.position.z;
+    const distance = Math.hypot(dx, dz);
+    if (distance > 0.04) {
+      const stride = Math.min(distance, dt * 1.05);
+      worker.group.position.x += (dx / distance) * stride;
+      worker.group.position.z += (dz / distance) * stride;
+      worker.group.rotation.y = Math.atan2(dx, dz);
+    } else {
+      worker.group.rotation.y = Math.atan2(0 - target.x, 1.5 - target.z);
+    }
+    const walking = distance > 0.08;
+    const phase = this.elapsed * 8.6;
+    worker.group.position.y =
+      worker.baseY + (walking ? Math.abs(Math.sin(phase)) * 0.035 : 0);
+    if (walking) {
+      worker.legL.rotation.x = Math.sin(phase) * 0.55;
+      worker.legR.rotation.x = -Math.sin(phase) * 0.55;
+      worker.armL.rotation.x = -Math.sin(phase) * 0.35;
+      worker.armR.rotation.x = Math.sin(phase) * 0.35;
+    } else {
+      worker.legL.rotation.x = 0;
+      worker.legR.rotation.x = 0;
+      worker.armR.rotation.x = 0.22 + Math.sin(this.elapsed * 5.2) * 0.62;
+      worker.armL.rotation.x = -0.12 - Math.sin(this.elapsed * 5.2) * 0.3;
+    }
+    worker.head.rotation.y = Math.sin(this.elapsed * 1.1) * 0.18;
+  }
+
   private animateCustomShopWorkers(
     shop: NonNullable<WorldHandles['customCarShop']>,
     state: CustomShopState,
@@ -18832,6 +19544,7 @@ export class GameEngine {
     const loadingCave = state.phase === 'loading';
     const waiting = state.phase === 'waiting_donor';
     const working = state.phase === 'restoring';
+    const ambient = state.phase === 'idle' || state.phase === 'complete';
     const testDrive = isCustomShopTestDrive(state);
     const stage = getCustomShopStage(state);
     const bayX = 0;
@@ -18860,6 +19573,43 @@ export class GameEngine {
       } else if (working && stage) {
         targetX = stage.workerOffsets[i].x;
         targetZ = stage.workerOffsets[i].z;
+      } else if (ambient) {
+        // Between jobs the crew does not stand by the lift like furniture.
+        // They sweep the bay, check the parts rack, walk out to the tire and
+        // scrap piles, and Duke periodically wanders up to Cave 12 Salvage.
+        const ambientStops = [
+          { x: -3.6, z: 2.5 },
+          { x: 4.2, z: 5.8 },
+          { x: 3.2, z: 7.1 },
+          { x: 8.2, z: 3.6 },
+          { x: -4.4, z: -2.3 },
+          { x: 0.3, z: 6.3 },
+          { x: -1.8, z: -1.7 },
+        ];
+        const facilityStats = getFacilityStats(this.restorationFacility);
+        if (facilityStats.expansionLevel > 0) {
+          ambientStops.push(
+            { x: 10.1, z: 7.5 },
+            { x: 18.4, z: 2.3 },
+            { x: 23.2, z: 1.4 },
+          );
+        }
+        if (facilityStats.expansionLevel > 1) {
+          ambientStops.push({ x: 27.8, z: 2.0 }, { x: 21.0, z: -3.0 });
+        }
+        if (facilityStats.canEngrave) {
+          ambientStops.push({ x: 33.2, z: 2.4 }, { x: 31.0, z: -2.4 });
+        }
+        const stop = Math.floor((this.elapsed + i * 23) / 13) % ambientStops.length;
+        const caveExcursion =
+          i === 0 && this.elapsed % 180 > 100 && this.elapsed % 180 < 150;
+        if (caveExcursion) {
+          targetX = caveX - 1.5 + Math.sin(this.elapsed * 0.22) * 0.8;
+          targetZ = caveZ + 1.3 + Math.cos(this.elapsed * 0.19) * 0.8;
+        } else {
+          targetX = ambientStops[stop].x;
+          targetZ = ambientStops[stop].z;
+        }
       } else {
         targetX = worker.baseX;
         targetZ = worker.baseZ;
@@ -18869,22 +19619,37 @@ export class GameEngine {
       const dz = targetZ - worker.group.position.z;
       const distance = Math.hypot(dx, dz);
       const walking = distance > 0.06;
-      const smoothing = Math.min(1, dt * (walking ? 3.4 : 2.8));
-      worker.group.position.x = THREE.MathUtils.lerp(
-        worker.group.position.x,
-        targetX,
-        smoothing,
-      );
-      worker.group.position.z = THREE.MathUtils.lerp(
-        worker.group.position.z,
-        targetZ,
-        smoothing,
-      );
+      if (ambient) {
+        const stride = Math.min(distance, dt * 1.25);
+        if (distance > 0.001) {
+          worker.group.position.x += (dx / distance) * stride;
+          worker.group.position.z += (dz / distance) * stride;
+        }
+      } else {
+        const smoothing = Math.min(1, dt * (walking ? 3.4 : 2.8));
+        worker.group.position.x = THREE.MathUtils.lerp(
+          worker.group.position.x,
+          targetX,
+          smoothing,
+        );
+        worker.group.position.z = THREE.MathUtils.lerp(
+          worker.group.position.z,
+          targetZ,
+          smoothing,
+        );
+      }
+      const ambientCave =
+        ambient &&
+        Math.hypot(targetX - caveX, targetZ - caveZ) < 6;
       const faceYaw = testDrive
         ? Math.atan2(0 - targetX, 7.2 - targetZ)
-        : loadingCave
-          ? Math.atan2(caveX - targetX, caveZ - targetZ)
-          : Math.atan2(bayX - targetX, bayZ - targetZ);
+        : ambient
+          ? walking
+            ? Math.atan2(dx, dz)
+            : Math.atan2(bayX - targetX, bayZ - targetZ)
+          : loadingCave
+            ? Math.atan2(caveX - targetX, caveZ - targetZ)
+            : Math.atan2(bayX - targetX, bayZ - targetZ);
       worker.group.rotation.y = THREE.MathUtils.lerp(
         worker.group.rotation.y,
         faceYaw,
@@ -18895,7 +19660,17 @@ export class GameEngine {
       const workPhase = this.elapsed * 5.6 + worker.phase;
       const swing = Math.sin(workPhase);
       const bounce = Math.abs(Math.sin(workPhase * 0.5));
-      const groundOffset = loadingCave ? caveLocalY : 0;
+      const ambientGround = ambient
+        ? getTerrainHeight(
+            shop.position.x + worker.group.position.x,
+            shop.position.z + worker.group.position.z,
+          ) - shop.groundY
+        : 0;
+      const groundOffset = loadingCave
+        ? caveLocalY
+        : ambientCave
+          ? caveLocalY
+          : ambientGround;
       worker.group.position.y =
         groundOffset +
         (walking
@@ -18982,6 +19757,26 @@ export class GameEngine {
           event.stage.particleColor,
           8,
         );
+        if (event.stage.requiresCrate) {
+          consumeFacilityPart(
+            this.restorationFacility,
+            event.stage.requiresCrate,
+            this.restorationJobId,
+          );
+        }
+        if (
+          event.stage.announce ||
+          event.stage.id === 'intake' ||
+          event.stage.id === 'paint' ||
+          event.stage.id === 'road_test'
+        ) {
+          recordFacilityPhoto(this.restorationFacility, {
+            jobId: this.restorationJobId,
+            vehicleId: CUSTOM_SHOP_VEHICLE_ID,
+            label: event.stage.label,
+            at: this.elapsed,
+          });
+        }
         if (event.stage.announce && playerDistance < 70) {
           this.toast(
             `${event.stage.label}: ${event.stage.detail}`,
@@ -18989,6 +19784,16 @@ export class GameEngine {
           );
         }
         break;
+      case 'stage_finished': {
+        const leveled = awardFacilityMechanicXp(this.restorationFacility, 7);
+        for (const mechanic of leveled) {
+          this.toast(
+            `${mechanic.name} reached mechanic level ${mechanic.level}. Quality and speed improve again.`,
+            'discovery',
+          );
+        }
+        break;
+      }
       case 'cargo_arrived':
         if (playerDistance < 120) {
           this.toast(
@@ -18998,6 +19803,12 @@ export class GameEngine {
         }
         break;
       case 'crate_delivered':
+        recordFacilityPartReceived(this.restorationFacility, {
+          jobId: this.restorationJobId,
+          crateId: event.crate.id,
+          label: event.crate.label,
+          at: this.elapsed,
+        });
         this.spawnParticles(
           shop.bayPosition.x + 3.4,
           shop.bayPosition.y + 0.7,
@@ -19032,10 +19843,54 @@ export class GameEngine {
         shop.liftCar.visible = false;
         shop.liftPlatform.visible = false;
         shop.forkliftShellPallet.visible = false;
+        this.recordFacilityBuildCompletion();
         break;
       default:
         break;
     }
+  }
+
+  private recordFacilityBuildCompletion(): void {
+    const state = this.customShopState;
+    const resolved = resolveCustomShopBuild(state.build);
+    const damage = resolved.damage;
+    const damageScore =
+      damage.dents * 4 +
+      damage.rustHoles * 5 +
+      (damage.fireDamage ? 12 : 0) +
+      (damage.collapsedRoof ? 10 : 0) +
+      (damage.trash === 'both' ? 5 : damage.trash === 'leaves' ? 2 : 3);
+    const result = recordFacilityCompletion(this.restorationFacility, {
+      vehicleId: CUSTOM_SHOP_VEHICLE_ID,
+      name: resolved.name,
+      damageScore,
+      valueBase: 12000 + resolved.engine.horsepower * 22,
+      at: this.elapsed,
+      elapsedSeconds: this.elapsed - (state.startedAt ?? this.elapsed),
+    });
+    if (result.challenge.completed) {
+      this.toast(
+        result.challenge.beat
+          ? `Personal challenge record: ${resolved.name} finished in ${formatFacilityChallengeTime(
+              result.challenge.seconds ?? 0,
+            )}.`
+          : `Challenge run finished in ${formatFacilityChallengeTime(
+              result.challenge.seconds ?? 0,
+            )}; best remains ${formatFacilityChallengeTime(
+              result.challenge.best ?? 0,
+            )}.`,
+        'craft',
+      );
+    }
+    this.toast(
+      `${resolved.name} quality score ${result.quality}/100${
+        result.record.warrantyMonths > 0
+          ? ` · ${result.record.warrantyMonths}-month player warranty`
+          : ''
+      }${result.record.certificateId ? ` · certificate ${result.record.certificateId}` : ''}.`,
+      'craft',
+    );
+    this.emitHud();
   }
 
   private setCustomShopStatus(
@@ -19057,10 +19912,12 @@ export class GameEngine {
             : state.phase === 'waiting_donor'
               ? 'Rae is fueling the forklift and staging the timber tray while the wrapped auction shell crosses from Crescent City.'
             : state.phase === 'complete'
-              ? `${resolved.name} is finished and ready to drive.`
+              ? `${resolved.name} is finished. Ask the computer for another car and the crew will clear the bay.`
               : state.waitingForParts
                 ? getCargoSupplyLabel(state.cargo)
-                : stage?.detail ?? 'Final detail.';
+                : stage?.id === 'engine_install'
+                  ? `${resolved.engine.label} on the mounts, with cooling and exhaust going on.`
+                  : stage?.detail ?? 'Final detail.';
     const statusKey = `${state.phase}:${state.stageIndex}:${state.waitingForParts ? 1 : 0}:${Math.floor(progress * 100)}:${Math.floor(state.cargo.shipProgress * 100)}`;
     if (statusKey === this.customShopStatusKey) return;
     this.customShopStatusKey = statusKey;
@@ -19095,6 +19952,11 @@ export class GameEngine {
       (vehicle.wheelScale ?? 1) * resolved.wheelScaleFactor,
     );
     vehicle.suspensionOffset = resolved.undercarriage.suspensionOffset;
+    vehicle.engineLabel = resolved.engine.label;
+    vehicle.horsepower = resolved.engine.horsepower;
+    vehicle.turboBoost = resolved.engine.powerMultiplier;
+    vehicle.rollCage = resolved.rollCage.bars;
+    vehicle.hoodBlower = resolved.engine.hoodBlower;
     vehicle.hydraulicHop = true;
     vehicle.hasAirbagSuspension = true;
     vehicle.hydraulicBounceBoost =
@@ -23652,7 +24514,14 @@ export class GameEngine {
     this.trunkBassPressure = 0;
     this.customShopState = createCustomShopState();
     this.customShopSpawned = false;
+    this.pendingCustomShopCar = null;
     this.customShopStatusKey = '';
+    this.restorationFacility = createRestorationFacilityState();
+    this.restorationJobId = '';
+    this.facilityExpansionApplied = -1;
+    this.facilityEquipmentApplied = -1;
+    this.facilityEngravingApplied = false;
+    this.facilityDisplayApplied = false;
   }
 
   private setupStarterEngineeringShowcase(

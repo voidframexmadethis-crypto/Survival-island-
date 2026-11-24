@@ -376,6 +376,13 @@ export interface ModularVehicleData {
   topSpeedMph?: number;
   zeroToSixtySec?: number;
   engineLabel?: string;
+  /** Shop-fitted roll cage; the mesh draws bars inside the cabin. */
+  rollCage?: boolean;
+  /** Forced-induction build with a blower sitting through the hood. */
+  hoodBlower?: boolean;
+  /** Engraving design id from the Royal Engraving Studio. */
+  engravingDesign?: string;
+  engravingColor?: string;
   suspensionOffset?: number;
   wheelScale?: number;
   hydraulicHop?: boolean;
@@ -1182,6 +1189,7 @@ export interface GameSaveData {
   structuralBlocks?: StructuralBlock[];
   kineticNodes?: KineticNode[];
   modularVehicles?: ModularVehicleData[];
+  restorationFacility?: import('./systems/restorationFacility').RestorationFacilityState;
   terrainDeltas?: [number, number][]; // sparse [vertexIndex, deltaY] persisted craters/channels
   coins?: number;
   plantedCrops?: PlantedCrop[];

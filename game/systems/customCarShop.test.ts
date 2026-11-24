@@ -20,12 +20,14 @@ import {
   DONOR_DAMAGE,
   DONOR_SHELL_CRATE,
   DONOR_SOURCES,
+  ENGINE_BUILD_OPTIONS,
   ENGINE_DRIVETRAIN_CRATE,
   HEADLIGHT_OPTIONS,
   INTERIOR_OPTIONS,
   JUNKYARD_CAVE,
   PAINT_OPTIONS,
   RIM_OPTIONS,
+  ROLL_CAGE_OPTIONS,
   ROOF_OPTIONS,
   STEERING_WHEEL_OPTIONS,
   UNDERCARRIAGE_OPTIONS,
@@ -52,6 +54,9 @@ import {
   isOnCustomShopFreightRoute,
   markCustomShopComplete,
   matchDonorRequest,
+  matchEngineRequest,
+  matchRollCageRequest,
+  resetCustomShopJob,
   resolveCustomShopBuild,
 } from './customCarShop';
 import { caveSystem } from './caveSystem';
@@ -380,6 +385,18 @@ test('marking a saved custom car complete restores the finished shop state', () 
   assert.equal(advanceCustomShopState(state, 1).length, 0);
 });
 
+test('a finished job resets cleanly so the crew can take another car', () => {
+  const state = createCustomShopState();
+  markCustomShopComplete(state);
+  resetCustomShopJob(state);
+  assert.equal(state.phase, 'idle');
+  assert.equal(state.completed, false);
+  assert.equal(state.stageIndex, 0);
+  assert.equal(state.cargo.phase, 'waiting');
+  assert.equal(beginCustomShopRestoration(state, 10), true);
+  assert.notEqual(state.phase, 'idle');
+});
+
 test('teardown removes trim, doors, panels and engine in a believable order', () => {
   const state = createCustomShopState();
   state.phase = 'restoring';
@@ -466,6 +483,48 @@ test('the shop computer matches a named car and lets the NPC crew surprise the p
   const randomPick = createNpcBuild('surprise me', () => 0.5);
   assert.ok(randomPick);
   assert.equal(randomPick.surprise, true);
+});
+
+test('the shop builds advanced engines from a sweet 350 to a blown black stroker', () => {
+  assert.ok(ENGINE_BUILD_OPTIONS.length >= 5);
+  assert.ok(
+    ENGINE_BUILD_OPTIONS.some(
+      (engine) => engine.hoodBlower && /black/i.test(engine.label),
+    ),
+  );
+  assert.ok(ENGINE_BUILD_OPTIONS.some((engine) => engine.loudness >= 0.99));
+  assert.equal(ROLL_CAGE_OPTIONS.length, 3);
+
+  assert.equal(matchEngineRequest('keep it sweet')?.id, 'sweet_350');
+  assert.equal(matchEngineRequest('supercharged small block')?.id, 'supercharged_383');
+  assert.equal(matchEngineRequest('give it twin turbos')?.id, 'twin_turbo_427');
+  assert.equal(matchEngineRequest('build me a custom engine')?.id, 'one_off_billet');
+  assert.equal(
+    matchEngineRequest('black stroker with a blower through the hood')?.id,
+    'black_stroker_496',
+  );
+  assert.equal(matchEngineRequest('a banana'), null);
+
+  assert.equal(matchRollCageRequest('with a roll cage')?.bars, true);
+  assert.equal(matchRollCageRequest('no cage')?.bars, false);
+  assert.equal(matchRollCageRequest('a banana'), null);
+
+  const plan = createNpcBuild(
+    "'64 Impala black stroker with a blower through the hood and a cage",
+    () => 0.99,
+  );
+  assert.ok(plan);
+  assert.equal(plan.build.engineId, 'black_stroker_496');
+  assert.equal(plan.build.rollCageId, 'six_point');
+
+  const resolved = resolveCustomShopBuild(plan.build);
+  assert.equal(resolved.engine.hoodBlower, true);
+  assert.equal(resolved.engine.loudness, 1);
+  assert.equal(resolved.rollCage.bars, true);
+  assert.ok(resolved.name.includes('Blown 496'));
+  assert.ok(resolved.engine.powerMultiplier > 1.4);
+  assert.ok(resolved.accessories.some((item) => item.includes('496')));
+  assert.ok(resolved.accessories.some((item) => item.includes('Six-Point')));
 });
 
 test('the paint stage drives the car into the booth, closes the door and returns', () => {

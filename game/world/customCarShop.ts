@@ -12,8 +12,10 @@ import {
   CUSTOM_FREIGHT_PIER_DECK_ABOVE_WATER,
   CUSTOM_FREIGHT_ROUTE,
   CUSTOM_FREIGHT_SHIP_MOORING,
+  CUSTOM_SHOP_EXPANSION,
   CUSTOM_SHOP_PAINT_BOOTH,
   CUSTOM_SHOP_WORKERS,
+  FACILITY_NIGHT_WORKER,
   getCustomShopShipRoutePoint,
   JUNKYARD_CAVE,
   type CustomShopToolKind,
@@ -45,6 +47,7 @@ export interface CustomCarShopHandles {
   bayPosition: THREE.Vector3;
   cavePosition: THREE.Vector3;
   workers: CustomShopWorkerHandle[];
+  facilityWorker: CustomShopWorkerHandle;
   towTruck: THREE.Group;
   towDonor: THREE.Group;
   liftCar: THREE.Group;
@@ -73,6 +76,24 @@ export interface CustomCarShopHandles {
   paintBoothLight: THREE.PointLight;
   redCargoShip: THREE.Group;
   freightDeckY: number;
+  facilityExpansion: {
+    shell: THREE.Group;
+    bays: THREE.Group[];
+    stations: THREE.Group[];
+    stationLabels: string[];
+    stationFeatureIds: string[];
+    lighting: THREE.Group;
+    engravingStudio: THREE.Group;
+    displayPad: THREE.Vector3;
+    engravingPad: THREE.Vector3;
+    setLevel: (
+      level: number,
+      equipmentCount: number,
+      engraving: boolean,
+      displayArea: boolean,
+      nightShift: boolean,
+    ) => void;
+  };
   setStatus: (headline: string, detail: string, progress: number) => void;
 }
 
@@ -1766,6 +1787,373 @@ export function buildCustomCarShop(
   addShadow(paintBooth);
   group.add(paintBooth);
 
+  // -------------------------------------------------------------------------
+  // Automatic facility expansion annex. The shell, breezeway and colliders are
+  // built once; bays, lighting, equipment stations, display pad and engraving
+  // studio reveal themselves as the player installs facility systems.
+  // -------------------------------------------------------------------------
+  const expansionShell = new THREE.Group();
+  expansionShell.name = 'bayou-royal-expansion-annex';
+  const exp = CUSTOM_SHOP_EXPANSION;
+  const expCenterX = (exp.west + exp.east) * 0.5;
+  const expCenterZ = (exp.north + exp.south) * 0.5;
+  const expWidth = exp.east - exp.west;
+  const expDepth = exp.south - exp.north;
+
+  const expFloor = new THREE.Mesh(roundedBox(expWidth, 0.3, expDepth, 0.04), floorMat);
+  expFloor.position.set(expCenterX, -0.14, expCenterZ);
+  const expFoundation = new THREE.Mesh(
+    roundedBox(expWidth + 0.3, 0.62, expDepth + 0.3, 0.04),
+    concreteMatSafe(concrete),
+  );
+  expFoundation.position.set(expCenterX, -0.48, expCenterZ);
+  expansionShell.add(expFloor, expFoundation);
+
+  const expNorthWall = new THREE.Mesh(roundedBox(expWidth + 0.3, 5.2, 0.26, 0.03), wallMat);
+  expNorthWall.position.set(expCenterX, 2.55, exp.north);
+  const expEastWall = new THREE.Mesh(roundedBox(0.26, 5.2, expDepth + 0.2, 0.03), wallMat);
+  expEastWall.position.set(exp.east, 2.55, expCenterZ);
+  expansionShell.add(expNorthWall, expEastWall);
+
+  // West wall keeps the paint booth visually separate, with a personnel door
+  // between the two wall runs so workers can walk straight through.
+  [
+    { center: -1.2, depth: 6.8 },
+    { center: 4.1, depth: 1.0 },
+  ].forEach((segment) => {
+    const wall = new THREE.Mesh(
+      roundedBox(0.24, 5.2, segment.depth, 0.03),
+      wallMat,
+    );
+    wall.position.set(exp.west, 2.65, segment.center);
+    expansionShell.add(wall);
+  });
+
+  // South wall with the wide drive-in opening. The freight road stays clear
+  // because the apron sits north of the shop's freight route.
+  const southWest = new THREE.Mesh(
+    roundedBox(exp.doorWest - exp.west, 5.2, 0.24, 0.03),
+    wallMat,
+  );
+  southWest.position.set((exp.west + exp.doorWest) * 0.5, 2.65, exp.south);
+  const southEast = new THREE.Mesh(
+    roundedBox(exp.east - exp.doorEast, 5.2, 0.24, 0.03),
+    wallMat,
+  );
+  southEast.position.set((exp.doorEast + exp.east) * 0.5, 2.65, exp.south);
+  const expDoorHeader = new THREE.Mesh(
+    roundedBox(exp.doorEast - exp.doorWest, 1.1, 0.28, 0.03),
+    wallDarkMat,
+  );
+  expDoorHeader.position.set((exp.doorWest + exp.doorEast) * 0.5, 4.62, exp.south);
+  expansionShell.add(southWest, southEast, expDoorHeader);
+
+  const expRoof = new THREE.Mesh(roundedBox(expWidth + 0.4, 0.3, expDepth + 0.4, 0.04), wallDarkMat);
+  expRoof.position.set(expCenterX, 5.12, expCenterZ);
+  expansionShell.add(expRoof);
+  for (let x = exp.west + 1.2; x < exp.east; x += 3.1) {
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.2, expDepth - 0.4), rustMat);
+    beam.position.set(x, 4.91, expCenterZ);
+    expansionShell.add(beam);
+  }
+  [17.6, 24.9, 32.2].forEach((x) => {
+    const skylight = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.06, 3.4), glassMat);
+    skylight.position.set(x, 5.3, -0.8);
+    expansionShell.add(skylight);
+  });
+
+  // Covered worker walkway connects the forecourt to the annex without
+  // crossing the paint booth or the freight road.
+  const walkway = new THREE.Mesh(roundedBox(8.4, 0.18, 2.5, 0.04), concreteMatSafe(concrete));
+  walkway.position.set(10.1, -0.04, 7.55);
+  const walkwayCanopy = new THREE.Mesh(roundedBox(8.6, 0.16, 2.7, 0.03), wallDarkMat);
+  walkwayCanopy.position.set(10.1, 3.15, 7.55);
+  expansionShell.add(walkway, walkwayCanopy);
+  [6.7, 10.0, 13.4].forEach((x) => {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.14, 3.1, 0.14), rustMat);
+    post.position.set(x, 1.55, 8.55);
+    expansionShell.add(post);
+  });
+
+  const expansionSignCanvas = makeCanvas(1024, 256);
+  if (expansionSignCanvas) {
+    const { canvas, ctx } = expansionSignCanvas;
+    ctx.fillStyle = '#14201d';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#c08a3e';
+    ctx.lineWidth = 10;
+    ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#f0d28b';
+    ctx.font = '700 62px Georgia, serif';
+    ctx.fillText('BAYOU ROYAL EXPANSION', 512, 105);
+    ctx.fillStyle = '#aebfba';
+    ctx.font = '500 34px Arial, sans-serif';
+    ctx.fillText('AUTO-EXPANDING WORKSHOP · BAYS · EQUIPMENT · ENGRAVING', 512, 185);
+    const signTexture = new THREE.CanvasTexture(canvas);
+    signTexture.colorSpace = THREE.SRGBColorSpace;
+    signTexture.anisotropy = 4;
+    const sign = new THREE.Mesh(
+      new THREE.PlaneGeometry(7.2, 1.8),
+      new THREE.MeshBasicMaterial({ map: signTexture, transparent: true }),
+    );
+    sign.position.set(10.1, 3.34, 7.57);
+    sign.rotation.y = Math.PI;
+    expansionShell.add(sign);
+  }
+
+  // Construction barrier stays across the bay door until the first system is
+  // installed and the annex is fitted out.
+  const barrier = new THREE.Group();
+  for (let i = 0; i < 9; i++) {
+    const stripe = new THREE.Mesh(
+      new THREE.BoxGeometry(0.56, 0.42, 0.05),
+      i % 2 === 0 ? amberMat : blackMat,
+    );
+    stripe.position.set(exp.doorWest + 0.3 + i * 0.55, 1.1, exp.south - 0.25);
+    barrier.add(stripe);
+  }
+  expansionShell.add(barrier);
+
+  const bays: THREE.Group[] = [];
+  const bayLabels = ['BAY 3 · RESTORATION', 'BAY 4 · METAL & PAINT', 'BAY 5 · DRIVELINE'];
+  exp.bayCenters.forEach((bx, index) => {
+    const bay = new THREE.Group();
+    bay.name = `bayou-royal-expansion-bay-${index + 1}`;
+    const pad = new THREE.Mesh(roundedBox(4.7, 0.1, 7.0, 0.02), blackMat);
+    pad.position.set(bx, 0.02, 0.05);
+    const lift = new THREE.Mesh(roundedBox(3.2, 0.12, 5.5, 0.02), rustMat);
+    lift.position.set(bx, 0.16, 0.05);
+    bay.add(pad, lift);
+    [-1.6, 1.6].forEach((dx) => {
+      const post = new THREE.Mesh(roundedBox(0.18, 3.3, 0.28, 0.02), rustMat);
+      post.position.set(bx + dx, 1.8, -1.1);
+      bay.add(post);
+    });
+    const bench = new THREE.Mesh(roundedBox(1.7, 0.86, 0.7, 0.03), redMat);
+    bench.position.set(bx + 1.75, 0.45, -3.2);
+    const benchTop = new THREE.Mesh(roundedBox(1.8, 0.08, 0.78, 0.02), blackMat);
+    benchTop.position.set(bx + 1.75, 0.9, -3.2);
+    bay.add(bench, benchTop);
+    const lamp = new THREE.Mesh(roundedBox(1.4, 0.12, 0.24, 0.02), blackMat);
+    lamp.position.set(bx, 4.55, 0);
+    const bulb = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.04, 0.17), warmLightMat);
+    bulb.position.set(bx, 4.48, 0);
+    bay.add(lamp, bulb);
+    const bayCanvas = makeCanvas(512, 128);
+    if (bayCanvas) {
+      const { canvas, ctx } = bayCanvas;
+      ctx.fillStyle = '#121b19';
+      ctx.fillRect(0, 0, 512, 128);
+      ctx.strokeStyle = '#c08a3e';
+      ctx.lineWidth = 6;
+      ctx.strokeRect(6, 6, 500, 116);
+      ctx.fillStyle = '#f1d496';
+      ctx.font = '700 36px Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(bayLabels[index], 256, 78);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const sign = new THREE.Mesh(
+        new THREE.PlaneGeometry(2.4, 0.6),
+        new THREE.MeshBasicMaterial({ map: texture, transparent: true }),
+      );
+      sign.position.set(bx, 3.65, -4.33);
+      bay.add(sign);
+    }
+    bay.visible = false;
+    bays.push(bay);
+    expansionShell.add(bay);
+  });
+
+  const lighting = new THREE.Group();
+  [17.4, 22.2, 27.0, 31.6].forEach((x) => {
+    [-2.2, 2.0].forEach((z) => {
+      const housing = new THREE.Mesh(roundedBox(1.3, 0.1, 0.2, 0.02), blackMat);
+      housing.position.set(x, 4.5, z);
+      const bulb = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.035, 0.14), warmLightMat);
+      bulb.position.set(x, 4.44, z);
+      lighting.add(housing, bulb);
+    });
+  });
+  [18.5, 24.5, 30.5].forEach((x) => {
+    const light = new THREE.PointLight(0xffd8a0, 1.15, 16, 1.7);
+    light.position.set(x, 4.1, 0);
+    lighting.add(light);
+  });
+  lighting.visible = false;
+  expansionShell.add(lighting);
+
+  const stationSpecs = [
+    ['FRAME STRAIGHTENING', 'frame_straightening'],
+    ['WELDING', 'welding_department'],
+    ['SANDBLASTING', 'sandblasting'],
+    ['HYDRAULICS', 'hydraulic_bay'],
+    ['WHEELS & TIRES', 'wheel_workshop'],
+    ['DYNO CELL', 'engine_dyno'],
+    ['UPHOLSTERY', 'upholstery_room'],
+    ['PARTS RECYCLING', 'parts_recycling'],
+  ] as const;
+  const stations: THREE.Group[] = [];
+  stationSpecs.forEach(([label], index) => {
+    const station = new THREE.Group();
+    station.name = `bayou-royal-station-${index}`;
+    const sx = 16.6 + index * 1.9;
+    const table = new THREE.Mesh(roundedBox(1.55, 0.82, 0.72, 0.03), wallDarkMat);
+    table.position.set(sx, 0.42, -3.85);
+    const top = new THREE.Mesh(roundedBox(1.7, 0.07, 0.82, 0.02), blackMat);
+    top.position.set(sx, 0.86, -3.85);
+    const machine = new THREE.Mesh(
+      new THREE.BoxGeometry(0.55, 0.48, 0.45),
+      index % 2 === 0 ? redMat : rustMat,
+    );
+    machine.position.set(sx + 0.2, 1.14, -3.9);
+    const machineLight = new THREE.Mesh(
+      new THREE.BoxGeometry(0.18, 0.07, 0.02),
+      index % 2 === 0 ? warmLightMat : amberMat,
+    );
+    machineLight.position.set(sx + 0.2, 1.24, -3.67);
+    station.add(table, top, machine, machineLight);
+    const labelCanvas = makeCanvas(256, 96);
+    if (labelCanvas) {
+      const { canvas, ctx } = labelCanvas;
+      ctx.fillStyle = '#111918';
+      ctx.fillRect(0, 0, 256, 96);
+      ctx.strokeStyle = '#b88743';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(4, 4, 248, 88);
+      ctx.fillStyle = '#efd69a';
+      ctx.font = '700 22px Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(label, 128, 56);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const sign = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.5, 0.56),
+        new THREE.MeshBasicMaterial({ map: texture, transparent: true }),
+      );
+      sign.position.set(sx, 1.9, -4.2);
+      station.add(sign);
+    }
+    station.visible = false;
+    stations.push(station);
+    expansionShell.add(station);
+  });
+
+  const engravingStudio = new THREE.Group();
+  engravingStudio.name = 'royal-engraving-studio';
+  const studioX = exp.engravingStudioX;
+  const studioFloor = new THREE.Mesh(roundedBox(5.2, 0.16, 8.6, 0.03), floorMat);
+  studioFloor.position.set(studioX, 0.04, 0);
+  const studioBack = new THREE.Mesh(roundedBox(5.3, 3.9, 0.16, 0.03), wallMat);
+  studioBack.position.set(studioX, 1.98, -4.33);
+  const studioWest = new THREE.Mesh(roundedBox(0.14, 3.4, 8.4, 0.03), glassMat);
+  studioWest.position.set(studioX - 2.58, 1.72, 0);
+  const studioRoof = new THREE.Mesh(roundedBox(5.3, 0.16, 8.7, 0.03), wallDarkMat);
+  studioRoof.position.set(studioX, 3.98, 0);
+  engravingStudio.add(studioFloor, studioBack, studioWest, studioRoof);
+  const engravingTable = new THREE.Mesh(roundedBox(2.5, 0.9, 1.1, 0.04), blackMat);
+  engravingTable.position.set(studioX, 0.48, -2.55);
+  const engravingTop = new THREE.Mesh(roundedBox(2.65, 0.08, 1.25, 0.02), brassMat);
+  engravingTop.position.set(studioX, 0.96, -2.55);
+  const vise = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.24, 0.3), chromeMaterial());
+  vise.position.set(studioX - 0.45, 1.12, -2.55);
+  const engraverLamp = new THREE.PointLight(0xffe1a8, 1.3, 8, 1.8);
+  engraverLamp.position.set(studioX, 3.1, -1.6);
+  const lampHousing = new THREE.Mesh(roundedBox(1.1, 0.12, 0.3, 0.02), blackMat);
+  lampHousing.position.set(studioX, 3.3, -1.6);
+  const displayPedestal = new THREE.Mesh(
+    new THREE.CylinderGeometry(2.1, 2.3, 0.18, 32),
+    wallDarkMat,
+  );
+  displayPedestal.position.set(studioX, 0.16, 1.55);
+  const displayRing = new THREE.Mesh(
+    new THREE.TorusGeometry(1.95, 0.05, 8, 40),
+    brassMat,
+  );
+  displayRing.rotation.x = Math.PI / 2;
+  displayRing.position.set(studioX, 0.28, 1.55);
+  engravingStudio.add(engravingTable, engravingTop, vise, engraverLamp, lampHousing, displayPedestal, displayRing);
+  const engravingSignCanvas = makeCanvas(1024, 256);
+  if (engravingSignCanvas) {
+    const { canvas, ctx } = engravingSignCanvas;
+    ctx.fillStyle = '#121b1a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#d6a34a';
+    ctx.lineWidth = 10;
+    ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#f4db9f';
+    ctx.font = '700 66px Georgia, serif';
+    ctx.fillText('ROYAL ENGRAVING', 512, 112);
+    ctx.fillStyle = '#b8c6c1';
+    ctx.font = '500 34px Arial, sans-serif';
+    ctx.fillText('BUMPERS · QUARTERS · WHEELS', 512, 190);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const sign = new THREE.Mesh(
+      new THREE.PlaneGeometry(4.2, 1.05),
+      new THREE.MeshBasicMaterial({ map: texture, transparent: true }),
+    );
+    sign.position.set(studioX, 3.1, -4.2);
+    engravingStudio.add(sign);
+  }
+  engravingStudio.visible = false;
+  expansionShell.add(engravingStudio);
+
+  const displayPad = new THREE.Group();
+  const padBase = new THREE.Mesh(
+    new THREE.CylinderGeometry(2.05, 2.2, 0.14, 32),
+    wallDarkMat,
+  );
+  padBase.position.set(exp.displayPad.x, 0.1, exp.displayPad.z);
+  const padRing = new THREE.Mesh(
+    new THREE.TorusGeometry(1.9, 0.045, 8, 40),
+    brassMat,
+  );
+  padRing.rotation.x = Math.PI / 2;
+  padRing.position.set(exp.displayPad.x, 0.2, exp.displayPad.z);
+  displayPad.add(padBase, padRing);
+  displayPad.visible = false;
+  expansionShell.add(displayPad);
+
+  // Midge is built with the annex so night shift can reveal her in place.
+  const facilityWorker = buildWorker(
+    FACILITY_NIGHT_WORKER.id,
+    FACILITY_NIGHT_WORKER.name,
+    FACILITY_NIGHT_WORKER.role,
+    FACILITY_NIGHT_WORKER.uniformColor,
+    FACILITY_NIGHT_WORKER.accentColor,
+    0x6d4930,
+    20.6,
+    2.4,
+    1.7,
+  );
+  facilityWorker.group.visible = false;
+  group.add(facilityWorker.group);
+
+  const setExpansionLevel = (
+    level: number,
+    equipmentCount: number,
+    engraving: boolean,
+    displayArea: boolean,
+    nightShift: boolean,
+  ) => {
+    bays.forEach((bay, index) => {
+      bay.visible = level > index;
+    });
+    lighting.visible = level >= 1;
+    barrier.visible = level === 0;
+    displayPad.visible = displayArea || level >= 4;
+    stations.forEach((station, index) => {
+      station.visible = index < Math.min(stations.length, Math.max(0, equipmentCount));
+    });
+    engravingStudio.visible = engraving;
+    facilityWorker.group.visible = nightShift;
+  };
+  setExpansionLevel(0, 0, false, false, false);
+  group.add(expansionShell);
+
   // Parts, tools, upholstery and paint displays around the bay.
   const bench = new THREE.Mesh(roundedBox(4.8, 0.2, 0.95, 0.04), woodTexMaterial(woodTex));
   bench.position.set(-3.35, 0.92, -3.75);
@@ -1978,6 +2366,7 @@ export function buildCustomCarShop(
     ),
   );
   workers.forEach((worker) => group.add(worker.group));
+
 
   // The tow truck waits on the forecourt, then drives the cave route.
   const { truck, donor } = buildTowTruck(
@@ -2328,6 +2717,76 @@ export function buildCustomCarShop(
     });
   }
 
+  // Expansion annex perimeter. The freight road passes south of the walkway,
+  // so these walls stay inside the shop property and never block it.
+  const expWorldX = CUSTOM_SHOP_POS.x;
+  const expWorldZ = CUSTOM_SHOP_POS.z;
+  for (let x = exp.west; x <= exp.east; x += 0.9) {
+    colliders.push({
+      x: expWorldX + x,
+      z: expWorldZ + exp.north,
+      radius: 0.62,
+      minY: wallMinY,
+      maxY: wallMaxY,
+    });
+  }
+  for (let z = exp.north; z <= exp.south; z += 0.9) {
+    colliders.push({
+      x: expWorldX + exp.east,
+      z: expWorldZ + z,
+      radius: 0.62,
+      minY: wallMinY,
+      maxY: wallMaxY,
+    });
+  }
+  for (let z = exp.north; z <= exp.south; z += 0.9) {
+    if (z > 2.2 && z < 3.6) continue;
+    colliders.push({
+      x: expWorldX + exp.west,
+      z: expWorldZ + z,
+      radius: 0.55,
+      minY: wallMinY,
+      maxY: wallMaxY,
+    });
+  }
+  for (let x = exp.west; x <= exp.east; x += 0.9) {
+    if (x > exp.doorWest - 0.2 && x < exp.doorEast + 0.2) continue;
+    colliders.push({
+      x: expWorldX + x,
+      z: expWorldZ + exp.south,
+      radius: 0.55,
+      minY: wallMinY,
+      maxY: wallMaxY,
+    });
+  }
+  [6.7, 10.0, 13.4].forEach((x) => {
+    colliders.push({
+      x: expWorldX + x,
+      z: expWorldZ + 8.55,
+      radius: 0.22,
+      minY: wallMinY,
+      maxY: wallMaxY,
+    });
+  });
+  for (let z = -4.0; z <= 4.0; z += 0.9) {
+    colliders.push({
+      x: expWorldX + exp.engravingStudioX - 2.58,
+      z: expWorldZ + z,
+      radius: 0.3,
+      minY: wallMinY,
+      maxY: wallMaxY,
+    });
+  }
+  for (let x = exp.engravingStudioX - 2.5; x <= exp.engravingStudioX + 2.5; x += 0.8) {
+    colliders.push({
+      x: expWorldX + x,
+      z: expWorldZ - 4.3,
+      radius: 0.3,
+      minY: wallMinY,
+      maxY: wallMaxY,
+    });
+  }
+
   group.traverse((object) => {
     if (object instanceof THREE.Mesh && !object.userData.dynamic) {
       object.castShadow = true;
@@ -2356,6 +2815,7 @@ export function buildCustomCarShop(
       JUNKYARD_CAVE.z,
     ),
     workers,
+    facilityWorker,
     towTruck: truck,
     towDonor: donor,
     liftCar,
@@ -2384,6 +2844,26 @@ export function buildCustomCarShop(
     paintBoothLight,
     redCargoShip,
     freightDeckY: freightDeckWorldY,
+    facilityExpansion: {
+      shell: expansionShell,
+      bays,
+      stations,
+      stationLabels: stationSpecs.map(([label]) => label),
+      stationFeatureIds: stationSpecs.map(([, id]) => id),
+      lighting,
+      engravingStudio,
+      displayPad: new THREE.Vector3(
+        CUSTOM_SHOP_POS.x + exp.displayPad.x,
+        groundY + 0.12,
+        CUSTOM_SHOP_POS.z + exp.displayPad.z,
+      ),
+      engravingPad: new THREE.Vector3(
+        CUSTOM_SHOP_POS.x + exp.engravingPad.x,
+        groundY + 0.12,
+        CUSTOM_SHOP_POS.z + exp.engravingPad.z,
+      ),
+      setLevel: setExpansionLevel,
+    },
     setStatus,
   };
 }
