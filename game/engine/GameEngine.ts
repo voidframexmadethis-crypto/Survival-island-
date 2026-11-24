@@ -506,6 +506,7 @@ import {
   createLowriderRigState,
   createLowriderVehicleRigSpec,
   impulseLowriderCorner,
+  launchLowriderBounce,
   launchLowriderFullHop,
   lowriderContactCount,
   lowriderWheelClearances,
@@ -24269,8 +24270,15 @@ export class GameEngine {
       this.lowriderHopTimer = 1.0;
       this.lowriderHopNextPulse = 0.32;
       pumpLowriderCorners(rig, corners, pump * power);
+      // A normal bounce now lifts the whole car a short distance instead of
+      // only moving the wheels under a rigid body. Full Hop remains the big
+      // four-wheel launch; this is the quick show-car bounce.
+      const bounced =
+        controls.stance === 'three_wheel'
+          ? false
+          : launchLowriderBounce(rig, power, this.lowriderRigSpec);
       this.sound.playHydraulicPump('bounce');
-      this.spawnParticles(av.x, av.y + 0.3, av.z, 0xfbbf24, 7);
+      this.spawnParticles(av.x, av.y + 0.3, av.z, 0xfbbf24, bounced ? 12 : 7);
       this.emitHud();
       return true;
     }

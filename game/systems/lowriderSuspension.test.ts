@@ -9,6 +9,7 @@ import {
   createLowriderRigState,
   createLowriderVehicleRigSpec,
   impulseLowriderCorner,
+  launchLowriderBounce,
   launchLowriderFullHop,
   lowriderContactCount,
   lowriderCornerClearance,
@@ -191,6 +192,64 @@ test('full hop lifts all four tires, lands and can be repeated', () => {
   run(rig, controls, 2.0);
   assert.equal(rig.hopCount, 3);
   assert.equal(rig.rootHeight, 0);
+});
+
+test('ordinary bounce lifts the whole car, then settles without a full-hop launch', () => {
+  const rig = createLowriderRigState();
+  const controls = createLowriderControls();
+
+  assert.equal(launchLowriderBounce(rig), true);
+  let apex = 0;
+  run(rig, controls, 1.6, () => {
+    apex = Math.max(apex, rig.rootHeight);
+  });
+  assert.ok(apex > 0.18, `bounce must lift the chassis, apex ${apex.toFixed(3)}`);
+  assert.ok(apex < 0.55, `ordinary bounce must stay below a full hop, apex ${apex.toFixed(3)}`);
+  assert.equal(rig.rootHeight, 0);
+  assert.equal(rig.rootVelocity, 0);
+  assert.equal(lowriderContactCount(rig), 4);
+
+  // The full hop remains the larger, deliberate four-wheel launch.
+  const fullRig = createLowriderRigState();
+  assert.equal(launchLowriderFullHop(fullRig), true);
+  let fullApex = 0;
+  run(fullRig, createLowriderControls(), 1.8, () => {
+    fullApex = Math.max(fullApex, fullRig.rootHeight);
+  });
+  assert.ok(fullApex > apex + 0.2, 'full hop must be clearly bigger than the normal bounce');
+});
+
+test('sprung body rebounds after hydraulic lift instead of staying rigid', () => {
+  const rig = createLowriderRigState();
+  const controls = createLowriderControls();
+  for (const corner of LOWRIDER_CORNERS) {
+    setLowriderCornerTarget(controls, corner, 0.52);
+  }
+  run(rig, controls, 1.5);
+  const lifted = rig.bodyHeave;
+  assert.ok(lifted > 0.4, `body must follow the lift, got ${lifted.toFixed(3)}`);
+
+  // Drop the actuators and watch the body cycle through a compression and a
+  // visible rebound. A critically/over-damped body would only sag and stop.
+  resetLowriderControls(controls);
+  let sawCompression = false;
+  let trough = Infinity;
+  let rebound = -Infinity;
+  let previousVelocity = rig.bodyVelocity;
+  run(rig, controls, 2.2, () => {
+    if (!sawCompression && previousVelocity < 0 && rig.bodyVelocity >= 0) {
+      sawCompression = true;
+      trough = rig.bodyHeave;
+    } else if (sawCompression && previousVelocity > 0 && rig.bodyVelocity <= 0) {
+      rebound = Math.max(rebound, rig.bodyHeave);
+    }
+    previousVelocity = rig.bodyVelocity;
+  });
+
+  assert.equal(sawCompression, true, 'body must move down after the lift is released');
+  assert.ok(trough < lifted - 0.25, 'body must compress with the suspension');
+  assert.ok(rebound > trough + 0.03, 'body must rebound, not settle rigidly');
+  assert.ok(Math.abs(rig.bodyHeave) < 0.01, 'body must settle back to ride height');
 });
 
 test('side-to-side movement raises one side, then the other, with no permanent lift', () => {

@@ -67,13 +67,19 @@ export const LOWRIDER_MAX_BODY_TRIM = 0.46;
 export const LOWRIDER_MIN_BODY_TRIM = -0.12;
 
 const WHEEL_SPRING = 150;
-const WHEEL_DAMPING = 9.5;
+// A show car rebounds once or twice before the shocks settle it. The old
+// over-damped values killed that movement almost instantly and made the car
+// look rigid even while the pumps were running.
+const WHEEL_DAMPING = 8.2;
 const WHEEL_MAX_VELOCITY = 6.2;
-const BODY_SPRING = 54;
-const BODY_DAMPING = 9.4;
+const BODY_SPRING = 50;
+const BODY_DAMPING = 4.8;
 const GRAVITY = 16;
 export const LOWRIDER_FULL_HOP_LAUNCH = 5.1;
+/** Ordinary Bounce is a lighter chassis arc than the full four-wheel hop. */
+export const LOWRIDER_BOUNCE_LAUNCH_RATIO = 0.62;
 const FULL_HOP_COOLDOWN = 0.42;
+const BOUNCE_COOLDOWN = 0.34;
 const MAX_ROOT_HEIGHT = 1.55;
 const CONTACT_EPSILON = 0.004;
 
@@ -114,7 +120,7 @@ export const DEFAULT_LOWRIDER_RIG_SPEC: LowriderRigSpec = {
   wheelDamping: WHEEL_DAMPING,
   bodySpring: BODY_SPRING,
   bodyDamping: BODY_DAMPING,
-  bodyFollow: 0.92,
+  bodyFollow: 0.95,
   hopLaunch: LOWRIDER_FULL_HOP_LAUNCH,
   gravity: GRAVITY,
   maxRootHeight: MAX_ROOT_HEIGHT,
@@ -152,7 +158,7 @@ export function deriveLowriderRigSpec(
     wheelDamping: WHEEL_DAMPING * Math.sqrt(massRatio) * (0.92 + stiffnessRatio * 0.08),
     bodySpring: BODY_SPRING * (0.88 + stiffnessRatio * 0.12),
     bodyDamping: BODY_DAMPING * Math.sqrt(massRatio),
-    bodyFollow: clamp(0.9 + (0.6 - cog) * 0.18, 0.86, 0.96),
+    bodyFollow: clamp(0.93 + (0.6 - cog) * 0.16, 0.9, 0.97),
     hopLaunch:
       LOWRIDER_FULL_HOP_LAUNCH *
       clamp(1.06 - (massRatio - 1) * 0.22 - (cog - 0.52) * 0.18, 0.86, 1.14),
@@ -428,6 +434,31 @@ export function pumpLowriderCorners(
 }
 
 /**
+ * Fires a lighter whole-car bounce for the normal Bounce/Coil Bounce control.
+ * It is deliberately shorter than the full four-wheel hop: the chassis leaves
+ * the pavement, the sprung body rebounds, and the wheel actuators keep pumping.
+ */
+export function launchLowriderBounce(
+  rig: LowriderRigState,
+  power = 1,
+  spec: LowriderRigSpec = DEFAULT_LOWRIDER_RIG_SPEC,
+): boolean {
+  if (rig.rootHeight > 0.05 || rig.hopCooldown > 0) return false;
+  const boost = clamp(power, 0.5, 1.7);
+  rig.rootVelocity = clamp(
+    spec.hopLaunch * LOWRIDER_BOUNCE_LAUNCH_RATIO * boost,
+    1.6,
+    4.25,
+  );
+  rig.hopCooldown = BOUNCE_COOLDOWN;
+  rig.hopCount += 1;
+  // The body is thrown upward before the tires unload, which gives the visible
+  // body-first hydraulic bounce instead of a rigid chassis sliding upward.
+  rig.bodyVelocity += 0.4 * boost;
+  return true;
+}
+
+/**
  * Launches the whole car. The wheels stay attached and the entire root leaves
  * the ground on a gravity-driven arc; returns false while already airborne or
  * during the landing cooldown.
@@ -574,8 +605,8 @@ export function stepLowriderRig(
     const pitchTarget = airborne
       ? clamp(-rig.rootVelocity * 0.012 + (rearLift - frontLift) * 0.18, -0.14, 0.14)
       : clamp((rearLift - frontLift) * 0.28, -0.18, 0.18);
-    rig.roll += (rollTarget - rig.roll) * Math.min(1, 9 * h);
-    rig.pitch += (pitchTarget - rig.pitch) * Math.min(1, 9 * h);
+    rig.roll += (rollTarget - rig.roll) * Math.min(1, 7 * h);
+    rig.pitch += (pitchTarget - rig.pitch) * Math.min(1, 7 * h);
   }
 
   return rig;
