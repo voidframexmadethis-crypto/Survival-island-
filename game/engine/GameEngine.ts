@@ -365,6 +365,7 @@ import { WorldPerformanceManager } from '../systems/worldPerformanceManager';
 import { RealisticRainSystem } from '../world/realisticRainSystem';
 import { createMuzzleFlashTexture, createMuzzleSmokeTexture } from '../world/muzzleFx';
 import { resolveGunParticleProfile } from '../world/gunParticleFx';
+import { resolveFirearmModelKind } from '../world/firearmModels';
 import {
   AUTUMN_GROVE_POS,
   BIOME_INFO,
@@ -13398,22 +13399,15 @@ export class GameEngine {
     this.handsRig.setFirearmGrip(isGun);
     if (isGun && eqId) {
       const gunSpec = FIREARM_SPECS[eqId];
-      if (gunSpec?.soundProfile === 'sniper' || gunSpec?.soundProfile === 'musket') {
-        this.handsRig.gunMesh.scale.set(1.06, 1.06, 1.85);
-      } else if (
-        gunSpec?.soundProfile === 'rifle' ||
-        gunSpec?.soundProfile === 'shotgun' ||
-        gunSpec?.soundProfile === 'lmg'
-      ) {
-        this.handsRig.gunMesh.scale.set(1.08, 1.08, 1.55);
-      } else if (gunSpec?.soundProfile === 'smg') {
-        this.handsRig.gunMesh.scale.set(1.04, 1.0, 1.24);
-      } else {
-        this.handsRig.gunMesh.scale.set(1, 1, 1);
-      }
+      this.handsRig.setFirearmModel(
+        resolveFirearmModelKind(eqId, gunSpec?.soundProfile),
+      );
+      // Only a uniform scale for the oversized hand cannon. No more stretching
+      // one pistol model along Z to fake every rifle and sniper.
+      this.handsRig.gunMesh.scale.setScalar(eqId === 'desert_eagle' ? 1.16 : 1);
       this.applyExchangeCosmetics(false);
     } else {
-      this.handsRig.gunMesh.scale.set(1, 1, 1);
+      this.handsRig.gunMesh.scale.setScalar(1);
     }
     this.handsRig.shaft.visible =
       !isCuttingMeat && !isGun && hasTool && eqId !== 'hunting_knife';

@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { roundedBox } from './roundedBox';
 import {
+  createFirearmModelSet,
+  type FirearmModelKind,
+} from './firearmModels';
+import {
   ArmorMaterialTier,
   BodyZone,
   CampStructureType,
@@ -118,6 +122,8 @@ export interface FirstPersonHandsRig {
   sickleBlade: THREE.Mesh;
   warhammerHead: THREE.Group;
   gunMesh: THREE.Group;
+  firearmModels: Record<FirearmModelKind, THREE.Group>;
+  setFirearmModel: (kind: FirearmModelKind) => void;
   portalGunHandle: PortalGunMeshHandle;
   alienPlasmaGunMesh: THREE.Group;
   infernoBladeMesh: THREE.Group;
@@ -605,8 +611,7 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
   toolGroup.add(knifeBlade);
 
   // 3D Realistic Tactical Survival Sidearm (Gun) with worn gunmetal PBR, Picatinny rail, ejection port & tritium sights
-  const gunMesh = new THREE.Group();
-  gunMesh.position.set(0, 0.02, -0.06);
+  const pistolModel = new THREE.Group();
   const gunSteelMat = new THREE.MeshStandardMaterial({
     color: 0xa2aab6,
     map: fpPbr.gunmetal.map,
@@ -639,33 +644,33 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
   const slide = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.052, 0.258), gunSteelMat);
   slide.position.set(0, 0.066, -0.066);
   slide.castShadow = true;
-  gunMesh.add(slide);
+  pistolModel.add(slide);
 
   // Upper machined slide bevel & dustcover shroud
   const slideCrown = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.011, 0.244), gunSteelMat);
   slideCrown.position.set(0, 0.095, -0.064);
-  gunMesh.add(slideCrown);
+  pistolModel.add(slideCrown);
 
   // Brushed metallic side slide rail highlights
   const sideRailL = new THREE.Mesh(new THREE.BoxGeometry(0.0462, 0.008, 0.246), chromeMat);
   sideRailL.position.set(0, 0.048, -0.065);
-  gunMesh.add(sideRailL);
+  pistolModel.add(sideRailL);
 
   // Machined Picatinny top rail ribs
   for (let pr = 0; pr < 7; pr++) {
     const rib = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.006, 0.008), gunSteelMat);
     rib.position.set(0, 0.102, 0.01 - pr * 0.022);
-    gunMesh.add(rib);
+    pistolModel.add(rib);
   }
 
   // Polished steel ejection port & extractor accent
   const ejectionPort = new THREE.Mesh(new THREE.BoxGeometry(0.0455, 0.018, 0.048), chromeMat);
   ejectionPort.position.set(0.002, 0.078, -0.055);
-  gunMesh.add(ejectionPort);
+  pistolModel.add(ejectionPort);
 
   const lowerFrame = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.026, 0.22), gunGripMat);
   lowerFrame.position.set(0, 0.036, -0.058);
-  gunMesh.add(lowerFrame);
+  pistolModel.add(lowerFrame);
 
   // Underbarrel tactical light / laser housing
   const underRailMount = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.024, 0.075), gunSteelMat);
@@ -673,36 +678,36 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
   const underLens = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.006, 10), chromeMat);
   underLens.rotation.x = Math.PI / 2;
   underLens.position.set(0, 0.014, -0.184);
-  gunMesh.add(underRailMount, underLens);
+  pistolModel.add(underRailMount, underLens);
 
   // Machined rear & front slide serrations
   for (let sr = 0; sr < 6; sr++) {
     const notch = new THREE.Mesh(new THREE.BoxGeometry(0.0465, 0.036, 0.005), chromeMat);
     notch.position.set(0, 0.066, 0.016 + sr * 0.009);
-    gunMesh.add(notch);
+    pistolModel.add(notch);
   }
   for (let sf = 0; sf < 4; sf++) {
     const fNotch = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.032, 0.0045), chromeMat);
     fNotch.position.set(0, 0.066, -0.145 - sf * 0.009);
-    gunMesh.add(fNotch);
+    pistolModel.add(fNotch);
   }
 
   const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.017, 0.22, 12), chromeMat);
   barrel.rotation.x = Math.PI / 2;
   barrel.position.set(0, 0.065, -0.195);
   barrel.castShadow = true;
-  gunMesh.add(barrel);
+  pistolModel.add(barrel);
 
   const muzzleTip = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.042, 12), gunSteelMat);
   muzzleTip.rotation.x = Math.PI / 2;
   muzzleTip.position.set(0, 0.065, -0.308);
-  gunMesh.add(muzzleTip);
+  pistolModel.add(muzzleTip);
 
   const grip = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.13, 0.062), gunGripMat);
   grip.rotation.x = 0.26;
   grip.position.set(0, -0.02, 0.01);
   grip.castShadow = true;
-  gunMesh.add(grip);
+  pistolModel.add(grip);
 
   const triggerGuard = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.005, 6, 12, Math.PI), gunSteelMat);
   triggerGuard.rotation.x = -Math.PI / 2;
@@ -710,7 +715,7 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
   const trigger = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.022, 0.008), chromeMat);
   trigger.rotation.x = -0.35;
   trigger.position.set(0, 0.026, -0.038);
-  gunMesh.add(triggerGuard, trigger);
+  pistolModel.add(triggerGuard, trigger);
 
   // Iron sights with subtle tritium 3-dot inserts (MeshBasicMaterial skips cosmetic skin overrides)
   const frontSight = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.016, 0.012), chromeMat);
@@ -728,7 +733,26 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
   rearDotL.position.set(-0.009, 0.105, 0.0525);
   const rearDotR = new THREE.Mesh(new THREE.SphereGeometry(0.002, 6, 6), rearDotMat);
   rearDotR.position.set(0.009, 0.105, 0.0525);
-  gunMesh.add(frontSight, frontSightDot, rearSight, rearDotL, rearDotR);
+  pistolModel.add(frontSight, frontSightDot, rearSight, rearDotL, rearDotR);
+
+  // Root motion (recoil, reload tilt, skins) stays on one group while the
+  // equipped firearm swaps between real category models instead of stretching
+  // the pistol into a blocky rifle.
+  const gunMesh = new THREE.Group();
+  gunMesh.position.set(0, 0.02, -0.06);
+  const firearmModels: Record<FirearmModelKind, THREE.Group> = {
+    pistol: pistolModel,
+    ...createFirearmModelSet(fpPbr.gunmetal),
+  };
+  for (const model of Object.values(firearmModels)) {
+    model.visible = model === pistolModel;
+    gunMesh.add(model);
+  }
+  const setFirearmModel = (kind: FirearmModelKind) => {
+    for (const [name, model] of Object.entries(firearmModels)) {
+      model.visible = name === kind;
+    }
+  };
 
   gunMesh.traverse((obj) => {
     if (obj instanceof THREE.Mesh) {
@@ -893,6 +917,8 @@ export function createFirstPersonHandsRig(): FirstPersonHandsRig {
     sickleBlade,
     warhammerHead,
     gunMesh,
+    firearmModels,
+    setFirearmModel,
     portalGunHandle,
     alienPlasmaGunMesh,
     infernoBladeMesh,
@@ -6277,8 +6303,35 @@ export function createRemotePlayerMesh(
   const armL = makeArm(-0.33);
   const armR = makeArm(0.33);
 
+  // Third-person silhouette: a beveled rifle profile with stock, receiver,
+  // trigger cut and barrel instead of a rectangular box.
+  const heldGunShape = new THREE.Shape();
+  heldGunShape.moveTo(-0.27, -0.04);
+  heldGunShape.lineTo(0.27, -0.04);
+  heldGunShape.lineTo(0.27, 0.005);
+  heldGunShape.lineTo(0.12, 0.012);
+  heldGunShape.lineTo(0.1, 0.05);
+  heldGunShape.lineTo(0.02, 0.06);
+  heldGunShape.lineTo(-0.02, 0.03);
+  heldGunShape.lineTo(-0.08, 0.035);
+  heldGunShape.lineTo(-0.11, 0.01);
+  heldGunShape.lineTo(-0.15, 0.02);
+  heldGunShape.lineTo(-0.18, 0.07);
+  heldGunShape.lineTo(-0.27, 0.08);
+  heldGunShape.closePath();
+  const heldGunGeo = new THREE.ExtrudeGeometry(heldGunShape, {
+    depth: 0.075,
+    steps: 1,
+    bevelEnabled: true,
+    bevelSegments: 2,
+    bevelSize: 0.008,
+    bevelThickness: 0.008,
+  });
+  heldGunGeo.translate(0, 0, -0.0375);
+  heldGunGeo.rotateY(-Math.PI / 2);
+  heldGunGeo.computeVertexNormals();
   const heldGunMesh = new THREE.Mesh(
-    new THREE.BoxGeometry(0.08, 0.12, 0.52),
+    heldGunGeo,
     new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.78, roughness: 0.3 }),
   );
   heldGunMesh.position.set(0, -0.5, 0.24);
