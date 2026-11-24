@@ -46,7 +46,9 @@ export class CarTrunkBassSystem {
   /** Pre-allocated FFT buffer: zero per-frame garbage. */
   private readonly fftData = new Uint8Array(new ArrayBuffer(64));
   private previousSubBass = 0;
-  private rattleEnabled = true;
+  // Off unless a profile explicitly asks for it (DONK/Tahoe). Lowriders must
+  // stay clean, and the default graph is built before a vehicle profile lands.
+  private rattleEnabled = false;
   private rattleMultiplier = 1;
 
   /** 0.0 to 1.0, driven by the real playing track's sub-band energy. */
@@ -113,6 +115,22 @@ export class CarTrunkBassSystem {
     return connected;
   }
 
+  /**
+   * Set the extra trunk sub EQ. Loud, heavily boosted sub-bass is the main
+   * source of clipping and speaker chatter, so profiles with more cabin bass
+   * use a smaller additive shelf and let the clean subwoofer gain do the work.
+   */
+  public setSubBoost(shelfDb: number, peakDb: number): void {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    if (this.subBoostFilter) {
+      this.subBoostFilter.gain.setTargetAtTime(shelfDb, now, 0.04);
+    }
+    if (this.subPeakFilter) {
+      this.subPeakFilter.gain.setTargetAtTime(peakDb, now, 0.04);
+    }
+  }
+
   public setRattleEnabled(enabled: boolean): void {
     this.rattleEnabled = enabled;
   }
@@ -146,8 +164,8 @@ export class CarTrunkBassSystem {
     this.compressor.threshold.value = -14;
     this.compressor.knee.value = 10;
     this.compressor.ratio.value = 8;
-    this.compressor.attack.value = 0.004;
-    this.compressor.release.value = 0.14;
+    this.compressor.attack.value = 0.008;
+    this.compressor.release.value = 0.18;
 
     // 4. FFT analyser for trunk flex and camera pressure.
     this.analyser = ctx.createAnalyser();

@@ -16,6 +16,7 @@ import {
   TERRAIN_SEGS,
   TERRAIN_SIZE,
   TERRAIN_VERTS,
+  UNDERGROUND_ELEVATOR_POS,
   VEHICLE_GARAGE_POS,
   VEHICLE_GARAGE_Y,
   WOODLAND_MANSION_POS,
@@ -35,6 +36,26 @@ import {
   getDimensionTerrainHeight,
   getSpacePlatformSurfaceY,
 } from './multiverse';
+
+test('Saturn V launch complex stays clear of the garage and underground elevator', () => {
+  const padRadius = 9.5;
+  const garageHalfWidth = 19.5;
+  const garageHalfDepth = 7.3;
+  const gapToGarage = Math.hypot(
+    Math.max(0, Math.abs(SATURN_ROCKET_POS.x - VEHICLE_GARAGE_POS.x) - garageHalfWidth),
+    Math.max(0, Math.abs(SATURN_ROCKET_POS.z - VEHICLE_GARAGE_POS.z) - garageHalfDepth),
+  );
+  assert.ok(
+    gapToGarage - padRadius >= 8,
+    `Expected at least 8 m of clear ground between the rocket pad and garage, got ${(gapToGarage - padRadius).toFixed(1)} m`,
+  );
+
+  const gapToElevator = Math.hypot(
+    SATURN_ROCKET_POS.x - UNDERGROUND_ELEVATOR_POS.x,
+    SATURN_ROCKET_POS.z - UNDERGROUND_ELEVATOR_POS.z,
+  );
+  assert.ok(gapToElevator - padRadius >= 8);
+});
 
 test('samplePlaneGeometryHeight matches Three.js Raycaster across deformed diagonal triangles', () => {
   const geo = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, TERRAIN_SEGS, TERRAIN_SEGS);

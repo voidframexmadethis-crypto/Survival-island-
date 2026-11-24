@@ -5410,6 +5410,7 @@ export function buildIslandWorld(
     if (Math.hypot(x - FARMER_POS.x, z - FARMER_POS.z) < 10.5) continue;
     if (Math.hypot(x - HILL_HOUSE_POS.x, z - HILL_HOUSE_POS.z) < 16.5) continue;
     if (Math.hypot(x - VEHICLE_GARAGE_POS.x, z - VEHICLE_GARAGE_POS.z) < 26.0) continue;
+    if (Math.hypot(x - SATURN_ROCKET_POS.x, z - SATURN_ROCKET_POS.z) < 18) continue;
     if (
       Math.abs(x - CUSTOM_SHOP_POS.x) < 8.4 &&
       z - CUSTOM_SHOP_POS.z >= -6.0 &&
@@ -6169,6 +6170,7 @@ export function buildIslandWorld(
     if (Math.hypot(px - JUNGLE_TEMPLE_POS.x, pz - JUNGLE_TEMPLE_POS.z) < 7.5) return false;
     if (Math.hypot(px - WHEATFIELD_POS.x, pz - WHEATFIELD_POS.z) < 9.0) return false;
     if (Math.hypot(px - FARMER_POS.x, pz - FARMER_POS.z) < 8.5) return false;
+    if (Math.hypot(px - SATURN_ROCKET_POS.x, pz - SATURN_ROCKET_POS.z) < 15) return false;
 
     // The shelter is now surrounded by lawn. Only the actual footprint of the
     // house, porch, entry step, studio wing and access ramp stay clear, instead
@@ -6813,6 +6815,7 @@ export function buildIslandWorld(
     if (isInBowlingAlleyClearZone(bx, bz)) continue;
     if (Math.hypot(bx - HILL_HOUSE_POS.x, bz - HILL_HOUSE_POS.z) < 16.5) continue;
     if (Math.hypot(bx - VEHICLE_GARAGE_POS.x, bz - VEHICLE_GARAGE_POS.z) < 18.5) continue;
+    if (Math.hypot(bx - SATURN_ROCKET_POS.x, bz - SATURN_ROCKET_POS.z) < 16) continue;
     if (
       Math.abs(bx - CUSTOM_SHOP_POS.x) < 8.0 &&
       bz - CUSTOM_SHOP_POS.z >= -5.8 &&

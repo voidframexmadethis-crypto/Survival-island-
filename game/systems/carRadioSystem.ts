@@ -62,26 +62,105 @@ export function isOldSchoolVehicleDescriptor(car: RadioCarDescriptor = {}): bool
   );
 }
 
-export type CarType = 'classic' | 'tahoe' | 'donk' | 'supercar';
+export type CarType = 'classic' | 'lowrider' | 'tahoe' | 'donk' | 'supercar';
 
 export interface CarAudioProfile {
+  /** 100 Hz lowshelf multiplier. */
   bass: number;
+  /** 48 Hz peaking-sub multiplier. */
   low: number;
+  /** Visual panel movement. Lowriders deliberately stay flat. */
   shake: number;
+  /** Extra 58/64 Hz trunk shelf and peak, in dB. */
+  trunkShelfDb: number;
+  trunkPeakDb: number;
+  /** Wave-shaper drive for the parallel subwoofer. */
+  subDrive: number;
+  /** Whether the metallic sheet-metal rattle voice may fire. */
+  rattle: boolean;
 }
 
 export const AUDIO_PROFILES: Record<CarType, CarAudioProfile> = {
-  classic: { bass: 1.8, low: 1.5, shake: 0.5 },
-  tahoe: { bass: 2.8, low: 2.5, shake: 1.0 },
-  donk: { bass: 3.0, low: 2.8, shake: 1.8 },
-  supercar: { bass: 0.8, low: 0.7, shake: 0.1 },
+  classic: {
+    bass: 1.8,
+    low: 1.5,
+    shake: 0.5,
+    trunkShelfDb: 18,
+    trunkPeakDb: 7,
+    subDrive: 2.0,
+    rattle: false,
+  },
+  // Full-size lowriders: maximum clean sub level, low additive bass, no rattle.
+  lowrider: {
+    bass: 3.8,
+    low: 3.2,
+    shake: 0.08,
+    trunkShelfDb: 11,
+    trunkPeakDb: 4,
+    subDrive: 1.05,
+    rattle: false,
+  },
+  tahoe: {
+    bass: 2.8,
+    low: 2.5,
+    shake: 1.0,
+    trunkShelfDb: 18,
+    trunkPeakDb: 7,
+    subDrive: 2.2,
+    rattle: true,
+  },
+  donk: {
+    bass: 3.0,
+    low: 2.8,
+    shake: 1.8,
+    trunkShelfDb: 18,
+    trunkPeakDb: 7,
+    subDrive: 2.2,
+    rattle: true,
+  },
+  supercar: {
+    bass: 0.8,
+    low: 0.7,
+    shake: 0.1,
+    trunkShelfDb: 0,
+    trunkPeakDb: 0,
+    subDrive: 1.0,
+    rattle: false,
+  },
 };
+
+const LOWRIDER_AUDIO_PRESETS = new Set([
+  'lowrider',
+  'cadillac_coupe_deville',
+  'town_car',
+  'mini_truck',
+  'el_camino',
+  'slab',
+]);
 
 export function resolveCarAudioType(car: RadioCarDescriptor = {}): CarType {
   const preset = (car.preset || '').toLowerCase();
   const tag = `${car.class || ''} ${car.style || ''} ${car.name || ''}`.toLowerCase();
-  if (preset === 'donk' || preset === 'el_camino' || tag.includes('donk')) {
+  if (preset === 'donk') {
     return 'donk';
+  }
+  if (LOWRIDER_AUDIO_PRESETS.has(preset)) {
+    return 'lowrider';
+  }
+  if (tag.includes('donk')) {
+    return 'donk';
+  }
+  if (
+    tag.includes('lowrider') ||
+    tag.includes('slab') ||
+    tag.includes('impala') ||
+    tag.includes('cadillac') ||
+    tag.includes('deville') ||
+    tag.includes('town car') ||
+    tag.includes('mini truck') ||
+    tag.includes('el camino')
+  ) {
+    return 'lowrider';
   }
   if (
     preset === 'chevy_tahoe' ||
@@ -108,6 +187,14 @@ export function resolveCarAudioType(car: RadioCarDescriptor = {}): CarType {
   return 'supercar';
 }
 
+/** Rattle is an intentional DONK/Tahoe effect, never a lowrider effect. */
+export function shouldEnableTrunkRattle(
+  carType: CarType,
+  oldSchool: boolean,
+): boolean {
+  return oldSchool && AUDIO_PROFILES[carType].rattle;
+}
+
 export interface CarSubwooferHandles {
   subGain: GainNode;
   destroy: () => void;
@@ -116,14 +203,16 @@ export interface CarSubwooferHandles {
 export function addCarSubwoofer(
   sourceBus: AudioNode,
   carPanner: PannerNode,
-  profile: { low: number },
+  profile: { low: number; subDrive?: number },
 ): CarSubwooferHandles {
   const ctx = sourceBus.context;
+  const drive = Math.max(0.8, profile.subDrive ?? 2.6);
+  const clean = drive <= 1.2;
 
   // Protect the subwoofer from infrasonic frequencies.
   const subsonic = ctx.createBiquadFilter();
   subsonic.type = 'highpass';
-  subsonic.frequency.value = 26;
+  subsonic.frequency.value = 30;
 
   // Dedicated subwoofer crossover (wide enough to energise a real trunk).
   const crossover = ctx.createBiquadFilter();
@@ -137,13 +226,12 @@ export function addCarSubwoofer(
   resonance.type = 'peaking';
   resonance.frequency.value = 72;
   resonance.Q.value = 1.1;
-  resonance.gain.value = 12;
+  resonance.gain.value = clean ? 8 : 12;
 
-  // Amplifier-style harmonic saturation. Pushing harder adds the gritty upper
-  // harmonics you hear when a real system is loud enough to rattle panels.
+  // Amplifier-style harmonic saturation. Lowrider profiles stay nearly linear
+  // so the extra loudness comes from clean sub gain instead of grit/clicks.
   const saturation = ctx.createWaveShaper();
   const curve = new Float32Array(512);
-  const drive = 2.6;
   const norm = Math.tanh(drive);
 
   for (let i = 0; i < curve.length; i++) {
@@ -154,16 +242,17 @@ export function addCarSubwoofer(
   saturation.curve = curve;
   saturation.oversample = '4x';
 
-  // Control peaks before the subwoofer output.
+  // Control peaks before the subwoofer output. A gentler, slower limiter on
+  // clean profiles avoids the low-frequency pumping that reads as clicking.
   const limiter = ctx.createDynamicsCompressor();
-  limiter.threshold.value = -10;
-  limiter.knee.value = 12;
-  limiter.ratio.value = 5;
-  limiter.attack.value = 0.004;
-  limiter.release.value = 0.16;
+  limiter.threshold.value = clean ? -6 : -10;
+  limiter.knee.value = clean ? 8 : 12;
+  limiter.ratio.value = clean ? 8 : 5;
+  limiter.attack.value = clean ? 0.008 : 0.004;
+  limiter.release.value = clean ? 0.2 : 0.16;
 
   const subGain = ctx.createGain();
-  subGain.gain.value = Math.min(1, 0.5 * profile.low);
+  subGain.gain.value = Math.min(1, (clean ? 0.62 : 0.5) * profile.low);
 
   // Parallel branch: original stereo remains untouched.
   sourceBus.connect(subsonic);
@@ -343,6 +432,7 @@ export function setupCarAudio(
 export const CABIN_BASS_AND_FIRST_PERSON = {
   audioCtx: null as AudioContext | null,
   sourceBus: null as GainNode | null,
+  rumbleFilter: null as BiquadFilterNode | null,
   analyser: null as AnalyserNode | null,
   bassFilter: null as BiquadFilterNode | null,
   subFilter: null as BiquadFilterNode | null,
@@ -386,6 +476,15 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
 
       this.sourceBus = this.audioCtx.createGain();
       this.sourceBus.gain.value = 1.0;
+
+      // Block infrasonic rumble before it reaches either bass path. This is
+      // what makes huge sub gain sound clean instead of clicking/clipping the
+      // speaker on frequencies the cabinet cannot reproduce.
+      const rumbleFilter = this.audioCtx.createBiquadFilter();
+      this.rumbleFilter = rumbleFilter;
+      rumbleFilter.type = 'highpass';
+      rumbleFilter.frequency.value = 30;
+      rumbleFilter.Q.value = 0.7;
 
       // 100 Hz lowshelf bass + 48 Hz peaking sub tuned per CarType profile
       this.bassFilter = this.audioCtx.createBiquadFilter();
@@ -439,11 +538,29 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       // cabin/panner chain. It reuses this context and source bus, so there is
       // still only one media-source binding and one car audio graph.
       this.trunkBassSystem = new CarTrunkBassSystem();
-      if (!this.trunkBassSystem.attachGraph(this.audioCtx, this.sourceBus, this.bassFilter)) {
+      if (
+        !this.trunkBassSystem.attachGraph(
+          this.audioCtx,
+          this.sourceBus,
+          rumbleFilter,
+        )
+      ) {
         this.trunkBassSystem.dispose();
         this.trunkBassSystem = null;
-        this.sourceBus.connect(this.bassFilter);
+        this.sourceBus.connect(rumbleFilter);
+      } else {
+        // The graph can be created after a lowrider profile was already
+        // selected, so apply its trunk EQ/rattle policy immediately.
+        this.trunkBassSystem.setSubBoost(
+          profile.trunkShelfDb,
+          profile.trunkPeakDb,
+        );
+        this.trunkBassSystem.setRattleEnabled(profile.rattle);
+        this.trunkBassSystem.setRattleMultiplier(
+          this.activeCarType === 'donk' ? 1.65 : 1,
+        );
       }
+      rumbleFilter.connect(this.bassFilter);
       this.bassFilter.connect(this.subFilter);
       this.subFilter.connect(this.analyser);
       this.analyser.connect(this.compressor);
@@ -536,23 +653,29 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     const carType = resolveCarAudioType(car);
     const profile = AUDIO_PROFILES[carType];
     this.activeCarType = carType;
-    this.trunkBassSystem?.setRattleEnabled(oldSchool);
+    this.trunkBassSystem?.setRattleEnabled(
+      shouldEnableTrunkRattle(carType, oldSchool),
+    );
     this.trunkBassSystem?.setRattleMultiplier(carType === 'donk' ? 1.65 : 1);
+    this.trunkBassSystem?.setSubBoost(profile.trunkShelfDb, profile.trunkPeakDb);
     const boost = this.bassBoost ? 1 : 0;
+    const now = this.audioCtx?.currentTime ?? 0;
     if (this.bassFilter && this.audioCtx) {
-      this.bassFilter.frequency.value = 100;
+      // Ramp filter coefficients as well as gain. Jumping frequency/Q in one
+      // sample is audible as a click when entering a car or toggling profiles.
+      this.bassFilter.frequency.setTargetAtTime(100, now, 0.03);
       this.bassFilter.gain.setTargetAtTime(
         6 * profile.bass * (boost ? 1.35 : 1),
-        this.audioCtx.currentTime,
+        now,
         0.03,
       );
     }
     if (this.subFilter && this.audioCtx) {
-      this.subFilter.frequency.value = 48;
-      this.subFilter.Q.value = 0.8;
+      this.subFilter.frequency.setTargetAtTime(48, now, 0.03);
+      this.subFilter.Q.setTargetAtTime(0.8, now, 0.03);
       this.subFilter.gain.setTargetAtTime(
         5 * profile.low * (boost ? 1.2 : 1),
-        this.audioCtx.currentTime,
+        now,
         0.03,
       );
     }

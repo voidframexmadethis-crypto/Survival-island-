@@ -140,7 +140,10 @@ export const UNDERGROUND_ELEVATOR_KIOSK_POS = {
   x: UNDERGROUND_ELEVATOR_POS.x - 5.45,
   z: UNDERGROUND_ELEVATOR_POS.z + 4.1,
 };
-export const SATURN_ROCKET_POS = { x: -18, z: 164 };
+// Keep the launch complex clearly separated from the Motor Atelier apron and
+// the underground elevator so the rocket, garage traffic and pedestrians do
+// not crowd the same clearing.
+export const SATURN_ROCKET_POS = { x: -26, z: 172 };
 export const ISLAND_UFO_POS = { x: 40, z: -35 };
 export const SNOWY_WOODLAND_POS = { x: -42, z: -124 };
 export const AUTUMN_GROVE_POS = { x: 46, z: 36 };

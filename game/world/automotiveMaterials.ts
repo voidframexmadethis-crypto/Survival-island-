@@ -1229,20 +1229,26 @@ export function createTireSidewallMaterial(): THREE.MeshStandardMaterial {
   });
 }
 
-/** Real-life laminated automotive safety glass with crisp Fresnel reflection & clear interior view */
+/**
+ * Tinted laminated automotive glass. This is a dielectric (non-metal) surface
+ * with a sharp clearcoat reflection so it reads as glass instead of tinted
+ * plastic/metal from every angle. Transmission is deliberately zero: real
+ * cabin visibility comes from alpha, while avoiding the extra full-screen
+ * refraction pass that used to cost several milliseconds per frame.
+ */
 export function createAutomotiveGlassMaterial(opacity = 0.38): THREE.MeshPhysicalMaterial {
   const mat = new THREE.MeshPhysicalMaterial({
-    color: 0x0c1926,
-    metalness: 0.1,
-    roughness: 0.014,
+    color: 0x16232d,
+    metalness: 0.0,
+    roughness: 0.02,
     ior: 1.52,
     reflectivity: 1.0,
-    specularIntensity: 1.0,
+    specularIntensity: 1.18,
     clearcoat: 1.0,
-    clearcoatRoughness: 0.01,
-    envMapIntensity: 2.65,
+    clearcoatRoughness: 0.008,
+    envMapIntensity: 2.9,
     transparent: true,
-    opacity,
+    opacity: THREE.MathUtils.clamp(opacity, 0.32, 0.5),
     depthWrite: false,
     side: THREE.DoubleSide,
   });

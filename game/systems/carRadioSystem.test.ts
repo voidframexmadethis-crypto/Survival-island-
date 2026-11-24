@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 import {
+  AUDIO_PROFILES,
   CABIN_BASS_AND_FIRST_PERSON,
+  resolveCarAudioType,
   setupCarAudio,
+  shouldEnableTrunkRattle,
   stereoOutputGain,
   updateCarAudioPosition,
   updateCarStereo3D,
@@ -120,6 +123,33 @@ test('updateCarAudioPosition attenuates over 50m and clamps to [0, 1] outside ca
   assert.equal(blocked.inside, true);
   assert.equal(audio.getPlayCalls(), 1);
   await new Promise((r) => setTimeout(r, 0));
+});
+
+test('lowrider profiles get the loudest clean bass and never rattle', () => {
+  assert.equal(resolveCarAudioType({ preset: 'lowrider' }), 'lowrider');
+  assert.equal(
+    resolveCarAudioType({ preset: 'cadillac_coupe_deville' }),
+    'lowrider',
+  );
+  assert.equal(resolveCarAudioType({ preset: 'town_car' }), 'lowrider');
+  assert.equal(resolveCarAudioType({ preset: 'mini_truck' }), 'lowrider');
+  assert.equal(resolveCarAudioType({ preset: 'el_camino' }), 'lowrider');
+  assert.equal(resolveCarAudioType({ preset: 'slab' }), 'lowrider');
+  assert.equal(resolveCarAudioType({ class: 'Lowrider' }), 'lowrider');
+
+  const lowrider = AUDIO_PROFILES.lowrider;
+  assert.ok(lowrider.bass > AUDIO_PROFILES.donk.bass);
+  assert.ok(lowrider.low > AUDIO_PROFILES.donk.low);
+  assert.ok(lowrider.trunkShelfDb < AUDIO_PROFILES.donk.trunkShelfDb);
+  assert.ok(lowrider.subDrive <= 1.2);
+  assert.ok(lowrider.shake < 0.1);
+  assert.equal(lowrider.rattle, false);
+
+  assert.equal(shouldEnableTrunkRattle('lowrider', true), false);
+  assert.equal(shouldEnableTrunkRattle('classic', true), false);
+  assert.equal(shouldEnableTrunkRattle('donk', true), true);
+  assert.equal(shouldEnableTrunkRattle('tahoe', true), true);
+  assert.equal(shouldEnableTrunkRattle('lowrider', false), false);
 });
 
 test('stereoOutputGain is silent at zero, ramps up, and drives a loud cabin mix', () => {

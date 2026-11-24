@@ -823,17 +823,17 @@ export class GameEngine {
   // presets (no shader recompiles, no framebuffer thrash on every step).
   private readonly frameGovernor = new FrameRateGovernor({
     targetFps: 60,
-    minScale: 0.5,
+    minScale: 0.45,
     maxScale: 1,
-    sampleWindowMs: 650,
-    startupGraceMs: 1800,
-    downFps: 57,
+    sampleWindowMs: 600,
+    startupGraceMs: 1200,
+    downFps: 58,
     upFps: 63,
-    upWindows: 6,
+    upWindows: 8,
     stallFrameMs: 420,
-    severeFrameMs: 34,
+    severeFrameMs: 30,
     severeFrameLimit: 2,
-    steps: [1, 0.9, 0.8, 0.7, 0.6, 0.5],
+    steps: [1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.45],
   });
   private basePixelRatio = 1;
   private appliedRenderScale = 1;
@@ -842,6 +842,7 @@ export class GameEngine {
   private surfaceWetness = 0;
   private perfMonitor: GamePerformanceRecorder | null = null;
   private disposed = false;
+  private containerResizeObserver: ResizeObserver | null = null;
   private rafPausedByVisibility = false;
   private clock = new THREE.Clock();
   private elapsed = 0;
@@ -1769,6 +1770,15 @@ export class GameEngine {
 
     this.container.innerHTML = '';
     this.container.appendChild(this.renderer.domElement);
+
+    // Keep the drawing buffer matched to the actual mount, not just the window.
+    // This prevents the game from staying tiny after a layout/orientation change
+    // that does not fire a window resize.
+    if (typeof ResizeObserver !== 'undefined') {
+      this.containerResizeObserver?.disconnect();
+      this.containerResizeObserver = new ResizeObserver(() => this.onResize());
+      this.containerResizeObserver.observe(this.container);
+    }
 
     this.scene = new THREE.Scene();
     this.finalIslandFeatures = new FinalIslandFeatures(this.scene);
@@ -2931,9 +2941,7 @@ export class GameEngine {
     const menuShowcase = this.mode === 'menu' && !this.isSoftwareGl;
     this.cinematicFx.setQuality(
       menuShowcase
-        ? this.isTouchDevice
-          ? 'high'
-          : 'ultra'
+        ? 'high'
         : resolveCinematicPostQuality({
             preset: this.activeGraphicsPreset,
             isTouch: this.isTouchDevice,
@@ -2955,8 +2963,9 @@ export class GameEngine {
         this.timeOfDay = 0.71;
         if (!this.isSoftwareGl) {
           this.frameGovernor.reset();
-          // Menus render a little supersampled so the hero backdrop stays crisp.
-          this.applyRenderScale(this.isTouchDevice ? 1 : 1.12);
+          // Keep the menu at native resolution; supersampling the hero scene was
+          // a visible startup hitch on integrated GPUs.
+          this.applyRenderScale(1);
         }
         this.applyCinematicQualityForMode();
         this.applyMenuCullImmediate();
@@ -3029,13 +3038,15 @@ export class GameEngine {
       preset !== 'low' &&
       !this.isSoftwareGl;
 
-    // Ultra gets a 3072 shadow atlas for crisp contact shadows on the hero
-    // attractions; the other presets keep the cheaper 2048 map.
+    // Ultra gets the only large shadow atlas. Medium/high keep a smaller map so
+    // the depth pass does not stall integrated GPUs during busy scenes.
     const shadowMapSize =
       !this.isTouchDevice && !this.isSoftwareGl && preset !== 'low'
         ? preset === 'ultra'
           ? 3072
-          : 2048
+          : preset === 'high'
+            ? 2048
+            : 1536
         : 1024;
     const shadowHalfExtent =
       preset === 'ultra'
@@ -3069,14 +3080,14 @@ export class GameEngine {
       if (preset === 'low') {
         dpr = 1;
       } else if (this.isTouchDevice) {
-        // Crisp iPhone/mobile Retina clarity without 3x pixel fillrate meltdown (9x fewer fragments than 3x DPR)
-        dpr = Math.min(nativeDpr, preset === 'ultra' || preset === 'high' ? 1.3 : 1.15);
+        // Crisp Retina clarity without a 3x fill-rate meltdown on phones.
+        dpr = Math.min(nativeDpr, preset === 'ultra' || preset === 'high' ? 1.2 : 1.1);
       } else if (preset === 'medium') {
-        dpr = Math.min(nativeDpr, 1.3);
+        dpr = Math.min(nativeDpr, 1.2);
       } else if (preset === 'high') {
-        dpr = Math.min(nativeDpr, 1.45);
+        dpr = Math.min(nativeDpr, 1.35);
       } else {
-        dpr = Math.min(nativeDpr, 1.8);
+        dpr = Math.min(nativeDpr, 1.6);
       }
     }
 
@@ -3151,9 +3162,7 @@ export class GameEngine {
     this.basePixelRatio = dpr;
     this.appliedRenderScale = 1;
     this.frameGovernor.reset();
-    this.applyRenderScale(
-      this.mode === 'menu' && !this.isTouchDevice && !this.isSoftwareGl ? 1.12 : 1,
-    );
+    this.applyRenderScale(1);
     this.applyCinematicQualityForMode();
     this.renderer.shadowMap.enabled = shadowsOn;
     this.renderer.shadowMap.type =
@@ -25697,8 +25706,9 @@ export class GameEngine {
       // allocated garbage for every car on the island.
       let rattleShake = this.vehicleRattleCache.get(v.id);
       if (rattleShake === undefined) {
-        rattleShake =
-          AUDIO_PROFILES[resolveCarAudioType(this.toRadioCarDescriptor(v))].shake;
+        const audioProfile =
+          AUDIO_PROFILES[resolveCarAudioType(this.toRadioCarDescriptor(v))];
+        rattleShake = audioProfile.rattle ? audioProfile.shake : 0;
         this.vehicleRattleCache.set(v.id, rattleShake);
       }
 
@@ -25890,7 +25900,7 @@ export class GameEngine {
         // harmonics, exactly like a real trunk lid on a loud system.
         const flex = showBassPulse * showBassPulse;
         const rattle =
-          showBassPulse > 0.02
+          rattleShake > 0 && showBassPulse > 0.02
             ? Math.sin(this.elapsed * 57) * showBassPulse * (0.006 + 0.004 * rattleShake)
             : 0;
         const targetTrunk =
@@ -28939,6 +28949,8 @@ export class GameEngine {
 
   public dispose(): void {
     this.disposed = true;
+    this.containerResizeObserver?.disconnect();
+    this.containerResizeObserver = null;
     this.fpsController.stop();
     this.worldPerfManager.dispose();
     this.perfMonitor?.dispose();

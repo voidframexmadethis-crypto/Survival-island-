@@ -221,11 +221,35 @@ test('attachGraph builds the 58 Hz trunk DSP without a second media source', () 
   // No rattle voice runs continuously; pulses are created only on hits.
   assert.equal(graph.sources.length, 0);
 
+  // Lowrider profiles use less additive trunk EQ so the clean sub gain can be
+  // pushed harder without slamming the limiter into audible clicks.
+  system.setSubBoost(11, 4);
+  assert.equal(subBoost.gain.value, 11);
+  assert.equal(subPeak.gain.value, 4);
+
   // The existing radio source bus feeds only the new DSP, and the DSP returns
   // into the existing cabin chain instead of opening another destination.
   assert.equal(inputConnections.length, 1);
   assert.equal(inputConnections[0], subBoost);
   assert.ok(graph.connections.some(([, b]) => b === output));
+  system.dispose();
+});
+
+test('rattle stays off until a profile explicitly enables it', () => {
+  const graph = makeMockGraph();
+  const input = { kind: 'input', connect() {}, disconnect() {} };
+  const output = { kind: 'output', connect() {}, disconnect() {} };
+  const system = new CarTrunkBassSystem();
+  system.attachGraph(
+    graph.ctx as unknown as AudioContext,
+    input as unknown as AudioNode,
+    output as unknown as AudioNode,
+  );
+
+  system.step(true, 0, true);
+  assert.equal(system.bassEnergy, 1);
+  assert.equal(system.rattleBursts, 0);
+  assert.equal(graph.sources.length, 0);
   system.dispose();
 });
 
