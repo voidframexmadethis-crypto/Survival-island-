@@ -2508,18 +2508,12 @@ export class GameEngine {
       this.triggerHydraulicAction('lock_up');
     } else if (activeHasHyd && e.code === 'KeyH') {
       this.triggerHydraulicAction('three_wheel');
-    } else if (activeHasHyd && e.code === 'KeyN') {
-      this.triggerHydraulicAction('full_hop');
-    } else if (activeHasHyd && e.code === 'KeyJ') {
-      this.triggerHydraulicAction('three_wheel_hop');
     } else if (activeHasHyd && (e.code === 'Digit6' || e.code === 'Numpad6')) {
       this.triggerHydraulicAction('front_lock');
     } else if (activeHasHyd && (e.code === 'Digit7' || e.code === 'Numpad7')) {
       this.triggerHydraulicAction('rear_lock');
     } else if (activeHasHyd && (e.code === 'Digit8' || e.code === 'Numpad8')) {
       this.triggerHydraulicAction('side_lock');
-    } else if (activeHasHyd && (e.code === 'Digit9' || e.code === 'Numpad9')) {
-      this.triggerHydraulicAction('full_hop');
     } else if (
       activeVehicle &&
       (activeVehicle.hasConvertibleTop || activeVehicle.preset === 'cadillac_coupe_deville') &&
@@ -23622,15 +23616,13 @@ export class GameEngine {
       this.emitHud();
       return true;
     }
-    const extraHint = this.usesLowriderRig(v)
-      ? ' · [Space] Front Hop · [Z] Rear Hop · [H] 3-Wheel · [N] Full Hop · [J] 3-Wheel Hop · Wheel Controls in HUD'
-      : v.preset === 'donk'
-        ? ' · [Space/Z/Q/R] Hydraulics (Up / Down / Side-to-Side)'
-        : this.vehicleHasHydraulics(v)
-          ? ' · [Space/Z/Q/R/X] High-Bounce 2-Wheel Hydraulics'
-          : this.isOldSchoolVehicle(v)
-            ? ' · [T] Trunk Bass · [B] Car Radio'
-            : ' · [B] Car Radio';
+    const extraHint = v.preset === 'donk'
+      ? ' · [Space/Z/Q/R] Hydraulics (Up / Down / Side-to-Side)'
+      : this.vehicleHasHydraulics(v)
+        ? ' · [Space/1] Front Hop · [Z/2] Rear Hop · [Q/R] Tilt · [X] Lock · [H] 3-Wheel · Wheel Controls in HUD'
+        : this.isOldSchoolVehicle(v)
+          ? ' · [T] Trunk Bass · [B] Car Radio'
+          : ' · [B] Car Radio';
     this.toast(
       `Piloting ${v.name} (${specs.craftClass}) · WASD Drive${extraHint} · [V] 1st-Person · [E] Exit · [F] Cargo`,
       'discovery',
@@ -23700,7 +23692,11 @@ export class GameEngine {
    * The rig is never a wheel-only visual overlay.
    */
   private usesLowriderRig(v?: ModularVehicleData | null): boolean {
-    return this.vehicleHasHydraulics(v);
+    // Classic hydraulics are the supported behavior. The later independent
+    // cylinder rig stays disabled so every hydraulic car uses the original
+    // four-corner spring/damper path: front/rear/side hops, lock, drop and the
+    // traditional three-wheel stance.
+    return false;
   }
 
   /**
@@ -25747,11 +25743,9 @@ export class GameEngine {
         for (const wc of handles.wheelCorners) {
           wc.obj.position.y = wc.baseY;
         }
-      } else if (isActive && activeHasHyd) {
-        // Every hydraulic lowrider uses the same four-corner rig. The body is
-        // sprung on the average actuator extension, then pitched and rolled by
-        // the actual corner loads; the tyres keep their contact patch unless a
-        // corner is deliberately pumped clear of the road.
+      } else if (isActive && activeHasHyd && activeUsesRig) {
+        // Later independent-corner rig. Disabled by usesLowriderRig so the
+        // classic hydraulic path below remains the single source of behavior.
         const rig = this.lowriderRig;
         const bodyLift = rig.bodyHeave;
         handles.chassisGroup.position.y =
