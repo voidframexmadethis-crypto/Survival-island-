@@ -87,7 +87,7 @@ export const AUDIO_PROFILES: Record<CarType, CarAudioProfile> = {
     shake: 0.5,
     trunkShelfDb: 18,
     trunkPeakDb: 7,
-    subDrive: 2.0,
+    subDrive: 1.15,
     rattle: false,
   },
   // Full-size lowriders: maximum clean sub level, low additive bass, no rattle.
@@ -106,7 +106,8 @@ export const AUDIO_PROFILES: Record<CarType, CarAudioProfile> = {
     shake: 1.0,
     trunkShelfDb: 18,
     trunkPeakDb: 7,
-    subDrive: 2.2,
+    // Stay clean: the subwoofer is not the noise source, the trunk panel is.
+    subDrive: 1.2,
     rattle: true,
   },
   donk: {
@@ -115,7 +116,7 @@ export const AUDIO_PROFILES: Record<CarType, CarAudioProfile> = {
     shake: 1.8,
     trunkShelfDb: 18,
     trunkPeakDb: 7,
-    subDrive: 2.2,
+    subDrive: 1.25,
     rattle: true,
   },
   supercar: {
@@ -556,6 +557,9 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
           profile.trunkPeakDb,
         );
         this.trunkBassSystem.setRattleEnabled(profile.rattle);
+        this.trunkBassSystem.setCabinRattleEnabled(
+          this.activeCarType !== 'supercar',
+        );
         this.trunkBassSystem.setRattleMultiplier(
           this.activeCarType === 'donk' ? 1.65 : 1,
         );
@@ -567,7 +571,8 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       this.compressor.connect(this.carPanner);
       this.carPanner.connect(this.masterGain);
       this.masterGain.connect(this.limiter);
-      this.limiter.connect(this.audioCtx.destination);
+            this.limiter.connect(this.audioCtx.destination);
+
 
       this.subwoofer?.destroy();
       this.subwoofer = addCarSubwoofer(this.sourceBus, this.carPanner, profile);
@@ -603,6 +608,14 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     this.cameraMode =
       this.cameraMode === 'FIRST_PERSON' ? 'CHASE' : 'FIRST_PERSON';
     return this.cameraMode;
+  },
+
+  /**
+   * Gate the 20x cabin sub stage to "player is sitting in the car". Outside the
+   * cabin the stereo keeps its normal loudness/attenuation.
+   */
+  setCabinBassBoost(insideCar: boolean): void {
+    this.trunkBassSystem?.setCabinBassBoost(insideCar);
   },
 
   bassBoost: false,
@@ -656,6 +669,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     this.trunkBassSystem?.setRattleEnabled(
       shouldEnableTrunkRattle(carType, oldSchool),
     );
+    this.trunkBassSystem?.setCabinRattleEnabled(oldSchool);
     this.trunkBassSystem?.setRattleMultiplier(carType === 'donk' ? 1.65 : 1);
     this.trunkBassSystem?.setSubBoost(profile.trunkShelfDb, profile.trunkPeakDb);
     const boost = this.bassBoost ? 1 : 0;
@@ -903,8 +917,8 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     if (trunkMesh) {
       const baseY = trunkMesh.userData.baseY ?? trunkMesh.position.y;
       trunkMesh.userData.baseY = baseY;
-      trunkMesh.position.y = baseY + trunkPump * 0.05;
-      trunkMesh.rotation.x = -(trunkPump * 0.035);
+      trunkMesh.position.y = baseY + trunkPump * 0.085;
+      trunkMesh.rotation.x = -(trunkPump * 0.05);
     }
 
     // 2. First-person interior seat camera for ALL cars
@@ -999,8 +1013,8 @@ export function updateCarTrunkAudio(
     // Real bass-driven trunk lid lift + subtle vibration on old-school cars only
     const baseY = trunkMesh.userData.baseY ?? trunkMesh.position.y;
     trunkMesh.userData.baseY = baseY;
-    trunkMesh.position.y = baseY + pump * 0.045;
-    trunkMesh.rotation.x = -(pump * 0.03);
+    trunkMesh.position.y = baseY + pump * 0.075;
+    trunkMesh.rotation.x = -(pump * 0.045);
   } else if (trunkMesh.userData.baseY !== undefined) {
     trunkMesh.position.y = trunkMesh.userData.baseY;
     trunkMesh.rotation.x = 0;

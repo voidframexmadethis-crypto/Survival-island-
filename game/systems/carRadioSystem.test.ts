@@ -317,7 +317,9 @@ test('setupCarAudio routes through HRTF PannerNode with 100Hz bass, 48Hz sub fil
     assert.ok(Math.abs(handles.sub.gain.value - 5 * 1.5) < 1e-6);
     assert.equal(handles.analyser.fftSize, 2048);
     assert.equal(handles.analyser.smoothingTimeConstant, 0.78);
-    assert.ok(Math.abs(handles.subwoofer.subGain.gain.value - Math.min(1, 0.5 * 1.5)) < 1e-6);
+    // Classic is a clean sub profile now: no clipped harmonics over the bass,
+    // so the clean gain stage is used.
+    assert.ok(Math.abs(handles.subwoofer.subGain.gain.value - Math.min(1, 0.62 * 1.5)) < 1e-6);
 
     assert.equal(handles.panner.panningModel, 'HRTF');
     assert.equal(handles.panner.distanceModel, 'inverse');

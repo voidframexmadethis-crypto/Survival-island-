@@ -60,9 +60,12 @@ export class Delta88TrunkRattleSynth {
     edgeHigh.gain.setValueAtTime(3.5, t);
 
     const gain = this.ctx.createGain();
-    const cabinScale = isInsideCar ? 0.28 : 0.72;
+    // The player wants to hear the trunk sheet metal working from the driver's
+    // seat, so the in-cabin pulse is as loud as the outside one instead of being
+    // tucked 11 dB down behind the music.
+    const cabinScale = isInsideCar ? 1.0 : 0.72;
     const peakGain = Math.min(
-      0.72,
+      1.0,
       clamped * rattleMultiplier * cabinScale * 0.95,
     );
 

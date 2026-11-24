@@ -25257,6 +25257,9 @@ export class GameEngine {
           CABIN_BASS_AND_FIRST_PERSON.stereoPlaying,
       );
       trunkBass.step(isInsideRadioCar, distanceToTrunk, radioPlaying);
+      // 20x cabin sub stage only while the player is actually in the car, so
+      // the surrounding world audio is untouched.
+      CABIN_BASS_AND_FIRST_PERSON.setCabinBassBoost(isInsideRadioCar);
       if (radioPlaying) {
         const proximity = isInsideRadioCar
           ? 1
@@ -25511,7 +25514,13 @@ export class GameEngine {
       if (rattleShake === undefined) {
         const audioProfile =
           AUDIO_PROFILES[resolveCarAudioType(this.toRadioCarDescriptor(v))];
-        rattleShake = audioProfile.rattle ? audioProfile.shake : 0;
+        // The trunk panel is what makes the rattle noise, so every old-school
+        // car shakes its lid even when its radio profile is the clean one.
+        rattleShake = audioProfile.rattle
+          ? audioProfile.shake
+          : vIsOldSchool
+            ? 0.55
+            : 0;
         this.vehicleRattleCache.set(v.id, rattleShake);
       }
 
@@ -25636,7 +25645,7 @@ export class GameEngine {
         const flex = showBassPulse * showBassPulse;
         const rattle =
           rattleShake > 0 && showBassPulse > 0.02
-            ? Math.sin(this.elapsed * 57) * showBassPulse * (0.006 + 0.004 * rattleShake)
+            ? Math.sin(this.elapsed * 57) * showBassPulse * (0.02 + 0.03 * rattleShake)
             : 0;
         const targetTrunk =
           (v.trunkOpen ? 0.96 : 0) +
@@ -25644,7 +25653,7 @@ export class GameEngine {
           rattle;
         handles.trunkLid.position.y =
           showBassPulse > 0.01
-            ? baseTrunkY + showBassPulse * 0.05 + flex * 0.018 + rattle * 0.6
+            ? baseTrunkY + showBassPulse * 0.05 + flex * 0.018 + rattle * 0.9
             : baseTrunkY;
         handles.trunkLid.rotation.x = THREE.MathUtils.damp(
           handles.trunkLid.rotation.x,

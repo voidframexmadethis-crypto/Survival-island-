@@ -283,10 +283,12 @@ test('step converts sub-bass hits into rattle bursts and respects proximity', ()
   assert.ok(edgeHigh);
   assert.equal(edgeHigh.gain.value, 3.5);
 
-  // A sustained 808 must not machine-gun the rattle between beats.
+  // A sustained 808 keeps the trunk panel shaking, so it keeps rattling. The
+  // synth's 65 ms cap paces this into a rattle instead of a solid buzz.
   graph.ctx.currentTime = 1.2;
   system.step(true, 0, true);
-  assert.equal(system.rattleBursts, 1);
+  assert.equal(system.rattleBursts, 2);
+  assert.equal(graph.sources.length, 2);
 
   // Outside the 14 m near field, even a new bass hit must not rattle the trunk.
   graph.setAnalyserLevel(0.2);
@@ -295,7 +297,7 @@ test('step converts sub-bass hits into rattle bursts and respects proximity', ()
   graph.setAnalyserLevel(1);
   graph.ctx.currentTime = 2.1;
   system.step(false, 20, true);
-  assert.equal(system.rattleBursts, 1);
+  assert.equal(system.rattleBursts, 2);
 
   // A fresh rising attack inside the car retriggers the same preallocated voice.
   graph.setAnalyserLevel(0.2);
@@ -304,13 +306,13 @@ test('step converts sub-bass hits into rattle bursts and respects proximity', ()
   graph.setAnalyserLevel(1);
   graph.ctx.currentTime = 2.4;
   system.step(true, 0, true);
-  assert.equal(system.rattleBursts, 2);
-  assert.equal(graph.sources.length, 2);
+  assert.equal(system.rattleBursts, 3);
+  assert.equal(graph.sources.length, 3);
 
   // Radio off decays energy and does not create more rattle.
   graph.ctx.currentTime = 3;
   system.step(true, 0, false);
   assert.ok(system.bassEnergy > 0 && system.bassEnergy < 1);
-  assert.equal(system.rattleBursts, 2);
+  assert.equal(system.rattleBursts, 3);
   system.dispose();
 });

@@ -17,6 +17,19 @@ import { Delta88TrunkRattleSynth } from './delta88TrunkRattleSynth';
 const TRUNK_RATTLE_RANGE_METERS = 28;
 const TRUNK_RATTLE_NEAR_METERS = 14;
 
+/**
+ * The metallic trunk voice gets its own hot output stage so it stays audible
+ * over the boosted sub-bass instead of being buried by the cabin compressor.
+ */
+const RATTLE_OUTPUT_GAIN = 8;
+
+/**
+ * Extra low-end the driver's seat gets while sitting in the car. The gain runs
+ * before the cabin limiter, so it is loud but always kept under full scale —
+ * the bass stays clean and the trunk panel supplies the noise.
+ */
+export const CABIN_BASS_GAIN = 20;
+
 /** Average the analyser bins that cover roughly 40-170 Hz at a 1024 FFT. */
 export function averageSubBassBins(data: Uint8Array, firstBin = 1, lastBin = 3): number {
   let sum = 0;
@@ -38,7 +51,10 @@ export class CarTrunkBassSystem {
   private masterGain: GainNode | null = null;
   private analyser: AnalyserNode | null = null;
   private rattleLimiter: DynamicsCompressorNode | null = null;
+  private rattleOutputGain: GainNode | null = null;
   private rattleSynth: Delta88TrunkRattleSynth | null = null;
+  private cabinBassFilter: BiquadFilterNode | null = null;
+  private cabinBassGain: GainNode | null = null;
   private ownsContext = false;
   private attachedToExternalGraph = false;
   private disposed = false;
@@ -49,6 +65,9 @@ export class CarTrunkBassSystem {
   // Off unless a profile explicitly asks for it (DONK/Tahoe). Lowriders must
   // stay clean, and the default graph is built before a vehicle profile lands.
   private rattleEnabled = false;
+  // Old-school cars can rattle in the cabin even when their profile keeps the
+  // outside trunk quiet. Enabled from the radio profile.
+  private cabinRattleEnabled = false;
   private rattleMultiplier = 1;
 
   /** 0.0 to 1.0, driven by the real playing track's sub-band energy. */
@@ -135,8 +154,26 @@ export class CarTrunkBassSystem {
     this.rattleEnabled = enabled;
   }
 
+  /** Let an old-school car's trunk panel talk while the player is inside it. */
+  public setCabinRattleEnabled(enabled: boolean): void {
+    this.cabinRattleEnabled = enabled;
+  }
+
+  /**
+   * 20x low-end for the driver only. Applied to a bass-only parallel branch
+   * ahead of the cabin limiter, so it never clips the radio output.
+   */
+  public setCabinBassBoost(insideCar: boolean): void {
+    if (!this.ctx || !this.cabinBassGain) return;
+    this.cabinBassGain.gain.setTargetAtTime(
+      insideCar ? CABIN_BASS_GAIN : 1,
+      this.ctx.currentTime,
+      0.06,
+    );
+  }
+
   public setRattleMultiplier(multiplier: number): void {
-    this.rattleMultiplier = Math.max(0, Math.min(2, multiplier));
+    this.rattleMultiplier = Math.max(0, Math.min(3, multiplier));
   }
 
   private buildChain(ctx: AudioContext, output: AudioNode, masterLevel: number): void {
@@ -194,13 +231,35 @@ export class CarTrunkBassSystem {
     this.rattleLimiter.ratio.value = 12;
     this.rattleLimiter.attack.value = 0.002;
     this.rattleLimiter.release.value = 0.09;
-    this.rattleLimiter.connect(this.masterGain);
+
+    this.rattleOutputGain = ctx.createGain();
+    this.rattleOutputGain.gain.value = RATTLE_OUTPUT_GAIN;
+    this.rattleLimiter.connect(this.rattleOutputGain);
+    this.rattleOutputGain.connect(this.masterGain);
     this.rattleSynth = new Delta88TrunkRattleSynth(ctx, this.rattleLimiter);
+
+    // Cabin-only 20x low-end. A bass-only parallel branch (150 Hz lowpass)
+    // joins the main path before the compressor, so the final cabin limiter
+    // still owns the ceiling: no hard clipping, no distorted buzz on top, just
+    // the trunk panel rattling.
+    this.cabinBassFilter = ctx.createBiquadFilter();
+    this.cabinBassFilter.type = 'lowpass';
+    this.cabinBassFilter.frequency.value = 150;
+    this.cabinBassFilter.Q.value = 0.7;
+
+    this.cabinBassGain = ctx.createGain();
+    this.cabinBassGain.gain.value = 1;
+
+    this.subPeakFilter.connect(this.cabinBassFilter);
+    this.cabinBassFilter.connect(this.cabinBassGain);
+    this.cabinBassGain.connect(this.compressor);
   }
 
   /** Short Delta 88-style metal pulse on a bass hit. */
   private triggerTrunkRattle(intensity: number): void {
-    if (!this.rattleEnabled || !this.rattleSynth) return;
+    if ((!this.rattleEnabled && !this.cabinRattleEnabled) || !this.rattleSynth) {
+      return;
+    }
     if (
       this.rattleSynth.triggerOnBassHit(
         intensity,
@@ -263,11 +322,16 @@ export class CarTrunkBassSystem {
     this.bassEnergy = subAvg;
     this.previousSubBass = subAvg;
 
-    // Rattle on the rising edge of a bass hit, not for every frame a long 808
-    // is held. That makes the sheet metal follow the uploaded track's beat.
+    // The trunk panel is what makes the noise: while the sub is genuinely
+    // moving it, the panel keeps chattering, and the synth's 65 ms cap paces the
+    // pulses into a rattle instead of one hit per beat. Outside the cabin only
+    // fresh attacks rattle the sheet metal.
+    const rattleGate = isInsideCar ? 0.32 : 0.5;
+    const riseGate = isInsideCar ? 0.04 : 0.075;
+    const sustainedShake = isInsideCar && subAvg > 0.4;
     if (
-      subAvg > 0.5 &&
-      bassRise > 0.075 &&
+      subAvg > rattleGate &&
+      (bassRise > riseGate || sustainedShake) &&
       (isInsideCar || distanceToTrunkMeters < TRUNK_RATTLE_NEAR_METERS) &&
       falloff > 0
     ) {
@@ -295,6 +359,9 @@ export class CarTrunkBassSystem {
       this.analyser?.disconnect();
       this.masterGain?.disconnect();
       this.rattleLimiter?.disconnect();
+      this.rattleOutputGain?.disconnect();
+      this.cabinBassFilter?.disconnect();
+      this.cabinBassGain?.disconnect();
     } catch {
       // Already disconnected.
     }
@@ -305,8 +372,12 @@ export class CarTrunkBassSystem {
     this.analyser = null;
     this.masterGain = null;
     this.rattleLimiter = null;
+    this.rattleOutputGain = null;
     this.rattleSynth = null;
+    this.cabinBassFilter = null;
+    this.cabinBassGain = null;
     this.rattleMultiplier = 1;
+    this.cabinRattleEnabled = false;
     if (this.ownsContext && this.ctx && this.ctx.state !== 'closed') {
       void this.ctx.close().catch(() => {});
     }
