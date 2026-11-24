@@ -235,7 +235,14 @@ export interface WorldHandles {
   resourceNodes: ResourceNodeState[];
   resourceMeshes: Map<string, THREE.Object3D>;
   resourceHandles: Map<string, ResourceVisualHandle>;
-  colliders: { x: number; z: number; radius: number; nodeId?: string }[];
+  colliders: {
+    x: number;
+    z: number;
+    radius: number;
+    nodeId?: string;
+    minY?: number;
+    maxY?: number;
+  }[];
   expeditionJournalPos: THREE.Vector3;
   farmerNpcPos: THREE.Vector3;
   farmerNpcGroup: THREE.Group;
@@ -1101,7 +1108,14 @@ export function buildIslandWorld(
 
   // 6. Hyper-Realistic Shipwreck & Beaching Event with Tiered Interior Zones & Boarding Routes
   // ALL COLLISION BARRIERS & INVISIBLE WALLS STRIPPED: Player can walk/swim freely through any part!
-  const colliders: { x: number; z: number; radius: number; nodeId?: string }[] = [];
+  const colliders: {
+    x: number;
+    z: number;
+    radius: number;
+    nodeId?: string;
+    minY?: number;
+    maxY?: number;
+  }[] = [];
   const wreckMat = new THREE.MeshStandardMaterial({
     color: 0x4b3320,
     map: woodTex,

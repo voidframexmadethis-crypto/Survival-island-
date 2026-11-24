@@ -127,7 +127,13 @@ function makeScoreTexture(
 export class HilltopBowlingAlley {
   public readonly group = new THREE.Group();
   public readonly station = BOWLING_STATION_WORLD;
-  public readonly colliders: { x: number; z: number; radius: number }[] = [];
+  public readonly colliders: {
+    x: number;
+    z: number;
+    radius: number;
+    minY?: number;
+    maxY?: number;
+  }[] = [];
 
   private readonly ballGroup = new THREE.Group();
   private readonly pins: BowlingPin[] = [];
@@ -188,12 +194,15 @@ export class HilltopBowlingAlley {
       return mesh;
     };
 
-    // Raised timber floor and covered pavilion.
+    // Raised timber floor and enclosed wing. The east wall has a 2.6 m
+    // opening onto the glazed gallery from the original hilltop house.
     addBox(root, floorMat, 31.0, 0.28, 9.2, 7.3, -0.14, 0);
     addBox(root, wallMat, 0.24, 4.7, 9.2, 22.7, 2.35, 0);
-    addBox(root, wallMat, 0.24, 4.7, 9.2, -8.2, 2.35, 0);
-    addBox(root, wallMat, 31.0, 0.2, 0.24, 7.3, 4.7, -4.5);
-    addBox(root, wallMat, 31.0, 0.2, 0.24, 7.3, 4.7, 4.5);
+    addBox(root, wallMat, 0.24, 4.7, 0.9, -8.2, 2.35, -4.05);
+    addBox(root, wallMat, 0.24, 4.7, 5.5, -8.2, 2.35, 1.75);
+    addBox(root, wallMat, 0.24, 1.7, 2.6, -8.2, 3.85, -2.3);
+    addBox(root, wallMat, 31.0, 4.7, 0.24, 7.3, 2.35, -4.5);
+    addBox(root, wallMat, 31.0, 4.7, 0.24, 7.3, 2.35, 4.5);
     addBox(root, roofMat, 32.2, 0.32, 10.0, 7.3, 5.25, 0);
     addBox(root, roofMat, 32.4, 0.24, 4.8, 7.3, 5.62, -2.55);
     addBox(root, roofMat, 32.4, 0.24, 4.8, 7.3, 5.62, 2.55);
@@ -201,6 +210,23 @@ export class HilltopBowlingAlley {
       for (const z of [-4.25, 4.25]) {
         addBox(root, trimMat, 0.24, 4.9, 0.24, x, 2.42, z);
       }
+    }
+    // Tall glazing above the lane gives the interior real depth.
+    for (const x of [-5.0, 1.8, 8.6, 15.4]) {
+      addBox(root, new THREE.MeshStandardMaterial({
+        color: 0x93c5fd,
+        transparent: true,
+        opacity: 0.28,
+        roughness: 0.1,
+        metalness: 0.2,
+      }), 4.8, 1.7, 0.05, x, 3.2, -4.36);
+      addBox(root, new THREE.MeshStandardMaterial({
+        color: 0x93c5fd,
+        transparent: true,
+        opacity: 0.28,
+        roughness: 0.1,
+        metalness: 0.2,
+      }), 4.8, 1.7, 0.05, x, 3.2, 4.36);
     }
 
     // Regulation lane, approach, gutters and pin deck.
@@ -318,13 +344,36 @@ export class HilltopBowlingAlley {
       });
     }
 
-    // Structural posts use the game's normal 2D collider layer.
+    // Structural posts and enclosing walls use the normal collider layer.
     for (const x of [-7.7, 21.8]) {
       for (const z of [-4.25, 4.25]) {
         const worldX = BOWLING_ALLEY_POS.x - x;
         const worldZ = BOWLING_ALLEY_POS.z - z;
         this.colliders.push({ x: worldX, z: worldZ, radius: 0.34 });
       }
+    }
+    for (let x = -8.0; x <= 22.6; x += 0.8) {
+      const worldX = BOWLING_ALLEY_POS.x - x;
+      for (const z of [-4.5, 4.5]) {
+        this.colliders.push({
+          x: worldX,
+          z: BOWLING_ALLEY_POS.z - z,
+          radius: 0.28,
+          minY: BOWLING_ALLEY_FLOOR_Y - 0.1,
+          maxY: BOWLING_ALLEY_FLOOR_Y + 4.8,
+        });
+      }
+    }
+    // East end wall, leaving the gallery door open at local z -3.6..-1.0.
+    for (let z = -4.4; z <= 4.4; z += 0.7) {
+      if (z > -3.7 && z < -0.9) continue;
+      this.colliders.push({
+        x: BOWLING_ALLEY_POS.x + 8.2,
+        z: BOWLING_ALLEY_POS.z - z,
+        radius: 0.28,
+        minY: BOWLING_ALLEY_FLOOR_Y - 0.1,
+        maxY: BOWLING_ALLEY_FLOOR_Y + 4.8,
+      });
     }
   }
 

@@ -111,6 +111,8 @@ import { DryingRackModal } from './DryingRackModal';
 import { CraftingModal } from './CraftingModal';
 import { FarmerShopModal } from './FarmerShopModal';
 import { FridgeModal } from './FridgeModal';
+import { MansionEntertainmentModal } from './MansionEntertainmentModal';
+import { MansionWardrobeModal } from './MansionWardrobeModal';
 import { VikingVillageModal } from './VikingVillageModal';
 import { InventoryModal } from './InventoryModal';
 import { IslandMapModal } from './IslandMapModal';
@@ -3289,7 +3291,249 @@ export function SurvivalGameClient() {
                 {hud.activeVehicle.hasHydraulics && (
                   <div className="space-y-2 pt-1 border-t border-stone-800">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      {hud.activeVehicle.hydraulicStyle === 'airbag_coilover' ? (
+                      {hud.activeVehicle.hydraulicStyle === 'cadillac_lowrider' ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('lock_up')}
+                            className="min-h-[32px] px-2.5 py-1 rounded-lg bg-stone-900 border border-emerald-600/60 text-emerald-200 text-[11px] font-bold flex items-center gap-1"
+                          >
+                            <ArrowUp className="w-3.5 h-3.5" />
+                            <span>Up</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('drop')}
+                            className="min-h-[32px] px-2.5 py-1 rounded-lg bg-stone-900 border border-emerald-600/60 text-emerald-200 text-[11px] font-bold flex items-center gap-1"
+                          >
+                            <ArrowDown className="w-3.5 h-3.5" />
+                            <span>Down</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('front_hop')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicHopMode === 'front'
+                                ? 'bg-amber-400 border-amber-100 text-stone-950'
+                                : 'bg-stone-900 border-purple-500/60 text-purple-100'
+                            }`}
+                          >
+                            Front Hop
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('rear_hop')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicHopMode === 'rear'
+                                ? 'bg-amber-400 border-amber-100 text-stone-950'
+                                : 'bg-stone-900 border-purple-500/60 text-purple-100'
+                            }`}
+                          >
+                            Rear Hop
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('three_wheel')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicMode === 'three_wheel'
+                                ? 'bg-emerald-400 border-emerald-100 text-stone-950'
+                                : 'bg-stone-900 border-emerald-600/60 text-emerald-200'
+                            }`}
+                          >
+                            3-Wheel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('three_wheel_hop')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicHopMode === 'three'
+                                ? 'bg-amber-400 border-amber-100 text-stone-950'
+                                : 'bg-stone-900 border-emerald-600/60 text-emerald-200'
+                            }`}
+                          >
+                            3-Wheel Hop
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('full_hop')}
+                            className="min-h-[32px] px-2.5 py-1 rounded-lg bg-fuchsia-600 border border-fuchsia-300 text-white text-[11px] font-bold"
+                          >
+                            Full Hop
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('left_tilt')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicMode === 'left_tilt'
+                                ? 'bg-amber-400 border-amber-100 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            Left
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('right_tilt')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicMode === 'right_tilt'
+                                ? 'bg-amber-400 border-amber-100 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            Right
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('front_lock')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicFrontLocked
+                                ? 'bg-sky-400 border-sky-100 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            Front Lock
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('rear_lock')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicRearLocked
+                                ? 'bg-sky-400 border-sky-100 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            Rear Lock
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('bounce')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicHopMode === 'all'
+                                ? 'bg-amber-400 border-amber-100 text-stone-950'
+                                : 'bg-purple-600 border-purple-300 text-white'
+                            }`}
+                          >
+                            Bounce
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('normal_height')}
+                            className="min-h-[32px] px-2.5 py-1 rounded-lg bg-stone-900 border border-stone-600 text-stone-200 text-[11px] font-bold"
+                          >
+                            Stock Height
+                          </button>
+
+                          <span className="w-full text-[10px] font-semibold uppercase tracking-wide text-stone-500 pt-0.5">
+                            Independent corners — select for 3-wheel, +/− for travel
+                          </span>
+                          <div className="grid w-full grid-cols-4 gap-1.5">
+                            {(['fl', 'fr', 'rl', 'rr'] as const).map((corner) => {
+                              const selected =
+                                (hud.activeVehicle!.hydraulicSelectedCorner ?? 'rl') === corner;
+                              const lifted =
+                                hud.activeVehicle!.hydraulicWheelClearance?.[corner] ?? 0;
+                              const grounded =
+                                hud.activeVehicle!.hydraulicWheelContact?.[corner] ?? true;
+                              const cornerLocked =
+                                hud.activeVehicle!.hydraulicCornerLocked?.[corner] ?? false;
+                              return (
+                                <div
+                                  key={corner}
+                                  className={`rounded-lg border p-1 ${
+                                    selected
+                                      ? 'border-emerald-400 bg-emerald-500/15'
+                                      : 'border-stone-800 bg-stone-950/70'
+                                  }`}
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      engineRef.current?.triggerHydraulicAction(
+                                        `select_${corner}` as
+                                          | 'select_fl'
+                                          | 'select_fr'
+                                          | 'select_rl'
+                                          | 'select_rr',
+                                      )
+                                    }
+                                    className="w-full text-left"
+                                  >
+                                    <span className="block text-[11px] font-bold text-stone-100">
+                                      {corner.toUpperCase()}
+                                    </span>
+                                    <span
+                                      className={`block text-[9px] font-mono ${
+                                        grounded ? 'text-stone-400' : 'text-emerald-300'
+                                      }`}
+                                    >
+                                      {grounded
+                                        ? 'GROUND'
+                                        : `${Math.round(lifted * 39.37)} in AIR`}
+                                    </span>
+                                  </button>
+                                  <div className="mt-1 flex gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        engineRef.current?.triggerHydraulicAction(
+                                          `${corner}_raise` as
+                                            | 'fl_raise'
+                                            | 'fr_raise'
+                                            | 'rl_raise'
+                                            | 'rr_raise',
+                                        )
+                                      }
+                                      className="flex-1 rounded bg-emerald-700/70 text-[11px] font-bold text-white"
+                                    >
+                                      +
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        engineRef.current?.triggerHydraulicAction(
+                                          `${corner}_lower` as
+                                            | 'fl_lower'
+                                            | 'fr_lower'
+                                            | 'rl_lower'
+                                            | 'rr_lower',
+                                        )
+                                      }
+                                      className="flex-1 rounded bg-stone-800 text-[11px] font-bold text-stone-200"
+                                    >
+                                      −
+                                    </button>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      engineRef.current?.triggerHydraulicAction(
+                                        `lock_${corner}` as
+                                          | 'lock_fl'
+                                          | 'lock_fr'
+                                          | 'lock_rl'
+                                          | 'lock_rr',
+                                      )
+                                    }
+                                    className={`mt-1 w-full rounded text-[9px] font-bold py-0.5 ${
+                                      cornerLocked
+                                        ? 'bg-sky-400 text-stone-950'
+                                        : 'bg-stone-800 text-stone-400'
+                                    }`}
+                                  >
+                                    {cornerLocked ? 'LOCKED' : 'Lock'}
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div className="w-full text-[10px] text-stone-400 font-mono">
+                            Ground contact: {hud.activeVehicle.hydraulicContactCount ?? 4}/4 tires
+                            {hud.activeVehicle.hydraulicHopMode
+                              ? ` · ${hud.activeVehicle.hydraulicHopMode.toUpperCase()} HOP ACTIVE`
+                              : ''}
+                          </div>
+                        </>
+                      ) : hud.activeVehicle.hydraulicStyle === 'airbag_coilover' ? (
                         <>
                           <button
                             type="button"
@@ -4519,6 +4763,26 @@ export function SurvivalGameClient() {
           onTake={(itemId) => engineRef.current?.transferFromFridge(itemId, 1)}
           onStore={(itemId) => engineRef.current?.transferToFridge(itemId, 1)}
           onEat={(itemId) => engineRef.current?.useOrEquipItem(itemId)}
+          onClose={closeModal}
+        />
+      )}
+
+      {activeModal === 'wardrobe' && hud && (
+        <MansionWardrobeModal
+          hud={hud}
+          onStore={(itemId) => engineRef.current?.transferToWardrobe(itemId, 1)}
+          onTake={(itemId) => engineRef.current?.transferFromWardrobe(itemId, 1)}
+          onWear={(itemId) => {
+            engineRef.current?.transferFromWardrobe(itemId, 1);
+            engineRef.current?.useOrEquipItem(itemId);
+          }}
+          onClose={closeModal}
+        />
+      )}
+
+      {activeModal === 'mansion_entertainment' && (
+        <MansionEntertainmentModal
+          initialStationId={activeStationStructureId || 'mansion_xbox'}
           onClose={closeModal}
         />
       )}

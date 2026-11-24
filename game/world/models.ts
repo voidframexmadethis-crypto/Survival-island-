@@ -4489,7 +4489,14 @@ export interface HouseStationTarget {
     | 'house_studio_drums'
     | 'house_studio_booth'
     | 'house_door'
-    | 'house_bowling';
+    | 'house_bowling'
+    | 'house_wardrobe'
+    | 'house_light'
+    | 'house_pool'
+    | 'house_pool_exit'
+    | 'house_pool_table'
+    | 'house_arcade'
+    | 'house_xbox';
   label: string;
   sublabel: string;
   x: number;
@@ -4647,8 +4654,23 @@ export function createHilltopHouse(
   westGardenHeader.position.set(-5.2, 2.78, 2.3);
   westGardenHeader.userData.isHouseWall = true;
   group.add(westGardenHeader);
-  // North Wall
-  addWall(-0.5, -4.2, 9.6, 0.24);
+  // North Wall with a real opening into the mansion's garden atrium. This is
+  // what physically joins the original shell to the new grand block.
+  addWall(-3.65, -4.2, 3.3, 0.24);
+  addWall(2.65, -4.2, 3.3, 0.24);
+  const northAtriumHeader = new THREE.Mesh(
+    new THREE.BoxGeometry(3.0, 0.82, 0.28),
+    trimMat,
+  );
+  northAtriumHeader.position.set(-0.5, 2.69, -4.2);
+  northAtriumHeader.userData.isHouseWall = true;
+  group.add(northAtriumHeader);
+  for (const x of [-2.0, 1.0]) {
+    const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.15, 2.3, 0.32), trimMat);
+    jamb.position.set(x, 1.21, -4.2);
+    jamb.userData.isHouseWall = true;
+    group.add(jamb);
+  }
   // South Partition Wall (Z = +4.2) separating main rooms from Dedicated Music Studio Wing,
   // leaving a wide 2.7m open archway at X: +1.5 .. +4.2 along the East entry corridor!
   addWall(-1.85, 4.2, 6.7, 0.24);
@@ -4843,14 +4865,16 @@ export function createHilltopHouse(
   // D. Kitchen (North-East wall Z=-3.55): Refrigerator, Stove/Oven, Kitchen Counter & Sink
   // Refrigerator at X=-0.1, Z=-3.5
   const fridgeBody = new THREE.Mesh(new THREE.BoxGeometry(0.95, 1.95, 0.85), steelMat);
-  fridgeBody.position.set(-0.1, 1.05, -3.55);
+  // Keep the fridge against the east wall so the north-wall atrium opening
+  // stays physically clear; the old position stood in the doorway.
+  fridgeBody.position.set(3.55, 1.05, -1.75);
   fridgeBody.castShadow = true;
   const fridgeSplit = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.03, 0.87), darkTvMat);
-  fridgeSplit.position.set(-0.1, 1.38, -3.55);
-  const fridgeHandle = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.55, 0.06), chromeMat);
-  fridgeHandle.position.set(0.28, 1.05, -3.1);
+  fridgeSplit.position.set(3.55, 1.38, -1.75);
+  const fridgeHandle = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.55, 0.05), chromeMat);
+  fridgeHandle.position.set(3.05, 1.05, -1.75);
   group.add(fridgeBody, fridgeSplit, fridgeHandle);
-  addLocalCollider(-0.1, -3.55, 0.55);
+  addLocalCollider(3.55, -1.75, 0.55);
 
   // Kitchen Stove / Oven at X=1.25, Z=-3.55
   const stoveBody = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.92, 0.82), steelMat);
@@ -5545,9 +5569,9 @@ export function createHilltopHouse(
       kind: 'house_fridge',
       label: 'Open Refrigerator',
       sublabel: 'Cold storage & fresh dairy',
-      x: worldX - 0.1,
+      x: worldX + 3.35,
       y: worldY,
-      z: worldZ - 3.3,
+      z: worldZ - 1.55,
       range: 2.4,
     },
     {

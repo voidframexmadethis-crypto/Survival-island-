@@ -405,6 +405,8 @@ import {
   getBiomeAt,
   getHilltopBaseFloorY,
   getLandmarkFloorY,
+  getMansionPoolAt,
+  MANSION_POOLS,
   getPlayableMaxRadius,
   getTerrainHeight,
   getTerrainSlope,
@@ -476,6 +478,28 @@ import {
   toggleHydraulicLock,
   type HydraulicControlState,
 } from '../systems/hydraulicControls';
+import {
+  LOWRIDER_CORNERS,
+  adjustLowriderCorner,
+  createLowriderControls,
+  createLowriderRigState,
+  impulseLowriderCorner,
+  launchLowriderFullHop,
+  lowriderContactCount,
+  lowriderWheelClearances,
+  pumpLowriderCorners,
+  resetLowriderControls,
+  resumeLowriderLevel,
+  setLowriderBodyTrim,
+  setLowriderSide,
+  stepLowriderRig,
+  toggleLowriderAxleLock,
+  toggleLowriderCornerLock,
+  toggleLowriderThreeWheel,
+  type LowriderControls,
+  type LowriderCorner,
+  type LowriderRigState,
+} from '../systems/lowriderSuspension';
 import {
   CoasterPiecePresetKey,
   RollerCoasterRuntime,
@@ -685,6 +709,8 @@ export interface EngineCallbacks {
       | 'viking_village'
       | 'mainland'
       | 'air_shuttle_entertainment'
+      | 'wardrobe'
+      | 'mansion_entertainment'
     >,
     structureId?: string,
   ) => void;
@@ -971,7 +997,10 @@ export class GameEngine {
   ];
 
   // Spatial Hash Grids (16m cells) for O(1) zero-GC world collider and resource node lookups
-  private colliderGrid = new Map<number, { x: number; z: number; radius: number; nodeId?: string }[]>();
+  private colliderGrid = new Map<
+    number,
+    { x: number; z: number; radius: number; nodeId?: string; minY?: number; maxY?: number }[]
+  >();
   private resourceNodeGrid = new Map<number, ResourceNodeState[]>();
   private activeFellingNodeIds = new Set<string>();
   private respawningNodeIds = new Set<string>();
@@ -1349,6 +1378,7 @@ export class GameEngine {
   private plantedCrops: PlantedCrop[] = [];
   private cropMeshes = new Map<string, THREE.Group>();
   private fridgeItems: InventorySlot[] = [];
+  private mansionWardrobeItems: InventorySlot[] = [];
   private seatedState: {
     label: string;
     x: number;
@@ -1546,6 +1576,12 @@ export class GameEngine {
   private liftButtonPressTimer = 0;
   private readonly _tapNdc = new THREE.Vector2();
   private hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
+  /** Dedicated four-corner Cadillac rig, simulated independently of the body mesh. */
+  private cadillacRig: LowriderRigState = createLowriderRigState();
+  private cadillacControls: LowriderControls = createLowriderControls();
+  private cadillacHopMode: 'three' | 'front' | 'rear' | 'all' | null = null;
+  private cadillacHopTimer = 0;
+  private cadillacHopNextPulse = 0;
   private trunkBassPulse = 0;
   private trunkBassPressure = 0;
   private chestThumpPulse = 0;
@@ -2427,6 +2463,10 @@ export class GameEngine {
       this.triggerHydraulicAction('lock_up');
     } else if (activeHasHyd && e.code === 'KeyH') {
       this.triggerHydraulicAction('three_wheel');
+    } else if (activeHasHyd && e.code === 'KeyN') {
+      this.triggerHydraulicAction('full_hop');
+    } else if (activeHasHyd && e.code === 'KeyJ') {
+      this.triggerHydraulicAction('three_wheel_hop');
     } else if (
       activeVehicle &&
       (activeVehicle.hasConvertibleTop || activeVehicle.preset === 'cadillac_coupe_deville') &&
@@ -4924,6 +4964,7 @@ export class GameEngine {
       this.coins = 99999;
       this.seatedState = null;
       this.fridgeItems = [];
+      this.mansionWardrobeItems = [];
       this.clearPlantedCrops();
       this.clearPlacedStructures();
       this.clearAlienRelicDecorMeshes();
@@ -5115,6 +5156,7 @@ export class GameEngine {
 
     this.coins = 150;
     this.seatedState = null;
+    this.mansionWardrobeItems = [];
     this.fridgeItems = [
       { itemId: 'milk', quantity: 2 },
       { itemId: 'egg', quantity: 6 },
@@ -5452,6 +5494,9 @@ export class GameEngine {
       ? save.backpackCompartments.map((c) => ({ ...c }))
       : [];
     this.coins = typeof save.coins === 'number' ? save.coins : 150;
+    this.mansionWardrobeItems = Array.isArray(save.wardrobeItems)
+      ? save.wardrobeItems.map((s) => ({ ...s }))
+      : [];
     this.fridgeItems = Array.isArray(save.fridgeItems)
       ? save.fridgeItems.map((s) => ({ ...s }))
       : loadedWorldType === 'island'
@@ -6485,6 +6530,7 @@ export class GameEngine {
       gameMode: effectiveMode,
       plantedCrops: this.plantedCrops.map((c) => ({ ...c })),
       fridgeItems: this.fridgeItems.map((s) => ({ ...s })),
+      wardrobeItems: this.mansionWardrobeItems.map((s) => ({ ...s })),
       tvChannel: this.smartTv.currentChannel,
       tvPower: this.smartTv.power,
       tvTitle: this.smartTv.getCurrentChannelMeta().name,
@@ -7462,6 +7508,116 @@ export class GameEngine {
     this.emitHud();
   }
 
+  public transferToWardrobe(itemId: ItemId, qty = 1): void {
+    if (!this.removeItem(itemId, qty)) return;
+    const existing = this.mansionWardrobeItems.find((s) => s.itemId === itemId);
+    if (existing) existing.quantity += qty;
+    else this.mansionWardrobeItems.push({ itemId, quantity: qty });
+    this.mansionWardrobeItems.sort((a, b) => a.itemId.localeCompare(b.itemId));
+    this.sound.playPickup();
+    this.emitHud();
+  }
+
+  public transferFromWardrobe(itemId: ItemId, qty = 1): void {
+    const idx = this.mansionWardrobeItems.findIndex((s) => s.itemId === itemId);
+    if (idx === -1) return;
+    const take = Math.min(qty, this.mansionWardrobeItems[idx].quantity);
+    this.mansionWardrobeItems[idx].quantity -= take;
+    if (this.mansionWardrobeItems[idx].quantity <= 0) {
+      this.mansionWardrobeItems.splice(idx, 1);
+    }
+    this.addItem(itemId, take, false);
+    this.sound.playPickup();
+    this.emitHud();
+  }
+
+  private toggleMansionDoor(doorId: string): void {
+    const door = this.world?.premadeMansion?.doors.find((d) => d.id === doorId);
+    if (!door) return;
+    door.open = !door.open;
+    // A closed leaf is blocked by its whole line of colliders; an open leaf
+    // disables all of them. Never use a negative radius: the circular push
+    // resolution would teleport the player through the doorway.
+    for (const collider of door.colliders) {
+      collider.radius = door.open ? 0 : 0.3;
+    }
+    this.sound.playWeldSnap();
+    this.toast(door.open ? 'Door opened.' : 'Door closed and latched.', 'info');
+    this.emitHud();
+  }
+
+  private toggleMansionWardrobe(wardrobeId: string): void {
+    const wardrobe = this.world?.premadeMansion?.wardrobes.find(
+      (w) => w.id === wardrobeId,
+    );
+    if (!wardrobe) return;
+    wardrobe.open = !wardrobe.open;
+    this.sound.playWeldSnap();
+    this.emitHud();
+  }
+
+  private toggleMansionLight(lightId: string): void {
+    const light = this.world?.premadeMansion?.lights.find((l) => l.id === lightId);
+    if (!light) return;
+    light.on = !light.on;
+    light.material.emissiveIntensity = light.on ? 1.2 : 0.02;
+    this.sound.playWeldSnap();
+    this.toast(light.on ? 'Bedroom lights on.' : 'Bedroom lights dimmed.', 'info');
+  }
+
+  private updateMansionInteractive(dt: number): void {
+    const mansion = this.world?.premadeMansion;
+    if (!mansion) return;
+    const t = Math.min(1, dt * 9);
+    for (const door of mansion.doors) {
+      const target = door.open ? door.openAngle : door.closedAngle;
+      door.pivot.rotation.y += (target - door.pivot.rotation.y) * t;
+    }
+    for (const wardrobe of mansion.wardrobes) {
+      const target = wardrobe.open ? wardrobe.openAngle : 0;
+      wardrobe.pivot.rotation.y += (target - wardrobe.pivot.rotation.y) * t;
+    }
+  }
+
+  private enterMansionPool(stationId: string): void {
+    const pool = MANSION_POOLS.find((p) =>
+      stationId.includes('indoor')
+        ? p.id === 'mansion_indoor_pool'
+        : p.id === 'mansion_outdoor_pool',
+    );
+    if (!pool) return;
+    this.playerX = pool.entryX;
+    this.playerZ = pool.entryZ;
+    this.playerY = pool.waterY - 0.55;
+    this.playerVelY = -0.12;
+    this.isSwimming = true;
+    this.isUnderwater = false;
+    this.swimBreath = 100;
+    this.grounded = false;
+    this.sound.playWashBottle();
+    this.toast('Entered the pool — swim with WASD, dive with Ctrl/C.', 'info');
+    this.emitHud();
+  }
+
+  private exitMansionPool(stationId: string): void {
+    const pool = MANSION_POOLS.find((p) =>
+      stationId.includes('indoor')
+        ? p.id === 'mansion_indoor_pool'
+        : p.id === 'mansion_outdoor_pool',
+    );
+    if (!pool) return;
+    this.playerX = pool.exitX;
+    this.playerZ = pool.exitZ;
+    this.playerY = pool.deckY + 0.08;
+    this.playerVelY = 0;
+    this.isSwimming = false;
+    this.isUnderwater = false;
+    this.swimBreath = 100;
+    this.grounded = true;
+    this.toast('Climbed out of the pool.', 'info');
+    this.emitHud();
+  }
+
   public buyFromFarmer(itemId: ItemId): boolean {
     const entry = FARM_SHOP_STOCK.find((s) => s.itemId === itemId);
     if (!entry) return false;
@@ -7725,7 +7881,31 @@ export class GameEngine {
         break;
       }
       case 'house_door': {
-        this.toggleHillHouseDoor();
+        if (st.id.startsWith('mansion_')) this.toggleMansionDoor(st.id);
+        else this.toggleHillHouseDoor();
+        break;
+      }
+      case 'house_wardrobe': {
+        this.toggleMansionWardrobe(st.id);
+        this.callbacks.onOpenStation('wardrobe', st.id);
+        break;
+      }
+      case 'house_light': {
+        this.toggleMansionLight(st.id);
+        break;
+      }
+      case 'house_pool': {
+        this.enterMansionPool(st.id);
+        break;
+      }
+      case 'house_pool_exit': {
+        this.exitMansionPool(st.id);
+        break;
+      }
+      case 'house_pool_table':
+      case 'house_arcade':
+      case 'house_xbox': {
+        this.callbacks.onOpenStation('mansion_entertainment', st.id);
         break;
       }
       case 'house_bowling': {
@@ -8231,7 +8411,14 @@ export class GameEngine {
         near.kind === 'house_studio_drums' ||
         near.kind === 'house_studio_booth' ||
         near.kind === 'house_door' ||
-        near.kind === 'house_bowling')
+        near.kind === 'house_bowling' ||
+        near.kind === 'house_wardrobe' ||
+        near.kind === 'house_light' ||
+        near.kind === 'house_pool' ||
+        near.kind === 'house_pool_exit' ||
+        near.kind === 'house_pool_table' ||
+        near.kind === 'house_arcade' ||
+        near.kind === 'house_xbox')
     ) {
       const st = this.getActiveStations().find((s) => s.id === near.id);
       if (st) {
@@ -8754,7 +8941,15 @@ export class GameEngine {
         near.kind === 'house_music_studio' ||
         near.kind === 'house_studio_drums' ||
         near.kind === 'house_studio_booth' ||
-        near.kind === 'house_bowling'
+        near.kind === 'house_bowling' ||
+        near.kind === 'house_door' ||
+        near.kind === 'house_wardrobe' ||
+        near.kind === 'house_light' ||
+        near.kind === 'house_pool' ||
+        near.kind === 'house_pool_exit' ||
+        near.kind === 'house_pool_table' ||
+        near.kind === 'house_arcade' ||
+        near.kind === 'house_xbox'
       ) {
         const st = this.getActiveStations().find((s) => s.id === near.id);
         if (st) {
@@ -11774,7 +11969,14 @@ export class GameEngine {
     // Terrain, Built Bridges/Decks & Swimming state
     if (!Number.isFinite(this.playerX)) this.playerX = 0;
     if (!Number.isFinite(this.playerZ)) this.playerZ = 0;
-    const waterLevel = this.inSpacePlanet ? -999 : getWaterLevelAt(this.playerX, this.playerZ);
+    const localPool = this.inSpacePlanet || isFlat
+      ? null
+      : getMansionPoolAt(this.playerX, this.playerZ, this.playerY);
+    const waterLevel = this.inSpacePlanet
+      ? -999
+      : localPool
+        ? localPool.waterY
+        : getWaterLevelAt(this.playerX, this.playerZ);
     const terrainY = this.getPlayerTerrainY(this.playerX, this.playerZ);
     const deckY = this.inSpacePlanet
       ? -999
@@ -11782,7 +11984,9 @@ export class GameEngine {
     const ferryDeckY = this.inSpacePlanet
       ? -999
       : this.getFerryWalkSurfaceY(this.playerX, this.playerZ, this.playerY);
-    const standingSurfaceY = Math.max(terrainY, deckY, ferryDeckY);
+    const standingSurfaceY = localPool
+      ? localPool.floorY
+      : Math.max(terrainY, deckY, ferryDeckY);
     this.isSwimming = !this.inSpacePlanet && !isFlat && standingSurfaceY < waterLevel - 0.45;
 
     const prevPlayerY = this.playerY;
@@ -11950,7 +12154,16 @@ export class GameEngine {
             if (!cell) continue;
             for (let ci = 0; ci < cell.length; ci++) {
               const col = cell[ci];
+              // Vertical bands let interior doors and upper-floor walls block
+              // only the storey they belong to instead of the whole column.
+              if (
+                (col.minY !== undefined && this.playerY < col.minY - 0.25) ||
+                (col.maxY !== undefined && this.playerY > col.maxY + 0.05)
+              ) {
+                continue;
+              }
               let activeRadius = col.radius;
+              if (activeRadius <= 0) continue;
               if (col.nodeId) {
                 const node = this.nodeById.get(col.nodeId);
                 if (node && node.hp <= 0) {
@@ -12175,7 +12388,12 @@ export class GameEngine {
     const newFerryDeckY = this.inSpacePlanet
       ? -999
       : this.getFerryWalkSurfaceY(this.playerX, this.playerZ, this.playerY);
-    const newSurfaceY = Math.max(newTerrainY, newDeckY, newFerryDeckY);
+    const newLocalPool = this.inSpacePlanet || isFlat
+      ? null
+      : getMansionPoolAt(this.playerX, this.playerZ, this.playerY);
+    const newSurfaceY = newLocalPool
+      ? newLocalPool.floorY
+      : Math.max(newTerrainY, newDeckY, newFerryDeckY);
     if (this.worldType === 'island' && this.currentDimension === 'overworld') {
       const currentCave = this.islandCaveSystem.getWalkSurface(
         this.playerX,
@@ -12197,7 +12415,11 @@ export class GameEngine {
     } else {
       this.activeCaveInteriorId = null;
     }
-    const newWaterY = this.inSpacePlanet ? -999 : getWaterLevelAt(this.playerX, this.playerZ);
+    const newWaterY = this.inSpacePlanet
+      ? -999
+      : newLocalPool
+        ? newLocalPool.waterY
+        : getWaterLevelAt(this.playerX, this.playerZ);
     this.isSwimming = !this.inSpacePlanet && !isFlat && newSurfaceY < newWaterY - 0.45;
     if (!this.isSwimming) {
       this.isUnderwater = false;
@@ -16647,12 +16869,43 @@ export class GameEngine {
           canFloat: specs.canFloat,
           canFly: specs.canFly,
           hasHydraulics: this.vehicleHasHydraulics(av),
-          hydraulicStyle: this.isAirbagVehicle(av)
-            ? 'airbag_coilover'
-            : this.isDonkHydraulicVehicle(av)
-              ? 'up_down_side'
-              : 'full_bounce',
+          hydraulicStyle: this.isCadillacLowrider(av)
+            ? 'cadillac_lowrider'
+            : this.isAirbagVehicle(av)
+              ? 'airbag_coilover'
+              : this.isDonkHydraulicVehicle(av)
+                ? 'up_down_side'
+                : 'full_bounce',
           hydraulicMode: this.hydraulicMode,
+          hydraulicSelectedCorner: this.isCadillacLowrider(av)
+            ? this.cadillacControls.selectedCorner
+            : undefined,
+          hydraulicWheelClearance: this.isCadillacLowrider(av)
+            ? lowriderWheelClearances(this.cadillacRig)
+            : undefined,
+          hydraulicWheelContact: this.isCadillacLowrider(av)
+            ? {
+                fl: this.cadillacRig.corners.fl.contact,
+                fr: this.cadillacRig.corners.fr.contact,
+                rl: this.cadillacRig.corners.rl.contact,
+                rr: this.cadillacRig.corners.rr.contact,
+              }
+            : undefined,
+          hydraulicContactCount: this.isCadillacLowrider(av)
+            ? lowriderContactCount(this.cadillacRig)
+            : undefined,
+          hydraulicCornerLocked: this.isCadillacLowrider(av)
+            ? { ...this.cadillacControls.locked }
+            : undefined,
+          hydraulicFrontLocked: this.isCadillacLowrider(av)
+            ? this.cadillacControls.locked.fl && this.cadillacControls.locked.fr
+            : undefined,
+          hydraulicRearLocked: this.isCadillacLowrider(av)
+            ? this.cadillacControls.locked.rl && this.cadillacControls.locked.rr
+            : undefined,
+          hydraulicHopMode: this.isCadillacLowrider(av)
+            ? this.cadillacHopMode
+            : null,
           hasAirbagSuspension: this.isAirbagVehicle(av),
           airbagSpeed: av.airbagSpeed ?? 1.0,
           airbagLockLevel: av.airbagLockLevel ?? 1.0,
@@ -16696,12 +16949,13 @@ export class GameEngine {
               av.preset === 'chevy_tahoe' || av.preset === 'chevy_2000_sub'
                 ? Math.max(0.075, 0.38 + (av.suspensionOffset ?? -0.3))
                 : Math.max(0.26, 0.38 + (av.suspensionOffset ?? 0));
-            const avgHeave =
-              (this.hydCorners.fl +
-                this.hydCorners.fr +
-                this.hydCorners.rl +
-                this.hydCorners.rr) *
-              0.25;
+            const avgHeave = this.isCadillacLowrider(av)
+              ? this.cadillacRig.bodyHeave
+              : (this.hydCorners.fl +
+                  this.hydCorners.fr +
+                  this.hydCorners.rl +
+                  this.hydCorners.rr) *
+                0.25;
             return Math.max(3, Math.round((baseRide + avgHeave) * 39.37));
           })(),
           highClearance:
@@ -16967,6 +17221,7 @@ export class GameEngine {
       seatedLabel: this.seatedState?.label ?? null,
       plantedCrops: this.cachedHudCrops,
       fridgeItems: this.cachedHudFridge,
+      wardrobeItems: this.mansionWardrobeItems.map((s) => ({ ...s })),
       structuralSummary,
       terrainSummary,
       targetHitbox: this.targetHitbox ? { ...this.targetHitbox } : null,
@@ -20233,6 +20488,7 @@ export class GameEngine {
             this.updateStructuralAndTerrainSystems(dt);
             this.updateKineticNetwork(dt);
             this.updateHillHouseDoor(dt);
+            this.updateMansionInteractive(dt);
             this.syncDragonDailyGrowth();
             this.updateDragonValleyWorld(dt);
             this.coasterRuntime?.update(dt, this.playerX, this.playerZ);
@@ -22771,6 +23027,15 @@ export class GameEngine {
           }
         : { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
+    this.cadillacRig = createLowriderRigState();
+    this.cadillacControls = createLowriderControls();
+    this.cadillacHopMode = null;
+    this.cadillacHopTimer = 0;
+    this.cadillacHopNextPulse = 0;
+    if (this.isCadillacLowrider(v) && parkedThreeWheel) {
+      this.cadillacControls.selectedCorner = 'rl';
+      toggleLowriderThreeWheel(this.cadillacControls, 'rl');
+    }
     this.trunkBassPulse = 0;
     this.trunkBassPressure = 0;
     this.chestThumpPulse = 0;
@@ -22793,8 +23058,9 @@ export class GameEngine {
       this.emitHud();
       return true;
     }
-    const extraHint =
-      v.preset === 'donk'
+    const extraHint = this.isCadillacLowrider(v)
+      ? ' · [Space] Front Hop · [Z] Rear Hop · [H] 3-Wheel · [N] Full Hop · [J] 3-Wheel Hop · Wheel Controls in HUD'
+      : v.preset === 'donk'
         ? ' · [Space/Z/Q/R] Hydraulics (Up / Down / Side-to-Side)'
         : this.vehicleHasHydraulics(v)
           ? ' · [Space/Z/Q/R/X] High-Bounce 2-Wheel Hydraulics'
@@ -22862,6 +23128,14 @@ export class GameEngine {
           v.preset === 'chevy_tahoe' ||
           v.preset === 'chevy_2000_sub'),
     );
+  }
+
+  /**
+   * The Coupe DeVille runs the full four-corner hydraulic rig rather than the
+   * generic airbag body-only path. This is the car with real wheel lift.
+   */
+  private isCadillacLowrider(v?: ModularVehicleData | null): boolean {
+    return Boolean(v && v.preset === 'cadillac_coupe_deville');
   }
 
   private vehicleHasHydraulics(v?: ModularVehicleData | null): boolean {
@@ -22960,6 +23234,11 @@ export class GameEngine {
     this.hydraulicControls = createHydraulicControlState();
     this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
+    this.cadillacRig = createLowriderRigState();
+    this.cadillacControls = createLowriderControls();
+    this.cadillacHopMode = null;
+    this.cadillacHopTimer = 0;
+    this.cadillacHopNextPulse = 0;
     this.trunkBassPulse = 0;
     this.trunkBassPressure = 0;
     this.chestThumpPulse = 0;
@@ -23156,6 +23435,273 @@ export class GameEngine {
     return false;
   }
 
+  /**
+   * Coupe DeVille controls drive real per-corner actuators. The four wheels
+   * have independent lift, axle locks preserve their commanded height, hops
+   * add velocity, and the full hop launches the whole chassis ballistically.
+   */
+  private handleCadillacHydraulicAction(
+    action: string,
+    av: ModularVehicleData,
+  ): boolean {
+    const rig = this.cadillacRig;
+    const controls = this.cadillacControls;
+    const speed = THREE.MathUtils.clamp(av.airbagSpeed ?? 1, 0.25, 2);
+    const pressure = THREE.MathUtils.clamp(av.airbagLockLevel ?? 1, 0.4, 1.4);
+    const pump = 4.8 * (0.75 + speed * 0.4) * pressure;
+    const cornerMap = {
+      fl_raise: ['fl', 1],
+      fl_lower: ['fl', -1],
+      fr_raise: ['fr', 1],
+      fr_lower: ['fr', -1],
+      rl_raise: ['rl', 1],
+      rl_lower: ['rl', -1],
+      rr_raise: ['rr', 1],
+      rr_lower: ['rr', -1],
+    } as const;
+    const selectMap = {
+      select_fl: 'fl',
+      select_fr: 'fr',
+      select_rl: 'rl',
+      select_rr: 'rr',
+    } as const;
+    const lockMap = {
+      lock_fl: 'fl',
+      lock_fr: 'fr',
+      lock_rl: 'rl',
+      lock_rr: 'rr',
+    } as const;
+    const stopHop = () => {
+      this.cadillacHopMode = null;
+      this.cadillacHopTimer = 0;
+    };
+    const startHop = (mode: 'three' | 'front' | 'rear' | 'all', corners: LowriderCorner[]) => {
+      if (this.cadillacHopMode === mode) {
+        stopHop();
+        this.toast(`${av.name}: ${mode === 'three' ? '3-wheel' : mode} hop released`, 'info');
+        this.emitHud();
+        return;
+      }
+      this.cadillacHopMode = mode;
+      this.cadillacHopTimer = 1.55;
+      this.cadillacHopNextPulse = 0.3;
+      pumpLowriderCorners(rig, corners, pump);
+      this.sound.playHydraulicPump('bounce');
+      this.spawnParticles(av.x, av.y + 0.35, av.z, 0xfbbf24, 8);
+      this.emitHud();
+    };
+
+    av.hydraulicsDanceEnabled = false;
+
+    if (action in cornerMap) {
+      const [corner, direction] = cornerMap[action as keyof typeof cornerMap];
+      if (!adjustLowriderCorner(controls, corner, direction)) {
+        this.toast(`${av.name}: ${corner.toUpperCase()} cylinder is locked`, 'info');
+        return true;
+      }
+      this.hydraulicMode = 'level';
+      this.sound.playHydraulicPump(direction > 0 ? 'up' : 'down');
+      this.emitHud();
+      return true;
+    }
+
+    if (action in lockMap) {
+      const corner = lockMap[action as keyof typeof lockMap];
+      toggleLowriderCornerLock(controls, corner);
+      const locked = controls.locked[corner];
+      this.sound.playHydraulicPump(locked ? 'lock' : 'unlock');
+      this.toast(
+        `${av.name}: ${corner.toUpperCase()} cylinder ${locked ? 'locked' : 'unlocked'}`,
+        locked ? 'discovery' : 'info',
+      );
+      this.emitHud();
+      return true;
+    }
+
+    if (action in selectMap) {
+      controls.selectedCorner = selectMap[action as keyof typeof selectMap];
+      this.toast(
+        `${av.name}: ${controls.selectedCorner.toUpperCase()} corner selected for 3-wheel stance`,
+        'info',
+      );
+      this.emitHud();
+      return true;
+    }
+
+    if (action === 'lock_up') {
+      setLowriderBodyTrim(controls, 0.18);
+      this.sound.playHydraulicPump('up');
+      this.emitHud();
+      return true;
+    }
+
+    if (action === 'drop') {
+      setLowriderBodyTrim(controls, -0.18);
+      this.sound.playHydraulicPump('down');
+      this.emitHud();
+      return true;
+    }
+
+    if (action === 'height_lock') {
+      const locked = !LOWRIDER_CORNERS.every((corner) => controls.locked[corner]);
+      for (const corner of LOWRIDER_CORNERS) controls.locked[corner] = locked;
+      this.hydraulicLocked = locked;
+      this.sound.playHydraulicPump(locked ? 'lock' : 'unlock');
+      this.toast(
+        locked
+          ? `${av.name}: All four corners locked at their current height`
+          : `${av.name}: All corners unlocked`,
+        locked ? 'discovery' : 'info',
+      );
+      this.emitHud();
+      return true;
+    }
+
+    if (action === 'front_lock' || action === 'rear_lock') {
+      const axle = action === 'front_lock' ? 'front' : 'rear';
+      const locked = toggleLowriderAxleLock(controls, axle);
+      this.hydraulicLocked = false;
+      this.sound.playHydraulicPump(locked ? 'lock' : 'unlock');
+      this.toast(
+        `${av.name}: ${axle === 'front' ? 'Front' : 'Rear'} axle ${locked ? 'locked' : 'unlocked'} — hops still active`,
+        locked ? 'discovery' : 'info',
+      );
+      this.emitHud();
+      return true;
+    }
+
+    if (action === 'three_wheel') {
+      const raised = toggleLowriderThreeWheel(controls, controls.selectedCorner);
+      this.hydraulicMode = raised ? 'three_wheel' : 'level';
+      this.hydraulicLocked = false;
+      av.hydraulicStance = raised ? 'three_wheel' : undefined;
+      this.sound.playHydraulicPump(raised ? 'up' : 'down');
+      this.toast(
+        raised
+          ? `${av.name}: 3-wheel stance — ${controls.selectedCorner.toUpperCase()} wheel lifting`
+          : `${av.name}: Back on four wheels`,
+        raised ? 'discovery' : 'info',
+      );
+      this.emitHud();
+      return true;
+    }
+
+    if (action === 'left_tilt' || action === 'right_tilt') {
+      const side = action === 'left_tilt' ? 'left' : 'right';
+      if (controls.stance === side) {
+        resumeLowriderLevel(controls);
+        this.hydraulicMode = 'level';
+      } else {
+        setLowriderSide(controls, side);
+        this.hydraulicMode = action;
+      }
+      this.sound.playHydraulicPump('up');
+      this.emitHud();
+      return true;
+    }
+
+    if (action === 'front_hop' || action === 'rear_hop' || action === 'three_wheel_hop') {
+      let mode: 'three' | 'front' | 'rear' = 'three';
+      let corners: LowriderCorner[] = [controls.selectedCorner];
+      if (action === 'front_hop') {
+        mode = 'front';
+        corners = ['fl', 'fr'];
+        this.hydraulicMode = 'front_hop';
+      } else if (action === 'rear_hop') {
+        mode = 'rear';
+        corners = ['rl', 'rr'];
+        this.hydraulicMode = 'rear_hop';
+      } else {
+        if (controls.stance !== 'three_wheel') {
+          toggleLowriderThreeWheel(controls, controls.selectedCorner);
+        }
+        this.hydraulicMode = 'three_wheel';
+      }
+      startHop(mode, corners);
+      return true;
+    }
+
+    if (action === 'bounce' || action === 'bounce_soft' || action === 'bounce_hard' || action === 'coil_bounce') {
+      const power =
+        action === 'bounce_soft' ? 0.66 : action === 'bounce_hard' ? 1.55 : 1.1;
+      const corners: LowriderCorner[] =
+        controls.stance === 'three_wheel' ? [controls.selectedCorner] : [...LOWRIDER_CORNERS];
+      this.cadillacHopMode = controls.stance === 'three_wheel' ? 'three' : 'all';
+      this.cadillacHopTimer = 1.0;
+      this.cadillacHopNextPulse = 0.32;
+      pumpLowriderCorners(rig, corners, pump * power);
+      this.sound.playHydraulicPump('bounce');
+      this.spawnParticles(av.x, av.y + 0.3, av.z, 0xfbbf24, 7);
+      this.emitHud();
+      return true;
+    }
+
+    if (action === 'full_hop') {
+      const floorY = Math.max(
+        getTerrainHeight(av.x, av.z),
+        this.getStructuralSurfaceY(av.x, av.z, av.y + 0.8),
+      );
+      if (av.y > floorY + 0.25) {
+        this.toast(`${av.name}: Wait for the car to land before the next full hop`, 'info');
+        return true;
+      }
+      if (!launchLowriderFullHop(rig, pressure)) {
+        this.toast(`${av.name}: Full hop is still recharging`, 'info');
+        return true;
+      }
+      stopHop();
+      this.hydraulicMode = 'full_hop';
+      av.hydraulicStance = undefined;
+      this.sound.playHydraulicPump('bounce');
+      this.spawnParticles(av.x, av.y + 0.2, av.z, 0xfbbf24, 16);
+      this.toast(`${av.name}: Full four-wheel hydraulic hop`, 'discovery');
+      this.emitHud();
+      return true;
+    }
+
+    if (action === 'normal_height') {
+      stopHop();
+      resetLowriderControls(controls);
+      this.hydraulicLocked = false;
+      this.hydraulicMode = 'level';
+      av.hydraulicStance = undefined;
+      this.sound.playHydraulicPump('down');
+      this.toast(`${av.name}: Returned to stock ride height`, 'info');
+      this.emitHud();
+      return true;
+    }
+
+    return false;
+  }
+
+  /** Runs the repeated pump while a hop control is held/toggled on. */
+  private updateCadillacHydraulicBurst(dt: number, av: ModularVehicleData): void {
+    if (!this.cadillacHopMode) return;
+    this.cadillacHopTimer -= dt;
+    this.cadillacHopNextPulse -= dt;
+    if (this.cadillacHopTimer <= 0) {
+      this.cadillacHopMode = null;
+      this.cadillacHopTimer = 0;
+      return;
+    }
+    if (this.cadillacHopNextPulse > 0) return;
+    this.cadillacHopNextPulse = 0.36;
+    const speed = THREE.MathUtils.clamp(av.airbagSpeed ?? 1, 0.25, 2);
+    const pressure = THREE.MathUtils.clamp(av.airbagLockLevel ?? 1, 0.4, 1.4);
+    const pump = 4.8 * (0.75 + speed * 0.4) * pressure;
+    const controls = this.cadillacControls;
+    if (this.cadillacHopMode === 'front') {
+      pumpLowriderCorners(this.cadillacRig, ['fl', 'fr'], pump);
+    } else if (this.cadillacHopMode === 'rear') {
+      pumpLowriderCorners(this.cadillacRig, ['rl', 'rr'], pump);
+    } else if (this.cadillacHopMode === 'three') {
+      impulseLowriderCorner(this.cadillacRig, controls.selectedCorner, pump);
+    } else {
+      pumpLowriderCorners(this.cadillacRig, LOWRIDER_CORNERS, pump * 0.7);
+    }
+    this.sound.playHydraulicPump('bounce');
+  }
+
   public triggerHydraulicAction(
     action:
       | 'front_hop'
@@ -23169,6 +23715,8 @@ export class GameEngine {
       | 'side_to_side'
       | 'coil_bounce'
       | 'three_wheel'
+      | 'three_wheel_hop'
+      | 'full_hop'
       | 'front_raise'
       | 'front_lower'
       | 'rear_raise'
@@ -23177,6 +23725,22 @@ export class GameEngine {
       | 'left_lower'
       | 'right_raise'
       | 'right_lower'
+      | 'fl_raise'
+      | 'fl_lower'
+      | 'fr_raise'
+      | 'fr_lower'
+      | 'rl_raise'
+      | 'rl_lower'
+      | 'rr_raise'
+      | 'rr_lower'
+      | 'select_fl'
+      | 'select_fr'
+      | 'select_rl'
+      | 'select_rr'
+      | 'lock_fl'
+      | 'lock_fr'
+      | 'lock_rl'
+      | 'lock_rr'
       | 'height_lock'
       | 'bounce'
       | 'bounce_soft'
@@ -23193,6 +23757,9 @@ export class GameEngine {
     this.sound.unlock();
     const isDonk = this.isDonkHydraulicVehicle(av);
     const isAirbag = this.isAirbagVehicle(av);
+    if (this.isCadillacLowrider(av)) {
+      if (this.handleCadillacHydraulicAction(action, av)) return;
+    }
     if (!isAirbag && this.handleSectionHydraulicAction(action, av)) return;
 
     // Cadillac Coupe DeVille Airbag + Coil-Over Spring Suspension
@@ -24010,6 +24577,26 @@ export class GameEngine {
       const bob = Math.sin(this.elapsed * 3.2 + v.x * 0.2) * 0.08;
       v.y = THREE.MathUtils.damp(v.y, newWaterY - 0.12 + bob, 8, dt);
       v.vy = 0;
+    } else if (this.isCadillacLowrider(v)) {
+      // Real four-corner hydraulic rig: actuators move each wheel, axle hops
+      // pump while held, and a full hop launches the root under gravity.
+      this.updateCadillacHydraulicBurst(dt, v);
+      stepLowriderRig(this.cadillacRig, this.cadillacControls, dt, {
+        speed: v.airbagSpeed,
+        pressure: v.airbagLockLevel,
+      });
+      if (this.cadillacRig.rootHeight > 0 || this.cadillacRig.rootVelocity > 0) {
+        v.y = floorY + this.cadillacRig.rootHeight;
+        v.vy = this.cadillacRig.rootVelocity;
+      } else {
+        // On the road the normal vehicle vertical physics stays untouched.
+        v.vy -= 20 * dt;
+        v.y += v.vy * dt;
+        if (v.y <= floorY) {
+          v.y = floorY;
+          v.vy = 0;
+        }
+      }
     } else {
       v.vy -= 20 * dt;
       v.y += v.vy * dt;
@@ -24211,12 +24798,13 @@ export class GameEngine {
     const activeHasHyd = this.vehicleHasHydraulics(activeV);
     const activeIsDonk = this.isDonkHydraulicVehicle(activeV);
     const activeIsAirbag = this.isAirbagVehicle(activeV);
+    const activeIsCadillac = this.isCadillacLowrider(activeV);
     const airbagSpeed = THREE.MathUtils.clamp(activeV?.airbagSpeed ?? 1.0, 0.25, 2.0);
     const airbagLock = THREE.MathUtils.clamp(activeV?.airbagLockLevel ?? 1.0, 0.4, 1.4);
     const sideWave = Math.sin(this.elapsed * (2.6 + airbagSpeed * 3.4));
 
     let tFl = 0, tFr = 0, tRl = 0, tRr = 0;
-    if (activeHasHyd) {
+    if (activeHasHyd && !activeIsCadillac) {
       if (activeIsAirbag) {
         if (this.hydraulicMode === 'lock_up') {
           tFl = tFr = tRl = tRr = 0.72 * airbagLock;
@@ -24271,7 +24859,7 @@ export class GameEngine {
     // Independent section heights take over when the player has raised the
     // front, rear or either side. These targets are held while bouncing, so a
     // locked rear never sinks back to stock height.
-    if (!activeIsAirbag && hasManualHydraulicHeight(this.hydraulicControls)) {
+    if (!activeIsAirbag && !activeIsCadillac && hasManualHydraulicHeight(this.hydraulicControls)) {
       const manual = hydraulicCornerTargets(this.hydraulicControls);
       tFl = manual.fl;
       tFr = manual.fr;
@@ -24292,7 +24880,7 @@ export class GameEngine {
     const minClamp = activeIsAirbag ? -0.32 : activeIsDonk ? -0.26 : -0.2;
     const maxClamp = activeIsAirbag ? 1.48 : activeIsDonk ? 0.72 : 1.55;
 
-    if (activeHasHyd || this.hydVel.fl !== 0 || this.hydVel.fr !== 0 || this.hydVel.rl !== 0 || this.hydVel.rr !== 0 || this.hydCorners.fl !== 0 || this.hydCorners.fr !== 0 || this.hydCorners.rl !== 0 || this.hydCorners.rr !== 0) {
+    if (!activeIsCadillac && (activeHasHyd || this.hydVel.fl !== 0 || this.hydVel.fr !== 0 || this.hydVel.rl !== 0 || this.hydVel.rr !== 0 || this.hydCorners.fl !== 0 || this.hydCorners.fr !== 0 || this.hydCorners.rl !== 0 || this.hydCorners.rr !== 0)) {
       this.hydVel.fl += ((tFl - this.hydCorners.fl) * stiffness - this.hydVel.fl * damping) * dt;
       this.hydCorners.fl = THREE.MathUtils.clamp(this.hydCorners.fl + this.hydVel.fl * dt, minClamp, maxClamp);
       this.hydVel.fr += ((tFr - this.hydCorners.fr) * stiffness - this.hydVel.fr * damping) * dt;
@@ -24478,7 +25066,7 @@ export class GameEngine {
         danceState.enabled = true;
         this.vehicleDanceStates.set(v.id, danceState);
       }
-      if (danceState && (danceState.enabled || v.hydraulicsDanceEnabled)) {
+      if (!activeIsCadillac && danceState && (danceState.enabled || v.hydraulicsDanceEnabled)) {
         danceState.enabled = Boolean(v.hydraulicsDanceEnabled);
         stepGarageHydraulicsDance(
           {
@@ -24498,6 +25086,17 @@ export class GameEngine {
         }
         for (const wc of handles.wheelCorners) {
           wc.obj.position.y = wc.baseY;
+        }
+      } else if (isActive && activeIsCadillac) {
+        // Every tire is driven by its own actuator state. The chassis heave and
+        // attitude come from the same spring simulation, not a decorative pose.
+        const rig = this.cadillacRig;
+        handles.chassisGroup.position.y =
+          Math.max(minChassisY, baseBodyY + rig.bodyHeave) + showBassPulse * 0.02;
+        handles.chassisGroup.rotation.x = rig.pitch;
+        handles.chassisGroup.rotation.z = rig.roll;
+        for (const wc of handles.wheelCorners) {
+          wc.obj.position.y = wc.baseY + rig.corners[wc.corner].lift;
         }
       } else if (isActive && activeHasHyd) {
         const { fl, fr, rl, rr } = this.hydCorners;

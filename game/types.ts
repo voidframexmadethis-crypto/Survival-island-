@@ -451,7 +451,8 @@ export type HydraulicMode =
   | 'front_lock'
   | 'rear_lock'
   | 'side_to_side'
-  | 'three_wheel';
+  | 'three_wheel'
+  | 'full_hop';
 
 export interface ActiveVehicleHudState {
   id: string;
@@ -469,8 +470,20 @@ export interface ActiveVehicleHudState {
   canFloat: boolean;
   canFly: boolean;
   hasHydraulics: boolean;
-  hydraulicStyle: 'full_bounce' | 'up_down_side' | 'airbag_coilover';
+  hydraulicStyle:
+    | 'full_bounce'
+    | 'up_down_side'
+    | 'airbag_coilover'
+    | 'cadillac_lowrider';
   hydraulicMode: HydraulicMode;
+  hydraulicSelectedCorner?: 'fl' | 'fr' | 'rl' | 'rr';
+  hydraulicWheelClearance?: Record<'fl' | 'fr' | 'rl' | 'rr', number>;
+  hydraulicWheelContact?: Record<'fl' | 'fr' | 'rl' | 'rr', boolean>;
+  hydraulicContactCount?: number;
+  hydraulicCornerLocked?: Record<'fl' | 'fr' | 'rl' | 'rr', boolean>;
+  hydraulicFrontLocked?: boolean;
+  hydraulicRearLocked?: boolean;
+  hydraulicHopMode?: 'three' | 'front' | 'rear' | 'all' | null;
   hasAirbagSuspension: boolean;
   airbagSpeed: number;
   airbagLockLevel: number;
@@ -1167,6 +1180,7 @@ export interface GameSaveData {
   coins?: number;
   plantedCrops?: PlantedCrop[];
   fridgeItems?: InventorySlot[];
+  wardrobeItems?: InventorySlot[];
   visitedBiomes: BiomeId[];
   exploredCells?: number[]; // Indices of 32x32 fog-of-war map cells discovered
   resourceStates?: SavedResourceNodeState[];
@@ -1267,7 +1281,9 @@ export type ActiveModal =
   | 'viking_village'
   | 'air_shuttle_entertainment'
   | 'mainland'
-  | 'lost_world';
+  | 'lost_world'
+  | 'wardrobe'
+  | 'mansion_entertainment';
 
 export interface NearbyInteraction {
   id: string;
@@ -1317,6 +1333,13 @@ export interface NearbyInteraction {
     | 'house_studio_booth'
     | 'house_door'
     | 'house_bowling'
+    | 'house_wardrobe'
+    | 'house_light'
+    | 'house_pool'
+    | 'house_pool_exit'
+    | 'house_pool_table'
+    | 'house_arcade'
+    | 'house_xbox'
     | 'structural_block'
     | 'kinetic_node'
     | 'modular_vehicle'
@@ -1406,6 +1429,7 @@ export interface HUDStateSnapshot {
   seatedLabel: string | null;
   plantedCrops: PlantedCrop[];
   fridgeItems: InventorySlot[];
+  wardrobeItems: InventorySlot[];
   nearbyInteraction: NearbyInteraction | null;
   nearbyCarcass: {
     id: string;

@@ -44,24 +44,84 @@ export const PREMADE_MANSION_BOUNDS = {
 export const MANSION_WEST_STAIR = {
   minX: PREMADE_MANSION_POS.x - 16.8,
   maxX: PREMADE_MANSION_POS.x - 13.2,
-  minZ: PREMADE_MANSION_POS.z - 9.2,
+  minZ: PREMADE_MANSION_POS.z,
   maxZ: PREMADE_MANSION_POS.z + 6.2,
 } as const;
 export const MANSION_EAST_STAIR = {
   minX: PREMADE_MANSION_POS.x + 13.2,
   maxX: PREMADE_MANSION_POS.x + 16.8,
-  minZ: PREMADE_MANSION_POS.z - 9.2,
-  maxZ: PREMADE_MANSION_POS.z + 6.2,
+  // Second-to-third flight now lands at both corridor doorways.
+  minZ: PREMADE_MANSION_POS.z - 1.5,
+  maxZ: PREMADE_MANSION_POS.z + 2.0,
 } as const;
 
-export const BOWLING_ALLEY_POS = { x: -107, z: 128 };
+export const BOWLING_ALLEY_POS = { x: -99, z: 128 };
 export const BOWLING_ALLEY_FLOOR_Y = HILL_HOUSE_Y + 0.16;
 export const BOWLING_ALLEY_CLEAR_ZONE = {
-  minX: BOWLING_ALLEY_POS.x - 25,
-  maxX: BOWLING_ALLEY_POS.x + 14,
-  minZ: BOWLING_ALLEY_POS.z - 8,
-  maxZ: BOWLING_ALLEY_POS.z + 8,
+  minX: BOWLING_ALLEY_POS.x - 26,
+  maxX: BOWLING_ALLEY_POS.x + 19,
+  minZ: BOWLING_ALLEY_POS.z - 9,
+  maxZ: BOWLING_ALLEY_POS.z + 9,
 } as const;
+
+/** Local water volumes for the two real swimming pools in the mansion. */
+export interface MansionPoolVolume {
+  id: string;
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  waterY: number;
+  floorY: number;
+  entryX: number;
+  entryZ: number;
+  exitX: number;
+  exitZ: number;
+  deckY: number;
+}
+
+export const MANSION_POOLS: readonly MansionPoolVolume[] = [
+  {
+    id: 'mansion_indoor_pool',
+    minX: PREMADE_MANSION_POS.x - 12.2,
+    maxX: PREMADE_MANSION_POS.x - 7.6,
+    minZ: PREMADE_MANSION_POS.z - 5.0,
+    maxZ: PREMADE_MANSION_POS.z + 5.4,
+    waterY: HILL_HOUSE_Y - 0.2,
+    floorY: HILL_HOUSE_Y - 1.82,
+    entryX: PREMADE_MANSION_POS.x - 9.9,
+    entryZ: PREMADE_MANSION_POS.z + 0.2,
+    exitX: PREMADE_MANSION_POS.x - 7.0,
+    exitZ: PREMADE_MANSION_POS.z + 0.2,
+    deckY: PREMADE_MANSION_FLOOR_Y,
+  },
+  {
+    id: 'mansion_outdoor_pool',
+    minX: PREMADE_MANSION_POS.x + 18.5,
+    maxX: PREMADE_MANSION_POS.x + 27.5,
+    minZ: PREMADE_MANSION_POS.z - 33.15,
+    maxZ: PREMADE_MANSION_POS.z - 23.65,
+    waterY: HILL_HOUSE_Y - 0.2,
+    floorY: HILL_HOUSE_Y - 1.82,
+    entryX: PREMADE_MANSION_POS.x + 18.9,
+    entryZ: PREMADE_MANSION_POS.z - 31.8,
+    exitX: PREMADE_MANSION_POS.x + 17.5,
+    exitZ: PREMADE_MANSION_POS.z - 28.4,
+    deckY: PREMADE_MANSION_FLOOR_Y,
+  },
+] as const;
+
+export function getMansionPoolAt(x: number, z: number, y?: number): MansionPoolVolume | null {
+  for (const pool of MANSION_POOLS) {
+    if (x < pool.minX || x > pool.maxX || z < pool.minZ || z > pool.maxZ) continue;
+    // Pools are ground-floor volumes. Without this vertical guard the first-
+    // floor suites and corridors built directly above the indoor pool were
+    // treated as open water, dropping players through the upper storeys.
+    if (y !== undefined && y > pool.waterY + 1.6) continue;
+    return pool;
+  }
+  return null;
+}
 export function isInBowlingAlleyClearZone(x: number, z: number): boolean {
   return (
     x >= BOWLING_ALLEY_CLEAR_ZONE.minX &&
@@ -220,10 +280,11 @@ export function isTerrainProtectedAt(x: number, z: number): boolean {
   ) {
     return true;
   }
-  // Premade mansion footprint, exterior stairs and motor court.
+  // Unified mansion footprint: main block, original south wing, garden
+  // atrium, north recreation wing, pools, motor court and west bowling wing.
   if (
-    Math.abs(x - PREMADE_MANSION_POS.x) < 25 &&
-    Math.abs(z - PREMADE_MANSION_POS.z) < 24
+    Math.abs(x - PREMADE_MANSION_POS.x) < 46 &&
+    Math.abs(z - PREMADE_MANSION_POS.z) < 48
   ) {
     return true;
   }
@@ -247,6 +308,8 @@ export function getHilltopBaseFloorY(
   if (activeTerrainWorldType === 'flat') return -9999;
   const dx = x - HILL_HOUSE_POS.x;
   const dz = z - HILL_HOUSE_POS.z;
+  const mdx = x - PREMADE_MANSION_POS.x;
+  const mdz = z - PREMADE_MANSION_POS.z;
   const sweepFootY = Math.max(footY, prevFootY);
   let bestY = -9999;
 
@@ -286,6 +349,82 @@ export function getHilltopBaseFloorY(
     bestY = HILLTOP_UPPER_FLOOR_Y;
   }
 
+  // Unified mansion: south garden atrium, original hilltop wing, north
+  // recreation wing and both pool terraces.
+  const atriumFloor = PREMADE_MANSION_FLOOR_Y;
+  if (
+    mdx >= -8.2 &&
+    mdx <= 8.2 &&
+    mdz >= 9.2 &&
+    mdz <= 12.8 &&
+    sweepFootY >= atriumFloor - 1.65 &&
+    atriumFloor > bestY
+  ) {
+    bestY = atriumFloor;
+  }
+  if (
+    mdx >= -13.4 &&
+    mdx <= 13.4 &&
+    mdz >= -35.6 &&
+    mdz <= -21.0 &&
+    sweepFootY >= PREMADE_MANSION_FLOOR_Y - 1.65 &&
+    PREMADE_MANSION_FLOOR_Y > bestY
+  ) {
+    bestY = PREMADE_MANSION_FLOOR_Y;
+  }
+  if (
+    mdx >= 14.0 &&
+    mdx <= 32.4 &&
+    mdz >= -36.2 &&
+    mdz <= -20.8 &&
+    sweepFootY >= PREMADE_MANSION_FLOOR_Y - 1.65 &&
+    PREMADE_MANSION_FLOOR_Y > bestY
+  ) {
+    bestY = PREMADE_MANSION_FLOOR_Y;
+  }
+  // East second-floor balcony and south third-floor balcony.
+  if (
+    mdx >= 13.2 &&
+    mdx <= 16.6 &&
+    mdz >= 0.8 &&
+    mdz <= 6.3 &&
+    sweepFootY >= PREMADE_MANSION_UPPER_FLOOR_Y - 1.35 &&
+    PREMADE_MANSION_UPPER_FLOOR_Y > bestY
+  ) {
+    bestY = PREMADE_MANSION_UPPER_FLOOR_Y;
+  }
+  if (
+    mdx >= 3.8 &&
+    mdx <= 7.6 &&
+    mdz >= 9.2 &&
+    mdz <= 12.1 &&
+    sweepFootY >= PREMADE_MANSION_TOP_FLOOR_Y - 1.35 &&
+    PREMADE_MANSION_TOP_FLOOR_Y > bestY
+  ) {
+    bestY = PREMADE_MANSION_TOP_FLOOR_Y;
+  }
+  // Stair landings connect to the central corridors on both upper storeys.
+  if (
+    mdx >= -16.8 &&
+    mdx <= -13.2 &&
+    mdz >= -1.7 &&
+    mdz <= 0.8 &&
+    sweepFootY >= PREMADE_MANSION_UPPER_FLOOR_Y - 1.35 &&
+    PREMADE_MANSION_UPPER_FLOOR_Y > bestY
+  ) {
+    bestY = PREMADE_MANSION_UPPER_FLOOR_Y;
+  }
+  if (
+    mdx >= 13.2 &&
+    mdx <= 16.8 &&
+    mdz >= -1.7 &&
+    mdz <= 0.8 &&
+    sweepFootY >= PREMADE_MANSION_TOP_FLOOR_Y - 1.35 &&
+    PREMADE_MANSION_TOP_FLOOR_Y > bestY
+  ) {
+    bestY = PREMADE_MANSION_TOP_FLOOR_Y;
+  }
+
   // Full-height exterior stair from the west lawn to the upper deck.
   if (
     x >= HILLTOP_HOUSE_STAIR.minX &&
@@ -304,8 +443,6 @@ export function getHilltopBaseFloorY(
   }
 
   // Three-storey premade mansion: walkable floors on all three storeys.
-  const mdx = x - PREMADE_MANSION_POS.x;
-  const mdz = z - PREMADE_MANSION_POS.z;
   if (Math.abs(mdx) <= 13.2 && Math.abs(mdz) <= 9.2) {
     if (
       sweepFootY >= PREMADE_MANSION_UPPER_FLOOR_Y - 1.35 &&
@@ -1313,7 +1450,7 @@ export function getTerrainSurfaceHeight(x: number, z: number): number {
 }
 
 const FLAT_PADS: readonly [number, number, number, number, number, number][] = [
-  [PREMADE_MANSION_POS.x, PREMADE_MANSION_POS.z, 22, 32, 32 * 32, HILL_HOUSE_Y],
+  [PREMADE_MANSION_POS.x, PREMADE_MANSION_POS.z, 40, 43, 43 * 43, HILL_HOUSE_Y],
   [TRIAL_CHAMBERS_POS.x, TRIAL_CHAMBERS_POS.z, 6.5, 13.5, 13.5 * 13.5, 3.6],
   [WOODLAND_MANSION_POS.x, WOODLAND_MANSION_POS.z, 10.5, 17.5, 17.5 * 17.5, 4.1],
   [TAIGA_VILLAGE_POS.x, TAIGA_VILLAGE_POS.z, 11.5, 18.0, 18.0 * 18.0, 5.2],
