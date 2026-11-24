@@ -167,8 +167,8 @@ test('premade hilltop base, porch, entry step, and music studio wing have solid 
     );
   }
 
-  // Ensure the Custom Vehicle Garage stays completely flat at VEHICLE_GARAGE_Y (3.25)
-  for (const dx of [-6, 0, 6]) {
+  // Ensure the six-car Motor Atelier stays completely flat at VEHICLE_GARAGE_Y (3.25)
+  for (const dx of [-15, -9, -6, 0, 6, 9, 15]) {
     const gx = VEHICLE_GARAGE_POS.x + dx;
     assert.ok(
       Math.abs(getTerrainHeight(gx, VEHICLE_GARAGE_POS.z) - VEHICLE_GARAGE_Y) < 0.05,

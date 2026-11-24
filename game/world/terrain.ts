@@ -130,7 +130,7 @@ export function isInBowlingAlleyClearZone(x: number, z: number): boolean {
     z <= BOWLING_ALLEY_CLEAR_ZONE.maxZ
   );
 }
-export const VEHICLE_GARAGE_POS = { x: -52, z: 152 };
+export const VEHICLE_GARAGE_POS = { x: 0, z: 144 };
 export const VEHICLE_GARAGE_Y = 3.25;
 export const UNDERGROUND_ELEVATOR_POS = { x: -34, z: 152 };
 export const UNDERGROUND_ELEVATOR_KIOSK_POS = {
@@ -275,8 +275,8 @@ export function isTerrainProtectedAt(x: number, z: number): boolean {
     return true;
   }
   if (
-    Math.abs(x - VEHICLE_GARAGE_POS.x) < 13.5 &&
-    Math.abs(z - VEHICLE_GARAGE_POS.z) < 9.5
+    Math.abs(x - VEHICLE_GARAGE_POS.x) < 20.2 &&
+    Math.abs(z - VEHICLE_GARAGE_POS.z) < 7.6
   ) {
     return true;
   }
@@ -628,19 +628,19 @@ export function getOverworldStructureSurfaceY(
   const sweepFootY = Math.max(footY, prevFootY);
   let bestY = -9999;
 
-  // 1. Custom 4-Bay Vehicle Garage Pad, Bay Pads & Driveway Apron
+  // 1. Six-Car Hilltop Motor Atelier Pad, Bay Pads & Driveway Apron
   const gdx = x - VEHICLE_GARAGE_POS.x;
   const gdz = z - VEHICLE_GARAGE_POS.z;
-  if (Math.abs(gdx) <= 14.35 && gdz >= -6.6 && gdz <= 9.75) {
-    if (Math.abs(gdx) <= 14.05 && Math.abs(gdz) <= 6.55) {
-      const padTop = VEHICLE_GARAGE_Y + 0.13;
+  if (Math.abs(gdx) <= 20.35 && gdz >= -7.1 && gdz <= 10.4) {
+    if (Math.abs(gdx) <= 20.05 && Math.abs(gdz) <= 7.05) {
+      const padTop = VEHICLE_GARAGE_Y + 0.15;
       if (sweepFootY >= padTop - 1.65 && padTop > bestY) {
         bestY = padTop;
       }
     }
     if (gdz >= -3.55 && gdz <= 4.75) {
-      for (let i = 0; i < 4; i++) {
-        const bx = -9.0 + i * 6.0;
+      for (let i = 0; i < 6; i++) {
+        const bx = -15.0 + i * 6.0;
         if (Math.abs(gdx - bx) <= 2.55) {
           const bayTop = VEHICLE_GARAGE_Y + 0.165;
           if (sweepFootY >= bayTop - 1.65 && bayTop > bestY) {
@@ -650,8 +650,8 @@ export function getOverworldStructureSurfaceY(
         }
       }
     }
-    if (gdz >= 5.9 && gdz <= 9.75) {
-      const apronTop = VEHICLE_GARAGE_Y + 0.07 - (gdz - 7.8) * 0.045;
+    if (gdz >= 6.2 && gdz <= 10.4) {
+      const apronTop = VEHICLE_GARAGE_Y + 0.07 - (gdz - 8.0) * 0.045;
       if (sweepFootY >= apronTop - 1.65 && apronTop > bestY) {
         bestY = apronTop;
       }
@@ -1574,12 +1574,12 @@ function carveDragonValley(x: number, z: number, height: number): number {
   const padProtect = 1 - smoothstep(0, 4.5, Math.hypot(padX, padZ));
   target = target * (1 - padProtect) + height * padProtect;
 
-  // The garage apron sits on the same mountain shoulder. Keep its bays and
-  // forecourt level while the rim closes around the outside of the property.
+  // The atelier apron sits on the same mountain shoulder. Keep its six bays
+  // and forecourt level while the rim closes around the outside of the property.
   const garageX = Math.max(
     0,
-    VEHICLE_GARAGE_POS.x - 11 - x,
-    x - (VEHICLE_GARAGE_POS.x + 11),
+    VEHICLE_GARAGE_POS.x - 20 - x,
+    x - (VEHICLE_GARAGE_POS.x + 20),
   );
   const garageZ = Math.max(
     0,
@@ -1876,10 +1876,10 @@ export function getBaseTerrainHeight(x: number, z: number): number {
     h = h * (1 - fBlend) + 3.15 * fBlend;
   }
 
-  // Expanded 3-Bay Custom Vehicle Garage clearing & wide driveways (skip when outside garage zone)
-  if (x >= -90 && x <= 10 && z >= 128 && z <= 200) {
-    const gdx = Math.max(0, Math.abs(x - VEHICLE_GARAGE_POS.x) - 11.2);
-    const gdz = Math.max(0, Math.abs(z - VEHICLE_GARAGE_POS.z) - 6.8);
+  // Six-Car Hilltop Motor Atelier clearing, underground-garage link and drives.
+  if (x >= -90 && x <= 26 && z >= 126 && z <= 200) {
+    const gdx = Math.max(0, Math.abs(x - VEHICLE_GARAGE_POS.x) - 18.8);
+    const gdz = Math.max(0, Math.abs(z - VEHICLE_GARAGE_POS.z) - 7.2);
     const gDistSq = gdx * gdx + gdz * gdz;
     if (gDistSq < 30.25) {
       const garageBlend = 1 - smoothstep(1.2, 5.5, Math.sqrt(gDistSq));
@@ -1890,7 +1890,7 @@ export function getBaseTerrainHeight(x: number, z: number): number {
       x,
       z,
       VEHICLE_GARAGE_POS.x + 2,
-      VEHICLE_GARAGE_POS.z + 6.5,
+      VEHICLE_GARAGE_POS.z + 7.6,
       -4,
       174,
     );
@@ -1903,29 +1903,28 @@ export function getBaseTerrainHeight(x: number, z: number): number {
     const westDrive = distSqToSegment(
       x,
       z,
-      VEHICLE_GARAGE_POS.x - 6,
-      VEHICLE_GARAGE_POS.z + 6.5,
-      -78,
-      184,
+      VEHICLE_GARAGE_POS.x - 14,
+      VEHICLE_GARAGE_POS.z + 7.3,
+      -82,
+      152,
     );
     if (westDrive.distSq < 33.64) {
       const wBlend = 1 - smoothstep(2.6, 5.8, Math.sqrt(westDrive.distSq));
-      const targetWestH = VEHICLE_GARAGE_Y * (1 - westDrive.t) + 1.55 * westDrive.t;
+      const targetWestH = VEHICLE_GARAGE_Y * (1 - westDrive.t) + 2.85 * westDrive.t;
       h = h * (1 - wBlend * 0.82) + targetWestH * (wBlend * 0.82);
     }
 
     const eastDrive = distSqToSegment(
       x,
       z,
-      VEHICLE_GARAGE_POS.x + 10.5,
-      VEHICLE_GARAGE_POS.z + 1.5,
-      -6,
-      138,
+      VEHICLE_GARAGE_POS.x + 20.4,
+      VEHICLE_GARAGE_POS.z + 7.5,
+      VEHICLE_GARAGE_POS.x + 20.4,
+      VEHICLE_GARAGE_POS.z - 12,
     );
     if (eastDrive.distSq < 29.16) {
       const eBlend = 1 - smoothstep(2.4, 5.4, Math.sqrt(eastDrive.distSq));
-      const targetEastH = VEHICLE_GARAGE_Y * (1 - eastDrive.t) + 2.85 * eastDrive.t;
-      h = h * (1 - eBlend * 0.8) + targetEastH * (eBlend * 0.8);
+      h = h * (1 - eBlend * 0.8) + VEHICLE_GARAGE_Y * (eBlend * 0.8);
     }
   }
 

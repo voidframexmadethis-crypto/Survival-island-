@@ -163,8 +163,8 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
               Math.abs(wx - HILL_HOUSE_POS.x) < 5.6 &&
               Math.abs(wz - HILL_HOUSE_POS.z) < 4.6;
             const inGarage =
-              Math.abs(wx - VEHICLE_GARAGE_POS.x) < 11.2 &&
-              Math.abs(wz - VEHICLE_GARAGE_POS.z) < 6.8;
+              Math.abs(wx - VEHICLE_GARAGE_POS.x) < 19.4 &&
+              Math.abs(wz - VEHICLE_GARAGE_POS.z) < 7.3;
 
             if (inHouse) {
               r = 165;
@@ -454,7 +454,7 @@ export function IslandMapModal({ hud, onClose }: IslandMapModalProps) {
         { label: 'Wheatfield', pos: WHEATFIELD_POS, color: '#facc15' },
         { label: 'Farmer Market', pos: FARMER_POS, color: '#4ade80' },
         { label: 'Hilltop House', pos: HILL_HOUSE_POS, color: '#fb923c' },
-        { label: 'Vehicle Garage', pos: VEHICLE_GARAGE_POS, color: '#38bdf8' },
+        { label: 'Motor Atelier', pos: VEHICLE_GARAGE_POS, color: '#38bdf8' },
         { label: 'Ferry Call Box', pos: FERRY_CALL_POS, color: '#38bdf8' },
         { label: 'Island Ferry Pier', pos: FERRY_DOCK_CAR_STOP, color: '#f59e0b' },
         { label: 'River Bridge West', pos: CAUSEWAY_GATEWAY_POINT, color: '#fbbf24' },

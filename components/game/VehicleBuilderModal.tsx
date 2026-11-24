@@ -186,7 +186,7 @@ export const VehicleBuilderModal: React.FC<VehicleBuilderModalProps> = ({
             </div>
             <div className="min-w-0">
               <h2 className="text-base sm:text-xl font-bold font-display text-amber-100 tracking-wide truncate">
-                Vehicle Garage &amp; Modular Assembly Bay
+                Hilltop Motor Atelier &amp; Modular Assembly Bay
               </h2>
               <p className="text-[11px] sm:text-xs text-stone-400 line-clamp-1 sm:line-clamp-none">
                 Build &amp; customize Chevy Tahoes on 40&quot; Forgiatos, Lowriders, DONKs, SLABs, Coupe DeVilles, Sports Cars, Buggies &amp; Boats

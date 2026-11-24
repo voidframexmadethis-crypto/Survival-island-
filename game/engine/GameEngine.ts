@@ -430,6 +430,12 @@ import {
   buildSpacePlanetArena,
 } from '../world/saturnRocketModel';
 import {
+  GARAGE_ATELIER_BAYS,
+  GARAGE_CREW_TASKS,
+  supportsHydraulicUpgrade,
+  type GarageCrewTask,
+} from '../systems/garageCrew';
+import {
   createGarageDanceState,
   ELEVATOR_EXOTIC_LIFT,
   ELEVATOR_VOICE_COMPUTER,
@@ -1590,6 +1596,9 @@ export class GameEngine {
   private mansionCoasterShift = 0;
   private mansionCoasterToastShown = false;
   private garageMaidServiceCooldown = 0;
+  private garageCrewProgress = new Map<number, number>();
+  private garageCrewCooldown = new Map<number, number>();
+  private garageCrewToastAt = -Infinity;
 
   // Creature Taming & Mounting & Sandbox
   private mountedCreatureId: string | null = null;
@@ -5689,8 +5698,8 @@ export class GameEngine {
           );
         }
         if (!this.vehicles.some((v) => v.preset === 'chevy_tahoe')) {
-          const westX = VEHICLE_GARAGE_POS.x - 16.0;
-          const westZ = VEHICLE_GARAGE_POS.z + 5.2;
+          const westX = VEHICLE_GARAGE_POS.x - 15.0;
+          const westZ = VEHICLE_GARAGE_POS.z + 0.6;
           this.spawnVehicleInstance(
             createVehicleFromPreset(
               'veh_starter_tahoe',
@@ -5706,6 +5715,7 @@ export class GameEngine {
     } else if (loadedWorldType === 'island') {
       this.setupStarterEngineeringShowcase(true, false);
     }
+    if (loadedWorldType === 'island') this.migrateLegacyGarageVehicles();
 
     this.clearPlacedStructures();
     this.clearAlienRelicDecorMeshes();
@@ -17618,7 +17628,7 @@ export class GameEngine {
     if (dx * dx + dz * dz > 140 * 140) return;
 
     this.garageMaidServiceCooldown = Math.max(0, this.garageMaidServiceCooldown - dt);
-    const nearGarage = dx * dx + dz * dz < 14 * 14;
+    const nearGarage = dx * dx + dz * dz < 20 * 20;
     if (nearGarage) {
       const wave = Math.sin(this.elapsed * 5.6);
       garageMaid.armR.rotation.x = 0.2 + wave * 0.5;
@@ -17639,6 +17649,169 @@ export class GameEngine {
           'discovery',
         );
         this.emitHud();
+      }
+    }
+  }
+
+  /**
+   * Five specialists per car work the atelier floor. Once all five tasks have
+   * run, the car gets a full fluid/body service, the hydraulic pump upgrade,
+   * audio, headlights, exterior wash and an interior detail.
+   */
+  private updateGarageCrew(dt: number): void {
+    const crew = this.world?.garageCrew;
+    if (!crew?.length) return;
+    const gx = this.world!.garagePos.x;
+    const gz = this.world!.garagePos.z;
+    const playerDistance = Math.hypot(this.playerX - gx, this.playerZ - gz);
+    if (playerDistance > 150) return;
+
+    const bayCars = new Map<number, ReturnType<GameEngine['findGarageBayCar']>>();
+    for (const bay of GARAGE_ATELIER_BAYS) {
+      bayCars.set(bay.index, this.findGarageBayCar(bay.index));
+    }
+    const completed: string[] = [];
+
+    for (const worker of crew) {
+      const car = bayCars.get(worker.bayIndex);
+      const working = Boolean(car);
+      const phase = this.elapsed * this.garageCrewTaskSpeed(worker.task) + worker.phase;
+      const swing = Math.sin(phase);
+      const bounce = Math.abs(Math.sin(phase * 0.5));
+      if (working) {
+        worker.armR.rotation.x = 0.25 + swing * 0.72;
+        worker.armL.rotation.x = -0.18 - swing * 0.46;
+        worker.armR.rotation.z = Math.sin(phase * 0.7) * 0.18;
+        worker.armL.rotation.z = -Math.sin(phase * 0.8) * 0.16;
+        worker.group.position.x = worker.baseX + swing * 0.045;
+        worker.group.position.y = worker.baseY + bounce * 0.018;
+        worker.group.position.z = worker.baseZ + Math.cos(phase * 0.6) * 0.035;
+      } else {
+        worker.armR.rotation.x = Math.sin(this.elapsed * 1.15 + worker.phase) * 0.08;
+        worker.armL.rotation.x = -Math.sin(this.elapsed * 1.05 + worker.phase) * 0.06;
+        worker.armR.rotation.z = 0;
+        worker.armL.rotation.z = 0;
+        worker.group.position.set(worker.baseX, worker.baseY, worker.baseZ);
+      }
+    }
+
+    for (const bay of GARAGE_ATELIER_BAYS) {
+      const car = bayCars.get(bay.index);
+      let progress = this.garageCrewProgress.get(bay.index) ?? 0;
+      let cooldown = this.garageCrewCooldown.get(bay.index) ?? 0;
+      if (!car) {
+        progress = 0;
+      } else if (cooldown > 0) {
+        cooldown = Math.max(0, cooldown - dt);
+      } else {
+        progress = Math.min(1, progress + dt / 13);
+        if (progress >= 1) {
+          this.completeGarageCrewService(car);
+          completed.push(car.name);
+          progress = 0;
+          cooldown = 100;
+        }
+      }
+      this.garageCrewProgress.set(bay.index, progress);
+      this.garageCrewCooldown.set(bay.index, cooldown);
+    }
+
+    if (
+      completed.length > 0 &&
+      playerDistance < 36 &&
+      this.elapsed - this.garageCrewToastAt > 20
+    ) {
+      this.garageCrewToastAt = this.elapsed;
+      this.toast(
+        `Atelier crew finished ${completed.length} car${completed.length > 1 ? 's' : ''}: new hydraulic pumps, speakers, headlights, exterior wash and interior detail.`,
+        'discovery',
+      );
+      this.emitHud();
+    }
+  }
+
+  private garageCrewTaskSpeed(task: GarageCrewTask): number {
+    switch (task) {
+      case 'wash':
+        return 5.4;
+      case 'interior':
+        return 4.8;
+      case 'hydraulics':
+        return 3.9;
+      case 'audio':
+        return 4.4;
+      case 'lights':
+        return 3.6;
+    }
+  }
+
+  private findGarageBayCar(bayIndex: number) {
+    const bay = GARAGE_ATELIER_BAYS.find((candidate) => candidate.index === bayIndex);
+    if (!bay) return undefined;
+    const slotX = VEHICLE_GARAGE_POS.x + bay.x;
+    const slotZ = VEHICLE_GARAGE_POS.z + bay.z;
+    let closest: (typeof this.vehicles)[number] | undefined;
+    let closestDistance = 5.0;
+    for (const vehicle of this.vehicles) {
+      if (vehicle.dimension && vehicle.dimension !== 'overworld') continue;
+      if (vehicle.id === this.activeVehicleId) continue;
+      if (Math.hypot(vehicle.vx, vehicle.vz) > 1.5) continue;
+      const distance = Math.hypot(vehicle.x - slotX, vehicle.z - slotZ);
+      if (distance < closestDistance) {
+        closest = vehicle;
+        closestDistance = distance;
+      }
+    }
+    return closest;
+  }
+
+  private completeGarageCrewService(car: (typeof this.vehicles)[number]): void {
+    car.hp = car.maxHp;
+    car.fuel = 100;
+    if (supportsHydraulicUpgrade(car.preset)) {
+      car.hydraulicHop = true;
+      car.hasAirbagSuspension = true;
+      car.hydraulicBounceBoost = Math.max(car.hydraulicBounceBoost ?? 1, 1.18);
+      car.airbagSpeed = Math.max(car.airbagSpeed ?? 0.7, 0.9);
+    }
+    car.trunkBassEnabled = true;
+
+    const wash = GARAGE_CREW_TASKS.find((task) => task.id === 'wash')!;
+    const audio = GARAGE_CREW_TASKS.find((task) => task.id === 'audio')!;
+    const lights = GARAGE_CREW_TASKS.find((task) => task.id === 'lights')!;
+    this.spawnParticles(car.x, car.y + 0.8, car.z + 1.5, 0xe0f2fe, 10);
+    this.spawnParticles(car.x, car.y + 0.7, car.z - 1.2, audio.accentColor, 8);
+    this.spawnParticles(car.x, car.y + 0.45, car.z + 2.2, lights.uniformColor, 6);
+    this.spawnParticles(car.x - 0.8, car.y + 0.6, car.z, wash.accentColor, 6);
+  }
+
+  /** Moves cars out of the old hill-clipping garage footprint into the new atelier. */
+  private migrateLegacyGarageVehicles(): void {
+    const legacyX = -52;
+    const legacyZ = 152;
+    const targets: Record<string, { x: number; z: number }> = {
+      lowrider: { x: -9, z: 0.6 },
+      donk: { x: -3, z: 0.6 },
+      slab: { x: 3, z: 0.6 },
+      cadillac_coupe_deville: { x: 9, z: 0.6 },
+      chevy_tahoe: { x: -15, z: 0.6 },
+      expedition_rover: { x: 15, z: 0.6 },
+    };
+    for (const vehicle of this.vehicles) {
+      const target = targets[vehicle.preset ?? ''];
+      if (!target) continue;
+      if (Math.hypot(vehicle.x - legacyX, vehicle.z - legacyZ) > 26) continue;
+      vehicle.x = VEHICLE_GARAGE_POS.x + target.x;
+      vehicle.z = VEHICLE_GARAGE_POS.z + target.z;
+      vehicle.y = getTerrainHeight(vehicle.x, vehicle.z) + 0.14;
+      vehicle.vx = 0;
+      vehicle.vy = 0;
+      vehicle.vz = 0;
+      vehicle.yaw = 0;
+      const mesh = this.vehicleMeshes.get(vehicle.id);
+      if (mesh) {
+        mesh.root.position.set(vehicle.x, vehicle.y, vehicle.z);
+        mesh.root.rotation.y = vehicle.yaw;
       }
     }
   }
@@ -20748,6 +20921,7 @@ export class GameEngine {
     ) {
       this.updateMansionMaids(dt);
       this.updateGarageMaid(dt);
+      this.updateGarageCrew(dt);
     }
 
     // Autonomous Ship Navigator Companion AI on Survival Island
@@ -22241,9 +22415,9 @@ export class GameEngine {
       );
       this.spawnVehicleInstance(deville);
 
-      // Expedition 4x4 Rover parked on the East Service Apron beside Bay 4
-      const apronX = VEHICLE_GARAGE_POS.x + 16.0;
-      const apronZ = VEHICLE_GARAGE_POS.z + 5.2;
+      // Expedition 4x4 Rover displayed on the east gallery turntable.
+      const apronX = VEHICLE_GARAGE_POS.x + 15.0;
+      const apronZ = VEHICLE_GARAGE_POS.z + 0.6;
       const rover = createVehicleFromPreset(
         'veh_starter_rover',
         'expedition_rover',
@@ -22254,9 +22428,9 @@ export class GameEngine {
       );
       this.spawnVehicleInstance(rover);
 
-      // Slammed Chevy Tahoe on 40" Forgiato "44" Auto Spinners + Behind-Driver Subwoofers (West Apron beside Bay 1)
-      const westApronX = VEHICLE_GARAGE_POS.x - 16.0;
-      const westApronZ = VEHICLE_GARAGE_POS.z + 5.2;
+      // Slammed Chevy Tahoe on 40" Forgiato "44" Auto Spinners + Behind-Driver Subwoofers (west gallery turntable).
+      const westApronX = VEHICLE_GARAGE_POS.x - 15.0;
+      const westApronZ = VEHICLE_GARAGE_POS.z + 0.6;
       const tahoe = createVehicleFromPreset(
         'veh_starter_tahoe',
         'chevy_tahoe',
@@ -23166,8 +23340,8 @@ export class GameEngine {
       { x: VEHICLE_GARAGE_POS.x - 3.0, z: VEHICLE_GARAGE_POS.z + 0.6, yaw: 0, label: 'Bay B' },
       { x: VEHICLE_GARAGE_POS.x + 3.0, z: VEHICLE_GARAGE_POS.z + 0.6, yaw: 0, label: 'Bay C' },
       { x: VEHICLE_GARAGE_POS.x + 9.0, z: VEHICLE_GARAGE_POS.z + 0.6, yaw: 0, label: 'Bay D' },
-      { x: VEHICLE_GARAGE_POS.x + 16.0, z: VEHICLE_GARAGE_POS.z + 5.2, yaw: 0, label: 'East Apron' },
-      { x: VEHICLE_GARAGE_POS.x - 16.0, z: VEHICLE_GARAGE_POS.z + 5.2, yaw: 0, label: 'West Apron' },
+      { x: VEHICLE_GARAGE_POS.x + 15.0, z: VEHICLE_GARAGE_POS.z + 0.6, yaw: 0, label: 'East Gallery' },
+      { x: VEHICLE_GARAGE_POS.x - 15.0, z: VEHICLE_GARAGE_POS.z + 0.6, yaw: 0, label: 'West Gallery' },
     ];
     let preferredIdx = 4;
     if (v.id === 'veh_starter_lowrider' || v.preset === 'lowrider') preferredIdx = 0;
@@ -23297,8 +23471,8 @@ export class GameEngine {
           this.toast(`Exited ${v.name} (Garage ${slot.label})`, 'info');
         } else {
           const alreadyInGarageCorridor =
-            Math.abs(v.x - VEHICLE_GARAGE_POS.x) <= 15 &&
-            v.z >= VEHICLE_GARAGE_POS.z - 5 &&
+            Math.abs(v.x - VEHICLE_GARAGE_POS.x) <= 20 &&
+            v.z >= VEHICLE_GARAGE_POS.z - 6 &&
             v.z <= VEHICLE_GARAGE_POS.z + 10.5;
           this.autoParkJobs.set(v.id, {
             vehicleId: v.id,
@@ -25685,8 +25859,8 @@ export class GameEngine {
     if (job.phase === 'approach') {
       const distApron = Math.hypot(apronX - v.x, apronZ - v.z);
       const alreadyInGarageCorridor =
-        Math.abs(v.x - VEHICLE_GARAGE_POS.x) <= 15 &&
-        v.z >= VEHICLE_GARAGE_POS.z - 5 &&
+        Math.abs(v.x - VEHICLE_GARAGE_POS.x) <= 20 &&
+        v.z >= VEHICLE_GARAGE_POS.z - 6 &&
         v.z <= VEHICLE_GARAGE_POS.z + 10.5;
       if (distApron < 3.0 || alreadyInGarageCorridor) {
         job.phase = 'park';
@@ -25736,8 +25910,8 @@ export class GameEngine {
             const col = bucket[ci];
             if (col.radius < 0.9) continue;
             if (
-              Math.abs(col.x - VEHICLE_GARAGE_POS.x) < 14 &&
-              Math.abs(col.z - VEHICLE_GARAGE_POS.z) < 9
+              Math.abs(col.x - VEHICLE_GARAGE_POS.x) < 20.5 &&
+              Math.abs(col.z - VEHICLE_GARAGE_POS.z) < 8.5
             ) {
               continue;
             }
@@ -25832,8 +26006,8 @@ export class GameEngine {
             const col = bucket[ci];
             if (col.radius < 0.9) continue;
             if (
-              Math.abs(col.x - VEHICLE_GARAGE_POS.x) < 14 &&
-              Math.abs(col.z - VEHICLE_GARAGE_POS.z) < 9
+              Math.abs(col.x - VEHICLE_GARAGE_POS.x) < 20.5 &&
+              Math.abs(col.z - VEHICLE_GARAGE_POS.z) < 8.5
             ) {
               continue;
             }

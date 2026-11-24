@@ -5398,7 +5398,7 @@ export function SurvivalGameClient() {
                 className="p-3.5 rounded-xl bg-stone-800 hover:bg-amber-600 hover:text-stone-950 font-bold text-stone-100 text-sm flex items-center gap-2.5 transition"
               >
                 <Car className="w-5 h-5 text-amber-400 shrink-0" />
-                <span>Vehicle Garage</span>
+                <span>Hilltop Motor Atelier</span>
               </button>
               <button
                 onClick={() => {

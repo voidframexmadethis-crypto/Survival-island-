@@ -36,7 +36,7 @@ export const DIMENSION_DEFINITIONS: Record<DimensionId, DimensionDefinition> = {
     category: 'island',
     subtitle: 'Origin Sanctuary · 1.00g',
     description:
-      'Your home island with the Hilltop House, 3-Bay Custom Garage, dinosaurs, wildlife, and ocean shipwreck.',
+      'Your home island with the Hilltop House, six-car Motor Atelier, underground exotic garage, dinosaurs, wildlife, and ocean shipwreck.',
     primaryColor: '#22c55e',
     secondaryColor: '#38bdf8',
     primaryHex: 0x22c55e,

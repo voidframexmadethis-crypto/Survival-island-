@@ -8,6 +8,10 @@ import { buildLouisianaMainland, type LouisianaMainlandHandles } from './louisia
 import { buildLouisianaBusinesses } from './louisianaBusinesses';
 import { buildLouisianaNeighborhoods } from './louisianaNeighborhoods';
 import { buildIslandFerryDock } from './ferryDock';
+import {
+  buildHilltopMotorAtelier,
+  type MotorAtelierWorkerHandle,
+} from './hilltopMotorAtelier';
 import { buildLouisianaFerry, type LouisianaFerryHandles } from './louisianaFerry';
 import { buildCrescentClipper, type CrescentClipperHandles } from './crescentClipper';
 import { buildSeaplaneBase, type SeaplaneBaseHandles } from './seaplaneBase';
@@ -138,7 +142,6 @@ import {
   createWaterNormalTexture,
   createWoodPlankNormalTexture,
   createWoodPlankTexture,
-  getPolishedConcretePbr,
 } from './textures';
 import {
   HouseStationTarget,
@@ -277,6 +280,7 @@ export interface WorldHandles {
   garagePos: THREE.Vector3;
   garageBenchPos: THREE.Vector3;
   garageMaid: { group: THREE.Group; armL: THREE.Group; armR: THREE.Group };
+  garageCrew: MotorAtelierWorkerHandle[];
   armoryChest: ShipwreckChestHandle;
   wheatfieldPos: THREE.Vector3;
   caveCeilings: CaveCeilingCluster[];
@@ -399,14 +403,13 @@ export function buildIslandWorld(
     const dAutumn = Math.hypot(x - AUTUMN_GROVE_POS.x, z - AUTUMN_GROVE_POS.z);
     const dSwamp = Math.hypot(x - SWAMP_POS.x, z - SWAMP_POS.z);
     const dWheat = Math.hypot(x - WHEATFIELD_POS.x, z - WHEATFIELD_POS.z);
-    const dGarage = Math.hypot(x - VEHICLE_GARAGE_POS.x, z - VEHICLE_GARAGE_POS.z);
     const onHouseRamp =
       x >= HILL_HOUSE_POS.x + 5 &&
       x <= HILL_HOUSE_POS.x + 22 &&
       Math.abs(z - HILL_HOUSE_POS.z) < 2.3;
     const onGaragePadArea =
-      Math.abs(x - VEHICLE_GARAGE_POS.x) < 12.6 &&
-      Math.abs(z - VEHICLE_GARAGE_POS.z) < 8.4;
+      Math.abs(x - VEHICLE_GARAGE_POS.x) < 19.5 &&
+      Math.abs(z - VEHICLE_GARAGE_POS.z) < 7.4;
     const segDist = (ax: number, az: number, bx: number, bz: number) => {
       const dx = bx - ax;
       const dz = bz - az;
@@ -415,9 +418,9 @@ export function buildIslandWorld(
       return Math.hypot(x - (ax + t * dx), z - (az + t * dz));
     };
     const onGarageDriveway =
-      segDist(VEHICLE_GARAGE_POS.x + 2, VEHICLE_GARAGE_POS.z + 6.5, -4, 174) < 3.8 ||
-      segDist(VEHICLE_GARAGE_POS.x - 6, VEHICLE_GARAGE_POS.z + 6.5, -78, 184) < 3.4 ||
-      segDist(VEHICLE_GARAGE_POS.x + 10.5, VEHICLE_GARAGE_POS.z + 1.5, -6, 138) < 3.2;
+      segDist(VEHICLE_GARAGE_POS.x + 2, VEHICLE_GARAGE_POS.z + 7.6, -4, 174) < 3.8 ||
+      segDist(VEHICLE_GARAGE_POS.x - 14, VEHICLE_GARAGE_POS.z + 7.3, -82, 152) < 3.4 ||
+      segDist(VEHICLE_GARAGE_POS.x + 20.4, VEHICLE_GARAGE_POS.z + 7.5, VEHICLE_GARAGE_POS.x + 20.4, VEHICLE_GARAGE_POS.z - 12) < 3.2;
 
     if (y < -0.3) {
       if (biome === 'warm_ocean') c.setHex(0xd6c28c); // Bright sandy coral reef bed
@@ -4063,373 +4066,20 @@ export function buildIslandWorld(
     range: 3.1,
   });
 
-  // E. Expanded Covered 3-Bay Custom Vehicle Garage Zone Beside the Shelter (VEHICLE_GARAGE_POS)
-  const garageGroundY = getTerrainHeight(VEHICLE_GARAGE_POS.x, VEHICLE_GARAGE_POS.z);
-  const garageGroup = new THREE.Group();
-  garageGroup.position.set(VEHICLE_GARAGE_POS.x, garageGroundY, VEHICLE_GARAGE_POS.z);
-
-  const concretePbr = getPolishedConcretePbr(maxAniso);
-  const concreteBaseMat = new THREE.MeshStandardMaterial({
-    color: 0x6b7280,
-    map: concretePbr.map,
-    normalMap: concretePbr.normalMap,
-    normalScale: new THREE.Vector2(0.45, 0.45),
-    roughnessMap: concretePbr.roughnessMap,
-    roughness: 0.22,
-    metalness: 0.28,
-    envMapIntensity: 1.35,
-  });
-  const concreteBayPadMat = new THREE.MeshStandardMaterial({
-    color: 0x4b5563,
-    map: concretePbr.map,
-    normalMap: concretePbr.normalMap,
-    normalScale: new THREE.Vector2(0.35, 0.35),
-    roughnessMap: concretePbr.roughnessMap,
-    roughness: 0.2,
-    metalness: 0.32,
-    envMapIntensity: 1.45,
-  });
-  const apronMat = new THREE.MeshStandardMaterial({
-    color: 0x78716c,
-    map: concretePbr.map,
-    normalMap: concretePbr.normalMap,
-    normalScale: new THREE.Vector2(0.48, 0.48),
-    roughnessMap: concretePbr.roughnessMap,
-    roughness: 0.28,
-    metalness: 0.22,
-    envMapIntensity: 1.25,
-  });
-  const steelFrameMat = new THREE.MeshStandardMaterial({
-    color: 0x1e293b,
-    roughness: 0.36,
-    metalness: 0.78,
-  });
-  const timberPostMat = new THREE.MeshStandardMaterial({
-    color: 0x6b4226,
-    map: woodTex,
-    roughness: 0.85,
-  });
-  const garageRoofMat = new THREE.MeshStandardMaterial({
-    color: 0x334155,
-    roughness: 0.55,
-    metalness: 0.48,
-  });
-  const bayTrimMats = [
-    new THREE.MeshStandardMaterial({
-      color: 0xf59e0b,
-      emissive: 0xd97706,
-      emissiveIntensity: 0.65,
-      roughness: 0.25,
-    }),
-    new THREE.MeshStandardMaterial({
-      color: 0x38bdf8,
-      emissive: 0x0284c7,
-      emissiveIntensity: 0.65,
-      roughness: 0.25,
-    }),
-    new THREE.MeshStandardMaterial({
-      color: 0xe879f9,
-      emissive: 0xc026d3,
-      emissiveIntensity: 0.7,
-      roughness: 0.25,
-    }),
-    new THREE.MeshStandardMaterial({
-      color: 0xf8fafc,
-      emissive: 0xe2e8f0,
-      emissiveIntensity: 0.75,
-      roughness: 0.2,
-    }),
-  ];
-  const tireMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.88 });
-  const toolMetalMat = new THREE.MeshStandardMaterial({
-    color: 0xe2e8f0,
-    metalness: 0.88,
-    roughness: 0.2,
-  });
-  const toolChestRedMat = new THREE.MeshStandardMaterial({
-    color: 0xb91c1c,
-    roughness: 0.32,
-    metalness: 0.55,
-  });
-
-  // Main leveled polished reflective concrete foundation pad (28.0m x 13.0m for 4 bays)
-  const garagePad = new THREE.Mesh(
-    ensureGeometryHasUv(roundedBox(28.0, 0.18, 13.0, 0.18, 3)),
-    concreteBaseMat,
-  );
-  garagePad.position.set(0, 0.04, 0);
-  garagePad.receiveShadow = true;
-  garagePad.castShadow = false;
-  garagePad.userData.noShadowCast = true;
-  garagePad.userData.preserveEnvMapIntensity = true;
-  garageGroup.add(garagePad);
-
-  // Wide beveled polished concrete driveway apron leading south (+Z) onto the island trails & beach
-  const driveApron = new THREE.Mesh(
-    ensureGeometryHasUv(roundedBox(28.6, 0.12, 3.8, 0.12, 2)),
-    apronMat,
-  );
-  driveApron.position.set(0, 0.01, 7.8);
-  driveApron.rotation.x = 0.045;
-  driveApron.receiveShadow = true;
-  driveApron.castShadow = false;
-  driveApron.userData.noShadowCast = true;
-  driveApron.userData.preserveEnvMapIntensity = true;
-  garageGroup.add(driveApron);
-
-  // 4 Distinct Covered Custom Bays: Bay 1 (-9 Lowrider), Bay 2 (-3 DONK), Bay 3 (+3 SLAB), Bay 4 (+9 Cadillac Coupe DeVille)
-  const bayCenters = [-9.0, -3.0, 3.0, 9.0];
-  bayCenters.forEach((bx, bayIdx) => {
-    const trimMat = bayTrimMats[bayIdx];
-    const bayPad = new THREE.Mesh(
-      ensureGeometryHasUv(roundedBox(5.0, 0.04, 8.2, 0.04, 2)),
-      concreteBayPadMat,
-    );
-    bayPad.position.set(bx, 0.145, 0.6);
-    bayPad.receiveShadow = true;
-    bayPad.castShadow = false;
-    bayPad.userData.noShadowCast = true;
-    bayPad.userData.preserveEnvMapIntensity = true;
-    garageGroup.add(bayPad);
-
-    [-2.42, 2.42].forEach((sideOffset) => {
-      const sideLine = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.025, 8.0), trimMat);
-      sideLine.position.set(bx + sideOffset, 0.17, 0.6);
-      sideLine.userData.noShadowCast = true;
-      garageGroup.add(sideLine);
-    });
-    const frontApronLine = new THREE.Mesh(new THREE.BoxGeometry(4.95, 0.025, 0.14), trimMat);
-    frontApronLine.position.set(bx, 0.17, 4.55);
-    frontApronLine.userData.noShadowCast = true;
-    garageGroup.add(frontApronLine);
-
-    const backStop = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.16, 0.28), trimMat);
-    backStop.position.set(bx, 0.22, -3.35);
-    backStop.userData.noShadowCast = true;
-    garageGroup.add(backStop);
-  });
-
-  // Steel-and-Timber Canopy Columns (wide 6m open clear-span per bay, zero pillars blocking drive-in)
-  const colXList = [-12.6, -6.0, 0.0, 6.0, 12.6];
-  const colZList = [-5.8, 5.4];
-  colXList.forEach((px) => {
-    colZList.forEach((pz) => {
-      const plinth = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.32, 0.56), concreteBaseMat);
-      plinth.position.set(px, 0.26, pz);
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.32, 4.7, 0.32), steelFrameMat);
-      post.position.set(px, 2.55, pz);
-      post.castShadow = true;
-      garageGroup.add(plinth, post);
-      colliders.push({
-        x: VEHICLE_GARAGE_POS.x + px,
-        z: VEHICLE_GARAGE_POS.z + pz,
-        radius: 0.38,
-      });
-    });
-  });
-
-  // Back workshop low retaining wall + timber wainscot + steel roof trusses
-  const backWall = new THREE.Mesh(roundedBox(26.2, 2.4, 0.28, 0.1, 2), concreteBaseMat);
-  backWall.position.set(0, 1.3, -5.85);
-  backWall.castShadow = true;
-  backWall.receiveShadow = true;
-  garageGroup.add(backWall);
-
-  const frontHeaderBeam = new THREE.Mesh(roundedBox(26.8, 0.42, 0.38, 0.1, 2), steelFrameMat);
-  frontHeaderBeam.position.set(0, 4.85, 5.4);
-  const backHeaderBeam = new THREE.Mesh(roundedBox(26.8, 0.42, 0.38, 0.1, 2), steelFrameMat);
-  backHeaderBeam.position.set(0, 4.85, -5.8);
-  garageGroup.add(frontHeaderBeam, backHeaderBeam);
-
-  colXList.forEach((px) => {
-    const trussBeam = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.34, 11.6), steelFrameMat);
-    trussBeam.position.set(px, 4.85, -0.2);
-    garageGroup.add(trussBeam);
-  });
-
-  // Sloped corrugated steel canopy roof (28.4m x 13.4m)
-  const canopyRoof = new THREE.Mesh(roundedBox(28.4, 0.2, 13.4, 0.12, 3), garageRoofMat);
-  canopyRoof.position.set(0, 5.22, -0.2);
-  canopyRoof.rotation.x = -0.07;
-  canopyRoof.castShadow = true;
-  canopyRoof.receiveShadow = true;
-  garageGroup.add(canopyRoof);
-
-  // Overhead Illuminated Bay Signboard Beam & 3 Industrial Floodlight Fixtures
-  const signBacking = new THREE.Mesh(
-    new THREE.BoxGeometry(9.6, 0.62, 0.16),
-    new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.4, metalness: 0.6 }),
-  );
-  signBacking.position.set(0, 5.15, 5.65);
-  const signNeonBar = new THREE.Mesh(
-    new THREE.BoxGeometry(9.0, 0.12, 0.08),
-    new THREE.MeshStandardMaterial({
-      color: 0xfef08a,
-      emissive: 0xf59e0b,
-      emissiveIntensity: 1.15,
-    }),
-  );
-  signNeonBar.position.set(0, 5.15, 5.74);
-  garageGroup.add(signBacking, signNeonBar);
-
-  const floodBulbMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    emissive: 0xfffbeb,
-    emissiveIntensity: 1.5,
-  });
-  bayCenters.forEach((bx, bayIdx) => {
-    // Ceiling bay light housing + warm/cool industrial floodlight
-    const hood = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.14, 0.45), steelFrameMat);
-    hood.position.set(bx, 4.72, 0.5);
-    const bulb = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.08, 0.32), floodBulbMat);
-    bulb.position.set(bx, 4.64, 0.5);
-    garageGroup.add(hood, bulb);
-
-    // Exterior front overhang floodlight above each bay entrance
-    const extArm = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.75), steelFrameMat);
-    extArm.position.set(bx, 4.82, 5.9);
-    const extLamp = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.16, 0.28), floodBulbMat);
-    extLamp.position.set(bx, 4.76, 6.22);
-    extLamp.rotation.x = 0.45;
-    garageGroup.add(extArm, extLamp);
-
-    const bayLight = new THREE.PointLight(
-      bayIdx === 0 ? 0xffedd5 : bayIdx === 1 ? 0xe0f2fe : 0xfaf5ff,
-      1.65,
-      20,
-      1.3,
-    );
-    bayLight.position.set(bx, 4.35, 1.2);
-    garageGroup.add(bayLight);
-  });
-
-  // Rolling Red/Chrome Mechanic Tool Chests & Floor Jack along back wall
-  [-9.1, 9.1].forEach((tx) => {
-    const chestGroup = new THREE.Group();
-    chestGroup.position.set(tx, 0.13, -4.95);
-    const body = new THREE.Mesh(new THREE.BoxGeometry(1.45, 1.15, 0.68), toolChestRedMat);
-    body.position.y = 0.62;
-    body.castShadow = true;
-    const topBox = new THREE.Mesh(new THREE.BoxGeometry(1.38, 0.55, 0.58), toolChestRedMat);
-    topBox.position.y = 1.47;
-    topBox.castShadow = true;
-    for (let d = 0; d < 4; d++) {
-      const pull = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.05, 0.06), toolMetalMat);
-      pull.position.set(0, 0.32 + d * 0.24, 0.36);
-      chestGroup.add(pull);
-    }
-    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.54), toolMetalMat);
-    handle.position.set(tx < 0 ? 0.78 : -0.78, 1.05, 0);
-    chestGroup.add(body, topBox, handle);
-    garageGroup.add(chestGroup);
-  });
-
-  // Hydraulic Floor Jack beside Bay 1
-  const jackBody = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.14, 0.85), toolChestRedMat);
-  jackBody.position.set(-2.2, 0.2, -3.9);
-  const jackHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1.05, 6), toolMetalMat);
-  jackHandle.position.set(-2.2, 0.62, -4.32);
-  jackHandle.rotation.x = 0.45;
-  garageGroup.add(jackBody, jackHandle);
-
-  // Interactive Mechanic Repair & Assembly Workbench at center-north
-  const benchGroup = new THREE.Group();
-  benchGroup.position.set(0, 0.13, -5.0);
-  const benchTable = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.94, 1.05), timberPostMat);
-  benchTable.position.y = 0.47;
-  benchTable.castShadow = true;
-  const benchVise = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.28, 0.35), toolMetalMat);
-  benchVise.position.set(-0.95, 1.08, 0.15);
-  const benchLamp = new THREE.Mesh(
-    new THREE.SphereGeometry(0.15, 8, 8),
-    new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0xf59e0b, emissiveIntensity: 1.1 }),
-  );
-  benchLamp.position.set(1.05, 1.2, -0.2);
-  benchGroup.add(benchTable, benchVise, benchLamp);
-  garageGroup.add(benchGroup);
-  colliders.push({
-    x: VEHICLE_GARAGE_POS.x,
-    z: VEHICLE_GARAGE_POS.z - 5.0,
-    radius: 0.95,
-  });
-
-  // Spare Tires, Chrome Rims & Fuel Drums in West/East Service Corners
-  for (let t = 0; t < 4; t++) {
-    const tire = new THREE.Mesh(new THREE.TorusGeometry(0.38, 0.14, 8, 16), tireMat);
-    tire.rotation.x = Math.PI / 2;
-    tire.position.set(-7.6, 0.26 + t * 0.25, -4.85);
-    tire.castShadow = false;
-    tire.userData.noShadowCast = true;
-    garageGroup.add(tire);
-  }
-  const fuelCanMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.42, metalness: 0.3 });
-  [-4.4, -3.9, 4.2, 4.7].forEach((fx) => {
-    const can = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.56, 0.24), fuelCanMat);
-    can.position.set(fx, 0.42, -5.1);
-    can.castShadow = false;
-    can.userData.noShadowCast = true;
-    garageGroup.add(can);
-  });
-
-  // Estate maid working the garage: she services the player's cars,
-  // hydraulics, subwoofers and lights whenever they are parked here.
-  const garageMaid = new THREE.Group();
-  garageMaid.name = 'mansion-garage-maid';
-  const maidDressMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.82 });
-  const maidBlouseMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.7 });
-  const maidSkinMat = new THREE.MeshStandardMaterial({ color: 0x8d5524, roughness: 0.72 });
-  const maidHairMat = new THREE.MeshStandardMaterial({ color: 0x1a1210, roughness: 0.9 });
-  const maidBody = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 0.3), maidBlouseMat);
-  maidBody.position.y = 1.15;
-  const maidSkirt = new THREE.Mesh(new THREE.CylinderGeometry(0.29, 0.4, 0.55, 10), maidDressMat);
-  maidSkirt.position.y = 0.68;
-  const maidLegs = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.5, 0.26), maidDressMat);
-  maidLegs.position.y = 0.28;
-  const maidApron = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.7, 0.07), maidBlouseMat);
-  maidApron.position.set(0, 0.94, 0.17);
-  const maidHead = new THREE.Mesh(new THREE.SphereGeometry(0.19, 12, 10), maidSkinMat);
-  maidHead.position.y = 1.62;
-  const maidHair = new THREE.Mesh(new THREE.SphereGeometry(0.2, 10, 8), maidHairMat);
-  maidHair.position.set(0, 1.68, -0.03);
-  const maidBun = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 8), maidHairMat);
-  maidBun.position.set(0, 1.8, -0.15);
-  const garageMaidArmL = new THREE.Group();
-  garageMaidArmL.position.set(-0.32, 1.34, 0);
-  const gMaidArmLMesh = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.54, 0.14), maidBlouseMat);
-  gMaidArmLMesh.position.y = -0.27;
-  garageMaidArmL.add(gMaidArmLMesh);
-  const garageMaidArmR = new THREE.Group();
-  garageMaidArmR.position.set(0.32, 1.34, 0);
-  const gMaidArmRMesh = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.54, 0.14), maidBlouseMat);
-  gMaidArmRMesh.position.y = -0.27;
-  const gMaidWrench = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.4, 0.04), steelFrameMat);
-  gMaidWrench.position.set(0.02, -0.5, 0.1);
-  garageMaidArmR.add(gMaidArmRMesh, gMaidWrench);
-  garageMaid.add(maidBody, maidSkirt, maidLegs, maidApron, maidHead, maidHair, maidBun, garageMaidArmL, garageMaidArmR);
-  garageMaid.position.set(-3.0, 0.16, 2.6);
-  garageMaid.traverse((object) => {
-    object.userData.noStaticMerge = true;
-    object.userData.dynamic = true;
-    if (object instanceof THREE.Mesh) {
-      object.castShadow = true;
-      object.receiveShadow = false;
-    }
-  });
-  garageGroup.add(garageMaid);
-
+  // E. Hilltop Motor Atelier — relocated to the flat right-hand shoulder with
+  // room for all six cars. The underground elevator intentionally stays put.
+  const motorAtelier = buildHilltopMotorAtelier(woodTex, colliders);
+  const garageGroup = motorAtelier.group;
+  const garageMaid = motorAtelier.supervisor;
   overworldGroup.add(garageGroup);
   staticMergeTargets.push({ group: garageGroup });
 
-  const garagePos = new THREE.Vector3(VEHICLE_GARAGE_POS.x, garageGroundY, VEHICLE_GARAGE_POS.z);
-  const garageBenchPos = new THREE.Vector3(
-    VEHICLE_GARAGE_POS.x,
-    garageGroundY + 0.13,
-    VEHICLE_GARAGE_POS.z - 5.0,
-  );
+  const garagePos = motorAtelier.position;
+  const garageBenchPos = motorAtelier.benchPos;
 
-  // Base Armory Supply Chest tucked neatly beside the East flank of the Expanded Vehicle Garage
-  const armoryX = VEHICLE_GARAGE_POS.x + 12.6;
-  const armoryZ = VEHICLE_GARAGE_POS.z - 2.2;
+  // Base Armory Supply Chest tucked neatly beside the East flank of the Motor Atelier.
+  const armoryX = VEHICLE_GARAGE_POS.x + 21.6;
+  const armoryZ = VEHICLE_GARAGE_POS.z - 2.4;
   const armoryY = getTerrainHeight(armoryX, armoryZ);
   const armoryChest = createShipwreckLootChest(
     'base_armory',
@@ -4453,7 +4103,8 @@ export function buildIslandWorld(
   );
   overworldGroup.add(saturnBuilt.root);
 
-  // F2. Underground Exotic Garage Expansion & Hydraulic Car Elevator — Right Next to the Vehicle Garage
+  // F2. Underground Exotic Garage Expansion & Hydraulic Car Elevator — kept at
+  // its original position so the relocated atelier cannot bury it in the hill.
   const elevatorGroundY = getTerrainHeight(
     UNDERGROUND_ELEVATOR_POS.x,
     UNDERGROUND_ELEVATOR_POS.z,
@@ -5733,11 +5384,11 @@ export function buildIslandWorld(
     if (Math.hypot(x - WHEATFIELD_POS.x, z - WHEATFIELD_POS.z) < 11.5) continue;
     if (Math.hypot(x - FARMER_POS.x, z - FARMER_POS.z) < 10.5) continue;
     if (Math.hypot(x - HILL_HOUSE_POS.x, z - HILL_HOUSE_POS.z) < 16.5) continue;
-    if (Math.hypot(x - VEHICLE_GARAGE_POS.x, z - VEHICLE_GARAGE_POS.z) < 20.0) continue;
+    if (Math.hypot(x - VEHICLE_GARAGE_POS.x, z - VEHICLE_GARAGE_POS.z) < 26.0) continue;
     if (
-      x >= VEHICLE_GARAGE_POS.x - 18 &&
-      x <= VEHICLE_GARAGE_POS.x + 28 &&
-      z >= VEHICLE_GARAGE_POS.z - 6 &&
+      x >= VEHICLE_GARAGE_POS.x - 24 &&
+      x <= VEHICLE_GARAGE_POS.x + 24 &&
+      z >= VEHICLE_GARAGE_POS.z - 9 &&
       z <= VEHICLE_GARAGE_POS.z + 24
     ) {
       continue; // Keep garage wide driveways to beaches & trails completely clear of trees/boulders
@@ -6504,13 +6155,12 @@ export function buildIslandWorld(
       return false;
     }
 
-    // Garage pad and its three real driveway lanes. The old rectangular
-    // exclusion erased an entire hillside of grass around the cars.
+    // Atelier pad and its three real driveway lanes.
     if (
-      px >= VEHICLE_GARAGE_POS.x - 15.2 &&
-      px <= VEHICLE_GARAGE_POS.x + 15.2 &&
-      pz >= VEHICLE_GARAGE_POS.z - 7.0 &&
-      pz <= VEHICLE_GARAGE_POS.z + 7.6
+      px >= VEHICLE_GARAGE_POS.x - 20.4 &&
+      px <= VEHICLE_GARAGE_POS.x + 20.4 &&
+      pz >= VEHICLE_GARAGE_POS.z - 7.8 &&
+      pz <= VEHICLE_GARAGE_POS.z + 10.6
     ) {
       return false;
     }
@@ -6519,25 +6169,25 @@ export function buildIslandWorld(
         px,
         pz,
         VEHICLE_GARAGE_POS.x + 2,
-        VEHICLE_GARAGE_POS.z + 6.5,
+        VEHICLE_GARAGE_POS.z + 7.6,
         -4,
         174,
       ) < 2.3 ||
       distanceToSegment2D(
         px,
         pz,
-        VEHICLE_GARAGE_POS.x - 6,
-        VEHICLE_GARAGE_POS.z + 6.5,
-        -78,
-        184,
+        VEHICLE_GARAGE_POS.x - 14,
+        VEHICLE_GARAGE_POS.z + 7.3,
+        -82,
+        152,
       ) < 2.1 ||
       distanceToSegment2D(
         px,
         pz,
-        VEHICLE_GARAGE_POS.x + 10.5,
-        VEHICLE_GARAGE_POS.z + 1.5,
-        -6,
-        138,
+        VEHICLE_GARAGE_POS.x + 20.4,
+        VEHICLE_GARAGE_POS.z + 7.5,
+        VEHICLE_GARAGE_POS.x + 20.4,
+        VEHICLE_GARAGE_POS.z - 12,
       ) < 2.0
     ) {
       return false;
@@ -8051,10 +7701,11 @@ gl_Position = projectionMatrix * mvPosition;`,
     garagePos,
     garageBenchPos,
     garageMaid: {
-      group: garageMaid,
-      armL: garageMaidArmL,
-      armR: garageMaidArmR,
+      group: garageMaid.group,
+      armL: garageMaid.armL,
+      armR: garageMaid.armR,
     },
+    garageCrew: motorAtelier.crew,
     armoryChest,
     wheatfieldPos: new THREE.Vector3(WHEATFIELD_POS.x, wheatY, WHEATFIELD_POS.z),
     caveCeilings,

@@ -134,7 +134,7 @@ test('VolumetricTerrainEngine syncs geometry vertices and updates bounding volum
 test('getOverworldStructureSurfaceY covers all 7 landmark surfaces and swept fall checks', () => {
   setActiveTerrainWorldType('island');
 
-  // 1. Custom 4-Bay Vehicle Garage pad, bay pad & apron
+  // 1. Six-Car Motor Atelier pad, bay pad & apron
   const bayY = getOverworldStructureSurfaceY(
     VEHICLE_GARAGE_POS.x - 9.0,
     VEHICLE_GARAGE_POS.z,
