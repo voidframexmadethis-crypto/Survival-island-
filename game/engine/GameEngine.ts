@@ -202,9 +202,6 @@ import {
 } from '../systems/modularVehicle';
 import {
   REAR_BUMPER_MAX_LEVEL,
-  THREE_WHEEL_PARKED_POSE,
-  getThreeWheelHydraulicTargets,
-  isThreeWheelHydraulicVehicle,
   rearBumperBounceScale,
 } from '../systems/classicHydraulics';
 import {
@@ -490,9 +487,7 @@ import {
 import {
   adjustHydraulicSection,
   createHydraulicControlState,
-  hasManualHydraulicHeight,
   hydraulicBounceImpulse,
-  hydraulicCornerTargets,
   hydraulicSectionSummary,
   resetHydraulicHeight,
   toggleHydraulicLock,
@@ -2506,14 +2501,6 @@ export class GameEngine {
       this.triggerHydraulicAction('right_tilt');
     } else if (activeHasHyd && (e.code === 'KeyX' || e.code === 'Digit5' || e.code === 'Numpad5')) {
       this.triggerHydraulicAction('lock_up');
-    } else if (activeHasHyd && e.code === 'KeyH') {
-      this.triggerHydraulicAction('three_wheel');
-    } else if (activeHasHyd && (e.code === 'Digit6' || e.code === 'Numpad6')) {
-      this.triggerHydraulicAction('front_lock');
-    } else if (activeHasHyd && (e.code === 'Digit7' || e.code === 'Numpad7')) {
-      this.triggerHydraulicAction('rear_lock');
-    } else if (activeHasHyd && (e.code === 'Digit8' || e.code === 'Numpad8')) {
-      this.triggerHydraulicAction('side_lock');
     } else if (
       activeVehicle &&
       (activeVehicle.hasConvertibleTop || activeVehicle.preset === 'cadillac_coupe_deville') &&
@@ -16916,13 +16903,11 @@ export class GameEngine {
           canFloat: specs.canFloat,
           canFly: specs.canFly,
           hasHydraulics: this.vehicleHasHydraulics(av),
-          hydraulicStyle: this.usesLowriderRig(av)
-            ? 'cadillac_lowrider'
-            : this.isAirbagVehicle(av)
-              ? 'airbag_coilover'
-              : this.isDonkHydraulicVehicle(av)
-                ? 'up_down_side'
-                : 'full_bounce',
+          hydraulicStyle: this.isAirbagVehicle(av)
+            ? 'airbag_coilover'
+            : this.isDonkHydraulicVehicle(av)
+              ? 'up_down_side'
+              : 'full_bounce',
           hydraulicMode: this.hydraulicMode,
           hydraulicSelectedCorner: this.usesLowriderRig(av)
             ? this.lowriderControls.selectedCorner
@@ -23540,47 +23525,10 @@ export class GameEngine {
     this.vehicleAltitudeVel = 0;
     this.vehicleAscendHold = false;
     this.vehicleDescendHold = false;
-    const parkedThreeWheel = v.hydraulicStance === 'three_wheel';
-    const parkedLockedUp = v.hydraulicStance === 'lock_up';
-    this.hydraulicMode = parkedThreeWheel
-      ? 'three_wheel'
-      : parkedLockedUp
-        ? 'lock_up'
-        : 'level';
-    this.hydraulicLocked = parkedLockedUp;
-    this.hydraulicControls = parkedLockedUp
-      ? {
-          front: 0.78,
-          rear: 0.78,
-          left: 0,
-          right: 0,
-          locked: true,
-        }
-      : createHydraulicControlState();
-    const parkedTargets = getThreeWheelHydraulicTargets(
-      this.isAirbagVehicle(v),
-      v.airbagLockLevel ?? 1,
-    );
-    const parkedLockHeight = this.isAirbagVehicle(v)
-      ? 0.72 * THREE.MathUtils.clamp(v.airbagLockLevel ?? 1, 0.4, 1.4)
-      : this.isDonkHydraulicVehicle(v)
-        ? 0.62
-        : 0.78;
-    this.hydCorners = parkedThreeWheel
-      ? {
-          fl: parkedTargets.fl,
-          fr: parkedTargets.fr,
-          rl: parkedTargets.rl * 0.9,
-          rr: parkedTargets.rr,
-        }
-      : parkedLockedUp
-        ? {
-            fl: parkedLockHeight,
-            fr: parkedLockHeight,
-            rl: parkedLockHeight,
-            rr: parkedLockHeight,
-          }
-        : { fl: 0, fr: 0, rl: 0, rr: 0 };
+    this.hydraulicMode = 'level';
+    this.hydraulicLocked = false;
+    this.hydraulicControls = createHydraulicControlState();
+    this.hydCorners = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.hydVel = { fl: 0, fr: 0, rl: 0, rr: 0 };
     this.lowriderRig = createLowriderRigState();
     this.lowriderControls = createLowriderControls();
@@ -23590,10 +23538,6 @@ export class GameEngine {
     this.lowriderHopNextPulse = 0;
     this.lowriderSideSwayTimer = 0;
     this.lowriderSideSwayDir = 'left';
-    if (this.usesLowriderRig(v) && parkedThreeWheel) {
-      this.lowriderControls.selectedCorner = 'rl';
-      toggleLowriderThreeWheel(this.lowriderControls, 'rl');
-    }
     this.trunkBassPulse = 0;
     this.trunkBassPressure = 0;
     this.chestThumpPulse = 0;
@@ -23619,7 +23563,7 @@ export class GameEngine {
     const extraHint = v.preset === 'donk'
       ? ' · [Space/Z/Q/R] Hydraulics (Up / Down / Side-to-Side)'
       : this.vehicleHasHydraulics(v)
-        ? ' · [Space/1] Front Hop · [Z/2] Rear Hop · [Q/R] Tilt · [X] Lock · [H] 3-Wheel · Wheel Controls in HUD'
+        ? ' · [Space/1] Front Hop · [Z/2] Rear Hop · [Q/3 R/4] Tilt · [X/5] Lock · [C] Drop · HUD Controls'
         : this.isOldSchoolVehicle(v)
           ? ' · [T] Trunk Bass · [B] Car Radio'
           : ' · [B] Car Radio';
@@ -23790,14 +23734,7 @@ export class GameEngine {
     this.touchBrake = 0;
     this.touchHandbrake = false;
     if (v) {
-      // A locked-up lowrider stays parked on its raised cylinders, just like a
-      // real car left sitting on its hydraulics after the driver steps out.
-      v.hydraulicStance =
-        this.hydraulicMode === 'three_wheel'
-          ? 'three_wheel'
-          : this.hydraulicMode === 'lock_up'
-            ? 'lock_up'
-            : undefined;
+      v.hydraulicStance = undefined;
     }
     this.hydraulicMode = 'level';
     this.hydraulicLocked = false;
@@ -24365,65 +24302,21 @@ export class GameEngine {
       | 'drop'
       | 'front_lock'
       | 'rear_lock'
-      | 'side_lock'
       | 'side_to_side'
-      | 'coil_bounce'
-      | 'three_wheel'
-      | 'three_wheel_hop'
-      | 'full_hop'
-      | 'front_raise'
-      | 'front_lower'
-      | 'rear_raise'
-      | 'rear_lower'
-      | 'left_raise'
-      | 'left_lower'
-      | 'right_raise'
-      | 'right_lower'
-      | 'fl_raise'
-      | 'fl_lower'
-      | 'fr_raise'
-      | 'fr_lower'
-      | 'rl_raise'
-      | 'rl_lower'
-      | 'rr_raise'
-      | 'rr_lower'
-      | 'select_fl'
-      | 'select_fr'
-      | 'select_rl'
-      | 'select_rr'
-      | 'lock_fl'
-      | 'lock_fr'
-      | 'lock_rl'
-      | 'lock_rr'
-      | 'height_lock'
-      | 'bounce'
-      | 'bounce_soft'
-      | 'bounce_hard'
-      | 'normal_height',
+      | 'coil_bounce',
   ): void {
     if (!this.activeVehicleId || this.mode !== 'playing' || this.gameOver) return;
     const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
     if (!av || !this.vehicleHasHydraulics(av)) return;
 
-    if (action === 'three_wheel' && !isThreeWheelHydraulicVehicle(av.preset)) return;
-    if (action !== 'three_wheel') av.hydraulicStance = undefined;
-
     this.sound.unlock();
     const isDonk = this.isDonkHydraulicVehicle(av);
     const isAirbag = this.isAirbagVehicle(av);
-    if (this.usesLowriderRig(av)) {
-      if (this.handleLowriderHydraulicAction(action, av)) return;
-    }
-    if (!isAirbag && this.handleSectionHydraulicAction(action, av)) return;
-
     // Cadillac Coupe DeVille Airbag + Coil-Over Spring Suspension
     if (isAirbag) {
       const speed = THREE.MathUtils.clamp(av.airbagSpeed ?? 1.0, 0.25, 2.0);
       const lock = THREE.MathUtils.clamp(av.airbagLockLevel ?? 1.0, 0.4, 1.4);
-      const impulse =
-        (3.4 + speed * 4.4) *
-        lock *
-        THREE.MathUtils.clamp(av.hydraulicBounceBoost ?? 1, 1, 2.2);
+      const impulse = (3.4 + speed * 4.4) * lock;
       const floorY = Math.max(
         getTerrainHeight(av.x, av.z),
         this.getStructuralSurfaceY(av.x, av.z, av.y + 0.8),
@@ -24431,19 +24324,13 @@ export class GameEngine {
       const nearGround = av.y <= floorY + 1.15;
 
       if (action === 'coil_bounce' || action === 'front_hop') {
-        // A raised car bounces against its locked cylinders: the body springs
-        // back to the locked ride height instead of dropping to stock height.
-        this.hydraulicMode = this.hydraulicLocked ? 'lock_up' : 'front_hop';
+        this.hydraulicMode = 'front_hop';
         this.hydVel.fl = impulse * 1.45;
         this.hydVel.fr = impulse * 1.45;
         this.hydVel.rl = Math.min(this.hydVel.rl, -1.8 * lock);
         this.hydVel.rr = Math.min(this.hydVel.rr, -1.8 * lock);
-        // Real air suspension can hop the body, but only the hydraulic dancer
-        // is allowed to launch all four wheels clear of the ground.
-        if (av.hydraulicsDanceEnabled && nearGround && speed >= 0.85) {
-          const hopVy =
-            THREE.MathUtils.clamp(3.6 + speed * 3.1 * lock, 4.0, 9.4) *
-            Math.min(1.45, Math.max(1, av.hydraulicBounceBoost ?? 1));
+        if (nearGround && speed >= 0.85) {
+          const hopVy = THREE.MathUtils.clamp(3.6 + speed * 3.1 * lock, 4.0, 9.4);
           av.vy = av.y <= floorY + 0.35 ? hopVy : Math.min(9.6, Math.max(av.vy + 3.2, hopVy));
         }
         this.hydraulicBounceTimer = 0.52;
@@ -24485,24 +24372,9 @@ export class GameEngine {
         this.hydraulicLocked = false;
         this.hydraulicMode = this.hydraulicMode === 'side_to_side' ? 'level' : 'side_to_side';
         this.sound.playAirbagHiss(speed, false);
-      } else if (action === 'three_wheel') {
-        const entering = this.hydraulicMode !== 'three_wheel';
-        this.hydraulicMode = entering ? 'three_wheel' : 'level';
-        this.hydraulicLocked = false;
-        av.hydraulicStance = entering ? 'three_wheel' : undefined;
-        if (entering) {
-          av.hydraulicsDanceEnabled = false;
-          this.hydVel.fl += impulse * 0.24;
-          this.hydVel.fr += impulse * 0.24;
-          this.hydVel.rl += impulse * 0.95;
-          this.hydVel.rr += impulse * 0.24;
-          this.toast(`${av.name}: 3-Wheel Stance Locked`, 'info');
-        }
-        this.sound.playAirbagHiss(speed, false);
       } else if (action === 'lock_up') {
-        this.hydraulicLocked = !this.hydraulicLocked;
-        this.hydraulicMode = this.hydraulicLocked ? 'lock_up' : 'level';
-        if (this.hydraulicLocked) {
+        this.hydraulicMode = this.hydraulicMode === 'lock_up' ? 'level' : 'lock_up';
+        if (this.hydraulicMode === 'lock_up') {
           this.hydVel.fl += impulse * 0.62;
           this.hydVel.fr += impulse * 0.62;
           this.hydVel.rl += impulse * 0.62;
@@ -24512,10 +24384,6 @@ export class GameEngine {
       } else {
         this.hydraulicMode = this.hydraulicMode === 'drop_down' ? 'level' : 'drop_down';
         if (this.hydraulicMode === 'drop_down') {
-          if (this.hydraulicLocked) {
-            this.hydraulicLocked = false;
-            this.hydraulicMode = 'level';
-          }
           this.hydVel.fl -= impulse * 0.45;
           this.hydVel.fr -= impulse * 0.45;
           this.hydVel.rl -= impulse * 0.45;
@@ -24527,22 +24395,11 @@ export class GameEngine {
       return;
     }
 
-    // DONK body bounces on its rear axle: the back tires stay planted while the
-    // nose and front wheels lift, then settle without launching the whole car.
+    // DONK hydraulics can only go up, down, and side-to-side.
     if (isDonk) {
-      if (action === 'front_hop') {
-        this.hydraulicMode = this.hydraulicLocked ? 'lock_up' : 'front_hop';
-        this.hydVel.fl += 9.2;
-        this.hydVel.fr += 9.2;
-        this.hydVel.rl = Math.min(this.hydVel.rl, -1.4);
-        this.hydVel.rr = Math.min(this.hydVel.rr, -1.4);
-        this.hydraulicBounceTimer = 0.55;
-        this.sound.playHydraulicHop('hop');
-        this.spawnParticles(av.x, av.y + 0.3, av.z, 0xfbbf24, 7);
-      } else if (action === 'lock_up') {
-        this.hydraulicLocked = !this.hydraulicLocked;
-        this.hydraulicMode = this.hydraulicLocked ? 'lock_up' : 'level';
-        if (this.hydraulicLocked) {
+      if (action === 'front_hop' || action === 'lock_up') {
+        this.hydraulicMode = this.hydraulicMode === 'lock_up' ? 'level' : 'lock_up';
+        if (this.hydraulicMode === 'lock_up') {
           this.hydVel.fl += 3.6;
           this.hydVel.fr += 3.6;
           this.hydVel.rl += 3.6;
@@ -24550,7 +24407,6 @@ export class GameEngine {
         }
         this.sound.playHydraulicHop('lock');
       } else if (action === 'rear_hop' || action === 'drop') {
-        this.hydraulicLocked = false;
         this.hydraulicMode = this.hydraulicMode === 'drop_down' ? 'level' : 'drop_down';
         if (this.hydraulicMode === 'drop_down') {
           this.hydVel.fl -= 3.2;
@@ -24560,11 +24416,9 @@ export class GameEngine {
         }
         this.sound.playHydraulicHop('tilt');
       } else if (action === 'left_tilt') {
-        this.hydraulicLocked = false;
         this.hydraulicMode = this.hydraulicMode === 'left_tilt' ? 'level' : 'left_tilt';
         this.sound.playHydraulicHop('tilt');
       } else if (action === 'right_tilt') {
-        this.hydraulicLocked = false;
         this.hydraulicMode = this.hydraulicMode === 'right_tilt' ? 'level' : 'right_tilt';
         this.sound.playHydraulicHop('tilt');
       }
@@ -24572,94 +24426,63 @@ export class GameEngine {
       return;
     }
 
-    // Lowrider & custom hydraulic builds: the body bounces while the rear tires
-    // stay planted, so the car never launches all four wheels off the ground.
-    const bounceBoost = THREE.MathUtils.clamp(av.hydraulicBounceBoost ?? 1, 1, 2.2);
+    // Lowrider & custom hydraulic builds: bounce high with two wheels coming
+    // off the ground, matching the original hydraulic setup.
+    const floorY = Math.max(
+      getTerrainHeight(av.x, av.z),
+      this.getStructuralSurfaceY(av.x, av.z, av.y + 0.8),
+    );
+    const nearGround = av.y <= floorY + 1.15;
+
     if (action === 'front_hop' || action === 'coil_bounce') {
-      // Locked cylinders hold the raised ride height: the hop compresses them
-      // and the car springs back up instead of settling to stock height.
-      this.hydraulicMode = this.hydraulicLocked ? 'lock_up' : 'front_hop';
-      this.hydVel.fl = 15.5 * bounceBoost;
-      this.hydVel.fr = 15.5 * bounceBoost;
+      this.hydraulicMode = 'front_hop';
+      this.hydVel.fl = 15.5;
+      this.hydVel.fr = 15.5;
       this.hydVel.rl = Math.min(this.hydVel.rl, -2.4);
       this.hydVel.rr = Math.min(this.hydVel.rr, -2.4);
-      // The front axle lifts while the rear tires keep their contact patch.
+      if (nearGround) {
+        av.vy = av.y <= floorY + 0.35 ? 7.8 : Math.min(9.6, Math.max(av.vy + 4.4, 7.2));
+      }
       this.hydraulicBounceTimer = 0.55;
       this.sound.playHydraulicHop('hop');
       this.spawnParticles(av.x, av.y + 0.35, av.z, 0xfbbf24, 9);
     } else if (action === 'rear_hop' || action === 'rear_lock') {
-      this.hydraulicMode = this.hydraulicLocked ? 'lock_up' : 'rear_hop';
-      const rearEscalation = this.rearBumperEscalation(av, performance.now());
-      this.hydVel.rl = 15.5 * bounceBoost * rearEscalation;
-      this.hydVel.rr = 15.5 * bounceBoost * rearEscalation;
+      this.hydraulicMode = 'rear_hop';
+      this.hydVel.rl = 15.5;
+      this.hydVel.rr = 15.5;
       this.hydVel.fl = Math.min(this.hydVel.fl, -2.4);
       this.hydVel.fr = Math.min(this.hydVel.fr, -2.4);
-      // The body squats on the rear axle; those tires never leave the road.
+      if (nearGround) {
+        av.vy = av.y <= floorY + 0.35 ? 7.4 : Math.min(9.2, Math.max(av.vy + 4.2, 6.8));
+      }
       this.hydraulicBounceTimer = 0.55;
       this.sound.playHydraulicHop('hop');
       this.spawnParticles(av.x, av.y + 0.35, av.z, 0xfbbf24, 9);
-      if (rearEscalation > 1.2) {
-        this.toast(
-          `${av.name}: rear bumper bounce ×${rearEscalation.toFixed(1)}`,
-          'info',
-        );
-      }
     } else if (action === 'left_tilt') {
-      const wasLeft = this.hydraulicMode === 'left_tilt';
-      this.hydraulicMode = this.hydraulicLocked
-        ? 'lock_up'
-        : wasLeft
-          ? 'level'
-          : 'left_tilt';
-      if (!wasLeft) {
+      this.hydraulicMode = this.hydraulicMode === 'left_tilt' ? 'level' : 'left_tilt';
+      if (this.hydraulicMode === 'left_tilt') {
         this.hydVel.fr += 6.2;
         this.hydVel.rr += 6.2;
       }
       this.sound.playHydraulicHop('tilt');
     } else if (action === 'right_tilt') {
-      const wasRight = this.hydraulicMode === 'right_tilt';
-      this.hydraulicMode = this.hydraulicLocked
-        ? 'lock_up'
-        : wasRight
-          ? 'level'
-          : 'right_tilt';
-      if (!wasRight) {
+      this.hydraulicMode = this.hydraulicMode === 'right_tilt' ? 'level' : 'right_tilt';
+      if (this.hydraulicMode === 'right_tilt') {
         this.hydVel.fl += 6.2;
         this.hydVel.rl += 6.2;
       }
       this.sound.playHydraulicHop('tilt');
     } else if (action === 'lock_up' || action === 'front_lock') {
-      // Raise and mechanically lock all four cylinders. The lock survives
-      // hops, tilts and rear-bumper bounces until the player drops the car.
-      this.hydraulicLocked = !this.hydraulicLocked;
-      this.hydraulicMode = this.hydraulicLocked ? 'lock_up' : 'level';
-      if (this.hydraulicLocked) {
-        this.hydVel.fl += 4.6 * bounceBoost;
-        this.hydVel.fr += 4.6 * bounceBoost;
-        this.hydVel.rl += 4.6 * bounceBoost;
-        this.hydVel.rr += 4.6 * bounceBoost;
-        this.toast(`${av.name}: Hydraulics Locked Up`, 'info');
-      } else {
-        this.toast(`${av.name}: Hydraulics Unlocked`, 'info');
+      this.hydraulicMode = this.hydraulicMode === 'lock_up' ? 'level' : 'lock_up';
+      if (this.hydraulicMode === 'lock_up') {
+        this.hydVel.fl += 4.6;
+        this.hydVel.fr += 4.6;
+        this.hydVel.rl += 4.6;
+        this.hydVel.rr += 4.6;
       }
       this.sound.playHydraulicHop('lock');
-    } else if (action === 'three_wheel') {
-      const entering = this.hydraulicMode !== 'three_wheel';
-      this.hydraulicMode = entering ? 'three_wheel' : 'level';
-      this.hydraulicLocked = false;
-      av.hydraulicStance = entering ? 'three_wheel' : undefined;
-      if (entering) {
-        av.hydraulicsDanceEnabled = false;
-        this.hydVel.fl += 1.4;
-        this.hydVel.fr += 1.4;
-        this.hydVel.rl += 5.8;
-        this.hydVel.rr += 1.4;
-        this.toast(`${av.name}: 3-Wheel Stance Locked`, 'info');
-      }
-      this.sound.playHydraulicHop('tilt');
     } else {
       this.hydraulicMode = this.hydraulicMode === 'drop_down' ? 'level' : 'drop_down';
-      if (this.hydraulicMode === 'drop_down') this.hydraulicLocked = false;
       this.sound.playHydraulicHop('tilt');
     }
     this.emitHud();
@@ -25480,13 +25303,6 @@ export class GameEngine {
         } else if (this.hydraulicMode === 'side_to_side') {
           tFl = tRl = (0.24 + sideWave * 0.56) * airbagLock;
           tFr = tRr = (0.24 - sideWave * 0.56) * airbagLock;
-        } else if (this.hydraulicMode === 'three_wheel') {
-          // Three planted corners, rear-left wheel held high in a classic hydraulics pose.
-          const stance = getThreeWheelHydraulicTargets(true, airbagLock);
-          tFl = stance.fl;
-          tFr = stance.fr;
-          tRl = stance.rl;
-          tRr = stance.rr;
         }
       } else if (this.hydraulicMode === 'lock_up') {
         tFl = tFr = tRl = tRr = activeIsDonk ? 0.62 : 0.78;
@@ -25502,24 +25318,7 @@ export class GameEngine {
         const high = activeIsDonk ? 0.56 : 0.96;
         tFl = tRl = high;
         tFr = tRr = low;
-      } else if (this.hydraulicMode === 'three_wheel') {
-        const stance = getThreeWheelHydraulicTargets(false);
-        tFl = stance.fl;
-        tFr = stance.fr;
-        tRl = stance.rl;
-        tRr = stance.rr;
       }
-    }
-
-    // Independent section heights take over when the player has raised the
-    // front, rear or either side. These targets are held while bouncing, so a
-    // locked rear never sinks back to stock height.
-    if (!activeIsAirbag && !activeUsesRig && hasManualHydraulicHeight(this.hydraulicControls)) {
-      const manual = hydraulicCornerTargets(this.hydraulicControls);
-      tFl = manual.fl;
-      tFr = manual.fr;
-      tRl = manual.rl;
-      tRr = manual.rr;
     }
 
     const stiffness = activeIsAirbag
@@ -25763,27 +25562,8 @@ export class GameEngine {
         }
       } else if (isActive && activeHasHyd) {
         const { fl, fr, rl, rr } = this.hydCorners;
-        const rawHeave = (fl + fr + rl + rr) * 0.25;
-        const bounceBoost = THREE.MathUtils.clamp(
-          activeV?.hydraulicBounceBoost ?? 1,
-          1,
-          2.2,
-        );
-        const manualHeights = hydraulicCornerTargets(this.hydraulicControls);
-        const manualAvg =
-          (manualHeights.fl + manualHeights.fr + manualHeights.rl + manualHeights.rr) * 0.25;
-        const heaveCap =
-          Math.max(
-            (activeIsDonk ? 0.34 : activeV?.preset === 'lowrider' ? 0.56 : 0.5) *
-              bounceBoost,
-            manualAvg > 0 ? manualAvg * 0.92 : 0,
-          ) +
-          // A locked car still bounces above its held ride height instead of
-          // being flattened against the cap.
-          (this.hydraulicLocked ? 0.16 : 0);
-        const avgHeave = THREE.MathUtils.clamp(rawHeave, -0.12, heaveCap);
-        const hydPitch =
-          ((rl + rr) - (fl + fr)) * (activeIsDonk ? 0.12 : activeV?.preset === 'lowrider' ? 0.17 : 0.21);
+        const avgHeave = (fl + fr + rl + rr) * 0.25;
+        const hydPitch = activeIsDonk ? 0 : ((rl + rr) - (fl + fr)) * 0.21;
         const hydRoll = ((fr + rr) - (fl + rl)) * (activeIsDonk ? 0.16 : 0.24);
         handles.chassisGroup.position.y =
           Math.max(minChassisY, baseBodyY + avgHeave) + showBassPulse * 0.025;
@@ -25792,61 +25572,14 @@ export class GameEngine {
         const minCorner = Math.min(fl, fr, rl, rr);
         for (const wc of handles.wheelCorners) {
           if (activeIsDonk) {
-            // DONK rear tires stay on the road; only a front bounce lifts the nose.
-            const frontBounce = this.hydraulicMode === 'front_hop' && wc.corner.startsWith('f');
-            const cornerH = this.hydCorners[wc.corner];
-            wc.obj.position.y = frontBounce
-              ? wc.baseY + Math.min(0.34, Math.max(0, cornerH - minCorner - 0.05) * 0.7)
-              : wc.baseY;
-          } else if (this.hydraulicMode === 'three_wheel') {
-            // Only the rear-left wheel leaves the ground; the other three stay planted.
-            wc.obj.position.y =
-              wc.corner === 'rl'
-                ? wc.baseY + Math.max(0, this.hydCorners.rl - 0.3) * (activeIsAirbag ? 0.55 : 0.85)
-                : wc.baseY;
-          } else if (!activeIsAirbag) {
-            // Every full-cylinder lowrider can lift both front tyres clear of
-            // the road while the rear contact patch stays planted and carries
-            // the car. Air-ride cars keep their wheels down.
-            const cornerH = this.hydCorners[wc.corner];
-            const frontWheel = wc.corner === 'fl' || wc.corner === 'fr';
-            const lift = frontWheel
-              ? Math.min(0.46, Math.max(0, cornerH - minCorner - 0.05) * 0.78)
-              : 0;
-            wc.obj.position.y = wc.baseY + lift;
-          } else {
-            // Air-ride and other hydraulics move only the body; the tyres keep
-            // their contact patch on the road.
+            // DONK keeps all four wheels planted while the body moves.
             wc.obj.position.y = wc.baseY;
+          } else {
+            // The original hydraulics lift the active corners clear of the road.
+            const cornerH = this.hydCorners[wc.corner];
+            const relativeLift = Math.max(0, cornerH - minCorner - 0.05);
+            wc.obj.position.y = wc.baseY + relativeLift * (activeIsAirbag ? 0.55 : 0.85);
           }
-        }
-      } else if (
-        v.hydraulicStance === 'lock_up' &&
-        this.vehicleHasHydraulics(v)
-      ) {
-        // Parked on locked hydraulics: body held high, all four tyres planted.
-        const lockedHeave =
-          v.preset === 'donk' ? 0.34 : v.preset === 'lowrider' ? 0.56 : 0.5;
-        handles.chassisGroup.position.y =
-          baseBodyY + lockedHeave + showBassPulse * 0.02;
-        handles.chassisGroup.rotation.x = 0;
-        handles.chassisGroup.rotation.z = 0;
-        for (const wc of handles.wheelCorners) {
-          wc.obj.position.y = wc.baseY;
-        }
-      } else if (
-        v.hydraulicStance === 'three_wheel' &&
-        isThreeWheelHydraulicVehicle(v.preset)
-      ) {
-        // Parked three-wheel stance persists while the driver is out of the car.
-        const { heave, pitch, roll, wheelLift, airbagWheelLift } =
-          THREE_WHEEL_PARKED_POSE;
-        const parkedLift = this.isAirbagVehicle(v) ? airbagWheelLift : wheelLift;
-        handles.chassisGroup.position.y = baseBodyY + heave + showBassPulse * 0.02;
-        handles.chassisGroup.rotation.x = pitch;
-        handles.chassisGroup.rotation.z = roll;
-        for (const wc of handles.wheelCorners) {
-          wc.obj.position.y = wc.corner === 'rl' ? wc.baseY + parkedLift : wc.baseY;
         }
       } else {
         handles.chassisGroup.position.y = baseBodyY + showBassPulse * 0.032;
