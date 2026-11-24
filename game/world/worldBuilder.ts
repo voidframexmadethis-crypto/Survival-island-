@@ -16,7 +16,11 @@ import {
   buildCustomCarShop,
   type CustomCarShopHandles,
 } from './customCarShop';
-import { CUSTOM_SHOP_ROUTE, JUNKYARD_CAVE } from '../systems/customCarShop';
+import {
+  CUSTOM_SHOP_ROUTE,
+  JUNKYARD_CAVE,
+  isOnCustomShopFreightRoute,
+} from '../systems/customCarShop';
 import { buildLouisianaFerry, type LouisianaFerryHandles } from './louisianaFerry';
 import { buildCrescentClipper, type CrescentClipperHandles } from './crescentClipper';
 import { buildSeaplaneBase, type SeaplaneBaseHandles } from './seaplaneBase';
@@ -5420,6 +5424,7 @@ export function buildIslandWorld(
     }
     if (Math.hypot(x - JUNKYARD_CAVE.x, z - JUNKYARD_CAVE.z) < 9.5) continue;
     if (isOnCustomShopTowRoute(x, z)) continue;
+    if (isOnCustomShopFreightRoute(x, z)) continue;
     if (
       x >= VEHICLE_GARAGE_POS.x - 24 &&
       x <= VEHICLE_GARAGE_POS.x + 24 &&
@@ -6210,6 +6215,7 @@ export function buildIslandWorld(
     }
     if (Math.hypot(px - JUNKYARD_CAVE.x, pz - JUNKYARD_CAVE.z) < 8.5) return false;
     if (isOnCustomShopTowRoute(px, pz)) return false;
+    if (isOnCustomShopFreightRoute(px, pz)) return false;
     if (
       distanceToSegment2D(
         px,
@@ -6825,6 +6831,7 @@ export function buildIslandWorld(
     }
     if (Math.hypot(bx - JUNKYARD_CAVE.x, bz - JUNKYARD_CAVE.z) < 10) continue;
     if (isOnCustomShopTowRoute(bx, bz)) continue;
+    if (isOnCustomShopFreightRoute(bx, bz)) continue;
 
     if (sbPlaced < shoreBoulderCount && bBiome === 'beach' && by >= -0.35 && by <= 1.55) {
       dummy.position.set(bx, by - 0.14, bz);

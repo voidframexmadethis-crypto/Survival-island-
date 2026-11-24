@@ -152,6 +152,7 @@ import { BlankPhoneMarketplaceModal } from './BlankPhoneMarketplaceModal';
 import { NavigatorCompanionModal } from './NavigatorCompanionModal';
 import { LouisianaMainlandModal } from './LouisianaMainlandModal';
 import { LostWorldModal } from './LostWorldModal';
+import { RestorationShopModal } from './RestorationShopModal';
 import type { MainlandTab } from '@/game/systems/louisianaMainland';
 import {
   CustomPhoneMarketplaceState,
@@ -4407,6 +4408,14 @@ export function SurvivalGameClient() {
 
       {activeModal === 'lost_world' && engineInstance && (
         <LostWorldModal engine={engineInstance} onClose={closeModal} />
+      )}
+
+      {activeModal === 'restoration_shop' && engineInstance && hud && (
+        <RestorationShopModal
+          engine={engineInstance}
+          hud={hud}
+          onClose={closeModal}
+        />
       )}
 
       {activeModal === 'mainland' && hud && engineInstance && (

@@ -1,9 +1,19 @@
 import * as THREE from 'three';
 import { roundedBox } from './roundedBox';
 import { getPolishedConcretePbr } from './textures';
-import { CUSTOM_SHOP_POS, CUSTOM_SHOP_Y, getTerrainHeight } from './terrain';
 import {
+  CUSTOM_SHOP_POS,
+  CUSTOM_SHOP_Y,
+  getTerrainHeight,
+  getWaterLevelAt,
+} from './terrain';
+import {
+  CUSTOM_FREIGHT_DOCK,
+  CUSTOM_FREIGHT_PIER_DECK_ABOVE_WATER,
+  CUSTOM_FREIGHT_ROUTE,
+  CUSTOM_FREIGHT_SHIP_MOORING,
   CUSTOM_SHOP_WORKERS,
+  getCustomShopShipRoutePoint,
   JUNKYARD_CAVE,
   type CustomShopWorkerId,
 } from '../systems/customCarShop';
@@ -33,6 +43,17 @@ export interface CustomCarShopHandles {
   towDonor: THREE.Group;
   liftCar: THREE.Group;
   liftPlatform: THREE.Group;
+  liftCarTrunk: THREE.Group | null;
+  liftCarWheels: THREE.Group[];
+  hydraulicParts: THREE.Group;
+  stockSuspensionPile: THREE.Group;
+  partCrates: THREE.Group[];
+  cargoShip: THREE.Group;
+  cargoShipContainers: THREE.Group;
+  forklift: THREE.Group;
+  forkliftForks: THREE.Group;
+  forkliftPallet: THREE.Group;
+  freightDeckY: number;
   setStatus: (headline: string, detail: string, progress: number) => void;
 }
 
@@ -292,8 +313,12 @@ function buildJunkShell(
   roof.position.set(0, 1.04, -0.25);
   const hood = new THREE.Mesh(roundedBox(1.65, 0.15, 1.2, 0.06), rustMat);
   hood.position.set(0, 0.91, 1.3);
+  // Hinged trunk so the crew can actually open it for the hydraulic install.
+  const trunkPivot = new THREE.Group();
+  trunkPivot.position.set(0, 0.9, -1.12);
   const trunk = new THREE.Mesh(roundedBox(1.65, 0.12, 0.9, 0.05), rustMat);
-  trunk.position.set(0, 0.9, -1.55);
+  trunk.position.set(0, 0, -0.43);
+  trunkPivot.add(trunk);
   const windshield = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.46), glassMat);
   windshield.position.set(0, 1.13, 0.89);
   windshield.rotation.x = -0.42;
@@ -306,18 +331,27 @@ function buildJunkShell(
   const rustPatch2 = rustPatch.clone();
   rustPatch2.position.set(0.96, 0.7, -1.1);
   rustPatch2.rotation.y = Math.PI / 2;
-  group.add(body, roof, hood, trunk, windshield, rearGlass, rustPatch, rustPatch2);
+  group.add(body, roof, hood, trunkPivot, windshield, rearGlass, rustPatch, rustPatch2);
 
+  const wheels: THREE.Group[] = [];
   if (withWheels) {
     [1.35, -1.35].forEach((z) => {
       [-0.92, 0.92].forEach((x) => {
+        const wheel = new THREE.Group();
+        wheel.position.set(x, 0.37, z);
         const tire = new THREE.Mesh(
           new THREE.CylinderGeometry(0.38, 0.38, 0.24, 16),
           tireMat,
         );
         tire.rotation.z = Math.PI / 2;
-        tire.position.set(x, 0.37, z);
-        group.add(tire);
+        const rim = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.19, 0.19, 0.26, 12),
+          rustMat,
+        );
+        rim.rotation.z = Math.PI / 2;
+        wheel.add(tire, rim);
+        group.add(wheel);
+        wheels.push(wheel);
       });
     });
   } else {
@@ -329,6 +363,8 @@ function buildJunkShell(
     axle.position.y = 0.26;
     group.add(axle);
   }
+  group.userData.trunkLid = trunkPivot;
+  group.userData.wheels = wheels;
   return group;
 }
 
@@ -472,6 +508,480 @@ function buildTowTruck(
   donor.position.set(0, 1.25, -1.45);
   donor.visible = false;
   return { truck, donor };
+}
+
+function crateLabelTexture(title: string, subtitle: string): THREE.CanvasTexture | null {
+  const made = makeCanvas(512, 256);
+  if (!made) return null;
+  const { canvas, ctx } = made;
+  ctx.fillStyle = '#c9b48a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#2b2118';
+  ctx.fillRect(18, 18, canvas.width - 36, canvas.height - 36);
+  ctx.strokeStyle = '#c08a3e';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(30, 30, canvas.width - 60, canvas.height - 60);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#e7b85f';
+  ctx.font = '700 38px Arial, sans-serif';
+  ctx.fillText(title.toUpperCase().slice(0, 22), 256, 104);
+  ctx.fillStyle = '#f1e5cd';
+  ctx.font = '600 29px Georgia, serif';
+  ctx.fillText(subtitle.toUpperCase().slice(0, 30), 256, 156);
+  ctx.fillStyle = '#9aa8a2';
+  ctx.font = '500 22px Arial, sans-serif';
+  ctx.fillText('BAYOU ROYAL CUSTOMS', 256, 198);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+function buildFreightShip(): { ship: THREE.Group; containers: THREE.Group } {
+  const ship = new THREE.Group();
+  ship.name = 'crescent-city-freight-barge';
+  const hullMat = new THREE.MeshStandardMaterial({
+    color: 0x1e2b33,
+    roughness: 0.62,
+    metalness: 0.32,
+  });
+  const hullStripe = new THREE.MeshStandardMaterial({
+    color: 0x8c2d24,
+    roughness: 0.66,
+    metalness: 0.2,
+  });
+  const deckMat = new THREE.MeshStandardMaterial({
+    color: 0x6b6f66,
+    roughness: 0.86,
+    metalness: 0.28,
+  });
+  const cabinMat = new THREE.MeshStandardMaterial({
+    color: 0xd9d3c0,
+    roughness: 0.58,
+    metalness: 0.12,
+  });
+  const rustMat = new THREE.MeshStandardMaterial({
+    color: 0x8a4b2d,
+    roughness: 0.88,
+    metalness: 0.18,
+  });
+  const darkMat = new THREE.MeshStandardMaterial({
+    color: 0x171b1d,
+    roughness: 0.7,
+    metalness: 0.3,
+  });
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: 0x7f9ba2,
+    roughness: 0.16,
+    metalness: 0.4,
+    transparent: true,
+    opacity: 0.5,
+  });
+  const ropeMat = new THREE.MeshStandardMaterial({ color: 0xb7a887, roughness: 0.95 });
+
+  const hull = new THREE.Mesh(roundedBox(5.9, 1.8, 18.4, 0.45), hullMat);
+  hull.position.y = -0.35;
+  const stripe = new THREE.Mesh(roundedBox(5.95, 0.2, 18.5, 0.35), hullStripe);
+  stripe.position.y = 0.28;
+  const deck = new THREE.Mesh(roundedBox(5.5, 0.16, 17.9, 0.08), deckMat);
+  deck.position.y = 0.56;
+  const stern = new THREE.Mesh(roundedBox(5.2, 0.5, 0.9, 0.12), hullMat);
+  stern.position.set(0, 0.72, -8.9);
+  const bowRamp = new THREE.Mesh(roundedBox(3.4, 0.12, 2.4, 0.04), rustMat);
+  bowRamp.position.set(0, 0.72, 8.0);
+  bowRamp.rotation.x = -0.08;
+  ship.add(hull, stripe, deck, stern, bowRamp);
+
+  const wheelhouse = new THREE.Mesh(roundedBox(4.3, 2.7, 3.1, 0.22), cabinMat);
+  wheelhouse.position.set(0, 2.0, -6.4);
+  const wheelhouseRoof = new THREE.Mesh(roundedBox(4.6, 0.2, 3.4, 0.08), cabinMat);
+  wheelhouseRoof.position.set(0, 3.42, -6.4);
+  ship.add(wheelhouse, wheelhouseRoof);
+  [-2.17, 2.17].forEach((x) => {
+    const glass = new THREE.Mesh(new THREE.PlaneGeometry(1.9, 0.72), glassMat);
+    glass.position.set(x, 2.45, -5.4);
+    glass.rotation.y = x > 0 ? Math.PI / 2 : -Math.PI / 2;
+    ship.add(glass);
+  });
+  const bridgeGlass = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 0.8), glassMat);
+  bridgeGlass.position.set(0, 2.48, -4.83);
+  ship.add(bridgeGlass);
+  const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.4, 1.5, 12), darkMat);
+  stack.position.set(1.2, 4.1, -7.1);
+  const stackBand = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.26, 12), hullStripe);
+  stackBand.position.set(1.2, 4.55, -7.1);
+  ship.add(stack, stackBand);
+
+  // Cargo containers with Crescent City freight stencils.
+  const containers = new THREE.Group();
+  const containerSpecs = [
+    { x: -1.35, z: 1.4, color: 0x8a3b2a, title: 'Dayton Wire', subtitle: '30-inch sets' },
+    { x: 1.35, z: 1.4, color: 0x28506b, title: 'Vogue / Forgiato', subtitle: 'rims & tires' },
+    { x: -1.35, z: 6.7, color: 0x6a6a3a, title: 'Interior & Roof', subtitle: 'hides, bows, carpet' },
+    { x: 1.35, z: 6.7, color: 0x5b4a63, title: 'Hydraulic Kit', subtitle: 'pumps & solenoids' },
+  ];
+  for (const spec of containerSpecs) {
+    const box = new THREE.Mesh(
+      roundedBox(2.35, 2.2, 5.0, 0.08),
+      new THREE.MeshStandardMaterial({ color: spec.color, roughness: 0.72, metalness: 0.36 }),
+    );
+    box.position.set(spec.x, 1.75, spec.z);
+    containers.add(box);
+    const texture = crateLabelTexture(spec.title, spec.subtitle);
+    if (texture) {
+      [-1.2, 1.2].forEach((side) => {
+        const label = new THREE.Mesh(
+          new THREE.PlaneGeometry(4.2, 1.6),
+          new THREE.MeshBasicMaterial({ map: texture, transparent: true }),
+        );
+        label.position.set(spec.x + side, 1.8, spec.z);
+        label.rotation.y = side > 0 ? Math.PI / 2 : -Math.PI / 2;
+        containers.add(label);
+      });
+    }
+    for (let rib = -2; rib <= 2; rib++) {
+      const ribMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(2.4, 0.06, 0.06),
+        darkMat,
+      );
+      ribMesh.position.set(spec.x, 2.7, spec.z + rib * 0.95);
+      containers.add(ribMesh);
+    }
+  }
+  ship.add(containers);
+
+  // Deck crane for unloading the crates onto the pier.
+  const craneBase = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 0.5, 12), rustMat);
+  craneBase.position.set(0, 0.82, -3.1);
+  const craneMast = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 3.1, 10), rustMat);
+  craneMast.position.set(0, 2.4, -3.1);
+  const craneBoom = new THREE.Mesh(roundedBox(0.22, 0.22, 3.6, 0.04), rustMat);
+  craneBoom.position.set(0, 3.7, -1.7);
+  craneBoom.rotation.x = -0.38;
+  const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 1.6, 6), darkMat);
+  cable.position.set(0, 2.85, -0.25);
+  ship.add(craneBase, craneMast, craneBoom, cable);
+
+  // Fenders, cleats, and mooring lines.
+  for (const z of [-5.5, -1.2, 3.2, 7.2]) {
+    const fender = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.7, 10), darkMat);
+    fender.rotation.z = Math.PI / 2;
+    fender.position.set(-2.95, 0.3, z);
+    ship.add(fender);
+  }
+  for (const z of [-4.4, 2.0, 6.4]) {
+    const cleat = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.6, 8), rustMat);
+    cleat.rotation.x = Math.PI / 2;
+    cleat.position.set(-2.6, 0.72, z);
+    ship.add(cleat);
+    const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.9, 6), ropeMat);
+    rope.rotation.x = Math.PI / 2;
+    rope.position.set(-2.6, 0.68, z + 0.5);
+    ship.add(rope);
+  }
+  const portLight = new THREE.Mesh(
+    new THREE.SphereGeometry(0.12, 8, 6),
+    new THREE.MeshStandardMaterial({ color: 0xff3b30, emissive: 0xff3b30, emissiveIntensity: 1.4 }),
+  );
+  portLight.position.set(-2.6, 2.9, -5.0);
+  const starboardLight = portLight.clone();
+  starboardLight.material = new THREE.MeshStandardMaterial({
+    color: 0x34d399,
+    emissive: 0x34d399,
+    emissiveIntensity: 1.4,
+  });
+  starboardLight.position.x = 2.6;
+  ship.add(portLight, starboardLight);
+
+  ship.traverse((object) => {
+    object.userData.noStaticMerge = true;
+    object.userData.dynamic = true;
+    if (object instanceof THREE.Mesh) {
+      object.castShadow = true;
+      object.receiveShadow = true;
+    }
+  });
+  return { ship, containers };
+}
+
+function buildShopForklift(): {
+  forklift: THREE.Group;
+  forks: THREE.Group;
+  pallet: THREE.Group;
+} {
+  const forklift = new THREE.Group();
+  forklift.name = 'bayou-royal-forklift';
+  const yellow = new THREE.MeshStandardMaterial({ color: 0xd88a1f, roughness: 0.52, metalness: 0.28 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x1b1d1e, roughness: 0.7, metalness: 0.28 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0x8d9298, roughness: 0.36, metalness: 0.78 });
+  const tire = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.94 });
+  const skin = new THREE.MeshStandardMaterial({ color: 0x7a4f37, roughness: 0.74 });
+  const uniform = new THREE.MeshStandardMaterial({ color: 0x8a6a3f, roughness: 0.75 });
+  const vest = new THREE.MeshStandardMaterial({ color: 0xd6a34a, roughness: 0.6 });
+  const wood = new THREE.MeshStandardMaterial({ color: 0x8b6239, roughness: 0.9 });
+
+  const chassis = new THREE.Mesh(roundedBox(1.35, 0.55, 2.15, 0.12), yellow);
+  chassis.position.y = 0.66;
+  const counterweight = new THREE.Mesh(roundedBox(1.4, 0.72, 0.6, 0.1), dark);
+  counterweight.position.set(0, 0.72, -1.05);
+  const hood = new THREE.Mesh(roundedBox(1.2, 0.3, 0.7, 0.06), yellow);
+  hood.position.set(0, 0.98, -0.62);
+  const seat = new THREE.Mesh(roundedBox(0.52, 0.14, 0.46, 0.05), dark);
+  seat.position.set(0, 1.2, -0.18);
+  const seatBack = new THREE.Mesh(roundedBox(0.5, 0.52, 0.12, 0.05), dark);
+  seatBack.position.set(0, 1.48, -0.42);
+  forklift.add(chassis, counterweight, hood, seat, seatBack);
+
+  // Mast, carriage and forks.
+  const mastL = new THREE.Mesh(roundedBox(0.1, 2.6, 0.12, 0.02), steel);
+  mastL.position.set(-0.5, 1.6, 0.94);
+  const mastR = mastL.clone();
+  mastR.position.x = 0.5;
+  const mastTop = new THREE.Mesh(roundedBox(1.1, 0.1, 0.14, 0.02), steel);
+  mastTop.position.set(0, 2.9, 0.94);
+  const mastBrace = new THREE.Mesh(roundedBox(1.1, 0.08, 0.1, 0.02), steel);
+  mastBrace.position.set(0, 1.9, 0.94);
+  forklift.add(mastL, mastR, mastTop, mastBrace);
+
+  const forks = new THREE.Group();
+  forks.name = 'forklift-forks';
+  forks.position.set(0, 0.28, 1.02);
+  const carriage = new THREE.Mesh(roundedBox(1.0, 0.7, 0.08, 0.02), dark);
+  carriage.position.set(0, 0.46, 0);
+  const forkL = new THREE.Mesh(roundedBox(0.14, 0.05, 1.3, 0.02), steel);
+  forkL.position.set(-0.32, 0.12, 0.65);
+  const forkR = forkL.clone();
+  forkR.position.x = 0.32;
+  forks.add(carriage, forkL, forkR);
+  forklift.add(forks);
+
+  const pallet = new THREE.Group();
+  pallet.name = 'forklift-pallet';
+  pallet.position.set(0, 0.16, 0.5);
+  const palletDeck = new THREE.Mesh(roundedBox(1.2, 0.1, 1.05, 0.02), wood);
+  palletDeck.position.y = 0.1;
+  pallet.add(palletDeck);
+  for (let i = 0; i < 3; i++) {
+    const block = new THREE.Mesh(roundedBox(1.05, 0.1, 0.16, 0.02), wood);
+    block.position.set(0, 0.02, -0.38 + i * 0.38);
+    pallet.add(block);
+  }
+  const crateMat = new THREE.MeshStandardMaterial({ color: 0xb08a58, roughness: 0.82 });
+  const crateA = new THREE.Mesh(roundedBox(0.95, 0.55, 0.85, 0.04), crateMat);
+  crateA.position.set(0, 0.43, 0);
+  const crateB = new THREE.Mesh(roundedBox(0.8, 0.4, 0.7, 0.04), crateMat);
+  crateB.position.set(0, 0.9, -0.05);
+  const strap = new THREE.Mesh(roundedBox(1.0, 0.05, 0.06, 0.01), dark);
+  strap.position.set(0, 0.72, 0.44);
+  pallet.add(crateA, crateB, strap);
+  pallet.visible = false;
+  forks.add(pallet);
+
+  // Seated driver in shop uniform.
+  const driver = new THREE.Group();
+  const torso = new THREE.Mesh(roundedBox(0.42, 0.52, 0.28, 0.06), uniform);
+  torso.position.set(0, 1.48, -0.2);
+  const vestMesh = new THREE.Mesh(roundedBox(0.36, 0.34, 0.03, 0.02), vest);
+  vestMesh.position.set(0, 1.5, -0.05);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), skin);
+  head.position.set(0, 1.86, -0.2);
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.18, 0.1, 12), vest);
+  cap.position.set(0, 1.96, -0.2);
+  const brim = new THREE.Mesh(roundedBox(0.26, 0.03, 0.16, 0.01), vest);
+  brim.position.set(0, 1.92, -0.06);
+  const armL = new THREE.Mesh(roundedBox(0.1, 0.42, 0.12, 0.03), uniform);
+  armL.position.set(-0.27, 1.52, 0.02);
+  armL.rotation.x = -0.7;
+  const armR = armL.clone();
+  armR.position.x = 0.27;
+  const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.025, 6, 16), dark);
+  wheel.position.set(0, 1.56, 0.2);
+  wheel.rotation.x = -0.35;
+  driver.add(torso, vestMesh, head, cap, brim, armL, armR, wheel);
+  forklift.add(driver);
+
+  // Overhead guard and wheels.
+  [-0.62, 0.62].forEach((x) => {
+    [-0.45, 0.5].forEach((z) => {
+      const post = new THREE.Mesh(roundedBox(0.08, 1.35, 0.08, 0.02), dark);
+      post.position.set(x, 1.85, z);
+      forklift.add(post);
+    });
+  });
+  const guard = new THREE.Mesh(roundedBox(1.45, 0.08, 1.15, 0.02), dark);
+  guard.position.set(0, 2.52, 0.02);
+  forklift.add(guard);
+  [0.55, -0.6].forEach((z) => {
+    [-0.68, 0.68].forEach((x) => {
+      const tyre = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.22, 14), tire);
+      tyre.rotation.z = Math.PI / 2;
+      tyre.position.set(x, 0.3, z);
+      forklift.add(tyre);
+      const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.24, 10), steel);
+      hub.rotation.z = Math.PI / 2;
+      hub.position.set(x, 0.3, z);
+      forklift.add(hub);
+    });
+  });
+
+  forklift.traverse((object) => {
+    object.userData.noStaticMerge = true;
+    object.userData.dynamic = true;
+    if (object instanceof THREE.Mesh) {
+      object.castShadow = true;
+      object.receiveShadow = false;
+    }
+  });
+  return { forklift, forks, pallet };
+}
+
+function buildHydraulicPartsPile(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'hydraulic-install-parts';
+  group.visible = false;
+  const brass = new THREE.MeshStandardMaterial({ color: 0xc08a3e, roughness: 0.28, metalness: 0.82 });
+  const red = new THREE.MeshStandardMaterial({ color: 0xb3261e, roughness: 0.44, metalness: 0.24 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x202224, roughness: 0.7, metalness: 0.3 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0xcfd3d8, roughness: 0.22, metalness: 0.9 });
+  const terminalRed = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.5 });
+  const terminalBlack = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.5 });
+
+  [-0.42, 0.42].forEach((x, index) => {
+    const pump = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.2, 0.5, 12), brass);
+    pump.position.set(x, 0.34, 0.3 + index * 0.1);
+    const motor = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.34, 12), red);
+    motor.position.set(x, 0.76, 0.3 + index * 0.1);
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.14, 10), dark);
+    cap.position.set(x, 0.98, 0.3 + index * 0.1);
+    group.add(pump, motor, cap);
+  });
+  for (let i = 0; i < 4; i++) {
+    const cylinder = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 1.05, 10), steel);
+    cylinder.rotation.z = Math.PI / 2;
+    cylinder.rotation.y = 0.12 * i;
+    cylinder.position.set(-0.1 + (i % 2) * 0.35, 0.12 + Math.floor(i / 2) * 0.16, -0.7);
+    group.add(cylinder);
+    const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.42, 8), steel);
+    rod.rotation.z = Math.PI / 2;
+    rod.position.set(0.7 + (i % 2) * 0.35, 0.12 + Math.floor(i / 2) * 0.16, -0.7);
+    group.add(rod);
+  }
+  for (let i = 0; i < 3; i++) {
+    const battery = new THREE.Mesh(roundedBox(0.52, 0.34, 0.36, 0.03), dark);
+    battery.position.set(-0.75 + i * 0.55, 0.19, 1.1);
+    const pos = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.08, 8), terminalRed);
+    pos.position.set(battery.position.x - 0.14, 0.38, 1.1);
+    const neg = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.08, 8), terminalBlack);
+    neg.position.set(battery.position.x + 0.14, 0.38, 1.1);
+    group.add(battery, pos, neg);
+  }
+  const relayBank = new THREE.Mesh(roundedBox(0.55, 0.16, 0.32, 0.02), dark);
+  relayBank.position.set(0.7, 0.1, 0.95);
+  group.add(relayBank);
+  for (let i = 0; i < 4; i++) {
+    const solenoid = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.18, 8), brass);
+    solenoid.rotation.z = Math.PI / 2;
+    solenoid.position.set(0.55 + i * 0.12, 0.24, 0.95);
+    group.add(solenoid);
+  }
+  const lineCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-0.6, 0.1, 0.6),
+    new THREE.Vector3(-0.1, 0.36, 0.4),
+    new THREE.Vector3(0.4, 0.18, 0.0),
+    new THREE.Vector3(0.9, 0.24, -0.2),
+  ]);
+  const line = new THREE.Mesh(new THREE.TubeGeometry(lineCurve, 18, 0.025, 6, false), red);
+  group.add(line);
+  const lineBlue = line.clone();
+  lineBlue.material = new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.4, metalness: 0.2 });
+  lineBlue.position.y += 0.06;
+  lineBlue.position.z -= 0.08;
+  group.add(lineBlue);
+  group.traverse((object) => {
+    if (object instanceof THREE.Mesh) {
+      object.castShadow = true;
+      object.receiveShadow = true;
+    }
+  });
+  return group;
+}
+
+function buildStockSuspensionPile(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'stock-suspension-pile';
+  group.visible = false;
+  const rust = new THREE.MeshStandardMaterial({ color: 0x6b4a33, roughness: 0.92, metalness: 0.16 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x2a2b2c, roughness: 0.82, metalness: 0.2 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.5, metalness: 0.6 });
+  for (let i = 0; i < 2; i++) {
+    for (let coil = 0; coil < 5; coil++) {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.035, 6, 16), steel);
+      ring.rotation.x = Math.PI / 2;
+      ring.position.set(-0.55 + i * 0.7, 0.09 + coil * 0.11, -0.2);
+      group.add(ring);
+    }
+    const controlArm = new THREE.Mesh(roundedBox(0.7, 0.08, 0.16, 0.02), rust);
+    controlArm.position.set(-0.55 + i * 0.7, 0.06, 0.45);
+    controlArm.rotation.y = 0.35 - i * 0.7;
+    group.add(controlArm);
+    const shock = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.72, 8), dark);
+    shock.rotation.z = Math.PI / 2;
+    shock.position.set(-0.25 + i * 0.5, 0.12, 0.55);
+    group.add(shock);
+  }
+  const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 1.8, 10), rust);
+  axle.rotation.z = Math.PI / 2;
+  axle.position.set(0, 0.12, 0.85);
+  group.add(axle);
+  group.traverse((object) => {
+    if (object instanceof THREE.Mesh) {
+      object.castShadow = true;
+      object.receiveShadow = true;
+    }
+  });
+  return group;
+}
+
+function buildPartCrates(): THREE.Group[] {
+  const crates: THREE.Group[] = [];
+  const specs = [
+    { title: 'Suspension', subtitle: 'hydraulic kit', color: 0x6f5c44 },
+    { title: 'Body & Paint', subtitle: 'steel & candy', color: 0x7d4a3c },
+    { title: 'Interior & Roof', subtitle: 'hides & bows', color: 0x6b5a3d },
+    { title: 'Wheels & Lights', subtitle: 'rims & lamps', color: 0x4f5a63 },
+  ];
+  const wood = new THREE.MeshStandardMaterial({ color: 0x8b6239, roughness: 0.9 });
+  specs.forEach((spec, index) => {
+    const group = new THREE.Group();
+    group.name = `crescent-parts-crate-${index}`;
+    const box = new THREE.Mesh(
+      roundedBox(1.15, 0.8, 1.0, 0.04),
+      new THREE.MeshStandardMaterial({ color: spec.color, roughness: 0.86, metalness: 0.05 }),
+    );
+    box.position.y = 0.42;
+    const skid = new THREE.Mesh(roundedBox(1.25, 0.1, 1.1, 0.02), wood);
+    skid.position.y = 0.06;
+    const texture = crateLabelTexture(spec.title, spec.subtitle);
+    if (texture) {
+      const label = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.9, 0.46),
+        new THREE.MeshBasicMaterial({ map: texture, transparent: true }),
+      );
+      label.position.set(0, 0.48, 0.51);
+      group.add(label);
+    }
+    group.add(box, skid);
+    group.position.set(index % 2 === 0 ? -0.72 : 0.72, 0, 0.6 + Math.floor(index / 2) * 1.1);
+    group.visible = false;
+    group.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.castShadow = true;
+        object.receiveShadow = true;
+      }
+    });
+    crates.push(group);
+  });
+  return crates;
 }
 
 export function buildCustomCarShop(
@@ -919,13 +1429,162 @@ export function buildCustomCarShop(
     new THREE.MeshStandardMaterial({ color: 0x8c4e2c, roughness: 0.98 }),
     glassMat,
     tireMat,
-    false,
+    true,
   );
   liftCar.position.set(0, 0.46, 0.35);
   liftCar.scale.setScalar(0.92);
   group.add(liftCar);
   liftCar.userData.noStaticMerge = true;
   liftCar.userData.dynamic = true;
+  const liftCarTrunk = (liftCar.userData.trunkLid as THREE.Group | undefined) ?? null;
+  const liftCarWheels = (liftCar.userData.wheels as THREE.Group[] | undefined) ?? [];
+
+  // Parts staged under the lift: stock suspension comes off first, then the
+  // hydraulic kit goes into the trunk.
+  const stockSuspensionPile = buildStockSuspensionPile();
+  stockSuspensionPile.position.set(-1.75, 0.06, -0.9);
+  const hydraulicParts = buildHydraulicPartsPile();
+  hydraulicParts.position.set(1.55, 0.06, -0.7);
+  group.add(stockSuspensionPile, hydraulicParts);
+
+  const partCrates = buildPartCrates();
+  const crateRack = new THREE.Group();
+  crateRack.name = 'crescent-parts-crates';
+  crateRack.position.set(4.25, 0.04, 6.1);
+  crateRack.rotation.y = -Math.PI / 2;
+  partCrates.forEach((crate) => crateRack.add(crate));
+  group.add(crateRack);
+
+  // Crescent City freight landing: gravel road, pier and moored parts barge.
+  // The bank at the dock mouth is dry; use the deepest water under the pier
+  // tip so the deck clears the channel instead of sitting in the mud.
+  const freightWaterY = Math.max(
+    getWaterLevelAt(CUSTOM_FREIGHT_DOCK.x, CUSTOM_FREIGHT_DOCK.z),
+    getWaterLevelAt(95.4, 149.8),
+    getWaterLevelAt(
+      CUSTOM_FREIGHT_SHIP_MOORING.x,
+      CUSTOM_FREIGHT_SHIP_MOORING.z,
+    ),
+  );
+  const freightDeckWorldY =
+    freightWaterY + CUSTOM_FREIGHT_PIER_DECK_ABOVE_WATER;
+  const freightDeckY = freightDeckWorldY - groundY;
+  const pier = new THREE.Group();
+  pier.name = 'bayou-royal-freight-pier';
+  const pierDeckX = CUSTOM_FREIGHT_DOCK.x + 1.4 - CUSTOM_SHOP_POS.x;
+  const pierDeckZ = CUSTOM_FREIGHT_DOCK.z - CUSTOM_SHOP_POS.z;
+  const pierPlankMat = new THREE.MeshStandardMaterial({
+    color: 0x7c6849,
+    roughness: 0.9,
+    metalness: 0.04,
+  });
+  for (let i = 0; i < 17; i++) {
+    const plank = new THREE.Mesh(roundedBox(0.38, 0.09, 4.0, 0.015), pierPlankMat);
+    plank.position.set(
+      pierDeckX - 3.2 + i * 0.4,
+      freightDeckY + 0.02,
+      pierDeckZ,
+    );
+    pier.add(plank);
+  }
+  const pierBeam = new THREE.Mesh(roundedBox(7.0, 0.18, 0.24, 0.03), wallDarkMat);
+  pierBeam.position.set(pierDeckX, freightDeckY - 0.12, pierDeckZ - 1.9);
+  const pierBeamB = pierBeam.clone();
+  pierBeamB.position.z = pierDeckZ + 1.9;
+  pier.add(pierBeam, pierBeamB);
+  for (const xOff of [-3.0, -1.0, 1.0, 3.0]) {
+    for (const zOff of [-1.7, 1.7]) {
+      const worldX = CUSTOM_SHOP_POS.x + pierDeckX + xOff;
+      const worldZ = CUSTOM_SHOP_POS.z + pierDeckZ + zOff;
+      const seabed = getTerrainHeight(worldX, worldZ) - groundY;
+      const height = Math.max(0.4, freightDeckY - seabed);
+      const piling = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.16, 0.19, height, 8),
+        pierPlankMat,
+      );
+      piling.position.set(pierDeckX + xOff, seabed + height / 2, pierDeckZ + zOff);
+      pier.add(piling);
+    }
+  }
+  const pierRamp = new THREE.Mesh(roundedBox(2.6, 0.12, 4.0, 0.03), pierPlankMat);
+  pierRamp.position.set(pierDeckX - 4.2, freightDeckY + 0.28, pierDeckZ);
+  pierRamp.rotation.z = 0.2;
+  pier.add(pierRamp);
+  [-1.5, 1.5].forEach((zOff) => {
+    const bollard = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.17, 0.2, 0.6, 10),
+      blackMat,
+    );
+    bollard.position.set(pierDeckX + 3.2, freightDeckY + 0.34, pierDeckZ + zOff);
+    pier.add(bollard);
+  });
+  const pierLight = new THREE.PointLight(0xffc27a, 1.35, 15, 1.7);
+  pierLight.position.set(pierDeckX + 1.0, freightDeckY + 3.0, pierDeckZ);
+  const pierLampPost = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.07, 0.09, 3.2, 8),
+    blackMat,
+  );
+  pierLampPost.position.set(pierDeckX + 1.0, freightDeckY + 1.6, pierDeckZ);
+  const pierLampHead = new THREE.Mesh(roundedBox(0.5, 0.14, 0.3, 0.02), warmLightMat);
+  pierLampHead.position.set(pierDeckX + 1.0, freightDeckY + 3.22, pierDeckZ);
+  pier.add(pierLight, pierLampPost, pierLampHead);
+
+  // Gravel freight road from the apron to the pier.
+  const freightRoad = new THREE.Group();
+  const gravelMat = new THREE.MeshStandardMaterial({
+    color: 0x6b6257,
+    roughness: 0.98,
+    metalness: 0.02,
+  });
+  for (const point of CUSTOM_FREIGHT_ROUTE) {
+    const worldY = getTerrainHeight(point.x, point.z);
+    if (worldY < freightWaterY + 0.4) continue;
+    const patch = new THREE.Mesh(new THREE.CircleGeometry(2.5, 14), gravelMat);
+    patch.rotation.x = -Math.PI / 2;
+    patch.position.set(
+      point.x - CUSTOM_SHOP_POS.x,
+      worldY - groundY + 0.025,
+      point.z - CUSTOM_SHOP_POS.z,
+    );
+    freightRoad.add(patch);
+  }
+  // Fill the long gaps between waypoints with overlapping road patches.
+  for (let i = 0; i < CUSTOM_FREIGHT_ROUTE.length - 1; i++) {
+    const a = CUSTOM_FREIGHT_ROUTE[i];
+    const b = CUSTOM_FREIGHT_ROUTE[i + 1];
+    const segments = Math.max(2, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 3));
+    for (let s = 1; s < segments; s++) {
+      const t = s / segments;
+      const x = a.x + (b.x - a.x) * t;
+      const z = a.z + (b.z - a.z) * t;
+      const worldY = getTerrainHeight(x, z);
+      if (worldY < freightWaterY + 0.4) continue;
+      const patch = new THREE.Mesh(new THREE.CircleGeometry(2.35, 12), gravelMat);
+      patch.rotation.x = -Math.PI / 2;
+      patch.position.set(x - CUSTOM_SHOP_POS.x, worldY - groundY + 0.025, z - CUSTOM_SHOP_POS.z);
+      freightRoad.add(patch);
+    }
+  }
+  const { ship: cargoShip, containers: cargoShipContainers } = buildFreightShip();
+  const shipPoint = getCustomShopShipRoutePoint(1);
+  cargoShip.position.set(
+    CUSTOM_FREIGHT_SHIP_MOORING.x - CUSTOM_SHOP_POS.x,
+    freightWaterY - groundY,
+    CUSTOM_FREIGHT_SHIP_MOORING.z - CUSTOM_SHOP_POS.z,
+  );
+  cargoShip.rotation.y = shipPoint.yaw;
+  cargoShip.visible = false;
+  const { forklift, forks: forkliftForks, pallet: forkliftPallet } = buildShopForklift();
+  forklift.position.set(
+    CUSTOM_FREIGHT_ROUTE[0].x - CUSTOM_SHOP_POS.x,
+    getTerrainHeight(CUSTOM_FREIGHT_ROUTE[0].x, CUSTOM_FREIGHT_ROUTE[0].z) - groundY,
+    CUSTOM_FREIGHT_ROUTE[0].z - CUSTOM_SHOP_POS.z,
+  );
+  forklift.rotation.y = Math.atan2(
+    CUSTOM_FREIGHT_ROUTE[1].x - CUSTOM_FREIGHT_ROUTE[0].x,
+    CUSTOM_FREIGHT_ROUTE[1].z - CUSTOM_FREIGHT_ROUTE[0].z,
+  );
+  group.add(pier, freightRoad, cargoShip, forklift);
 
   // Junkyard staging area at the mouth of Cave 12.
   const yard = new THREE.Group();
@@ -1067,6 +1726,17 @@ export function buildCustomCarShop(
     towDonor: donor,
     liftCar,
     liftPlatform,
+    liftCarTrunk,
+    liftCarWheels,
+    hydraulicParts,
+    stockSuspensionPile,
+    partCrates,
+    cargoShip,
+    cargoShipContainers,
+    forklift,
+    forkliftForks,
+    forkliftPallet,
+    freightDeckY: freightDeckWorldY,
     setStatus,
   };
 }

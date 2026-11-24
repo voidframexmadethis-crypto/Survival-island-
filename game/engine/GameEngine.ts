@@ -436,17 +436,39 @@ import {
   type GarageCrewTask,
 } from '../systems/garageCrew';
 import {
-  CUSTOM_DONK_BUILD,
+  CUSTOM_FREIGHT_PIER_DECK_ABOVE_WATER,
+  CUSTOM_FREIGHT_ROUTE,
+  CUSTOM_SHOP_PART_CRATES,
   CUSTOM_SHOP_ROUTE,
+  CUSTOM_SHOP_VEHICLE_ID,
+  DONOR_CARS,
+  HEADLIGHT_OPTIONS,
+  INTERIOR_OPTIONS,
+  PAINT_OPTIONS,
+  RIM_OPTIONS,
+  ROOF_OPTIONS,
+  STEERING_WHEEL_OPTIONS,
+  UNDERCARRIAGE_OPTIONS,
   advanceCustomShopState,
+  areCustomShopWheelsRemoved,
   beginCustomShopRestoration,
   createCustomShopState,
+  getCargoSupplyLabel,
+  getCustomShopFreightRoutePoint,
+  getCustomShopLiftOffset,
   getCustomShopOverallProgress,
   getCustomShopPhaseLabel,
+  getCustomShopShipRoutePoint,
   getCustomShopStage,
+  getRestorationShopHudState as buildRestorationShopHudState,
+  isCustomShopTrunkOpen,
   markCustomShopComplete,
+  resolveCustomShopBuild,
+  type CustomShopBuild,
+  type CustomShopBuildOptionKey,
   type CustomShopEvent,
   type CustomShopState,
+  type RestorationShopHudState,
 } from '../systems/customCarShop';
 import {
   createGarageDanceState,
@@ -740,6 +762,7 @@ export interface EngineCallbacks {
       | 'air_shuttle_entertainment'
       | 'wardrobe'
       | 'mansion_entertainment'
+      | 'restoration_shop'
     >,
     structureId?: string,
   ) => void;
@@ -1733,6 +1756,9 @@ export class GameEngine {
       (
         window as unknown as { __lostWorldSound?: SoundEngine }
       ).__lostWorldSound = this.sound;
+      (
+        window as unknown as { __customShopEngine?: GameEngine }
+      ).__customShopEngine = this;
     }
     // The live hull uses the fixed-step, playable crossing rather than the
     // wall-clock scenic route. Without this the visible ship sits on a
@@ -8353,6 +8379,11 @@ export class GameEngine {
       this.handleGarageBenchInteraction();
       return;
     }
+    if (near && near.kind === 'restoration_shop') {
+      this.callbacks.onOpenStation('restoration_shop');
+      this.actionCooldown = 0.4;
+      return;
+    }
     if (near && near.kind === 'saturn_rocket') {
       this.openSaturnRocketConsole();
       return;
@@ -13908,6 +13939,40 @@ export class GameEngine {
       return nearHouseStation;
     }
 
+    // Bayou Royal Customs build desk, just inside the open roll-up door.
+    if (
+      this.worldType === 'island' &&
+      this.currentDimension === 'overworld' &&
+      this.world?.customCarShop &&
+      !this.activeVehicleId
+    ) {
+      const entranceX = CUSTOM_SHOP_POS.x;
+      const entranceZ = CUSTOM_SHOP_POS.z + 5.2;
+      const distance = Math.hypot(this.playerX - entranceX, this.playerZ - entranceZ);
+      if (distance < 7.5) {
+        const shopState = this.customShopState;
+        return {
+          id: 'restoration_shop_build_sheet',
+          label:
+            shopState.phase === 'idle'
+              ? 'Write a Bayou Royal build sheet'
+              : shopState.phase === 'complete'
+                ? 'Bayou Royal Customs service desk'
+                : 'Check the Bayou Royal restoration',
+          sublabel:
+            shopState.phase === 'idle'
+              ? 'Pick a donor, rims, steering wheel, roof and interior'
+              : getCustomShopPhaseLabel(shopState),
+          kind: 'restoration_shop',
+          actionCategory: 'craft',
+          distance,
+          targetX: entranceX,
+          targetY: this.playerY,
+          targetZ: entranceZ,
+        };
+      }
+    }
+
     // Crescent Clipper seaplane. Boarding is the only trigger: once the
     // player is inside, the doors close and the automatic flight starts.
     if (this.worldType === 'island' && this.currentDimension === 'overworld') {
@@ -17546,6 +17611,7 @@ export class GameEngine {
       isNight,
       nocturnalActiveCount: this.nocturnalActiveCount,
       nearbyInteraction: this.nearbyInteraction,
+      restorationShop: buildRestorationShopHudState(this.customShopState),
       nearbyCarcass,
       inventory: this.cachedHudInventory,
       hotbarItemIds: [...this.hotbarItemIds],
@@ -18162,9 +18228,61 @@ export class GameEngine {
     this.spawnParticles(car.x - 0.8, car.y + 0.6, car.z, wash.accentColor, 6);
   }
 
+  /** Live build-sheet state for the Bayou Royal shop modal. */
+  public getRestorationShopHudState(): RestorationShopHudState {
+    return buildRestorationShopHudState(this.customShopState);
+  }
+
+  /** Changes one build-sheet choice while the shop is still idle. */
+  public selectRestorationBuildOption<K extends CustomShopBuildOptionKey>(
+    key: K,
+    value: CustomShopBuild[K],
+  ): boolean {
+    const state = this.customShopState;
+    if (state.phase !== 'idle' || state.completed) return false;
+    const catalog: Record<CustomShopBuildOptionKey, readonly { id: string }[]> = {
+      donorCarId: DONOR_CARS,
+      paintId: PAINT_OPTIONS,
+      rimId: RIM_OPTIONS,
+      steeringWheelId: STEERING_WHEEL_OPTIONS,
+      roofId: ROOF_OPTIONS,
+      interiorId: INTERIOR_OPTIONS,
+      headlightId: HEADLIGHT_OPTIONS,
+      undercarriageId: UNDERCARRIAGE_OPTIONS,
+    };
+    if (!catalog[key].some((option) => option.id === value)) return false;
+    state.build = { ...state.build, [key]: value } as CustomShopBuild;
+    this.emitHud();
+    return true;
+  }
+
+  /** Sends Duke and Rae to Cave 12 with the current build sheet. */
+  public startRestorationBuild(): boolean {
+    const state = this.customShopState;
+    if (state.phase !== 'idle' || state.completed) return false;
+    if (!beginCustomShopRestoration(state, this.elapsed, state.build)) return false;
+    const shop = this.world?.customCarShop;
+    if (shop) {
+      // The lift stays empty until the tow truck actually brings the donor in.
+      shop.liftCar.visible = false;
+      shop.liftPlatform.visible = true;
+      shop.towDonor.visible = false;
+      this.setCustomShopStatus(shop, state);
+    }
+    this.customShopStatusKey = '';
+    const resolved = resolveCustomShopBuild(state.build);
+    this.toast(
+      `Duke & Rae are rolling out to Cave 12 for a ${resolved.donor.name}. Build sheet: ${resolved.paint.label}, ${resolved.rims.label}, ${resolved.steeringWheel.label}, ${resolved.roof.label}.`,
+      'craft',
+    );
+    this.emitHud();
+    return true;
+  }
+
   /**
    * Bayou Royal Customs: Duke and Rae take the shop truck to the Cave 12
-   * junkyard, tow a donor home and restore it into a drivable striped DONK.
+   * junkyard, tow the chosen donor home and restore it on the lift while the
+   * Crescent City barge brings parts up the bayou by forklift.
    */
   private updateCustomShop(dt: number): void {
     const shop = this.world?.customCarShop;
@@ -18177,20 +18295,25 @@ export class GameEngine {
 
     if (state.phase === 'idle') {
       const existing = this.vehicles.find(
-        (vehicle) => vehicle.id === CUSTOM_DONK_BUILD.vehicleId,
+        (vehicle) => vehicle.id === CUSTOM_SHOP_VEHICLE_ID,
       );
       if (existing) {
         markCustomShopComplete(state);
         this.customShopSpawned = true;
         shop.liftCar.visible = false;
         shop.liftPlatform.visible = false;
-      } else if (playerDistance < 24) {
-        beginCustomShopRestoration(state, this.elapsed);
-        shop.liftCar.visible = true;
-        if (playerDistance < 36 && this.elapsed - this.customShopToastAt > 18) {
+      } else {
+        // Empty lift waiting on a build sheet; the donor only appears after
+        // Duke and Rae tow it back from Cave 12.
+        shop.liftCar.visible = false;
+        shop.liftPlatform.visible = true;
+        shop.towDonor.visible = false;
+        this.placeCustomShopTruckAtHome(shop);
+        this.resetCustomShopFreight(shop);
+        if (playerDistance < 28 && this.elapsed - this.customShopToastAt > 45) {
           this.customShopToastAt = this.elapsed;
           this.toast(
-            'Duke & Rae fired up the shop truck — heading to Cave 12 for a restoration donor.',
+            'Duke & Rae have the lift open at Bayou Royal Customs — press E at the shop for a build sheet.',
             'discovery',
           );
         }
@@ -18198,12 +18321,9 @@ export class GameEngine {
     }
 
     if (state.phase === 'idle') {
-      shop.liftCar.visible = !state.completed;
-      shop.liftPlatform.visible = !state.completed;
-      shop.towDonor.visible = false;
-      this.placeCustomShopTruckAtHome(shop);
       this.setCustomShopStatus(shop, state);
       this.animateCustomShopWorkers(shop, state, dt);
+      this.animateCustomShopLift(shop, state, dt);
       return;
     }
 
@@ -18212,6 +18332,8 @@ export class GameEngine {
     shop.liftPlatform.visible = !state.completed;
 
     this.placeCustomShopTruck(shop, state);
+    this.animateCustomShopFreight(shop, state, dt);
+    this.animateCustomShopLift(shop, state, dt);
     this.animateCustomShopWorkers(shop, state, dt);
     this.setCustomShopStatus(shop, state);
 
@@ -18221,6 +18343,158 @@ export class GameEngine {
     ) {
       shop.liftCar.visible = state.phase !== 'complete';
     }
+  }
+
+  private resetCustomShopFreight(
+    shop: NonNullable<WorldHandles['customCarShop']>,
+  ): void {
+    const state = this.customShopState;
+    shop.cargoShip.visible = false;
+    shop.forklift.visible = false;
+    shop.forkliftPallet.visible = false;
+    shop.partCrates.forEach((crate) => {
+      crate.visible = false;
+    });
+    shop.hydraulicParts.visible = false;
+    shop.stockSuspensionPile.visible = false;
+    shop.forklift.position.set(
+      CUSTOM_FREIGHT_ROUTE[0].x - CUSTOM_SHOP_POS.x,
+      getTerrainHeight(CUSTOM_FREIGHT_ROUTE[0].x, CUSTOM_FREIGHT_ROUTE[0].z) -
+        shop.groundY,
+      CUSTOM_FREIGHT_ROUTE[0].z - CUSTOM_SHOP_POS.z,
+    );
+    if (shop.liftCarTrunk) shop.liftCarTrunk.rotation.x = 0;
+  }
+
+  private animateCustomShopFreight(
+    shop: NonNullable<WorldHandles['customCarShop']>,
+    state: CustomShopState,
+    dt: number,
+  ): void {
+    const cargo = state.cargo;
+    const active = state.phase !== 'idle' && state.phase !== 'complete';
+    const shipVisible =
+      active &&
+      (cargo.phase === 'steaming_in' ||
+        cargo.phase === 'at_dock' ||
+        cargo.phase === 'steaming_out');
+    shop.cargoShip.visible = shipVisible;
+    if (shipVisible) {
+      const t =
+        cargo.phase === 'steaming_out'
+          ? 1 - cargo.shipProgress
+          : cargo.phase === 'at_dock'
+            ? 1
+            : cargo.shipProgress;
+      const point = getCustomShopShipRoutePoint(t);
+      const waterY = getWaterLevelAt(point.x, point.z);
+      shop.cargoShip.position.set(
+        point.x - CUSTOM_SHOP_POS.x,
+        waterY - shop.groundY + Math.sin(this.elapsed * 1.15) * 0.035,
+        point.z - CUSTOM_SHOP_POS.z,
+      );
+      shop.cargoShip.rotation.y = point.yaw;
+      shop.cargoShip.rotation.z = Math.sin(this.elapsed * 0.75) * 0.008;
+    }
+
+    const forkliftActive = active && cargo.phase !== 'waiting';
+    shop.forklift.visible = forkliftActive;
+    const carrying =
+      cargo.forkliftLeg === 'to_shop' || cargo.forkliftLeg === 'unloading';
+    const busyOnForks =
+      cargo.forkliftLeg === 'loading' || cargo.forkliftLeg === 'unloading';
+    shop.forkliftPallet.visible = carrying ||
+      (cargo.forkliftLeg === 'loading' && cargo.forkliftProgress > 0.6);
+    const forkTarget = busyOnForks ? 0.62 : carrying ? 0.34 : 0.24;
+    shop.forkliftForks.position.y = THREE.MathUtils.lerp(
+      shop.forkliftForks.position.y,
+      forkTarget,
+      Math.min(1, dt * 5),
+    );
+
+    if (forkliftActive) {
+      let t = 0;
+      if (cargo.phase === 'steaming_in') {
+        t = 0;
+      } else if (cargo.phase === 'steaming_out') {
+        t = cargo.forkliftLeg === 'to_ship' ? 1 - cargo.forkliftProgress : 0;
+      } else if (cargo.phase === 'at_dock') {
+        switch (cargo.forkliftLeg) {
+          case 'loading':
+          case 'unloading':
+          case 'parked':
+            t = cargo.forkliftLeg === 'loading' ? 1 : 0;
+            break;
+          case 'to_shop':
+            t = 1 - cargo.forkliftProgress;
+            break;
+          case 'to_ship':
+            t = cargo.forkliftProgress;
+            break;
+        }
+      }
+      const point = getCustomShopFreightRoutePoint(t);
+      const facing = getCustomShopFreightRoutePoint(
+        Math.min(1, Math.max(0, t + (cargo.forkliftLeg === 'to_ship' ? -0.015 : 0.015))),
+      );
+      const yaw = Math.atan2(facing.x - point.x, facing.z - point.z);
+      const terrainY = getTerrainHeight(point.x, point.z);
+      const waterY = getWaterLevelAt(point.x, point.z);
+      const pierY = waterY + CUSTOM_FREIGHT_PIER_DECK_ABOVE_WATER;
+      const onPier = point.x >= 90.2;
+      const targetY = (onPier ? Math.max(terrainY, pierY) : terrainY) - shop.groundY;
+      shop.forklift.position.x = point.x - CUSTOM_SHOP_POS.x;
+      shop.forklift.position.z = point.z - CUSTOM_SHOP_POS.z;
+      shop.forklift.position.y = THREE.MathUtils.lerp(
+        shop.forklift.position.y,
+        targetY,
+        Math.min(1, dt * 6),
+      );
+      shop.forklift.rotation.y = THREE.MathUtils.lerp(
+        shop.forklift.rotation.y,
+        yaw,
+        Math.min(1, dt * 5),
+      );
+    }
+
+    CUSTOM_SHOP_PART_CRATES.forEach((crate, index) => {
+      const visual = shop.partCrates[index];
+      if (visual) visual.visible = cargo.deliveredCrateIds.includes(crate.id);
+    });
+  }
+
+  private animateCustomShopLift(
+    shop: NonNullable<WorldHandles['customCarShop']>,
+    state: CustomShopState,
+    dt: number,
+  ): void {
+    const liftTarget = getCustomShopLiftOffset(state);
+    shop.liftPlatform.position.y = THREE.MathUtils.lerp(
+      shop.liftPlatform.position.y,
+      liftTarget,
+      Math.min(1, dt * 2.4),
+    );
+    const carTarget = liftTarget > 0 ? 0.46 + liftTarget : 0.46;
+    shop.liftCar.position.y = THREE.MathUtils.lerp(
+      shop.liftCar.position.y,
+      carTarget,
+      Math.min(1, dt * 2.4),
+    );
+    if (shop.liftCarTrunk) {
+      shop.liftCarTrunk.rotation.x = THREE.MathUtils.lerp(
+        shop.liftCarTrunk.rotation.x,
+        isCustomShopTrunkOpen(state) ? 1.02 : 0,
+        Math.min(1, dt * 4),
+      );
+    }
+    const wheelsOff = areCustomShopWheelsRemoved(state);
+    shop.liftCarWheels.forEach((wheel) => {
+      wheel.visible = !wheelsOff;
+    });
+    const stage = getCustomShopStage(state);
+    shop.hydraulicParts.visible = state.phase === 'restoring' && stage?.id === 'hydraulics';
+    shop.stockSuspensionPile.visible =
+      state.phase === 'restoring' && stage?.id === 'suspension';
   }
 
   private getCustomShopRoutePoint(progress: number): {
@@ -18394,8 +18668,44 @@ export class GameEngine {
           );
         }
         break;
+      case 'cargo_arrived':
+        if (playerDistance < 120) {
+          this.toast(
+            'The Crescent City parts barge is tied up at the Bayou Royal pier. The forklift is unloading the first crate.',
+            'discovery',
+          );
+        }
+        break;
+      case 'crate_delivered':
+        this.spawnParticles(
+          shop.bayPosition.x + 3.4,
+          shop.bayPosition.y + 0.7,
+          shop.bayPosition.z + 7.4,
+          0xd6a34a,
+          6,
+        );
+        if (playerDistance < 90) {
+          this.toast(
+            `${event.crate.label} landed at the bay: ${event.crate.manifest.slice(0, 3).join(', ')}.`,
+            'craft',
+          );
+        }
+        break;
+      case 'cargo_departed':
+        if (playerDistance < 120) {
+          this.toast(
+            'The empty Crescent City barge is casting off and backing down the bayou.',
+            'info',
+          );
+        }
+        break;
+      case 'cargo_done':
+        if (playerDistance < 140) {
+          this.toast('Parts run complete — the barge has cleared the bayou.', 'info');
+        }
+        break;
       case 'complete':
-        this.spawnCustomShopDonk();
+        this.spawnCustomShopBuild();
         break;
       default:
         break;
@@ -18409,59 +18719,68 @@ export class GameEngine {
     const progress = getCustomShopOverallProgress(state);
     const stage = getCustomShopStage(state);
     const headline = getCustomShopPhaseLabel(state);
+    const resolved = resolveCustomShopBuild(state.build);
     const detail = state.phase === 'idle'
-      ? 'Duke and Rae are ready to pull a wreck out of the cave.'
+      ? 'Open the build sheet at the shop desk and pick the donor, rims, wheel and roof.'
       : state.phase === 'outbound'
-        ? 'Heading north to Cave 12 Salvage for a fresh donor.'
+        ? `Heading north to Cave 12 Salvage for the ${resolved.donor.name}.`
         : state.phase === 'loading'
           ? 'Winching the best donor shell onto the flatbed.'
           : state.phase === 'inbound'
             ? 'Towing the donor back to the shop for a frame-off build.'
             : state.phase === 'complete'
-              ? 'The Bayou Royal DONK is finished and ready to drive.'
-              : stage?.detail ?? 'Final detail.';
-    const statusKey = `${state.phase}:${state.stageIndex}:${Math.floor(progress * 100)}`;
+              ? `${resolved.name} is finished and ready to drive.`
+              : state.waitingForParts
+                ? getCargoSupplyLabel(state.cargo)
+                : stage?.detail ?? 'Final detail.';
+    const statusKey = `${state.phase}:${state.stageIndex}:${state.waitingForParts ? 1 : 0}:${Math.floor(progress * 100)}`;
     if (statusKey === this.customShopStatusKey) return;
     this.customShopStatusKey = statusKey;
     shop.setStatus(headline, detail, progress);
   }
 
-  private spawnCustomShopDonk(): void {
+  private spawnCustomShopBuild(): void {
     if (this.customShopSpawned) return;
-    if (this.vehicles.some((vehicle) => vehicle.id === CUSTOM_DONK_BUILD.vehicleId)) {
+    if (this.vehicles.some((vehicle) => vehicle.id === CUSTOM_SHOP_VEHICLE_ID)) {
       this.customShopSpawned = true;
       return;
     }
     const shop = this.world?.customCarShop;
     if (!shop) return;
-    const build = CUSTOM_DONK_BUILD;
+    const state = this.customShopState;
+    const resolved = resolveCustomShopBuild(state.build);
     const vehicle = createVehicleFromPreset(
-      build.vehicleId,
-      'donk',
+      resolved.vehicleId,
+      resolved.donor.preset,
       shop.bayPosition.x,
       shop.bayPosition.y,
       shop.bayPosition.z,
       0,
     );
-    vehicle.name = build.name;
-    vehicle.paintColor = build.paintColor;
-    vehicle.customStripeColor = build.stripeColor;
-    vehicle.interiorColor = build.interiorColor;
-    vehicle.rimColor = build.rimColor;
-    vehicle.wheelScale = build.wheelScale;
-    vehicle.suspensionOffset = build.suspensionOffset;
+    vehicle.name = resolved.name;
+    vehicle.paintColor = resolved.paint.color;
+    vehicle.customStripeColor = resolved.paint.stripeColor;
+    vehicle.interiorColor = resolved.interior.color;
+    vehicle.rimColor = resolved.rims.color;
+    vehicle.wheelScale = Math.min(
+      1.85,
+      (vehicle.wheelScale ?? 1) * resolved.wheelScaleFactor,
+    );
+    vehicle.suspensionOffset = resolved.undercarriage.suspensionOffset;
     vehicle.hydraulicHop = true;
     vehicle.hasAirbagSuspension = true;
-    vehicle.hydraulicBounceBoost = build.hydraulicBounceBoost;
-    vehicle.airbagSpeed = build.airbagSpeed;
-    vehicle.airbagLockLevel = build.airbagLockLevel;
+    vehicle.hydraulicBounceBoost =
+      resolved.undercarriage.id === 'airbag_notched' ? 1.48 : 1.32;
+    vehicle.airbagSpeed = 1.05;
+    vehicle.airbagLockLevel = 1.22;
     vehicle.hydraulicsDanceEnabled = true;
     vehicle.hydraulicsDanceAvailable = true;
+    vehicle.hasConvertibleTop = resolved.convertibleTop;
     vehicle.trunkBassEnabled = true;
     vehicle.underglowEnabled = true;
-    vehicle.underglowColor = build.underglowColor;
+    vehicle.underglowColor = '#f59e0b';
     vehicle.rimLightMode = 'music';
-    vehicle.rimLightColor = build.rimLightColor;
+    vehicle.rimLightColor = resolved.headlights.color;
     vehicle.hp = vehicle.maxHp;
     vehicle.fuel = 100;
     this.spawnVehicleInstance(vehicle);
@@ -18474,18 +18793,18 @@ export class GameEngine {
       shop.bayPosition.x,
       shop.bayPosition.y + 1.2,
       shop.bayPosition.z,
-      build.stripeColor ? 0xf4e3c1 : 0xf1c453,
+      0xf4e3c1,
       26,
     );
     this.spawnParticles(
       shop.bayPosition.x,
       shop.bayPosition.y + 0.4,
       shop.bayPosition.z,
-      0xf59e0b,
+      parseInt(resolved.rims.color.replace('#', ''), 16),
       18,
     );
     this.toast(
-      'Duke & Rae rolled out the Bayou Royal DONK: candy burgundy with cream stripes, six-pump hydraulics, cream leather, 30-inch golds, speakers, new headlights and chrome. It is ready to drive.',
+      `Duke & Rae rolled out the ${resolved.name}: ${resolved.paint.label.toLowerCase()} with ${resolved.paint.stripeColor} stripes, ${resolved.rims.label}, ${resolved.steeringWheel.label}, ${resolved.roof.label}, ${resolved.interior.label}, ${resolved.headlights.label} and a fresh undercarriage. It is aligned, balanced and ready to drive.`,
       'discovery',
     );
     this.emitHud();

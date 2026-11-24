@@ -1289,7 +1289,8 @@ export type ActiveModal =
   | 'mainland'
   | 'lost_world'
   | 'wardrobe'
-  | 'mansion_entertainment';
+  | 'mansion_entertainment'
+  | 'restoration_shop';
 
 export interface NearbyInteraction {
   id: string;
@@ -1327,6 +1328,7 @@ export interface NearbyInteraction {
     | 'farmer'
     | 'planted_crop'
     | 'house_couch'
+    | 'restoration_shop'
     | 'house_bed'
     | 'house_tv'
     | 'house_fridge'
@@ -1437,6 +1439,7 @@ export interface HUDStateSnapshot {
   fridgeItems: InventorySlot[];
   wardrobeItems: InventorySlot[];
   nearbyInteraction: NearbyInteraction | null;
+  restorationShop?: import('./systems/customCarShop').RestorationShopHudState;
   nearbyCarcass: {
     id: string;
     displayName: string;
