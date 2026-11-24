@@ -22,6 +22,9 @@ import {
   CUSTOM_RESTORATION_STAGES,
   CUSTOM_SHOP_PART_CRATES,
   DONOR_CARS,
+  DONOR_SHELL_CRATE,
+  DONOR_SOURCES,
+  DONOR_DAMAGE,
   HEADLIGHT_OPTIONS,
   INTERIOR_OPTIONS,
   PAINT_OPTIONS,
@@ -160,6 +163,10 @@ export function RestorationShopModal({
   const build = snapshot.started ? snapshot.build : draft ?? snapshot.build;
   const locked = snapshot.started;
   const resolved = useMemo(() => resolveCustomShopBuild(build), [build]);
+  const cargoCrates =
+    build.donorSource === 'freight'
+      ? [DONOR_SHELL_CRATE, ...CUSTOM_SHOP_PART_CRATES]
+      : CUSTOM_SHOP_PART_CRATES;
   const delivered = new Set(snapshot.deliveredCrateIds);
   const currentStageIndex = snapshot.stageIndex;
 
@@ -204,8 +211,8 @@ export function RestorationShopModal({
                   Frame-off build sheet
                 </h2>
                 <p className="text-[11px] text-stone-400">
-                  Duke &amp; Rae pull the donor from Cave 12 Salvage while the Crescent City
-                  barge brings the parts.
+                  Pick a Cave 12 wreck or a wrapped Crescent City auction shell. The barge
+                  takes three minutes; the crew strips the car while it crosses.
                 </p>
               </div>
             </div>
@@ -245,10 +252,67 @@ export function RestorationShopModal({
             <div className="space-y-5">
               <section className="space-y-2">
                 <SectionTitle
+                  icon={<Ship className="h-4 w-4" />}
+                  step="ROUTE"
+                  title="Where is the donor coming from?"
+                  hint="Tow a Cave 12 wreck, or buy a wrapped auction shell off the Crescent City barge."
+                />
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {DONOR_SOURCES.map((source) => (
+                    <ChoiceCard
+                      key={source.id}
+                      selected={build.donorSource === source.id}
+                      disabled={locked}
+                      onClick={() => choose('donorSource', source.id)}
+                      title={source.label}
+                      subtitle={source.id === 'freight' ? '3-minute barge run' : 'Shop truck tow'}
+                      detail={source.detail}
+                    />
+                  ))}
+                </div>
+                <div className="rounded-xl border border-stone-800 bg-stone-900/50 p-3">
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-amber-400/80">
+                    {build.donorSource === 'freight' ? 'Auction shell condition' : 'As-found condition'}
+                  </div>
+                  <p className="mt-1 text-[11px] leading-snug text-stone-300">
+                    {resolved.damage.summary}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-1.5 text-[9px] font-medium">
+                    <span className="rounded border border-stone-700 bg-stone-950 px-1.5 py-0.5 text-stone-300">
+                      {resolved.damage.dents} dents
+                    </span>
+                    <span className="rounded border border-stone-700 bg-stone-950 px-1.5 py-0.5 text-stone-300">
+                      {resolved.damage.rustHoles} rust holes
+                    </span>
+                    {resolved.damage.collapsedRoof && (
+                      <span className="rounded border border-amber-700/40 bg-amber-950/30 px-1.5 py-0.5 text-amber-200">
+                        caved roof
+                      </span>
+                    )}
+                    {resolved.damage.fireDamage && (
+                      <span className="rounded border border-red-800/50 bg-red-950/30 px-1.5 py-0.5 text-red-200">
+                        fire damage
+                      </span>
+                    )}
+                    {resolved.damage.trash !== 'none' && (
+                      <span className="rounded border border-lime-800/40 bg-lime-950/25 px-1.5 py-0.5 text-lime-200">
+                        leaves &amp; animal mess
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-2">
+                <SectionTitle
                   icon={<Car className="h-4 w-4" />}
                   step="01"
                   title="What kind of car do you want?"
-                  hint="These are real full-frame donors that Duke can pull out of Cave 12."
+                  hint={
+                    build.donorSource === 'freight'
+                      ? 'The barge brings a bare shell and chassis from a Crescent City car sale; crates bring the engine and parts.'
+                      : 'These are real full-frame donors that Duke can pull out of Cave 12.'
+                  }
                 />
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
                   {DONOR_CARS.map((donor) => (
@@ -260,6 +324,7 @@ export function RestorationShopModal({
                       title={donor.shortName}
                       subtitle={donor.body}
                       detail={donor.detail}
+                      badge={`${DONOR_DAMAGE[donor.id].rustHoles} holes`}
                     />
                   ))}
                 </div>
@@ -475,6 +540,21 @@ export function RestorationShopModal({
                   <p className="mt-0.5 text-[10px] leading-snug text-stone-400">
                     {snapshot.stageDetail}
                   </p>
+                  {(snapshot.cargoPhase === 'steaming_in' ||
+                    snapshot.phase === 'waiting_donor') && (
+                    <div className="mt-1.5 flex items-center justify-between rounded-md border border-sky-500/30 bg-sky-950/30 px-2 py-1 font-mono-tabular text-[10px] text-sky-200">
+                      <span>
+                        {snapshot.cargoPhase === 'steaming_in'
+                          ? 'Barge from Crescent City'
+                          : 'Barge alongside the pier'}
+                      </span>
+                      <span className="font-bold">
+                        {snapshot.cargoPhase === 'steaming_in'
+                          ? `ETA ${snapshot.cargoEtaLabel}`
+                          : 'Unloading shell'}
+                      </span>
+                    </div>
+                  )}
                   {snapshot.waitingForParts && (
                     <div className="mt-1.5 rounded-md border border-sky-500/30 bg-sky-950/30 px-2 py-1 text-[10px] text-sky-200">
                       The lift is waiting on the Crescent City barge before this stage can start.
@@ -541,7 +621,7 @@ export function RestorationShopModal({
                     <Package className="h-3 w-3" /> Crescent City parts
                   </div>
                   <div className="mt-1 space-y-1">
-                    {CUSTOM_SHOP_PART_CRATES.map((crate) => {
+                    {cargoCrates.map((crate) => {
                       const arrived = delivered.has(crate.id);
                       return (
                         <div
@@ -576,9 +656,10 @@ export function RestorationShopModal({
                     <Ship className="h-3 w-3" /> Parts logistics
                   </div>
                   <p className="mt-1 text-[10px] leading-snug text-stone-400">
-                    The Crescent City barge brings four crates up the bayou. Rae runs the
-                    forklift from the pier to the bay; Duke cuts, welds, paints and stitches
-                    the car on the lift.
+                    The Crescent City barge takes three minutes up the bayou with five parts
+                    crates{resolved.build.donorSource === 'freight' ? ' and the wrapped shell on its timber tray' : ''}.
+                    Rae runs the forklift from the pier to the bay; Duke cuts, welds, paints and
+                    stitches the car on the lift, then takes it on a road test.
                   </p>
                 </div>
                 <button
@@ -587,7 +668,9 @@ export function RestorationShopModal({
                   className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 px-4 py-3 text-sm font-bold text-stone-950 shadow-lg shadow-amber-900/30 transition hover:from-amber-400 hover:to-amber-300"
                 >
                   <Truck className="h-4 w-4" />
-                  Send Duke &amp; Rae to Cave 12
+                  {resolved.build.donorSource === 'freight'
+                    ? 'Order the auction shell from Crescent City'
+                    : 'Send Duke & Rae to Cave 12'}
                 </button>
                 <p className="text-center text-[10px] leading-snug text-stone-500">
                   The car is stripped, hydraulicked, painted, re-trimmed, re-roofed, re-wheeled,

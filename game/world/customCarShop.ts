@@ -15,7 +15,9 @@ import {
   CUSTOM_SHOP_WORKERS,
   getCustomShopShipRoutePoint,
   JUNKYARD_CAVE,
+  type CustomShopToolKind,
   type CustomShopWorkerId,
+  type DonorDamageProfile,
 } from '../systems/customCarShop';
 
 export interface CustomShopWorkerHandle {
@@ -23,9 +25,12 @@ export interface CustomShopWorkerHandle {
   name: string;
   role: string;
   group: THREE.Group;
+  legL: THREE.Group;
+  legR: THREE.Group;
   armL: THREE.Group;
   armR: THREE.Group;
   head: THREE.Group;
+  tools: Record<CustomShopToolKind, THREE.Object3D>;
   baseX: number;
   baseZ: number;
   baseY: number;
@@ -44,6 +49,13 @@ export interface CustomCarShopHandles {
   liftCar: THREE.Group;
   liftPlatform: THREE.Group;
   liftCarTrunk: THREE.Group | null;
+  liftCarHood: THREE.Group | null;
+  liftCarDoors: THREE.Group[];
+  liftCarFenders: THREE.Object3D[];
+  liftCarQuarters: THREE.Object3D[];
+  liftCarGlass: THREE.Object3D | null;
+  liftCarEngine: THREE.Object3D | null;
+  liftCarTrash: THREE.Object3D[];
   liftCarWheels: THREE.Group[];
   hydraulicParts: THREE.Group;
   stockSuspensionPile: THREE.Group;
@@ -53,6 +65,8 @@ export interface CustomCarShopHandles {
   forklift: THREE.Group;
   forkliftForks: THREE.Group;
   forkliftPallet: THREE.Group;
+  forkliftShellPallet: THREE.Group;
+  wrappedShell: THREE.Group;
   freightDeckY: number;
   setStatus: (headline: string, detail: string, progress: number) => void;
 }
@@ -260,18 +274,79 @@ function buildWorker(
   const armR = new THREE.Group();
   armR.position.set(0.34, 1.25, 0);
   const armRMesh = armLMesh.clone();
-  const tool =
-    id === 'duke'
-      ? new THREE.Mesh(roundedBox(0.1, 0.18, 0.3, 0.02), chrome)
-      : new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.035, 0.42, 8), chrome);
-  if (id === 'duke') {
-    tool.position.set(0, -0.56, 0.2);
-    tool.rotation.x = -0.25;
-  } else {
-    tool.position.set(0, -0.6, 0.12);
-    tool.rotation.z = 0.65;
-  }
-  armR.add(armRMesh, tool);
+
+  // Every tech carries the whole kit; the engine shows the tool for the job.
+  const toolGroup = (): THREE.Group => {
+    const tool = new THREE.Group();
+    tool.position.set(0, -0.56, 0.16);
+    tool.visible = false;
+    return tool;
+  };
+  const hammer = toolGroup();
+  const hammerHandle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.028, 0.034, 0.46, 8),
+    new THREE.MeshStandardMaterial({ color: 0x7a4a24, roughness: 0.85 }),
+  );
+  hammerHandle.position.set(0, -0.1, 0);
+  hammerHandle.rotation.z = 0.12;
+  const hammerHead = new THREE.Mesh(roundedBox(0.11, 0.11, 0.3, 0.02), chrome);
+  hammerHead.position.set(0, 0.14, 0.02);
+  hammer.add(hammerHandle, hammerHead);
+
+  const wrench = toolGroup();
+  const wrenchShaft = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.025, 0.035, 0.42, 8),
+    chrome,
+  );
+  wrenchShaft.position.y = -0.08;
+  wrenchShaft.rotation.z = 0.65;
+  const wrenchJaw = new THREE.Mesh(roundedBox(0.13, 0.08, 0.06, 0.015), chrome);
+  wrenchJaw.position.set(0.14, 0.12, 0);
+  wrench.add(wrenchShaft, wrenchJaw);
+
+  const spray = toolGroup();
+  const sprayBody = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.075, 0.09, 0.26, 10),
+    new THREE.MeshStandardMaterial({ color: 0xc08a3e, roughness: 0.4, metalness: 0.4 }),
+  );
+  const sprayNozzle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.018, 0.024, 0.2, 8),
+    chrome,
+  );
+  sprayNozzle.position.set(0, 0.2, 0.04);
+  sprayBody.position.y = -0.02;
+  spray.add(sprayBody, sprayNozzle);
+
+  const needle = toolGroup();
+  const needleBody = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.055, 0.07, 0.34, 8),
+    new THREE.MeshStandardMaterial({ color: 0x4b5563, roughness: 0.3, metalness: 0.7 }),
+  );
+  const needleTip = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.012, 0.012, 0.26, 6),
+    chrome,
+  );
+  needleTip.position.y = 0.26;
+  needle.add(needleBody, needleTip);
+
+  const polish = toolGroup();
+  const polishPad = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.115, 0.135, 0.08, 10),
+    new THREE.MeshStandardMaterial({ color: 0xe7d7b5, roughness: 0.95 }),
+  );
+  polishPad.rotation.z = Math.PI / 2;
+  polish.add(polishPad);
+
+  armR.add(armRMesh, hammer, wrench, spray, needle, polish);
+  wrench.visible = true;
+  const tools: Record<CustomShopToolKind, THREE.Object3D> = {
+    hammer,
+    wrench,
+    spray,
+    needle,
+    polish,
+    none: new THREE.Group(),
+  };
 
   group.add(legL, legR, torso, apron, belt, head, armL, armR);
   group.position.set(localX, 0.37, localZ);
@@ -289,9 +364,12 @@ function buildWorker(
     name,
     role,
     group,
+    legL,
+    legR,
     armL,
     armR,
     head,
+    tools,
     baseX: localX,
     baseZ: localZ,
     baseY: 0.37,
@@ -305,33 +383,287 @@ function buildJunkShell(
   glassMat: THREE.MeshStandardMaterial,
   tireMat: THREE.MeshStandardMaterial,
   withWheels = true,
+  damage?: DonorDamageProfile,
 ): THREE.Group {
+  const profile: DonorDamageProfile = damage ?? {
+    dents: 6,
+    rustHoles: 4,
+    collapsedRoof: true,
+    fireDamage: true,
+    trash: 'both',
+    glassMissing: true,
+    summary: 'Cave wreck with rust, dents, fire damage and trash.',
+  };
+  const seeded = (index: number, salt: number) => {
+    const value = Math.sin((index + 1) * 12.9898 + salt * 78.233) * 43758.5453;
+    return value - Math.floor(value);
+  };
   const group = new THREE.Group();
+  group.name = 'junk-donor-shell';
   const body = new THREE.Mesh(roundedBox(1.9, 0.55, 4.4, 0.12), bodyMat);
   body.position.y = 0.62;
   const roof = new THREE.Mesh(roundedBox(1.55, 0.5, 2.1, 0.1), bodyMat);
   roof.position.set(0, 1.04, -0.25);
+
+  // A caved-in roof is common on cars that sat under trees or got jumped on.
+  const roofCollapse = new THREE.Group();
+  if (profile.collapsedRoof) {
+    const caved = new THREE.Mesh(
+      new THREE.SphereGeometry(0.72, 14, 10),
+      new THREE.MeshStandardMaterial({ color: 0x6b4a34, roughness: 0.94 }),
+    );
+    caved.scale.set(1.05, 0.16, 0.72);
+    caved.position.set(0.08, 1.24, -0.2);
+    const crease = new THREE.Mesh(
+      roundedBox(1.1, 0.035, 0.08, 0.01),
+      new THREE.MeshStandardMaterial({ color: 0x3d2a1c, roughness: 1 }),
+    );
+    crease.position.set(-0.1, 1.29, -0.2);
+    crease.rotation.y = 0.25;
+    roofCollapse.add(caved, crease);
+    roofCollapse.visible = profile.collapsedRoof;
+  }
+  group.add(roofCollapse);
+
+  // Hood and trunk are real hinges so the crew can open and remove them.
+  const hoodPivot = new THREE.Group();
+  hoodPivot.position.set(0, 0.98, 1.92);
   const hood = new THREE.Mesh(roundedBox(1.65, 0.15, 1.2, 0.06), rustMat);
-  hood.position.set(0, 0.91, 1.3);
-  // Hinged trunk so the crew can actually open it for the hydraulic install.
+  hood.position.set(0, -0.07, -0.6);
+  hoodPivot.add(hood);
+
   const trunkPivot = new THREE.Group();
   trunkPivot.position.set(0, 0.9, -1.12);
   const trunk = new THREE.Mesh(roundedBox(1.65, 0.12, 0.9, 0.05), rustMat);
   trunk.position.set(0, 0, -0.43);
   trunkPivot.add(trunk);
+
+  const glass = new THREE.Group();
   const windshield = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.46), glassMat);
   windshield.position.set(0, 1.13, 0.89);
   windshield.rotation.x = -0.42;
+  windshield.name = 'windshield-glass';
   const rearGlass = windshield.clone();
+  rearGlass.name = 'rear-glass';
   rearGlass.position.set(0, 1.12, -1.16);
   rearGlass.rotation.x = Math.PI + 0.4;
-  const rustPatch = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.38), rustMat);
-  rustPatch.position.set(-0.96, 0.64, 0.2);
-  rustPatch.rotation.y = -Math.PI / 2;
-  const rustPatch2 = rustPatch.clone();
-  rustPatch2.position.set(0.96, 0.7, -1.1);
-  rustPatch2.rotation.y = Math.PI / 2;
-  group.add(body, roof, hood, trunkPivot, windshield, rearGlass, rustPatch, rustPatch2);
+  rearGlass.visible = !profile.glassMissing;
+  const sideGlassL = new THREE.Mesh(new THREE.PlaneGeometry(1.25, 0.4), glassMat);
+  sideGlassL.position.set(-0.955, 1.12, -0.15);
+  sideGlassL.rotation.y = -Math.PI / 2;
+  sideGlassL.name = 'side-glass-l';
+  const sideGlassR = sideGlassL.clone();
+  sideGlassR.name = 'side-glass-r';
+  sideGlassR.position.x = 0.955;
+  sideGlassR.rotation.y = Math.PI / 2;
+  sideGlassL.visible = !profile.glassMissing;
+  sideGlassR.visible = !profile.glassMissing;
+  glass.add(windshield, rearGlass, sideGlassL, sideGlassR);
+
+  // Bolt-on doors, fenders and quarter skins get unbolted and set aside.
+  const doorL = new THREE.Group();
+  doorL.position.set(-0.95, 0.86, 0.98);
+  const doorLMesh = new THREE.Mesh(roundedBox(0.09, 0.5, 1.12, 0.04), bodyMat);
+  doorLMesh.position.set(0, -0.17, -0.56);
+  const doorLHandle = new THREE.Mesh(roundedBox(0.04, 0.04, 0.18, 0.01), rustMat);
+  doorLHandle.position.set(-0.06, -0.12, -0.95);
+  doorL.add(doorLMesh, doorLHandle);
+  const doorR = new THREE.Group();
+  doorR.position.set(0.95, 0.86, 0.98);
+  const doorRMesh = doorLMesh.clone();
+  const doorRHandle = doorLHandle.clone();
+  doorRHandle.position.x = 0.06;
+  doorR.add(doorRMesh, doorRHandle);
+
+  const fenderL = new THREE.Mesh(roundedBox(0.1, 0.44, 1.15, 0.035), rustMat);
+  fenderL.position.set(-0.97, 0.64, 1.55);
+  const fenderR = fenderL.clone();
+  fenderR.position.x = 0.97;
+  const quarterL = new THREE.Mesh(roundedBox(0.1, 0.48, 1.35, 0.035), bodyMat);
+  quarterL.position.set(-0.97, 0.66, -1.22);
+  const quarterR = quarterL.clone();
+  quarterR.position.x = 0.97;
+  const bodyPanels = new THREE.Group();
+  bodyPanels.add(fenderL, fenderR, quarterL, quarterR);
+
+  // Engine bay and cabin details make the teardown readable.
+  const engine = new THREE.Group();
+  const block = new THREE.Mesh(
+    roundedBox(0.72, 0.42, 0.86, 0.03),
+    new THREE.MeshStandardMaterial({ color: 0x2f3337, roughness: 0.6, metalness: 0.35 }),
+  );
+  block.position.set(0, 0.72, 1.24);
+  const airCleaner = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.24, 0.24, 0.12, 14),
+    new THREE.MeshStandardMaterial({ color: 0x353a3e, roughness: 0.35, metalness: 0.55 }),
+  );
+  airCleaner.position.set(0, 0.99, 1.24);
+  const valveCover = new THREE.Mesh(roundedBox(0.5, 0.09, 0.18, 0.02), rustMat);
+  valveCover.position.set(0, 0.93, 1.0);
+  engine.add(block, airCleaner, valveCover);
+
+  const interior = new THREE.Group();
+  const seatMat = new THREE.MeshStandardMaterial({ color: 0x4c3a2c, roughness: 0.96 });
+  [-0.42, 0.42].forEach((x) => {
+    const seat = new THREE.Mesh(roundedBox(0.62, 0.4, 0.6, 0.06), seatMat);
+    seat.position.set(x, 0.76, -0.28);
+    const back = new THREE.Mesh(roundedBox(0.62, 0.55, 0.14, 0.04), seatMat);
+    back.position.set(x, 0.96, -0.55);
+    back.rotation.x = -0.12;
+    interior.add(seat, back);
+  });
+  const dash = new THREE.Mesh(roundedBox(1.55, 0.24, 0.28, 0.05), seatMat);
+  dash.position.set(0, 0.9, 0.72);
+  const steeringWheel = new THREE.Mesh(
+    new THREE.TorusGeometry(0.15, 0.035, 8, 16),
+    new THREE.MeshStandardMaterial({ color: 0x1e1b18, roughness: 0.8 }),
+  );
+  steeringWheel.position.set(-0.38, 0.93, 0.48);
+  steeringWheel.rotation.x = -0.35;
+  const carpet = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.55, 1.9),
+    new THREE.MeshStandardMaterial({ color: 0x2c241b, roughness: 1 }),
+  );
+  carpet.rotation.x = -Math.PI / 2;
+  carpet.position.set(0, 0.68, -0.2);
+  interior.add(dash, steeringWheel, carpet);
+
+  const leaves = new THREE.Group();
+  if (profile.trash === 'leaves' || profile.trash === 'both') {
+    const leafMats = [0x6b7f3a, 0x9a6a2e, 0x7c5a2e].map(
+      (color) => new THREE.MeshStandardMaterial({ color, roughness: 1, side: THREE.DoubleSide }),
+    );
+    for (let index = 0; index < 22; index += 1) {
+      const leaf = new THREE.Mesh(new THREE.PlaneGeometry(0.08, 0.12), leafMats[index % 3]);
+      leaf.rotation.set(-Math.PI / 2 + 0.2, seeded(index, 1) * Math.PI, seeded(index, 2) * 0.6);
+      leaf.position.set(
+        (seeded(index, 3) - 0.5) * 1.45,
+        0.705 + seeded(index, 4) * 0.04,
+        (seeded(index, 5) - 0.5) * 1.8 - 0.2,
+      );
+      leaves.add(leaf);
+    }
+    const trunkLeaves = leaves.clone();
+    trunkLeaves.position.set(0, 0.16, -1.32);
+    trunkLeaves.scale.setScalar(0.7);
+    leaves.add(trunkLeaves);
+  }
+
+  const poop = new THREE.Group();
+  if (profile.trash === 'poop' || profile.trash === 'both') {
+    const poopMat = new THREE.MeshStandardMaterial({ color: 0x4a3520, roughness: 1 });
+    for (let index = 0; index < 4; index += 1) {
+      const lump = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 6), poopMat);
+      lump.scale.set(1.4, 0.7, 1);
+      lump.position.set(
+        (seeded(index, 6) - 0.5) * 1.2,
+        0.72,
+        -0.9 + seeded(index, 7) * 1.4,
+      );
+      poop.add(lump);
+    }
+  }
+
+  // Rust holes with raised, crusty edges.
+  const holeGroup = new THREE.Group();
+  const holeMat = new THREE.MeshStandardMaterial({
+    color: 0x0c0a08,
+    roughness: 1,
+    side: THREE.DoubleSide,
+  });
+  const holePositions = [
+    { x: -0.965, y: 0.56, z: 0.9, ry: -Math.PI / 2 },
+    { x: 0.965, y: 0.63, z: -0.95, ry: Math.PI / 2 },
+    { x: -0.36, y: 0.9, z: -1.55, rx: -Math.PI / 2 },
+    { x: 0.34, y: 0.91, z: 1.7, rx: -Math.PI / 2 },
+    { x: 0.44, y: 0.66, z: -1.9, ry: Math.PI / 2 },
+  ];
+  holePositions.slice(0, Math.max(0, Math.min(5, profile.rustHoles))).forEach((hole, index) => {
+    const size = 0.13 + seeded(index, 8) * 0.09;
+    const patch = new THREE.Mesh(new THREE.CircleGeometry(size, 12), holeMat);
+    patch.position.set(hole.x, hole.y, hole.z);
+    patch.rotation.set(hole.rx ?? 0, hole.ry ?? 0, 0);
+    const rim = new THREE.Mesh(
+      new THREE.TorusGeometry(size, 0.025, 6, 16),
+      new THREE.MeshStandardMaterial({ color: 0x8a4a22, roughness: 0.98, metalness: 0.1 }),
+    );
+    rim.position.copy(patch.position);
+    rim.rotation.copy(patch.rotation);
+    holeGroup.add(patch, rim);
+  });
+
+  // Crushed panels and door dents.
+  const dents = new THREE.Group();
+  const dentMat = bodyMat.clone();
+  dentMat.color.multiplyScalar(0.7);
+  dentMat.roughness = 0.95;
+  const dentSpots = [
+    { x: -0.94, y: 0.7, z: 1.35, ry: -Math.PI / 2 },
+    { x: 0.94, y: 0.62, z: -0.25, ry: Math.PI / 2 },
+    { x: 1.0, y: 0.72, z: -1.45, ry: Math.PI / 2 },
+    { x: -0.98, y: 0.58, z: -1.55, ry: -Math.PI / 2 },
+    { x: -0.5, y: 0.93, z: 0.25, rx: -Math.PI / 2 },
+    { x: 0.62, y: 0.93, z: -1.2, rx: -Math.PI / 2 },
+  ];
+  dentSpots.slice(0, Math.max(0, Math.min(6, profile.dents))).forEach((spot, index) => {
+    const dent = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8), dentMat);
+    dent.scale.set(0.62, 0.16, 0.82 + seeded(index, 9) * 0.3);
+    dent.position.set(spot.x, spot.y, spot.z);
+    dent.rotation.set(spot.rx ?? 0, spot.ry ?? 0, seeded(index, 10) * 0.5);
+    dents.add(dent);
+  });
+
+  // Fire damage: flat black soot, burned-through hood and ash crust.
+  const fire = new THREE.Group();
+  if (profile.fireDamage) {
+    const sootMat = new THREE.MeshStandardMaterial({
+      color: 0x14100d,
+      roughness: 1,
+      side: THREE.DoubleSide,
+    });
+    const hoodSoot = new THREE.Mesh(new THREE.CircleGeometry(0.62, 18), sootMat);
+    hoodSoot.position.set(-0.12, 0.015, -0.5);
+    hoodSoot.rotation.x = -Math.PI / 2;
+    hoodPivot.add(hoodSoot);
+    const roofSoot = hoodSoot.clone();
+    roofSoot.scale.setScalar(0.72);
+    roofSoot.position.set(0.34, 1.31, -0.4);
+    roofSoot.rotation.x = -Math.PI / 2;
+    const trunkSoot = hoodSoot.clone();
+    trunkSoot.scale.setScalar(0.55);
+    trunkSoot.position.set(0.2, 1.24, -1.15);
+    trunkSoot.rotation.x = -Math.PI / 2;
+    fire.add(roofSoot, trunkSoot);
+    const ashMat = new THREE.MeshStandardMaterial({ color: 0x5b554c, roughness: 1 });
+    for (let index = 0; index < 8; index += 1) {
+      const ash = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 5), ashMat);
+      ash.scale.set(1.3, 0.5, 1);
+      ash.position.set(
+        (seeded(index, 11) - 0.5) * 1.4,
+        0.69,
+        -1.2 + seeded(index, 12) * 2.2,
+      );
+      fire.add(ash);
+    }
+  }
+
+  group.add(
+    body,
+    roof,
+    hoodPivot,
+    trunkPivot,
+    glass,
+    doorL,
+    doorR,
+    bodyPanels,
+    engine,
+    interior,
+    leaves,
+    poop,
+    holeGroup,
+    dents,
+    fire,
+  );
 
   const wheels: THREE.Group[] = [];
   if (withWheels) {
@@ -363,7 +695,20 @@ function buildJunkShell(
     axle.position.y = 0.26;
     group.add(axle);
   }
+
   group.userData.trunkLid = trunkPivot;
+  group.userData.hoodLid = hoodPivot;
+  group.userData.doors = [doorL, doorR];
+  group.userData.fenders = [fenderL, fenderR];
+  group.userData.quarters = [quarterL, quarterR];
+  group.userData.glass = glass;
+  group.userData.engine = engine;
+  group.userData.interior = interior;
+  group.userData.trash = [leaves, poop];
+  group.userData.roofCollapse = roofCollapse;
+  group.userData.dents = dents;
+  group.userData.holes = holeGroup;
+  group.userData.fire = fire;
   group.userData.wheels = wheels;
   return group;
 }
@@ -535,6 +880,124 @@ function crateLabelTexture(title: string, subtitle: string): THREE.CanvasTexture
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 4;
   return texture;
+}
+
+function buildWrappedShellCargo(
+  bodyMat: THREE.MeshStandardMaterial,
+  rustMat: THREE.MeshStandardMaterial,
+  glassMat: THREE.MeshStandardMaterial,
+  tireMat: THREE.MeshStandardMaterial,
+): { cargo: THREE.Group; shell: THREE.Group } {
+  const cargo = new THREE.Group();
+  cargo.name = 'wrapped-auction-shell';
+  const timber = new THREE.MeshStandardMaterial({ color: 0x8b6239, roughness: 0.9 });
+  const darkTimber = new THREE.MeshStandardMaterial({ color: 0x5b3f26, roughness: 0.96 });
+  const wrap = new THREE.MeshStandardMaterial({
+    color: 0xdbe7e8,
+    roughness: 0.32,
+    metalness: 0.04,
+    transparent: true,
+    opacity: 0.42,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const strapMat = new THREE.MeshStandardMaterial({ color: 0x302a22, roughness: 0.85 });
+
+  // Huge timber tray the auction yard loads the shell on.
+  const tray = new THREE.Mesh(roundedBox(3.0, 0.26, 5.7, 0.05), timber);
+  tray.position.y = 0.16;
+  cargo.add(tray);
+  for (let index = 0; index < 7; index += 1) {
+    const plank = new THREE.Mesh(roundedBox(3.1, 0.12, 0.5, 0.02), darkTimber);
+    plank.position.set(0, 0.03, -2.45 + index * 0.82);
+    cargo.add(plank);
+  }
+  [-1.25, 1.25].forEach((x) => {
+    const runner = new THREE.Mesh(roundedBox(0.22, 0.18, 5.9, 0.03), darkTimber);
+    runner.position.set(x, 0.02, 0);
+    cargo.add(runner);
+  });
+
+  const shell = buildJunkShell(bodyMat, rustMat, glassMat, tireMat, false, {
+    dents: 2,
+    rustHoles: 1,
+    collapsedRoof: false,
+    fireDamage: false,
+    trash: 'none',
+    glassMissing: false,
+    summary: 'Straight auction shell with one dent and a small rust hole.',
+  });
+  shell.position.y = 0.27;
+  shell.rotation.y = 0.035;
+  shell.scale.setScalar(0.84);
+  cargo.add(shell);
+
+  // Shrink wrap over the whole shell, cinched down with freight straps.
+  const wrapped = new THREE.Mesh(roundedBox(1.92, 1.32, 4.1, 0.16), wrap);
+  wrapped.position.set(0, 1.02, -0.05);
+  cargo.add(wrapped);
+  for (const z of [-1.45, 0, 1.5]) {
+    const strap = new THREE.Mesh(roundedBox(2.03, 0.08, 0.1, 0.02), strapMat);
+    strap.position.set(0, 1.02, z);
+    cargo.add(strap);
+  }
+  const trayLabel = crateLabelTexture('AUCTION SHELL', 'chassis · no engine');
+  if (trayLabel) {
+    const label = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.2, 0.55),
+      new THREE.MeshBasicMaterial({ map: trayLabel, transparent: true }),
+    );
+    label.position.set(0, 0.5, 2.86);
+    cargo.add(label);
+  }
+  cargo.traverse((object) => {
+    object.userData.noStaticMerge = true;
+    object.userData.dynamic = true;
+    if (object instanceof THREE.Mesh) {
+      object.castShadow = true;
+      object.receiveShadow = true;
+    }
+  });
+  return { cargo, shell };
+}
+
+function buildEngineCrate(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'crescent-engine-crate';
+  const crate = new THREE.Mesh(
+    roundedBox(1.7, 1.25, 1.7, 0.04),
+    new THREE.MeshStandardMaterial({ color: 0x9c7444, roughness: 0.88 }),
+  );
+  crate.position.y = 0.63;
+  const engine = new THREE.Mesh(
+    roundedBox(1.05, 0.62, 1.0, 0.05),
+    new THREE.MeshStandardMaterial({ color: 0x343a3e, roughness: 0.5, metalness: 0.5 }),
+  );
+  engine.position.y = 1.5;
+  const intake = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.28, 0.28, 0.14, 14),
+    new THREE.MeshStandardMaterial({ color: 0x8d9298, roughness: 0.3, metalness: 0.8 }),
+  );
+  intake.position.y = 1.92;
+  const label = crateLabelTexture('ENGINE', 'small-block · crated');
+  if (label) {
+    const plane = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.45, 0.9),
+      new THREE.MeshBasicMaterial({ map: label, transparent: true }),
+    );
+    plane.position.set(0, 0.72, 0.87);
+    group.add(plane);
+  }
+  group.add(crate, engine, intake);
+  group.traverse((object) => {
+    object.userData.noStaticMerge = true;
+    object.userData.dynamic = true;
+    if (object instanceof THREE.Mesh) {
+      object.castShadow = true;
+      object.receiveShadow = true;
+    }
+  });
+  return group;
 }
 
 function buildFreightShip(): { ship: THREE.Group; containers: THREE.Group } {
@@ -947,6 +1410,7 @@ function buildPartCrates(): THREE.Group[] {
   const specs = [
     { title: 'Suspension', subtitle: 'hydraulic kit', color: 0x6f5c44 },
     { title: 'Body & Paint', subtitle: 'steel & candy', color: 0x7d4a3c },
+    { title: 'Engine', subtitle: '& drivetrain', color: 0x4a5058 },
     { title: 'Interior & Roof', subtitle: 'hides & bows', color: 0x6b5a3d },
     { title: 'Wheels & Lights', subtitle: 'rims & lamps', color: 0x4f5a63 },
   ];
@@ -971,7 +1435,8 @@ function buildPartCrates(): THREE.Group[] {
       group.add(label);
     }
     group.add(box, skid);
-    group.position.set(index % 2 === 0 ? -0.72 : 0.72, 0, 0.6 + Math.floor(index / 2) * 1.1);
+    group.position.set(index % 2 === 0 ? -0.72 : 0.72, 0, 0.6 + Math.floor(index / 2) * 1.05);
+    if (index === 4) group.position.x = 0;
     group.visible = false;
     group.traverse((object) => {
       if (object instanceof THREE.Mesh) {
@@ -1437,6 +1902,13 @@ export function buildCustomCarShop(
   liftCar.userData.noStaticMerge = true;
   liftCar.userData.dynamic = true;
   const liftCarTrunk = (liftCar.userData.trunkLid as THREE.Group | undefined) ?? null;
+  const liftCarHood = (liftCar.userData.hoodLid as THREE.Group | undefined) ?? null;
+  const liftCarDoors = (liftCar.userData.doors as THREE.Group[] | undefined) ?? [];
+  const liftCarFenders = (liftCar.userData.fenders as THREE.Object3D[] | undefined) ?? [];
+  const liftCarQuarters = (liftCar.userData.quarters as THREE.Object3D[] | undefined) ?? [];
+  const liftCarGlass = (liftCar.userData.glass as THREE.Object3D | undefined) ?? null;
+  const liftCarEngine = (liftCar.userData.engine as THREE.Object3D | undefined) ?? null;
+  const liftCarTrash = (liftCar.userData.trash as THREE.Object3D[] | undefined) ?? [];
   const liftCarWheels = (liftCar.userData.wheels as THREE.Group[] | undefined) ?? [];
 
   // Parts staged under the lift: stock suspension comes off first, then the
@@ -1565,6 +2037,19 @@ export function buildCustomCarShop(
       freightRoad.add(patch);
     }
   }
+  // The auction shell rides the pier on a huge timber tray under plastic wrap.
+  const { cargo: wrappedShell } = buildWrappedShellCargo(
+    new THREE.MeshStandardMaterial({ color: 0x5c5148, roughness: 0.92 }),
+    new THREE.MeshStandardMaterial({ color: 0x8a4b2d, roughness: 0.99 }),
+    glassMat,
+    tireMat,
+  );
+  wrappedShell.position.set(pierDeckX + 0.6, freightDeckY + 0.03, pierDeckZ + 0.2);
+  pier.add(wrappedShell);
+  const engineCrate = buildEngineCrate();
+  engineCrate.position.set(pierDeckX - 2.3, freightDeckY + 0.05, pierDeckZ + 1.4);
+  pier.add(engineCrate);
+
   const { ship: cargoShip, containers: cargoShipContainers } = buildFreightShip();
   const shipPoint = getCustomShopShipRoutePoint(1);
   cargoShip.position.set(
@@ -1575,6 +2060,19 @@ export function buildCustomCarShop(
   cargoShip.rotation.y = shipPoint.yaw;
   cargoShip.visible = false;
   const { forklift, forks: forkliftForks, pallet: forkliftPallet } = buildShopForklift();
+  const forkliftShellPallet = new THREE.Group();
+  forkliftShellPallet.name = 'forklift-shell-pallet';
+  const miniShellCargo = buildWrappedShellCargo(
+    new THREE.MeshStandardMaterial({ color: 0x5c5148, roughness: 0.92 }),
+    new THREE.MeshStandardMaterial({ color: 0x8a4b2d, roughness: 0.99 }),
+    glassMat,
+    tireMat,
+  ).cargo;
+  miniShellCargo.scale.setScalar(0.38);
+  miniShellCargo.position.set(0, 0.14, 0.5);
+  forkliftShellPallet.add(miniShellCargo);
+  forkliftShellPallet.visible = false;
+  forkliftForks.add(forkliftShellPallet);
   forklift.position.set(
     CUSTOM_FREIGHT_ROUTE[0].x - CUSTOM_SHOP_POS.x,
     getTerrainHeight(CUSTOM_FREIGHT_ROUTE[0].x, CUSTOM_FREIGHT_ROUTE[0].z) - groundY,
@@ -1727,6 +2225,13 @@ export function buildCustomCarShop(
     liftCar,
     liftPlatform,
     liftCarTrunk,
+    liftCarHood,
+    liftCarDoors,
+    liftCarFenders,
+    liftCarQuarters,
+    liftCarGlass,
+    liftCarEngine,
+    liftCarTrash,
     liftCarWheels,
     hydraulicParts,
     stockSuspensionPile,
@@ -1736,9 +2241,49 @@ export function buildCustomCarShop(
     forklift,
     forkliftForks,
     forkliftPallet,
+    forkliftShellPallet,
+    wrappedShell,
     freightDeckY: freightDeckWorldY,
     setStatus,
   };
+}
+
+/** Swaps the lift car's visible rust/dents/fire/trash to match the chosen donor. */
+export function applyCustomShopDonorDamage(
+  shop: CustomCarShopHandles,
+  damage: DonorDamageProfile,
+): void {
+  const root = shop.liftCar;
+  const roofCollapse = root.userData.roofCollapse as THREE.Object3D | undefined;
+  if (roofCollapse) roofCollapse.visible = damage.collapsedRoof;
+
+  const dents = root.userData.dents as THREE.Group | undefined;
+  dents?.children.forEach((child, index) => {
+    child.visible = index < damage.dents;
+  });
+
+  const holes = root.userData.holes as THREE.Group | undefined;
+  holes?.children.forEach((child, index) => {
+    child.visible = Math.floor(index / 2) < damage.rustHoles;
+  });
+
+  const fire = root.userData.fire as THREE.Object3D | undefined;
+  if (fire) fire.visible = damage.fireDamage;
+
+  const trash = root.userData.trash as THREE.Object3D[] | undefined;
+  const leaves = damage.trash === 'leaves' || damage.trash === 'both';
+  const poop = damage.trash === 'poop' || damage.trash === 'both';
+  root.userData.trashFlags = { leaves, poop };
+  if (trash) {
+    if (trash[0]) trash[0].visible = leaves;
+    if (trash[1]) trash[1].visible = poop;
+  }
+
+  const glass = root.userData.glass as THREE.Group | undefined;
+  glass?.children.forEach((child) => {
+    child.visible =
+      child.name === 'windshield-glass' || !damage.glassMissing;
+  });
 }
 
 function concreteMatSafe(concrete: ReturnType<typeof getPolishedConcretePbr>): THREE.MeshStandardMaterial {

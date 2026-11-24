@@ -226,6 +226,118 @@ export const DONOR_CARS: readonly DonorCarOption[] = [
 
 export type DonorCarId = (typeof DONOR_CARS)[number]['id'];
 
+export interface DonorDamageProfile {
+  dents: number;
+  rustHoles: number;
+  collapsedRoof: boolean;
+  fireDamage: boolean;
+  /** What the last owner left in the floor pans and trunk. */
+  trash: 'none' | 'leaves' | 'poop' | 'both';
+  glassMissing: boolean;
+  summary: string;
+}
+
+/** Cave donors are wrecks, not rollers: every one needs rust, dents and trash fixed. */
+export const DONOR_DAMAGE: Record<DonorCarId, DonorDamageProfile> = {
+  impala_64: {
+    dents: 4,
+    rustHoles: 3,
+    collapsedRoof: false,
+    fireDamage: true,
+    trash: 'both',
+    glassMissing: true,
+    summary:
+      'Trunk fire, rusted rear window ledge, leaves and animal droppings through the cabin.',
+  },
+  caprice_74: {
+    dents: 6,
+    rustHoles: 4,
+    collapsedRoof: true,
+    fireDamage: false,
+    trash: 'both',
+    glassMissing: false,
+    summary:
+      'Roof caved in, both quarters dented, floor pans full of leaves and old food wrappers.',
+  },
+  regal_87: {
+    dents: 5,
+    rustHoles: 2,
+    collapsedRoof: false,
+    fireDamage: true,
+    trash: 'poop',
+    glassMissing: true,
+    summary:
+      'Engine-bay fire, burned hood, missing back glass and years of animal mess inside.',
+  },
+  impala_96: {
+    dents: 3,
+    rustHoles: 2,
+    collapsedRoof: false,
+    fireDamage: false,
+    trash: 'leaves',
+    glassMissing: false,
+    summary:
+      'Side-swiped doors, rocker rust, a trunk packed with wet leaves and a cracked dash.',
+  },
+  deville_79: {
+    dents: 5,
+    rustHoles: 3,
+    collapsedRoof: true,
+    fireDamage: false,
+    trash: 'both',
+    glassMissing: true,
+    summary:
+      'Vinyl roof collapsed, trunk lid rotten, glass gone and the interior full of debris.',
+  },
+  elcamino_86: {
+    dents: 4,
+    rustHoles: 2,
+    collapsedRoof: false,
+    fireDamage: true,
+    trash: 'leaves',
+    glassMissing: false,
+    summary:
+      'Bed fire, burned wiring, dented tailgate and a load of wet leaves in the bed.',
+  },
+  towncar_03: {
+    dents: 2,
+    rustHoles: 1,
+    collapsedRoof: false,
+    fireDamage: false,
+    trash: 'poop',
+    glassMissing: false,
+    summary:
+      'Sitting under a tree for years: one rust hole, dented fender and animal mess inside.',
+  },
+};
+
+export type DonorSource = 'cave' | 'freight';
+
+export interface DonorSourceOption {
+  id: DonorSource;
+  label: string;
+  detail: string;
+}
+
+/**
+ * Two realistic supply routes: winch a wreck out of Cave 12, or buy a
+ * plastic-wrapped auction shell that crosses from Crescent City on the barge.
+ */
+export const DONOR_SOURCES: readonly DonorSourceOption[] = [
+  {
+    id: 'cave',
+    label: 'Cave 12 tow-out',
+    detail:
+      'Duke and Rae drive the shop truck to the cave yard and winch back a full wreck. Rust, holes, dents and trash included.',
+  },
+  {
+    id: 'freight',
+    label: 'Crescent City auction shell',
+    detail:
+      'A bare shell and chassis from a car sale, wrapped in plastic on a huge wooden tray. It rides the barge from the mainland; the engine and parts follow in the crates.',
+  },
+] as const;
+
 export interface PaintOption {
   id: string;
   label: string;
@@ -543,6 +655,7 @@ export const UNDERCARRIAGE_OPTIONS: readonly UndercarriageOption[] = [
 export type UndercarriageId = (typeof UNDERCARRIAGE_OPTIONS)[number]['id'];
 
 export interface CustomShopBuild {
+  donorSource: DonorSource;
   donorCarId: DonorCarId;
   paintId: PaintId;
   rimId: RimId;
@@ -554,6 +667,7 @@ export interface CustomShopBuild {
 }
 
 export type CustomShopBuildOptionKey =
+  | 'donorSource'
   | 'donorCarId'
   | 'paintId'
   | 'rimId'
@@ -564,6 +678,7 @@ export type CustomShopBuildOptionKey =
   | 'undercarriageId';
 
 export const DEFAULT_CUSTOM_BUILD: CustomShopBuild = {
+  donorSource: 'cave',
   donorCarId: 'caprice_74',
   paintId: 'candy_burgundy',
   rimId: 'dayton_gold_30',
@@ -591,6 +706,8 @@ export interface ResolvedCustomShopBuild {
   build: CustomShopBuild;
   vehicleId: string;
   name: string;
+  donorSource: DonorSourceOption;
+  damage: DonorDamageProfile;
   donor: DonorCarOption;
   paint: PaintOption;
   rims: RimOption;
@@ -609,7 +726,9 @@ export const CUSTOM_SHOP_VEHICLE_ID = 'veh_custom_shop_bayou_royal';
 export function resolveCustomShopBuild(
   build: CustomShopBuild,
 ): ResolvedCustomShopBuild {
+  const donorSource = findOption(DONOR_SOURCES, build.donorSource);
   const donor = findOption(DONOR_CARS, build.donorCarId);
+  const damage = DONOR_DAMAGE[donor.id];
   const paint = findOption(PAINT_OPTIONS, build.paintId);
   const rims = findOption(RIM_OPTIONS, build.rimId);
   const steeringWheel = findOption(
@@ -627,6 +746,8 @@ export function resolveCustomShopBuild(
     build,
     vehicleId: CUSTOM_SHOP_VEHICLE_ID,
     name: `Bayou Royal ${donor.name}`,
+    donorSource,
+    damage,
     donor,
     paint,
     rims,
@@ -658,14 +779,40 @@ export function resolveCustomShopBuild(
 export type PartsCrateId =
   | 'suspension_hydraulics'
   | 'body_paint'
+  | 'engine_drivetrain'
   | 'interior_roof'
   | 'wheels_lights';
 
+/** A wrapped auction shell is freight, not a parts box, so it has its own id. */
+export type CargoCrateId = PartsCrateId | 'donor_shell';
+
 export interface PartsCrate {
-  id: PartsCrateId;
+  id: CargoCrateId;
   label: string;
   manifest: readonly string[];
 }
+
+export const DONOR_SHELL_CRATE: PartsCrate = {
+  id: 'donor_shell',
+  label: 'Wrapped Shell & Chassis',
+  manifest: [
+    'Bare body shell shrink-wrapped to a 4.8 m timber tray',
+    'Chassis rails, floor pan and subframe',
+    'Core support, glass and auction paperwork',
+    'No engine or driveline — those follow in the crates',
+  ],
+};
+
+export const ENGINE_DRIVETRAIN_CRATE: PartsCrate = {
+  id: 'engine_drivetrain',
+  label: 'Engine & Drivetrain Crate',
+  manifest: [
+    'Rebuilt small-block long block',
+    'Transmission, converter and driveshaft',
+    'Radiator, fans, hoses and accessory drive',
+    'Wiring harness, ECU, mounts and exhaust',
+  ],
+};
 
 export const CUSTOM_SHOP_PART_CRATES: readonly PartsCrate[] = [
   {
@@ -673,28 +820,29 @@ export const CUSTOM_SHOP_PART_CRATES: readonly PartsCrate[] = [
     label: 'Suspension & Hydraulic Kit',
     manifest: [
       'Two 1/2-inch hydraulic pumps',
-      'Four 10-inch cylinders',
-      'Three deep-cycle batteries',
-      'Four solenoids, relay bank and lines',
-      'New ball joints, bushings and tie rods',
+      'Four 10-inch cylinders and two accumulators',
+      'Three deep-cycle batteries with trays',
+      'Four solenoids, relay bank, switches and lines',
+      'New ball joints, bushings, tie rods and brakes',
     ],
   },
   {
     id: 'body_paint',
     label: 'Body & Paint Crate',
     manifest: [
+      'Doors, trunk lid, hood, fenders and quarter skins',
       'Rear quarter patches and rocker steel',
       'Primer, sealer and candy basecoat',
       'Cream pinstripe and clear coat',
-      'New body bushings and hardware',
     ],
   },
+  ENGINE_DRIVETRAIN_CRATE,
   {
     id: 'interior_roof',
     label: 'Interior & Roof Crate',
     manifest: [
       'Leather hides, foam and carpet',
-      'Headliner, door cards and dash pad',
+      'Headliner, door cards, dash pad and glovebox liner',
       'Steering wheel, hub and column parts',
       'Roof material, bows and weatherstrip',
     ],
@@ -705,11 +853,31 @@ export const CUSTOM_SHOP_PART_CRATES: readonly PartsCrate[] = [
     manifest: [
       'Four rims, tires, lugs and valve stems',
       'Hub-centric adapters and knock-offs',
-      'Headlight buckets and relays',
+      'Headlight buckets, relays and LED halos',
       'Chrome trim, mirrors and badges',
     ],
   },
 ] as const;
+
+const ALL_CARGO_CRATES: readonly PartsCrate[] = [
+  DONOR_SHELL_CRATE,
+  ...CUSTOM_SHOP_PART_CRATES,
+];
+
+export function getPartsCrate(id: CargoCrateId): PartsCrate {
+  return (
+    ALL_CARGO_CRATES.find((crate) => crate.id === id) ??
+    CUSTOM_SHOP_PART_CRATES[0]
+  );
+}
+
+/** The wrapped auction shell is unloaded before the parts crates. */
+export function getCargoSchedule(build: CustomShopBuild): CargoCrateId[] {
+  const parts = CUSTOM_SHOP_PART_CRATES.map((crate) => crate.id);
+  return build.donorSource === 'freight'
+    ? [DONOR_SHELL_CRATE.id, ...parts]
+    : parts;
+}
 
 export type CargoSupplyPhase =
   | 'waiting'
@@ -732,17 +900,22 @@ export interface CargoSupplyState {
   crateIndex: number;
   forkliftLeg: ForkliftLeg;
   forkliftProgress: number;
-  deliveredCrateIds: PartsCrateId[];
+  deliveredCrateIds: CargoCrateId[];
+  /** Crates loaded on this voyage, in unloading order. */
+  crateIds: CargoCrateId[];
 }
 
-export const CARGO_SHIP_STEAM_IN_SECONDS = 6;
-export const CARGO_FORKLIFT_LOAD_SECONDS = 1.5;
-export const CARGO_FORKLIFT_OUTBOUND_SECONDS = 5;
-export const CARGO_FORKLIFT_UNLOAD_SECONDS = 1.5;
-export const CARGO_FORKLIFT_INBOUND_SECONDS = 4;
-export const CARGO_SHIP_STEAM_OUT_SECONDS = 8;
+/** Crescent City is a three-minute run up the bayou in real time. */
+export const CARGO_SHIP_STEAM_IN_SECONDS = 180;
+export const CARGO_FORKLIFT_LOAD_SECONDS = 2.4;
+export const CARGO_FORKLIFT_OUTBOUND_SECONDS = 6;
+export const CARGO_FORKLIFT_UNLOAD_SECONDS = 2.4;
+export const CARGO_FORKLIFT_INBOUND_SECONDS = 4.5;
+export const CARGO_SHIP_STEAM_OUT_SECONDS = 14;
 
-export function createCargoSupplyState(): CargoSupplyState {
+export function createCargoSupplyState(
+  crateIds: CargoCrateId[] = getCargoSchedule(DEFAULT_CUSTOM_BUILD),
+): CargoSupplyState {
   return {
     phase: 'waiting',
     shipProgress: 0,
@@ -750,7 +923,22 @@ export function createCargoSupplyState(): CargoSupplyState {
     forkliftLeg: 'parked',
     forkliftProgress: 0,
     deliveredCrateIds: [],
+    crateIds: [...crateIds],
   };
+}
+
+export function getCargoEtaSeconds(cargo: CargoSupplyState): number {
+  if (cargo.phase === 'steaming_in') {
+    return Math.max(0, Math.round((1 - cargo.shipProgress) * CARGO_SHIP_STEAM_IN_SECONDS));
+  }
+  return 0;
+}
+
+export function formatCargoEta(seconds: number): string {
+  const safe = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(safe / 60);
+  const rest = safe % 60;
+  return `${minutes}:${rest.toString().padStart(2, '0')}`;
 }
 
 export type CargoSupplyEvent =
@@ -776,9 +964,9 @@ function forkliftLegSeconds(leg: ForkliftLeg): number {
 }
 
 /**
- * Drives the Crescent City parts barge and the shop forklift. The barge arrives
- * with four crates; each one is forklifted from the pier to the bay before the
- * matching restoration stage can finish. Timing is per real second.
+ * Drives the Crescent City parts barge and the shop forklift. The voyage takes
+ * three minutes; each crate is then forklifted from the pier to the bay before
+ * the matching restoration stage can finish. Timing is per real second.
  */
 export function advanceCargoSupply(
   cargo: CargoSupplyState,
@@ -807,7 +995,7 @@ export function advanceCargoSupply(
     }
 
     if (cargo.phase === 'at_dock') {
-      const crate = CUSTOM_SHOP_PART_CRATES[cargo.crateIndex];
+      const crate = getPartsCrate(cargo.crateIds[cargo.crateIndex]);
       if (!crate) {
         cargo.phase = 'steaming_out';
         cargo.shipProgress = 0;
@@ -847,8 +1035,8 @@ export function advanceCargoSupply(
         }
         cargo.crateIndex++;
         events.push({ type: 'crate_delivered', crate });
-        const next = CUSTOM_SHOP_PART_CRATES[cargo.crateIndex];
-        if (!next) {
+        const nextId = cargo.crateIds[cargo.crateIndex];
+        if (!nextId) {
           cargo.forkliftLeg = 'to_ship';
           cargo.phase = 'steaming_out';
           cargo.shipProgress = 0;
@@ -885,14 +1073,14 @@ export function advanceCargoSupply(
 }
 
 export function getCargoSupplyLabel(cargo: CargoSupplyState): string {
-  const crate = CUSTOM_SHOP_PART_CRATES[cargo.crateIndex];
+  const crate = getPartsCrate(cargo.crateIds[cargo.crateIndex]);
   switch (cargo.phase) {
     case 'waiting':
       return 'Freight barge waiting at the Crescent City docks';
     case 'steaming_in':
-      return `Crescent City parts barge coming up the bayou · ${Math.round(
-        cargo.shipProgress * 100,
-      )}%`;
+      return `Crescent City barge coming up the bayou · ETA ${formatCargoEta(
+        getCargoEtaSeconds(cargo),
+      )}`;
     case 'at_dock': {
       if (!crate) return 'Barge empty — casting off';
       switch (cargo.forkliftLeg) {
@@ -919,18 +1107,24 @@ export function getCargoSupplyLabel(cargo: CargoSupplyState): string {
 
 export type RestorationStageId =
   | 'intake'
+  | 'strip_trim'
+  | 'strip_doors'
+  | 'strip_panels'
+  | 'engine_pull'
   | 'suspension'
   | 'hydraulics'
   | 'undercarriage'
   | 'body'
   | 'paint'
+  | 'engine_install'
   | 'interior'
   | 'steering'
   | 'roof'
   | 'rims'
   | 'alignment'
   | 'lights'
-  | 'detail';
+  | 'detail'
+  | 'road_test';
 
 export interface RestorationStage {
   id: RestorationStageId;
@@ -961,6 +1155,58 @@ export const CUSTOM_RESTORATION_STAGES: readonly RestorationStage[] = [
     workerOffsets: [
       { x: -2.15, z: 0.55 },
       { x: 2.15, z: -0.45 },
+    ],
+  },
+  {
+    id: 'strip_trim',
+    label: 'Strip glass, seats, carpet & years of trash',
+    detail:
+      'Duke bags the leaves, animal droppings and old food, then pulls the glass, seats, carpet and dash.',
+    duration: 10,
+    particleColor: 0x6b7f4a,
+    announce: true,
+    workerOffsets: [
+      { x: -1.9, z: 0.9 },
+      { x: 1.9, z: -0.7 },
+    ],
+  },
+  {
+    id: 'strip_doors',
+    label: 'Unbolt doors, trunk lid & hood',
+    detail:
+      'Doors unplugged and lifted off, trunk lid and hood unbolted, hinges and latches bagged.',
+    duration: 9,
+    particleColor: 0xb08b57,
+    announce: false,
+    workerOffsets: [
+      { x: -2.3, z: 0.3 },
+      { x: 2.3, z: 0.3 },
+    ],
+  },
+  {
+    id: 'strip_panels',
+    label: 'Cut fenders, quarter panels & core support',
+    detail:
+      'Fenders and quarter skins cut away, core support unbolted and the rusted rockers exposed.',
+    duration: 10,
+    particleColor: 0x9a6a43,
+    announce: false,
+    workerOffsets: [
+      { x: -2.25, z: 1.5 },
+      { x: 2.25, z: -1.5 },
+    ],
+  },
+  {
+    id: 'engine_pull',
+    label: 'Pull the seized engine & transmission',
+    detail:
+      'Hood off, cooling system drained and the seized engine and transmission lifted out on the hoist.',
+    duration: 8,
+    particleColor: 0x57534e,
+    announce: true,
+    workerOffsets: [
+      { x: -2.2, z: 2.0 },
+      { x: 2.2, z: 2.0 },
     ],
   },
   {
@@ -1031,6 +1277,20 @@ export const CUSTOM_RESTORATION_STAGES: readonly RestorationStage[] = [
     workerOffsets: [
       { x: -2.5, z: 0.1 },
       { x: 2.5, z: 1.4 },
+    ],
+  },
+  {
+    id: 'engine_install',
+    label: 'Install engine, cooling & exhaust',
+    detail:
+      'The rebuilt engine and transmission go back in on new mounts with radiator, hoses, harness and exhaust.',
+    duration: 8,
+    particleColor: 0x64748b,
+    announce: true,
+    requiresCrate: 'engine_drivetrain',
+    workerOffsets: [
+      { x: -2.1, z: 2.0 },
+      { x: 2.1, z: 0.6 },
     ],
   },
   {
@@ -1119,9 +1379,9 @@ export const CUSTOM_RESTORATION_STAGES: readonly RestorationStage[] = [
   },
   {
     id: 'detail',
-    label: 'Rim detail, QC & test drive',
+    label: 'Rim detail, fluids & final QC',
     detail:
-      'Rims polished, interior detailed, fluids topped off and a short test drive around the bayou.',
+      'Rims polished, interior detailed, fluids topped off and every switch, light and hydraulic function checked.',
     duration: 4,
     particleColor: 0xf59e0b,
     announce: false,
@@ -1129,6 +1389,20 @@ export const CUSTOM_RESTORATION_STAGES: readonly RestorationStage[] = [
     workerOffsets: [
       { x: -2.4, z: -0.2 },
       { x: 2.4, z: -0.2 },
+    ],
+  },
+  {
+    id: 'road_test',
+    label: 'Test drive around the shop road',
+    detail:
+      'Rae takes the finished car out of the bay, around the shop road and back—brakes, alignment and hydraulics checked under load.',
+    duration: 10,
+    particleColor: 0xfacc15,
+    announce: true,
+    requiresCrate: 'wheels_lights',
+    workerOffsets: [
+      { x: -2.5, z: 7.4 },
+      { x: -2.1, z: 7.0 },
     ],
   },
 ] as const;
@@ -1149,6 +1423,7 @@ export type CustomShopPhase =
   | 'outbound'
   | 'loading'
   | 'inbound'
+  | 'waiting_donor'
   | 'restoring'
   | 'complete';
 
@@ -1170,6 +1445,7 @@ export type CustomShopEvent =
   | { type: 'departed' }
   | { type: 'donor_loaded' }
   | { type: 'returned' }
+  | { type: 'donor_shell_landed' }
   | { type: 'stage_started'; stage: RestorationStage }
   | { type: 'stage_finished'; stage: RestorationStage }
   | { type: 'complete' }
@@ -1186,7 +1462,7 @@ export function createCustomShopState(
     completed: false,
     startedAt: null,
     build: { ...build },
-    cargo: createCargoSupplyState(),
+    cargo: createCargoSupplyState(getCargoSchedule(build)),
     waitingForParts: false,
     waitingForCrateId: null,
     stageAnnounced: false,
@@ -1200,10 +1476,10 @@ export function beginCustomShopRestoration(
 ): boolean {
   if (state.phase !== 'idle' || state.completed) return false;
   if (build) state.build = { ...state.build, ...build };
-  state.phase = 'outbound';
+  state.phase = state.build.donorSource === 'freight' ? 'waiting_donor' : 'outbound';
   state.tripProgress = 0;
   state.startedAt = startedAt;
-  state.cargo = createCargoSupplyState();
+  state.cargo = createCargoSupplyState(getCargoSchedule(state.build));
   state.cargo.phase = 'steaming_in';
   state.waitingForParts = false;
   state.waitingForCrateId = null;
@@ -1222,11 +1498,9 @@ export function markCustomShopComplete(state: CustomShopState): void {
   state.stageAnnounced = false;
   state.cargo.phase = 'done';
   state.cargo.shipProgress = 1;
-  state.cargo.crateIndex = CUSTOM_SHOP_PART_CRATES.length;
+  state.cargo.crateIndex = state.cargo.crateIds.length;
   state.cargo.forkliftLeg = 'parked';
-  state.cargo.deliveredCrateIds = CUSTOM_SHOP_PART_CRATES.map(
-    (crate) => crate.id,
-  );
+  state.cargo.deliveredCrateIds = [...state.cargo.crateIds];
 }
 
 /**
@@ -1247,8 +1521,29 @@ export function advanceCustomShopState(
 
   let remaining = step;
 
+  // A Crescent City auction shell has no cave tow: the car only appears once
+  // the wrapped shell has been forklifted off the barge and unloaded.
+  if (
+    state.phase === 'waiting_donor' &&
+    state.cargo.deliveredCrateIds.includes('donor_shell')
+  ) {
+    state.phase = 'restoring';
+    state.stageIndex = 0;
+    state.stageProgress = 0;
+    state.stageAnnounced = false;
+    state.waitingForParts = false;
+    state.waitingForCrateId = null;
+    events.push({ type: 'donor_shell_landed' });
+  }
+
   while (remaining > 0) {
-    if (state.phase === 'idle' || state.phase === 'complete') break;
+    if (
+      state.phase === 'idle' ||
+      state.phase === 'complete' ||
+      state.phase === 'waiting_donor'
+    ) {
+      break;
+    }
 
     if (state.phase === 'outbound') {
       const needed = (1 - state.tripProgress) * CUSTOM_SHOP_TRIP_OUT_SECONDS;
@@ -1355,6 +1650,9 @@ export function getCustomShopStage(
 export function getCustomShopOverallProgress(state: CustomShopState): number {
   if (state.phase === 'idle') return 0;
   if (state.phase === 'complete') return 1;
+  if (state.phase === 'waiting_donor') {
+    return 0.02 + state.cargo.shipProgress * 0.18;
+  }
   if (state.phase === 'outbound') return state.tripProgress * 0.1;
   if (state.phase === 'loading') return 0.1 + state.tripProgress * 0.04;
   if (state.phase === 'inbound') return 0.14 + state.tripProgress * 0.12;
@@ -1376,6 +1674,10 @@ export function getCustomShopPhaseLabel(state: CustomShopState): string {
       return 'Loading a donor from the cave junkyard';
     case 'inbound':
       return 'Towing the donor back to Bayou Royal Customs';
+    case 'waiting_donor':
+      return `Waiting for the wrapped auction shell · barge ETA ${formatCargoEta(
+        getCargoEtaSeconds(state.cargo),
+      )}`;
     case 'complete':
       return 'Bayou Royal restoration complete';
     case 'restoring': {
@@ -1414,9 +1716,133 @@ export function getCustomShopLiftOffset(state: CustomShopState): number {
 }
 
 export function isCustomShopTrunkOpen(state: CustomShopState): boolean {
+  if (state.phase === 'complete') return false;
   if (state.phase !== 'restoring') return false;
   const stage = getCustomShopStage(state);
-  return stage?.id === 'hydraulics' || stage?.id === 'interior';
+  return (
+    stage?.id === 'strip_doors' ||
+    stage?.id === 'hydraulics' ||
+    stage?.id === 'interior'
+  );
+}
+
+export interface CustomShopShellRemoval {
+  trimOff: boolean;
+  doorsOff: boolean;
+  panelsOff: boolean;
+  engineOut: boolean;
+  hoodOpen: boolean;
+  trunkOpen: boolean;
+}
+
+/**
+ * Tells the renderer which bolt-on parts are currently off the donor. Real
+ * teardown order: glass and interior first, then doors/trunk/hood, then the
+ * unboltable fenders and quarter skins, then the engine and transmission.
+ */
+export function getCustomShopShellRemoval(
+  state: CustomShopState,
+): CustomShopShellRemoval {
+  const stage = getCustomShopStage(state);
+  const indexOf = (id: RestorationStageId) =>
+    CUSTOM_RESTORATION_STAGES.findIndex((entry) => entry.id === id);
+  const restoring = state.phase === 'restoring';
+  const index = state.stageIndex;
+  const between = (start: RestorationStageId, end: RestorationStageId) =>
+    restoring && index > indexOf(start) && index < indexOf(end);
+  return {
+    trimOff: between('strip_trim', 'interior'),
+    doorsOff: between('strip_doors', 'body'),
+    panelsOff: between('strip_panels', 'body'),
+    engineOut: between('engine_pull', 'engine_install'),
+    hoodOpen:
+      restoring &&
+      (stage?.id === 'strip_doors' ||
+        stage?.id === 'strip_panels' ||
+        stage?.id === 'engine_pull'),
+    trunkOpen: isCustomShopTrunkOpen(state),
+  };
+}
+
+export type CustomShopToolKind =
+  | 'hammer'
+  | 'wrench'
+  | 'spray'
+  | 'needle'
+  | 'polish'
+  | 'none';
+
+/** Each stage uses the tool a real tech would actually be holding. */
+export function getCustomShopWorkerTool(
+  stage: RestorationStage | undefined,
+): CustomShopToolKind {
+  switch (stage?.id) {
+    case 'strip_trim':
+      return 'needle';
+    case 'strip_doors':
+    case 'suspension':
+    case 'hydraulics':
+    case 'engine_pull':
+    case 'engine_install':
+    case 'steering':
+    case 'rims':
+    case 'alignment':
+    case 'lights':
+      return 'wrench';
+    case 'strip_panels':
+    case 'undercarriage':
+    case 'body':
+      return 'hammer';
+    case 'paint':
+      return 'spray';
+    case 'roof':
+      return 'needle';
+    case 'detail':
+      return 'polish';
+    default:
+      return 'none';
+  }
+}
+
+/** Local space loop for the final road test, in front of the bay. */
+export const CUSTOM_SHOP_TEST_DRIVE_POINTS: readonly {
+  x: number;
+  z: number;
+}[] = [
+  { x: 0, z: 0.4 },
+  { x: 0, z: 6.9 },
+  { x: -3.6, z: 8.2 },
+  { x: -4.3, z: 5.3 },
+  { x: 0, z: 4.7 },
+  { x: 4.3, z: 5.3 },
+  { x: 3.6, z: 8.2 },
+  { x: 0, z: 6.9 },
+  { x: 0, z: 0.4 },
+];
+
+export function isCustomShopTestDrive(state: CustomShopState): boolean {
+  return state.phase === 'restoring' && getCustomShopStage(state)?.id === 'road_test';
+}
+
+export function getCustomShopTestDrivePoint(progress: number): {
+  x: number;
+  z: number;
+  heading: number;
+} {
+  const clamped = Math.min(0.999, Math.max(0, progress));
+  const segments = CUSTOM_SHOP_TEST_DRIVE_POINTS.length - 1;
+  const raw = clamped * segments;
+  const index = Math.min(segments - 1, Math.floor(raw));
+  const t = raw - index;
+  const from = CUSTOM_SHOP_TEST_DRIVE_POINTS[index];
+  const to = CUSTOM_SHOP_TEST_DRIVE_POINTS[index + 1];
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  return {
+    x: from.x + dx * t,
+    z: from.z + dz * t,
+    heading: Math.atan2(dx, dz),
+  };
 }
 
 export function areCustomShopWheelsRemoved(state: CustomShopState): boolean {
@@ -1443,8 +1869,12 @@ export interface RestorationShopHudState {
   waitingForCrateId: PartsCrateId | null;
   cargoLabel: string;
   cargoPhase: CargoSupplyPhase;
+  cargoEtaSeconds: number;
+  cargoEtaLabel: string;
   forkliftLeg: ForkliftLeg;
-  deliveredCrateIds: PartsCrateId[];
+  deliveredCrateIds: CargoCrateId[];
+  cargoCrateCount: number;
+  donorSource: DonorSource;
   completed: boolean;
   started: boolean;
 }
@@ -1469,8 +1899,12 @@ export function getRestorationShopHudState(
     waitingForCrateId: state.waitingForCrateId,
     cargoLabel: getCargoSupplyLabel(state.cargo),
     cargoPhase: state.cargo.phase,
+    cargoEtaSeconds: getCargoEtaSeconds(state.cargo),
+    cargoEtaLabel: formatCargoEta(getCargoEtaSeconds(state.cargo)),
     forkliftLeg: state.cargo.forkliftLeg,
     deliveredCrateIds: [...state.cargo.deliveredCrateIds],
+    cargoCrateCount: state.cargo.crateIds.length,
+    donorSource: state.build.donorSource,
     completed: state.completed,
     started: state.phase !== 'idle',
   };

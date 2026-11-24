@@ -355,6 +355,7 @@ import {
   SkyCelestialHandles,
 } from '../world/models';
 import { PirateCinematicRig } from '../world/pirateCinematicRig';
+import { applyCustomShopDonorDamage } from '../world/customCarShop';
 import { NavigatorCompanionController } from '../systems/navigatorCompanionSystem';
 import { sampleNavigatorFarewell } from '../systems/navigatorFarewellCinematic';
 import {
@@ -442,6 +443,7 @@ import {
   CUSTOM_SHOP_ROUTE,
   CUSTOM_SHOP_VEHICLE_ID,
   DONOR_CARS,
+  DONOR_SOURCES,
   HEADLIGHT_OPTIONS,
   INTERIOR_OPTIONS,
   PAINT_OPTIONS,
@@ -456,6 +458,10 @@ import {
   getCargoSupplyLabel,
   getCustomShopFreightRoutePoint,
   getCustomShopLiftOffset,
+  getCustomShopShellRemoval,
+  getCustomShopTestDrivePoint,
+  getCustomShopWorkerTool,
+  isCustomShopTestDrive,
   getCustomShopOverallProgress,
   getCustomShopPhaseLabel,
   getCustomShopShipRoutePoint,
@@ -18241,6 +18247,7 @@ export class GameEngine {
     const state = this.customShopState;
     if (state.phase !== 'idle' || state.completed) return false;
     const catalog: Record<CustomShopBuildOptionKey, readonly { id: string }[]> = {
+      donorSource: DONOR_SOURCES,
       donorCarId: DONOR_CARS,
       paintId: PAINT_OPTIONS,
       rimId: RIM_OPTIONS,
@@ -18263,18 +18270,29 @@ export class GameEngine {
     if (!beginCustomShopRestoration(state, this.elapsed, state.build)) return false;
     const shop = this.world?.customCarShop;
     if (shop) {
-      // The lift stays empty until the tow truck actually brings the donor in.
+      // The lift stays empty until the tow truck or barge actually brings the
+      // donor in. Damage matches the car chosen on the build sheet.
       shop.liftCar.visible = false;
+      shop.liftCar.position.set(0, 0.46, 0.35);
+      shop.liftCar.rotation.set(0, 0, 0);
       shop.liftPlatform.visible = true;
       shop.towDonor.visible = false;
+      applyCustomShopDonorDamage(shop, resolveCustomShopBuild(state.build).damage);
       this.setCustomShopStatus(shop, state);
     }
     this.customShopStatusKey = '';
     const resolved = resolveCustomShopBuild(state.build);
-    this.toast(
-      `Duke & Rae are rolling out to Cave 12 for a ${resolved.donor.name}. Build sheet: ${resolved.paint.label}, ${resolved.rims.label}, ${resolved.steeringWheel.label}, ${resolved.roof.label}.`,
-      'craft',
-    );
+    if (resolved.build.donorSource === 'freight') {
+      this.toast(
+        `Build sheet filed for a wrapped ${resolved.donor.name} auction shell. Duke is waiting on the Crescent City barge — three-minute run up the bayou — while Rae fuels the forklift.`,
+        'craft',
+      );
+    } else {
+      this.toast(
+        `Duke & Rae are rolling out to Cave 12 for a ${resolved.donor.name}. Build sheet: ${resolved.paint.label}, ${resolved.rims.label}, ${resolved.steeringWheel.label}, ${resolved.roof.label}. It needs ${resolved.damage.summary.toLowerCase()}`,
+        'craft',
+      );
+    }
     this.emitHud();
     return true;
   }
@@ -18352,6 +18370,8 @@ export class GameEngine {
     shop.cargoShip.visible = false;
     shop.forklift.visible = false;
     shop.forkliftPallet.visible = false;
+    shop.forkliftShellPallet.visible = false;
+    shop.wrappedShell.visible = true;
     shop.partCrates.forEach((crate) => {
       crate.visible = false;
     });
@@ -18397,14 +18417,22 @@ export class GameEngine {
       shop.cargoShip.rotation.z = Math.sin(this.elapsed * 0.75) * 0.008;
     }
 
-    const forkliftActive = active && cargo.phase !== 'waiting';
+    const forkliftActive =
+      active && (cargo.phase === 'at_dock' || cargo.phase === 'steaming_out');
     shop.forklift.visible = forkliftActive;
     const carrying =
       cargo.forkliftLeg === 'to_shop' || cargo.forkliftLeg === 'unloading';
     const busyOnForks =
       cargo.forkliftLeg === 'loading' || cargo.forkliftLeg === 'unloading';
-    shop.forkliftPallet.visible = carrying ||
-      (cargo.forkliftLeg === 'loading' && cargo.forkliftProgress > 0.6);
+    const currentCrateId = cargo.crateIds[cargo.crateIndex];
+    const handlingShell = currentCrateId === 'donor_shell';
+    const palletVisible =
+      carrying || (cargo.forkliftLeg === 'loading' && cargo.forkliftProgress > 0.6);
+    shop.forkliftShellPallet.visible = handlingShell && palletVisible;
+    shop.forkliftPallet.visible = !handlingShell && palletVisible;
+    // The wrapped shell disappears from the pier once the forklift has it.
+    const shellDelivered = cargo.deliveredCrateIds.includes('donor_shell');
+    shop.wrappedShell.visible = !shellDelivered && !(handlingShell && palletVisible);
     const forkTarget = busyOnForks ? 0.62 : carrying ? 0.34 : 0.24;
     shop.forkliftForks.position.y = THREE.MathUtils.lerp(
       shop.forkliftForks.position.y,
@@ -18468,30 +18496,90 @@ export class GameEngine {
     state: CustomShopState,
     dt: number,
   ): void {
-    const liftTarget = getCustomShopLiftOffset(state);
+    const stage = getCustomShopStage(state);
+    const testDrive = isCustomShopTestDrive(state);
+    const liftTarget = testDrive ? 0 : getCustomShopLiftOffset(state);
     shop.liftPlatform.position.y = THREE.MathUtils.lerp(
       shop.liftPlatform.position.y,
       liftTarget,
       Math.min(1, dt * 2.4),
     );
-    const carTarget = liftTarget > 0 ? 0.46 + liftTarget : 0.46;
-    shop.liftCar.position.y = THREE.MathUtils.lerp(
-      shop.liftCar.position.y,
-      carTarget,
-      Math.min(1, dt * 2.4),
-    );
-    if (shop.liftCarTrunk) {
-      shop.liftCarTrunk.rotation.x = THREE.MathUtils.lerp(
-        shop.liftCarTrunk.rotation.x,
-        isCustomShopTrunkOpen(state) ? 1.02 : 0,
+    const removal = getCustomShopShellRemoval(state);
+
+    if (testDrive) {
+      const point = getCustomShopTestDrivePoint(state.stageProgress);
+      shop.liftCar.position.set(point.x, 0.46, point.z);
+      shop.liftCar.rotation.y = point.heading;
+    } else {
+      const carTarget = liftTarget > 0 ? 0.46 + liftTarget : 0.46;
+      shop.liftCar.position.x = THREE.MathUtils.lerp(
+        shop.liftCar.position.x,
+        0,
+        Math.min(1, dt * 2.4),
+      );
+      shop.liftCar.position.z = THREE.MathUtils.lerp(
+        shop.liftCar.position.z,
+        0.35,
+        Math.min(1, dt * 2.4),
+      );
+      shop.liftCar.position.y = THREE.MathUtils.lerp(
+        shop.liftCar.position.y,
+        carTarget,
+        Math.min(1, dt * 2.4),
+      );
+      shop.liftCar.rotation.y = THREE.MathUtils.lerp(
+        shop.liftCar.rotation.y,
+        0,
+        Math.min(1, dt * 3),
+      );
+    }
+
+    if (shop.liftCarHood) {
+      shop.liftCarHood.rotation.x = THREE.MathUtils.lerp(
+        shop.liftCarHood.rotation.x,
+        removal.hoodOpen ? -1.15 : 0,
         Math.min(1, dt * 4),
       );
     }
+    if (shop.liftCarTrunk) {
+      shop.liftCarTrunk.rotation.x = THREE.MathUtils.lerp(
+        shop.liftCarTrunk.rotation.x,
+        removal.trunkOpen ? 1.02 : 0,
+        Math.min(1, dt * 4),
+      );
+    }
+    shop.liftCarDoors.forEach((door, index) => {
+      door.visible = !removal.doorsOff;
+      const open =
+        stage?.id === 'strip_doors'
+          ? Math.min(1, state.stageProgress * 1.6)
+          : 0;
+      door.rotation.y = THREE.MathUtils.lerp(
+        door.rotation.y,
+        (index === 0 ? 1 : -1) * 1.18 * open,
+        Math.min(1, dt * 3.5),
+      );
+    });
+    shop.liftCarFenders.forEach((fender) => {
+      fender.visible = !removal.panelsOff;
+    });
+    shop.liftCarQuarters.forEach((quarter) => {
+      quarter.visible = !removal.panelsOff;
+    });
+    if (shop.liftCarGlass) shop.liftCarGlass.visible = !removal.trimOff;
+    if (shop.liftCarEngine) shop.liftCarEngine.visible = !removal.engineOut;
+    const trashFlags = shop.liftCar.userData.trashFlags as
+      | { leaves: boolean; poop: boolean }
+      | undefined;
+    shop.liftCarTrash.forEach((group, index) => {
+      const allowed = index === 0 ? trashFlags?.leaves ?? true : trashFlags?.poop ?? true;
+      group.visible = allowed && !removal.trimOff;
+    });
+
     const wheelsOff = areCustomShopWheelsRemoved(state);
     shop.liftCarWheels.forEach((wheel) => {
       wheel.visible = !wheelsOff;
     });
-    const stage = getCustomShopStage(state);
     shop.hydraulicParts.visible = state.phase === 'restoring' && stage?.id === 'hydraulics';
     shop.stockSuspensionPile.visible =
       state.phase === 'restoring' && stage?.id === 'suspension';
@@ -18542,7 +18630,12 @@ export class GameEngine {
     shop: NonNullable<WorldHandles['customCarShop']>,
     state: CustomShopState,
   ): void {
-    if (state.phase === 'idle' || state.phase === 'restoring' || state.phase === 'complete') {
+    if (
+      state.phase === 'idle' ||
+      state.phase === 'waiting_donor' ||
+      state.phase === 'restoring' ||
+      state.phase === 'complete'
+    ) {
       this.placeCustomShopTruckAtHome(shop);
       return;
     }
@@ -18579,24 +18672,48 @@ export class GameEngine {
     state: CustomShopState,
     dt: number,
   ): void {
-    const travelling =
-      state.phase === 'outbound' ||
-      state.phase === 'loading' ||
-      state.phase === 'inbound';
+    const inCab = state.phase === 'outbound' || state.phase === 'inbound';
+    const loadingCave = state.phase === 'loading';
+    const waiting = state.phase === 'waiting_donor';
     const working = state.phase === 'restoring';
+    const testDrive = isCustomShopTestDrive(state);
     const stage = getCustomShopStage(state);
     const bayX = 0;
     const bayZ = 0.35;
+    const caveX = shop.cavePosition.x - shop.position.x;
+    const caveZ = shop.cavePosition.z - shop.position.z;
+    const caveLocalY = shop.cavePosition.y - shop.groundY;
+    const tool = working ? getCustomShopWorkerTool(stage) : 'wrench';
     for (let i = 0; i < shop.workers.length; i++) {
       const worker = shop.workers[i];
-      worker.group.visible = !travelling;
-      if (travelling) continue;
-      const offset = working && stage
-        ? stage.workerOffsets[i]
-        : { x: worker.baseX, z: worker.baseZ };
-      const targetX = working ? offset.x : worker.baseX;
-      const targetZ = working ? offset.z : worker.baseZ;
-      const smoothing = Math.min(1, dt * 2.8);
+      // Rae is behind the wheel on the final road test; Duke watches the road.
+      worker.group.visible = !inCab && !(testDrive && i === 1);
+      if (!worker.group.visible) continue;
+
+      let targetX: number;
+      let targetZ: number;
+      if (testDrive) {
+        targetX = i === 0 ? -4.6 : worker.baseX;
+        targetZ = i === 0 ? 6.6 : worker.baseZ;
+      } else if (loadingCave) {
+        targetX = caveX + (i === 0 ? -2.1 : 2.2) + Math.sin(this.elapsed * 0.45 + i) * 0.8;
+        targetZ = caveZ + 1.5 + Math.cos(this.elapsed * 0.35 + i) * 1.1;
+      } else if (waiting) {
+        targetX = worker.baseX + Math.sin(this.elapsed * 0.28 + i * 1.7) * 1.1;
+        targetZ = worker.baseZ + Math.cos(this.elapsed * 0.22 + i * 1.3) * 0.8;
+      } else if (working && stage) {
+        targetX = stage.workerOffsets[i].x;
+        targetZ = stage.workerOffsets[i].z;
+      } else {
+        targetX = worker.baseX;
+        targetZ = worker.baseZ;
+      }
+
+      const dx = targetX - worker.group.position.x;
+      const dz = targetZ - worker.group.position.z;
+      const distance = Math.hypot(dx, dz);
+      const walking = distance > 0.06;
+      const smoothing = Math.min(1, dt * (walking ? 3.4 : 2.8));
       worker.group.position.x = THREE.MathUtils.lerp(
         worker.group.position.x,
         targetX,
@@ -18607,23 +18724,56 @@ export class GameEngine {
         targetZ,
         smoothing,
       );
-      const faceYaw = Math.atan2(bayX - targetX, bayZ - targetZ);
+      const faceYaw = testDrive
+        ? Math.atan2(0 - targetX, 7.2 - targetZ)
+        : loadingCave
+          ? Math.atan2(caveX - targetX, caveZ - targetZ)
+          : Math.atan2(bayX - targetX, bayZ - targetZ);
       worker.group.rotation.y = THREE.MathUtils.lerp(
         worker.group.rotation.y,
         faceYaw,
         Math.min(1, dt * 5),
       );
-      const phase = this.elapsed * (working ? 5.6 : 1.15) + worker.phase;
-      const swing = Math.sin(phase);
-      const bounce = Math.abs(Math.sin(phase * 0.5));
-      worker.group.position.y = worker.baseY + (working ? bounce * 0.025 : 0);
-      worker.armR.rotation.x = working ? 0.28 + swing * 0.78 : Math.sin(phase) * 0.08;
-      worker.armL.rotation.x = working ? -0.18 - swing * 0.45 : -Math.sin(phase * 0.9) * 0.06;
-      worker.armR.rotation.z = working ? Math.sin(phase * 0.7) * 0.14 : 0;
-      worker.armL.rotation.z = working ? -Math.sin(phase * 0.8) * 0.12 : 0;
+
+      const walkPhase = this.elapsed * 9.5 + worker.phase * 2.1;
+      const workPhase = this.elapsed * 5.6 + worker.phase;
+      const swing = Math.sin(workPhase);
+      const bounce = Math.abs(Math.sin(workPhase * 0.5));
+      const groundOffset = loadingCave ? caveLocalY : 0;
+      worker.group.position.y =
+        groundOffset +
+        (walking
+          ? worker.baseY + Math.abs(Math.sin(walkPhase)) * 0.035
+          : worker.baseY + (working ? bounce * 0.025 : 0));
+      if (walking) {
+        worker.legL.rotation.x = Math.sin(walkPhase) * 0.62;
+        worker.legR.rotation.x = -Math.sin(walkPhase) * 0.62;
+        worker.armL.rotation.x = -Math.sin(walkPhase) * 0.42;
+        worker.armR.rotation.x = Math.sin(walkPhase) * 0.42;
+        worker.armL.rotation.z = 0;
+        worker.armR.rotation.z = 0;
+      } else if (working) {
+        worker.legL.rotation.x = 0;
+        worker.legR.rotation.x = 0;
+        worker.armR.rotation.x = 0.28 + swing * 0.78;
+        worker.armL.rotation.x = -0.18 - swing * 0.45;
+        worker.armR.rotation.z = Math.sin(workPhase * 0.7) * 0.14;
+        worker.armL.rotation.z = -Math.sin(workPhase * 0.8) * 0.12;
+      } else {
+        worker.legL.rotation.x = 0;
+        worker.legR.rotation.x = 0;
+        worker.armR.rotation.x = Math.sin(workPhase * 0.35) * 0.08;
+        worker.armL.rotation.x = -Math.sin(workPhase * 0.31) * 0.06;
+        worker.armR.rotation.z = 0;
+        worker.armL.rotation.z = 0;
+      }
       worker.head.rotation.y = working
-        ? Math.sin(phase * 0.31) * 0.16
+        ? Math.sin(workPhase * 0.31) * 0.16
         : Math.sin(this.elapsed * 0.7 + worker.phase) * 0.12;
+
+      for (const [kind, object] of Object.entries(worker.tools)) {
+        object.visible = kind === tool;
+      }
     }
   }
 
@@ -18645,10 +18795,25 @@ export class GameEngine {
         break;
       case 'returned':
         shop.liftCar.visible = true;
+        shop.liftCar.position.set(0, 0.46, 0.35);
+        shop.liftCar.rotation.set(0, 0, 0);
         shop.towDonor.visible = true;
         if (playerDistance < 60) {
           this.toast(
-            'The donor is on the lift. Duke and Rae are starting the frame-off restoration.',
+            'Duke winched the wrecked donor onto the lift. It has rust holes, dents and trash to deal with before the teardown starts.',
+            'craft',
+          );
+        }
+        break;
+      case 'donor_shell_landed':
+        shop.liftCar.visible = true;
+        shop.liftCar.position.set(0, 0.46, 0.35);
+        shop.liftCar.rotation.set(0, 0, 0);
+        shop.wrappedShell.visible = false;
+        shop.forkliftShellPallet.visible = false;
+        if (playerDistance < 90) {
+          this.toast(
+            'Rae set the plastic-wrapped auction shell on the lift — bare body and chassis on its timber tray, no engine. The parts crates are next.',
             'craft',
           );
         }
@@ -18686,7 +18851,9 @@ export class GameEngine {
         );
         if (playerDistance < 90) {
           this.toast(
-            `${event.crate.label} landed at the bay: ${event.crate.manifest.slice(0, 3).join(', ')}.`,
+            event.crate.id === 'donor_shell'
+              ? 'The wrapped auction shell and chassis are on the ground at the bay — Rae is cutting the shrink wrap.'
+              : `${event.crate.label} landed at the bay: ${event.crate.manifest.slice(0, 3).join(', ')}.`,
             'craft',
           );
         }
@@ -18706,6 +18873,9 @@ export class GameEngine {
         break;
       case 'complete':
         this.spawnCustomShopBuild();
+        shop.liftCar.visible = false;
+        shop.liftPlatform.visible = false;
+        shop.forkliftShellPallet.visible = false;
         break;
       default:
         break;
@@ -18728,12 +18898,14 @@ export class GameEngine {
           ? 'Winching the best donor shell onto the flatbed.'
           : state.phase === 'inbound'
             ? 'Towing the donor back to the shop for a frame-off build.'
+            : state.phase === 'waiting_donor'
+              ? 'Rae is fueling the forklift and staging the timber tray while the wrapped auction shell crosses from Crescent City.'
             : state.phase === 'complete'
               ? `${resolved.name} is finished and ready to drive.`
               : state.waitingForParts
                 ? getCargoSupplyLabel(state.cargo)
                 : stage?.detail ?? 'Final detail.';
-    const statusKey = `${state.phase}:${state.stageIndex}:${state.waitingForParts ? 1 : 0}:${Math.floor(progress * 100)}`;
+    const statusKey = `${state.phase}:${state.stageIndex}:${state.waitingForParts ? 1 : 0}:${Math.floor(progress * 100)}:${Math.floor(state.cargo.shipProgress * 100)}`;
     if (statusKey === this.customShopStatusKey) return;
     this.customShopStatusKey = statusKey;
     shop.setStatus(headline, detail, progress);

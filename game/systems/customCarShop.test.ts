@@ -10,11 +10,16 @@ import {
   CUSTOM_SHOP_HALF_WIDTH,
   CUSTOM_SHOP_PART_CRATES,
   CUSTOM_SHOP_TRIP_BACK_SECONDS,
+  CARGO_SHIP_STEAM_IN_SECONDS,
   CUSTOM_SHOP_TRIP_OUT_SECONDS,
   CUSTOM_SHOP_LOAD_SECONDS,
   CUSTOM_SHOP_WORKERS,
   DEFAULT_CUSTOM_BUILD,
   DONOR_CARS,
+  DONOR_DAMAGE,
+  DONOR_SHELL_CRATE,
+  DONOR_SOURCES,
+  ENGINE_DRIVETRAIN_CRATE,
   HEADLIGHT_OPTIONS,
   INTERIOR_OPTIONS,
   JUNKYARD_CAVE,
@@ -29,10 +34,17 @@ import {
   beginCustomShopRestoration,
   createCargoSupplyState,
   createCustomShopState,
+  formatCargoEta,
+  getCargoEtaSeconds,
+  getCargoSchedule,
   getCargoSupplyLabel,
+  getCustomShopShellRemoval,
+  getCustomShopTestDrivePoint,
+  getCustomShopWorkerTool,
   getCustomShopFreightRoutePoint,
   getCustomShopLiftOffset,
   getCustomShopOverallProgress,
+  isCustomShopTestDrive,
   isCustomShopTrunkOpen,
   isOnCustomShopFreightRoute,
   markCustomShopComplete,
@@ -90,6 +102,15 @@ test('the build sheet offers real donors, Daytons, chain wheels, roofs and inter
   assert.ok(PAINT_OPTIONS.length >= 4);
   assert.ok(HEADLIGHT_OPTIONS.length >= 3);
   assert.ok(UNDERCARRIAGE_OPTIONS.length >= 3);
+  assert.equal(DONOR_SOURCES.length, 2);
+  assert.ok(DONOR_SOURCES.some((source) => source.id === 'cave'));
+  assert.ok(DONOR_SOURCES.some((source) => source.id === 'freight'));
+  for (const donor of DONOR_CARS) {
+    const damage = DONOR_DAMAGE[donor.id];
+    assert.ok(damage.dents >= 2, `${donor.id} needs dents`);
+    assert.ok(damage.rustHoles >= 1, `${donor.id} needs rust holes`);
+    assert.ok(damage.summary.length > 20);
+  }
 });
 
 test('resolving a build carries the chosen paint, rims, wheel, roof and interior', () => {
@@ -116,6 +137,8 @@ test('resolving a build carries the chosen paint, rims, wheel, roof and interior
   assert.ok(resolved.name.includes('1964 Chevrolet Impala'));
   assert.ok(resolved.accessories.length >= 8);
   assert.equal(resolved.vehicleId, CUSTOM_DONK_BUILD.vehicleId);
+  assert.equal(resolved.donorSource.id, 'cave');
+  assert.equal(resolved.damage, DONOR_DAMAGE.impala_64);
 });
 
 test('restoration covers the real teardown, trunk hydraulics, undercarriage, interior, roof, rims, alignment and lights', () => {
@@ -147,15 +170,30 @@ test('restoration covers the real teardown, trunk hydraulics, undercarriage, int
     'alignment',
     'headlights',
     'rim detail',
+    'doors',
+    'quarter panels',
+    'engine',
+    'test drive',
   ]) {
     assert.ok(stageText.includes(requirement), `missing restoration stage: ${requirement}`);
   }
   assert.ok(CUSTOM_DONK_BUILD.accessories.length >= 8);
-  assert.equal(CUSTOM_RESTORATION_STAGES.length, 13);
+  assert.equal(CUSTOM_RESTORATION_STAGES.length, 19);
+  const firstGated = CUSTOM_RESTORATION_STAGES.findIndex(
+    (stage) => stage.requiresCrate !== undefined,
+  );
+  assert.ok(firstGated > 0);
   assert.ok(
-    CUSTOM_RESTORATION_STAGES.every((stage, index) =>
-      index === 0 ? stage.requiresCrate === undefined : Boolean(stage.requiresCrate),
+    CUSTOM_RESTORATION_STAGES.slice(0, firstGated).every(
+      (stage) => stage.requiresCrate === undefined,
     ),
+  );
+  assert.equal(
+    CUSTOM_RESTORATION_STAGES[CUSTOM_RESTORATION_STAGES.length - 1].id,
+    'road_test',
+  );
+  assert.ok(
+    CUSTOM_RESTORATION_STAGES.some((stage) => stage.requiresCrate === 'engine_drivetrain'),
   );
 });
 
@@ -182,21 +220,50 @@ test('the Crescent City barge moors on real water one forklift run from the shop
   assert.ok(Math.hypot(end.x - 95.4, end.z - 149.8) < 0.1);
 });
 
-test('cargo advances from the bayou mouth to four delivered crates and a departure', () => {
+test('the Crescent City crossing takes three minutes and lands five crates', () => {
+  assert.equal(CARGO_SHIP_STEAM_IN_SECONDS, 180);
   const cargo = createCargoSupplyState();
   cargo.phase = 'steaming_in';
-  const events = advanceCargoSupply(cargo, 200);
+  advanceCargoSupply(cargo, 60);
+  assert.ok(getCargoEtaSeconds(cargo) > 110);
+  assert.equal(formatCargoEta(125), '2:05');
+  assert.ok(getCargoSupplyLabel(cargo).includes('ETA 2:00'));
+
+  const events = advanceCargoSupply(cargo, 500);
   const delivered = events.filter((event) => event.type === 'crate_delivered');
+  assert.equal(CUSTOM_SHOP_PART_CRATES.length, 5);
   assert.equal(delivered.length, CUSTOM_SHOP_PART_CRATES.length);
   assert.deepEqual(
     cargo.deliveredCrateIds,
     CUSTOM_SHOP_PART_CRATES.map((crate) => crate.id),
   );
+  assert.ok(cargo.deliveredCrateIds.includes(ENGINE_DRIVETRAIN_CRATE.id));
   assert.equal(cargo.phase, 'done');
   assert.ok(events.some((event) => event.type === 'cargo_arrived'));
   assert.ok(events.some((event) => event.type === 'cargo_departed'));
   assert.ok(events.some((event) => event.type === 'cargo_done'));
   assert.equal(getCargoSupplyLabel(cargo).includes('cleared the bayou'), true);
+});
+
+test('a freight donor puts the wrapped shell on the barge before the parts', () => {
+  const freightBuild = { ...DEFAULT_CUSTOM_BUILD, donorSource: 'freight' as const };
+  const schedule = getCargoSchedule(freightBuild);
+  assert.equal(schedule[0], DONOR_SHELL_CRATE.id);
+  assert.equal(schedule.length, CUSTOM_SHOP_PART_CRATES.length + 1);
+
+  const state = createCustomShopState(freightBuild);
+  assert.equal(beginCustomShopRestoration(state, 0), true);
+  assert.equal(state.phase, 'waiting_donor');
+  assert.equal(state.cargo.phase, 'steaming_in');
+  assert.equal(state.cargo.crateIds[0], DONOR_SHELL_CRATE.id);
+
+  // The shell only appears after the three-minute crossing and unloading.
+  advanceCustomShopState(state, 180);
+  assert.equal(state.phase, 'waiting_donor');
+  const landed = advanceCustomShopState(state, 20);
+  assert.equal(state.phase, 'restoring');
+  assert.ok(landed.some((event) => event.type === 'donor_shell_landed'));
+  assert.ok(state.cargo.deliveredCrateIds.includes(DONOR_SHELL_CRATE.id));
 });
 
 test('one real second advances the salvage trip by one second, not a whole phase', () => {
@@ -224,7 +291,7 @@ test('the full cave retrieval and build waits on parts but always finishes', () 
 
   const seenStages = new Set<string>();
   let previousProgress = getCustomShopOverallProgress(state);
-  for (let i = 0; i < 300 && state.phase !== 'complete'; i++) {
+  for (let i = 0; i < 600 && state.phase !== 'complete'; i++) {
     const tick = advanceCustomShopState(state, 1);
     for (const event of tick) {
       if (event.type === 'stage_started') seenStages.add(event.stage.id);
@@ -239,7 +306,7 @@ test('the full cave retrieval and build waits on parts but always finishes', () 
   assert.equal(getCustomShopOverallProgress(state), 1);
   assert.equal(
     state.cargo.deliveredCrateIds.length,
-    CUSTOM_SHOP_PART_CRATES.length,
+    state.cargo.crateIds.length,
   );
   assert.deepEqual(
     [...seenStages],
@@ -304,6 +371,65 @@ test('marking a saved custom car complete restores the finished shop state', () 
   assert.equal(state.phase, 'complete');
   assert.equal(state.completed, true);
   assert.equal(state.cargo.phase, 'done');
-  assert.equal(state.cargo.deliveredCrateIds.length, CUSTOM_SHOP_PART_CRATES.length);
+  assert.equal(state.cargo.deliveredCrateIds.length, state.cargo.crateIds.length);
   assert.equal(advanceCustomShopState(state, 1).length, 0);
+});
+
+test('teardown removes trim, doors, panels and engine in a believable order', () => {
+  const state = createCustomShopState();
+  state.phase = 'restoring';
+  const indexOf = (id: string) =>
+    CUSTOM_RESTORATION_STAGES.findIndex((stage) => stage.id === id);
+
+  state.stageIndex = indexOf('intake');
+  let removal = getCustomShopShellRemoval(state);
+  assert.equal(removal.trimOff, false);
+  assert.equal(removal.doorsOff, false);
+  assert.equal(removal.panelsOff, false);
+  assert.equal(removal.engineOut, false);
+
+  state.stageIndex = indexOf('strip_doors');
+  removal = getCustomShopShellRemoval(state);
+  assert.equal(removal.hoodOpen, true);
+  assert.equal(removal.trunkOpen, true);
+  assert.equal(removal.doorsOff, false);
+
+  state.stageIndex = indexOf('engine_pull') + 1;
+  removal = getCustomShopShellRemoval(state);
+  assert.equal(removal.trimOff, true);
+  assert.equal(removal.doorsOff, true);
+  assert.equal(removal.panelsOff, true);
+  assert.equal(removal.engineOut, true);
+
+  state.stageIndex = indexOf('paint');
+  removal = getCustomShopShellRemoval(state);
+  assert.equal(removal.doorsOff, false);
+  assert.equal(removal.panelsOff, false);
+
+  state.stageIndex = indexOf('engine_install');
+  assert.equal(getCustomShopShellRemoval(state).engineOut, false);
+});
+
+test('workers hold the right tool and the finished car goes on a road test', () => {
+  const indexOf = (id: string) =>
+    CUSTOM_RESTORATION_STAGES.findIndex((stage) => stage.id === id);
+  const stageAt = (id: string) => CUSTOM_RESTORATION_STAGES[indexOf(id)];
+  assert.equal(getCustomShopWorkerTool(stageAt('strip_panels')), 'hammer');
+  assert.equal(getCustomShopWorkerTool(stageAt('hydraulics')), 'wrench');
+  assert.equal(getCustomShopWorkerTool(stageAt('paint')), 'spray');
+  assert.equal(getCustomShopWorkerTool(stageAt('detail')), 'polish');
+  assert.equal(getCustomShopWorkerTool(stageAt('road_test')), 'none');
+
+  const state = createCustomShopState();
+  state.phase = 'restoring';
+  state.stageIndex = indexOf('road_test');
+  state.stageProgress = 0.5;
+  assert.equal(isCustomShopTestDrive(state), true);
+  const point = getCustomShopTestDrivePoint(state.stageProgress);
+  assert.ok(Number.isFinite(point.x) && Number.isFinite(point.z));
+  assert.ok(Number.isFinite(point.heading));
+  assert.ok(
+    getCustomShopTestDrivePoint(0).z !== getCustomShopTestDrivePoint(0.5).z ||
+      getCustomShopTestDrivePoint(0).x !== getCustomShopTestDrivePoint(0.5).x,
+  );
 });
