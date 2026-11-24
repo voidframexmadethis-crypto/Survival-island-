@@ -364,6 +364,7 @@ import {
 import { WorldPerformanceManager } from '../systems/worldPerformanceManager';
 import { RealisticRainSystem } from '../world/realisticRainSystem';
 import { createMuzzleFlashTexture, createMuzzleSmokeTexture } from '../world/muzzleFx';
+import { resolveGunParticleProfile } from '../world/gunParticleFx';
 import {
   AUTUMN_GROVE_POS,
   BIOME_INFO,
@@ -654,6 +655,11 @@ interface PooledParticle {
   vz: number;
   life: number;
   maxLife: number;
+  /** Base size multiplier; debris clods are larger than powder sparks. */
+  size: number;
+  gravity: number;
+  /** Per-second velocity damping; hot sparks slow quickly in air. */
+  drag: number;
 }
 
 interface ActivePickup {
@@ -1449,6 +1455,11 @@ export class GameEngine {
     metalness: 0.85,
     roughness: 0.28,
   });
+  private shellCasingHullMat = new THREE.MeshStandardMaterial({
+    color: 0xb91c1c,
+    metalness: 0.15,
+    roughness: 0.62,
+  });
   private shellCasingPool: {
     mesh: THREE.Mesh;
     active: boolean;
@@ -1457,6 +1468,9 @@ export class GameEngine {
     rx: number;
     rz: number;
     life: number;
+    bounces: number;
+    bounceCooldown: number;
+    heavy: boolean;
   }[] = [];
   private shellCasingIdx = 0;
   private muzzleFlashGeo = new THREE.IcosahedronGeometry(0.14, 1);
@@ -1469,6 +1483,31 @@ export class GameEngine {
   });
   private muzzleFlashPool: { mesh: THREE.Mesh; life: number }[] = [];
   private muzzleFlashIdx = 0;
+  private muzzleBlastGeo = (() => {
+    const geo = new THREE.ConeGeometry(0.065, 0.42, 8, 1, true);
+    // Point the cone down -Z so it can be aimed with the shot direction.
+    geo.rotateX(-Math.PI / 2);
+    geo.translate(0, 0, -0.21);
+    return geo;
+  })();
+  private muzzleBlastMat = new THREE.MeshBasicMaterial({
+    color: 0xffd27a,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+  });
+  private muzzleBlastPool: {
+    mesh: THREE.Mesh;
+    life: number;
+    maxLife: number;
+    width: number;
+    length: number;
+  }[] = [];
+  private muzzleBlastIdx = 0;
+  private readonly fxForward = new THREE.Vector3(0, 0, -1);
   private muzzleLight: THREE.PointLight | null = null;
   private muzzleLightLife = 0;
   private muzzleFlashTex: THREE.CanvasTexture | null = null;
@@ -1687,6 +1726,13 @@ export class GameEngine {
     this.settings = settings;
     this.callbacks = callbacks;
     this.sound.configure(settings);
+    // Dev-only handle for the reload-audio regression check. Not exposed in
+    // production builds.
+    if (typeof window !== 'undefined' && process.env.NODE_ENV !== 'production') {
+      (
+        window as unknown as { __lostWorldSound?: SoundEngine }
+      ).__lostWorldSound = this.sound;
+    }
     // The live hull uses the fixed-step, playable crossing rather than the
     // wall-clock scenic route. Without this the visible ship sits on a
     // 48-hour leg and never reads as a moving ferry in a normal session.
@@ -2054,6 +2100,9 @@ export class GameEngine {
         vz: 0,
         life: 0,
         maxLife: 0.5,
+        size: 1,
+        gravity: 12,
+        drag: 0,
       });
     }
     this.particleInstanced.instanceMatrix.needsUpdate = true;
@@ -2075,6 +2124,9 @@ export class GameEngine {
         rx: 0,
         rz: 0,
         life: 0,
+        bounces: 0,
+        bounceCooldown: 0,
+        heavy: false,
       });
     }
     for (let i = 0; i < 4; i++) {
@@ -2083,6 +2135,20 @@ export class GameEngine {
       mesh.userData.ignoreLightingPass = true;
       this.scene.add(mesh);
       this.muzzleFlashPool.push({ mesh, life: 0 });
+    }
+    for (let i = 0; i < 6; i++) {
+      const material = this.muzzleBlastMat.clone();
+      const mesh = new THREE.Mesh(this.muzzleBlastGeo, material);
+      mesh.visible = false;
+      mesh.userData.ignoreLightingPass = true;
+      this.scene.add(mesh);
+      this.muzzleBlastPool.push({
+        mesh,
+        life: 0,
+        maxLife: 0.07,
+        width: 1,
+        length: 1,
+      });
     }
     // A single pooled flash light makes the barrel, hands and nearby foliage
     // catch the shot. It is added before shader pre-compilation so the light
@@ -9690,6 +9756,7 @@ export class GameEngine {
     this.reloadTimer = 0;
     this.reloadDuration = 0;
     this.reloadMode = null;
+    this.sound.cancelWeaponReload();
   }
 
   public reloadEquippedWeapon(): void {
@@ -9721,7 +9788,7 @@ export class GameEngine {
     this.reloadMode = spec.reloadMode;
     this.reloadDuration = spec.reloadTime;
     this.reloadTimer = spec.reloadTime;
-    this.sound.playReloadClick(spec.reloadMode === 'single');
+    this.sound.beginWeaponReload(eqId, spec.reloadMode);
     this.emitHud();
   }
 
@@ -9746,6 +9813,15 @@ export class GameEngine {
     }
 
     this.reloadTimer -= dt;
+    const reloadProgress =
+      this.reloadDuration > 0
+        ? Math.max(0, Math.min(1, 1 - this.reloadTimer / this.reloadDuration))
+        : 1;
+    this.sound.updateWeaponReload(
+      this.reloadingItemId,
+      spec.reloadMode,
+      reloadProgress,
+    );
     if (this.reloadTimer > 0) return;
 
     const currentMag = this.weaponMagazines.get(this.reloadingItemId) ?? 0;
@@ -9760,12 +9836,15 @@ export class GameEngine {
       this.removeItem('ammo', 1);
       const nextMag = currentMag + 1;
       this.weaponMagazines.set(this.reloadingItemId, nextMag);
-      this.sound.playReloadClick(true);
 
       if (nextMag < spec.magSize && this.getItemCount('ammo') > 0) {
+        // The shell stage already played as progress reached 1. Restart the
+        // timer; the sequencer replays only the per-shell stages next round.
         this.reloadDuration = spec.reloadTime;
         this.reloadTimer = spec.reloadTime;
       } else {
+        // Last round: close the pump, bolt, cylinder or break action.
+        this.sound.finishWeaponReload(this.reloadingItemId, spec.reloadMode);
         this.cancelReload();
       }
       this.emitHud();
@@ -9776,7 +9855,6 @@ export class GameEngine {
     if (needed > 0) {
       this.removeItem('ammo', needed);
       this.weaponMagazines.set(this.reloadingItemId, currentMag + needed);
-      this.sound.playReloadClick(false);
     }
     this.cancelReload();
     this.emitHud();
@@ -9848,57 +9926,72 @@ export class GameEngine {
     const sy = this.playerY + this.currentEyeHeight - 0.14 + _vec3A.y * barrelScale;
     const sz = this.playerZ + _vec3A.z * barrelScale + _vec3B.z * 0.18;
 
-    // Pooled muzzle flash + brass shell casing + pooled instanced burst
+    // Per-firearm muzzle signature: flash shape, powder smoke, burning
+    // grains, blast plume and the correct casing for the chambering.
+    const fx = resolveGunParticleProfile(spec.soundProfile);
+    const isShotgunBlast = spec.pelletCount > 1;
+    const flashSize = fx.flashSize * (0.9 + Math.random() * 0.24);
+
     if (this.muzzleFlashPool.length > 0) {
       const mf = this.muzzleFlashPool[this.muzzleFlashIdx % this.muzzleFlashPool.length];
       this.muzzleFlashIdx += 1;
       mf.mesh.position.set(sx, sy, sz);
       mf.mesh.rotation.set(Math.random() * 3, Math.random() * 3, 0);
-      mf.mesh.scale.setScalar(spec.pelletCount > 1 ? 1.55 : 1.12);
+      mf.mesh.scale.setScalar(flashSize * 1.2);
       mf.mesh.visible = true;
-      mf.life = 0.085;
+      mf.life = fx.flashLife;
     }
 
-    const isShotgunBlast = spec.pelletCount > 1;
-    const isLongGun =
-      spec.soundProfile === 'sniper' ||
-      spec.soundProfile === 'rifle' ||
-      spec.soundProfile === 'musket' ||
-      spec.soundProfile === 'lmg';
-    const flashColor =
-      spec.soundProfile === 'plasma'
-        ? 0x8ee8ff
-        : isShotgunBlast || spec.soundProfile === 'musket'
-          ? 0xffab4d
-          : isLongGun
-            ? 0xfff0c2
-            : 0xffe08a;
-    const flashSize =
-      (isShotgunBlast ? 1.35 : isLongGun ? 1.05 : 0.72) *
-      (0.9 + Math.random() * 0.24);
     if (this.muzzleGlowPool.length > 0) {
       const glow = this.muzzleGlowPool[this.muzzleGlowIdx % this.muzzleGlowPool.length];
       this.muzzleGlowIdx += 1;
       glow.sprite.position.set(sx, sy, sz);
-      glow.sprite.material.color.setHex(flashColor);
+      glow.sprite.material.color.setHex(fx.flashColor);
       glow.sprite.material.rotation = Math.random() * Math.PI * 2;
       glow.sprite.material.opacity = 0.95;
       glow.sprite.scale.setScalar(flashSize);
       glow.sprite.visible = true;
       glow.baseScale = flashSize * 1.18;
-      glow.maxLife = 0.085 + Math.random() * 0.045;
+      glow.maxLife = fx.flashLife + Math.random() * 0.03;
       glow.life = glow.maxLife;
     }
+
+    // A real muzzle flame is a forward cone, not a ball. The cone is aimed
+    // down the bore and expands slightly as it fades.
+    if (this.muzzleBlastPool.length > 0 && this.effectiveParticleScale > 0.15) {
+      const blast = this.muzzleBlastPool[this.muzzleBlastIdx % this.muzzleBlastPool.length];
+      this.muzzleBlastIdx += 1;
+      const width = flashSize * 1.6;
+      const length = fx.flashLength * (0.9 + Math.random() * 0.2);
+      blast.mesh.position.set(
+        sx + _vec3A.x * 0.015,
+        sy + _vec3A.y * 0.015,
+        sz + _vec3A.z * 0.015,
+      );
+      blast.mesh.quaternion.setFromUnitVectors(this.fxForward, _vec3A);
+      blast.mesh.scale.set(width, width, length);
+      blast.mesh.visible = true;
+      blast.width = width;
+      blast.length = length;
+      blast.maxLife = fx.flashLife * (0.85 + Math.random() * 0.3);
+      blast.life = blast.maxLife;
+      const material = blast.mesh.material as THREE.MeshBasicMaterial;
+      material.color.setHex(fx.flashColor);
+      material.opacity = 0.82;
+    }
+
     if (this.muzzleLight) {
       this.muzzleLight.position.set(sx + _vec3A.x * 0.18, sy + 0.03, sz + _vec3A.z * 0.18);
-      this.muzzleLight.color.setHex(flashColor);
-      this.muzzleLight.intensity = (isShotgunBlast ? 23 : isLongGun ? 18 : 12) * (0.85 + Math.random() * 0.3);
-      this.muzzleLightLife = 0.075;
+      this.muzzleLight.color.setHex(fx.flashColor);
+      this.muzzleLight.intensity =
+        fx.lightIntensity * (0.85 + Math.random() * 0.3);
+      this.muzzleLightLife = fx.flashLife * 1.1;
     }
+
     if (this.muzzleSmokePool.length > 0 && this.effectiveParticleScale > 0.05) {
-      const puffs = (isShotgunBlast ? 8 : spec.soundProfile === 'smg' ? 3 : 5) *
-        Math.max(0.5, this.effectiveParticleScale);
-      const puffCount = Math.round(puffs);
+      const puffCount = Math.round(
+        fx.smokePuffs * Math.max(0.5, this.effectiveParticleScale),
+      );
       for (let i = 0; i < puffCount; i++) {
         const puff = this.muzzleSmokePool[this.muzzleSmokeIdx % this.muzzleSmokePool.length];
         this.muzzleSmokeIdx += 1;
@@ -9908,53 +10001,129 @@ export class GameEngine {
           sz + _vec3A.z * (0.04 + Math.random() * 0.18),
         );
         puff.vel.set(
-          _vec3A.x * (0.6 + Math.random() * 1.4) + _vec3B.x * (Math.random() - 0.5) * 0.8,
-          0.22 + Math.random() * 0.55 + _vec3A.y * 0.6,
-          _vec3A.z * (0.6 + Math.random() * 1.4) + _vec3B.z * (Math.random() - 0.5) * 0.8,
+          _vec3A.x * (0.5 + Math.random() * 1.5) + _vec3B.x * (Math.random() - 0.5) * 0.9,
+          0.2 + Math.random() * 0.55 + _vec3A.y * 0.6,
+          _vec3A.z * (0.5 + Math.random() * 1.5) + _vec3B.z * (Math.random() - 0.5) * 0.9,
         );
-        puff.sprite.material.color.setHex(i === 0 ? 0xe3ddd2 : 0xb5b1aa);
-        puff.sprite.material.opacity = 0.52;
-        puff.baseScale = 0.2 + Math.random() * 0.2 + (isShotgunBlast ? 0.16 : 0);
+        puff.sprite.material.color.setHex(
+          i === 0 ? 0xe8e4dc : i === 1 ? fx.smokeColor : 0xa8a49d,
+        );
+        puff.sprite.material.opacity = fx.smokeOpacity;
+        puff.baseScale =
+          fx.smokeScale * (0.8 + Math.random() * 0.5) + (isShotgunBlast ? 0.08 : 0);
         puff.sprite.scale.setScalar(puff.baseScale);
         puff.sprite.visible = true;
-        puff.maxLife = 0.95 + Math.random() * 0.9;
+        puff.maxLife = fx.smokeLife * (0.8 + Math.random() * 0.45);
+        puff.life = puff.maxLife;
+      }
+      // Slow bore smoke keeps leaking out after the flash, especially for
+      // black powder, pump guns and long rifles.
+      const lingering = Math.round(
+        fx.barrelSmokePuffs * Math.max(0.4, this.effectiveParticleScale),
+      );
+      for (let i = 0; i < lingering; i++) {
+        const puff = this.muzzleSmokePool[this.muzzleSmokeIdx % this.muzzleSmokePool.length];
+        this.muzzleSmokeIdx += 1;
+        puff.sprite.position.set(
+          sx + _vec3A.x * (0.1 + Math.random() * 0.1),
+          sy + 0.02 + Math.random() * 0.05,
+          sz + _vec3A.z * (0.1 + Math.random() * 0.1),
+        );
+        puff.vel.set(
+          _vec3A.x * (0.12 + Math.random() * 0.25),
+          0.18 + Math.random() * 0.22,
+          _vec3A.z * (0.12 + Math.random() * 0.25),
+        );
+        puff.sprite.material.color.setHex(fx.smokeColor);
+        puff.sprite.material.opacity = fx.smokeOpacity * 0.55;
+        puff.baseScale = fx.smokeScale * 0.72;
+        puff.sprite.scale.setScalar(puff.baseScale);
+        puff.sprite.visible = true;
+        puff.maxLife = fx.smokeLife * 1.55;
         puff.life = puff.maxLife;
       }
     }
-    if (this.shellCasingPool.length > 0 && this.effectiveParticleScale > 0) {
+
+    // Real ejections throw the case out of the port, not straight up. Pistol
+    // brass is small, rifle brass is long, and a 12-gauge hull is fat red
+    // plastic that tumbles slower and lands heavier.
+    if (
+      fx.casing !== 'none' &&
+      this.shellCasingPool.length > 0 &&
+      this.effectiveParticleScale > 0
+    ) {
       const sc = this.shellCasingPool[this.shellCasingIdx % this.shellCasingPool.length];
       this.shellCasingIdx += 1;
       sc.active = true;
-      sc.life = 0.9;
+      sc.life = 2.8;
+      sc.bounces = 0;
+      sc.bounceCooldown = 0;
+      sc.heavy = fx.casing === 'shotgun';
       sc.pos.set(
         this.playerX + _vec3B.x * 0.24 + _vec3A.x * 0.35,
         this.playerY + this.currentEyeHeight - 0.14,
         this.playerZ + _vec3B.z * 0.24 + _vec3A.z * 0.35,
       );
       sc.vel.set(
-        _vec3B.x * (2.2 + Math.random() * 0.8),
-        1.8 + Math.random() * 0.8,
-        _vec3B.z * (2.2 + Math.random() * 0.8),
+        _vec3B.x * (fx.casingSpeed + Math.random() * 0.8) + _vec3A.x * 0.35,
+        (sc.heavy ? 1.35 : 1.8) + Math.random() * 0.8,
+        _vec3B.z * (fx.casingSpeed + Math.random() * 0.8) + _vec3A.z * 0.35,
       );
-      sc.rx = (Math.random() - 0.5) * 18;
-      sc.rz = (Math.random() - 0.5) * 18;
+      sc.rx = (Math.random() - 0.5) * (sc.heavy ? 14 : 22);
+      sc.rz = (Math.random() - 0.5) * (sc.heavy ? 14 : 22);
+      sc.mesh.material = sc.heavy ? this.shellCasingHullMat : this.shellCasingMat;
+      sc.mesh.scale.set(
+        fx.casingRadius / 0.014,
+        fx.casingLength / 0.048,
+        fx.casingRadius / 0.014,
+      );
       sc.mesh.position.copy(sc.pos);
       sc.mesh.visible = true;
+
+      // A trace of smoke follows a freshly ejected case out of the port.
+      if (
+        this.muzzleSmokePool.length > 0 &&
+        this.effectiveParticleScale > 0.25 &&
+        Math.random() < 0.7
+      ) {
+        const wisp = this.muzzleSmokePool[this.muzzleSmokeIdx % this.muzzleSmokePool.length];
+        this.muzzleSmokeIdx += 1;
+        wisp.sprite.position.set(sc.pos.x, sc.pos.y + 0.02, sc.pos.z);
+        wisp.vel.set(
+          _vec3B.x * 0.35 + (Math.random() - 0.5) * 0.2,
+          0.28 + Math.random() * 0.2,
+          _vec3B.z * 0.35 + (Math.random() - 0.5) * 0.2,
+        );
+        wisp.sprite.material.color.setHex(0xc8c4bc);
+        wisp.sprite.material.opacity = 0.16;
+        wisp.baseScale = 0.07;
+        wisp.sprite.scale.setScalar(wisp.baseScale);
+        wisp.sprite.visible = true;
+        wisp.maxLife = 0.55 + Math.random() * 0.3;
+        wisp.life = wisp.maxLife;
+      }
     }
 
-    this.spawnParticles(
+    // Burning powder grains and sparks are thrown forward with the bullet,
+    // not in a symmetrical fountain.
+    this.spawnParticleBurst(
       sx,
       sy,
       sz,
-      spec.soundProfile === 'plasma' ? 0x67e8f9 : 0xffbe3d,
-      spec.pelletCount > 1 ? 16 : 10,
-    );
-    this.spawnParticles(
-      sx + _vec3A.x * 0.08,
-      sy + 0.035,
-      sz + _vec3A.z * 0.08,
-      0xfff3c4,
-      4,
+      fx.sparkColor,
+      Math.round(fx.sparkCount * Math.max(0.45, this.effectiveParticleScale)),
+      {
+        dirX: _vec3A.x,
+        dirY: _vec3A.y,
+        dirZ: _vec3A.z,
+        speed: fx.sparkSpeed,
+        spread: 3.6,
+        lifeMin: fx.sparkLife * 0.55,
+        lifeMax: fx.sparkLife,
+        size: fx.sparkSize,
+        gravity: 7,
+        drag: 0.85,
+      },
     );
 
     const bulletLife = Math.max(0.8, spec.range / Math.max(40, spec.muzzleSpeed));
@@ -11157,6 +11326,85 @@ export class GameEngine {
       const life = 0.45 + Math.random() * 0.25;
       p.life = life;
       p.maxLife = life;
+      p.size = 1;
+      p.gravity = 12;
+      p.drag = 0;
+      this.particleInstanced.setColorAt(idx, _scratchColorA);
+    }
+    if (this.particleInstanced.instanceColor) {
+      this.particleInstanced.instanceColor.needsUpdate = true;
+    }
+  }
+
+  /**
+   * Pooled particle burst with direction, spread and per-grain mass. Used for
+   * muzzle sparks, dirt clods and metal splash so they arc differently instead
+   * of all sharing one upward fountain.
+   */
+  private spawnParticleBurst(
+    x: number,
+    y: number,
+    z: number,
+    colorHex: number,
+    count: number,
+    opts: {
+      dirX?: number;
+      dirY?: number;
+      dirZ?: number;
+      speed?: number;
+      spread?: number;
+      upBias?: number;
+      lifeMin?: number;
+      lifeMax?: number;
+      size?: number;
+      gravity?: number;
+      drag?: number;
+    },
+  ): void {
+    if (this.effectiveParticleScale <= 0 || !this.particleInstanced) return;
+    const scaledCount = Math.max(1, Math.round(count * this.effectiveParticleScale));
+    const dirX = opts.dirX ?? 0;
+    const dirY = opts.dirY ?? 0;
+    const dirZ = opts.dirZ ?? 0;
+    const directional = dirX !== 0 || dirY !== 0 || dirZ !== 0;
+    const speed = opts.speed ?? 2.5;
+    const spread = opts.spread ?? 2.2;
+    const upBias = opts.upBias ?? 0.6;
+    const lifeMin = opts.lifeMin ?? 0.28;
+    const lifeMax = Math.max(lifeMin, opts.lifeMax ?? 0.55);
+    const size = opts.size ?? 1;
+    const gravity = opts.gravity ?? 12;
+    const drag = opts.drag ?? 0;
+    this.hasActiveParticles = true;
+    _scratchColorA.setHex(colorHex);
+    for (let i = 0; i < scaledCount; i++) {
+      const idx = this.particleWriteIdx;
+      this.particleWriteIdx = (this.particleWriteIdx + 1) % MAX_POOLED_PARTICLES;
+      const p = this.particlePool[idx];
+      p.active = true;
+      p.x = x;
+      p.y = y;
+      p.z = z;
+      if (directional) {
+        p.vx = dirX * speed + (Math.random() - 0.5) * spread;
+        p.vy = dirY * speed + Math.random() * upBias + (Math.random() - 0.5) * spread * 0.3;
+        p.vz = dirZ * speed + (Math.random() - 0.5) * spread;
+      } else {
+        // Radial spray for an impact: a cone around the surface, biased up.
+        const theta = Math.random() * Math.PI * 2;
+        const cosPhi = Math.random() * 2 - 1;
+        const sinPhi = Math.sqrt(Math.max(0, 1 - cosPhi * cosPhi));
+        const grainSpeed = speed * (0.45 + Math.random() * 0.8);
+        p.vx = Math.cos(theta) * sinPhi * grainSpeed + (Math.random() - 0.5) * spread * 0.5;
+        p.vy = Math.abs(cosPhi) * grainSpeed + Math.random() * upBias;
+        p.vz = Math.sin(theta) * sinPhi * grainSpeed + (Math.random() - 0.5) * spread * 0.5;
+      }
+      const life = lifeMin + Math.random() * (lifeMax - lifeMin);
+      p.life = life;
+      p.maxLife = life;
+      p.size = size;
+      p.gravity = gravity;
+      p.drag = drag;
       this.particleInstanced.setColorAt(idx, _scratchColorA);
     }
     if (this.particleInstanced.instanceColor) {
@@ -11172,10 +11420,72 @@ export class GameEngine {
     surface: 'dirt' | 'metal' | 'flesh' = 'dirt',
   ): void {
     if (this.effectiveParticleScale <= 0) return;
-    const dustColor = surface === 'metal' ? 0xd6d3d1 : surface === 'flesh' ? 0x9f1239 : 0xc9b79d;
-    this.spawnParticles(x, y + 0.04, z, dustColor, surface === 'flesh' ? 4 : 7);
-    if (surface !== 'flesh') {
-      this.spawnParticles(x, y + 0.08, z, 0xffc247, 4);
+    if (surface === 'metal') {
+      // Steel throws a bright radial spark shower with very little dust.
+      this.spawnParticleBurst(x, y + 0.06, z, 0xffc247, 12, {
+        speed: 5.5,
+        spread: 3.2,
+        upBias: 0.7,
+        lifeMin: 0.16,
+        lifeMax: 0.38,
+        size: 0.5,
+        gravity: 9,
+        drag: 0.55,
+      });
+      this.spawnParticleBurst(x, y + 0.05, z, 0xfff3c4, 4, {
+        speed: 2.4,
+        spread: 1.6,
+        upBias: 0.5,
+        lifeMin: 0.1,
+        lifeMax: 0.2,
+        size: 0.4,
+        gravity: 7,
+        drag: 1,
+      });
+    } else if (surface === 'flesh') {
+      // A wet red mist and a few heavy droplets, not a fountain of sparks.
+      this.spawnParticleBurst(x, y + 0.04, z, 0x9f1239, 6, {
+        speed: 1.5,
+        spread: 1.8,
+        upBias: 0.9,
+        lifeMin: 0.35,
+        lifeMax: 0.65,
+        size: 1.15,
+        gravity: 2.2,
+        drag: 2.1,
+      });
+      this.spawnParticleBurst(x, y + 0.04, z, 0x7f1d1d, 5, {
+        speed: 2.3,
+        spread: 1.3,
+        upBias: 0.8,
+        lifeMin: 0.3,
+        lifeMax: 0.55,
+        size: 0.8,
+        gravity: 15,
+        drag: 0.25,
+      });
+    } else {
+      // Dirt and sand: a soft dust cloud plus clods that arc and drop.
+      this.spawnParticleBurst(x, y + 0.04, z, 0xc9b79d, 8, {
+        speed: 1.7,
+        spread: 2.4,
+        upBias: 1.5,
+        lifeMin: 0.5,
+        lifeMax: 0.95,
+        size: 1.3,
+        gravity: 3.2,
+        drag: 1.9,
+      });
+      this.spawnParticleBurst(x, y + 0.04, z, 0x6b4f35, 6, {
+        speed: 3.4,
+        spread: 2.1,
+        upBias: 1.4,
+        lifeMin: 0.38,
+        lifeMax: 0.7,
+        size: 1.7,
+        gravity: 16,
+        drag: 0.15,
+      });
     }
     if (surface !== 'flesh' && this.muzzleSmokePool.length > 0 && this.effectiveParticleScale > 0.2) {
       const puffs = surface === 'metal' ? 1 : 2;
@@ -16122,11 +16432,16 @@ export class GameEngine {
           continue;
         }
         stillActive = true;
-        p.vy -= 12 * dt;
+        p.vy -= p.gravity * dt;
+        if (p.drag > 0) {
+          const damp = 1 - Math.min(0.9, p.drag * dt);
+          p.vx *= damp;
+          p.vz *= damp;
+        }
         p.x += p.vx * dt;
         p.y += p.vy * dt;
         p.z += p.vz * dt;
-        const sc = Math.max(0.1, p.life * 2);
+        const sc = Math.max(0.1, p.life * 2 * p.size);
         _vec3A.set(p.x, p.y, p.z);
         _scratchQuat.identity();
         _scratchScale.setScalar(sc);
@@ -16143,6 +16458,7 @@ export class GameEngine {
     for (const sc of this.shellCasingPool) {
       if (!sc.active) continue;
       sc.life -= dt;
+      sc.bounceCooldown = Math.max(0, sc.bounceCooldown - dt);
       if (sc.life <= 0) {
         sc.active = false;
         sc.mesh.visible = false;
@@ -16152,10 +16468,23 @@ export class GameEngine {
       sc.pos.addScaledVector(sc.vel, dt);
       const gy = getTerrainHeight(sc.pos.x, sc.pos.z) + 0.02;
       if (sc.pos.y <= gy) {
+        const impactSpeed = Math.abs(sc.vel.y);
         sc.pos.y = gy;
-        sc.vel.y = Math.abs(sc.vel.y) * 0.25;
+        sc.vel.y = impactSpeed * 0.25;
         sc.vel.x *= 0.65;
         sc.vel.z *= 0.65;
+        sc.rx *= 0.7;
+        sc.rz *= 0.7;
+        if (
+          impactSpeed > 1.1 &&
+          sc.bounces < 2 &&
+          sc.bounceCooldown <= 0 &&
+          Math.hypot(sc.pos.x - this.playerX, sc.pos.z - this.playerZ) < 22
+        ) {
+          this.sound.playCasingBounce(sc.heavy, impactSpeed);
+          sc.bounces += 1;
+          sc.bounceCooldown = 0.12;
+        }
       }
       sc.mesh.position.copy(sc.pos);
       sc.mesh.rotation.x += sc.rx * dt;
@@ -16165,6 +16494,24 @@ export class GameEngine {
       if (mf.life <= 0) continue;
       mf.life -= dt;
       if (mf.life <= 0) mf.mesh.visible = false;
+    }
+    for (const blast of this.muzzleBlastPool) {
+      if (blast.life <= 0) continue;
+      blast.life -= dt;
+      const material = blast.mesh.material as THREE.MeshBasicMaterial;
+      if (blast.life <= 0) {
+        blast.mesh.visible = false;
+        material.opacity = 0;
+        continue;
+      }
+      const t = blast.life / Math.max(0.001, blast.maxLife);
+      const grow = 1 + (1 - t) * 0.35;
+      blast.mesh.scale.set(
+        blast.width * grow,
+        blast.width * grow,
+        blast.length * grow,
+      );
+      material.opacity = t * t * 0.82;
     }
     if (this.muzzleLight && this.muzzleLightLife > 0) {
       this.muzzleLightLife = Math.max(0, this.muzzleLightLife - dt);
@@ -28832,8 +29179,15 @@ export class GameEngine {
     this.particleMat.dispose();
     this.shellCasingGeo.dispose();
     this.shellCasingMat.dispose();
+    this.shellCasingHullMat.dispose();
     this.muzzleFlashGeo.dispose();
     this.muzzleFlashMat.dispose();
+    for (const blast of this.muzzleBlastPool) {
+      (blast.mesh.material as THREE.Material).dispose();
+    }
+    this.muzzleBlastPool = [];
+    this.muzzleBlastGeo.dispose();
+    this.muzzleBlastMat.dispose();
     for (const glow of this.muzzleGlowPool) glow.sprite.material.dispose();
     for (const puff of this.muzzleSmokePool) puff.sprite.material.dispose();
     this.muzzleGlowPool = [];

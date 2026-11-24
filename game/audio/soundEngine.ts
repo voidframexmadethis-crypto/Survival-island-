@@ -1,5 +1,9 @@
-import { CreatureSpecies, WeatherType } from '../types';
+import { CreatureSpecies, WeatherType, type FirearmReloadMode } from '../types';
 import type { EngineAudioConfig } from '../systems/vehicleProfiles';
+import {
+  ReloadSoundSequencer,
+  type ReloadSfxKind,
+} from './reloadSoundSequencer';
 
 /**
  * Per-firearm character. Pitch shapes the crack, weight the low-end punch,
@@ -56,6 +60,7 @@ export class SoundEngine {
   private nextFireCrackleTime = 0;
   private whiteNoiseBuf: AudioBuffer | null = null;
   private brownNoiseBuf: AudioBuffer | null = null;
+  private readonly reloadSequencer = new ReloadSoundSequencer();
 
   // Continuous real-time multi-powertrain vehicle engine synthesizer
   private engineOsc1: OscillatorNode | null = null;
@@ -608,6 +613,241 @@ export class SoundEngine {
     osc.stop(now + 0.08);
   }
 
+  /** Start a full, mechanism-specific reload. Progress stages follow below. */
+  public beginWeaponReload(
+    weaponId: string,
+    mode: FirearmReloadMode,
+  ): void {
+    this.playReloadStages(this.reloadSequencer.begin(weaponId, mode), weaponId);
+  }
+
+  /** Drive the next stage from real reload progress (0..1). */
+  public updateWeaponReload(
+    weaponId: string,
+    mode: FirearmReloadMode,
+    progress: number,
+  ): void {
+    this.playReloadStages(
+      this.reloadSequencer.poll(weaponId, mode, progress),
+      weaponId,
+    );
+  }
+
+  /** Close the action after the last round/box is seated. */
+  public finishWeaponReload(
+    weaponId: string,
+    mode: FirearmReloadMode,
+  ): void {
+    this.playReloadStages(
+      this.reloadSequencer.finish(weaponId, mode),
+      weaponId,
+    );
+  }
+
+  public cancelWeaponReload(): void {
+    this.reloadSequencer.cancel();
+  }
+
+  private playReloadStages(stages: ReloadSfxKind[], weaponId: string): void {
+    for (const stage of stages) this.playReloadStage(stage, weaponId);
+  }
+
+  private sfxClick(
+    now: number,
+    frequency: number,
+    gain: number,
+    duration: number,
+    type: OscillatorType = 'square',
+  ): void {
+    if (!this.ctx || !this.masterGain) return;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(Math.max(40, frequency), now);
+    osc.frequency.exponentialRampToValueAtTime(
+      Math.max(35, frequency * 0.58),
+      now + duration,
+    );
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.linearRampToValueAtTime(Math.max(0.0002, gain), now + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + duration + 0.01);
+  }
+
+  private sfxTone(
+    now: number,
+    startHz: number,
+    endHz: number,
+    gain: number,
+    duration: number,
+    type: OscillatorType = 'sine',
+  ): void {
+    if (!this.ctx || !this.masterGain) return;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(Math.max(30, startHz), now);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(30, endHz), now + duration);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.linearRampToValueAtTime(Math.max(0.0002, gain), now + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + duration + 0.01);
+  }
+
+  private sfxNoise(
+    now: number,
+    opts: {
+      filter: 'bandpass' | 'lowpass' | 'highpass';
+      frequency: number;
+      q?: number;
+      gain: number;
+      duration: number;
+    },
+  ): void {
+    if (!this.ctx || !this.masterGain) return;
+    const src = this.createNoiseSource('white');
+    if (!src) return;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = opts.filter;
+    filter.frequency.setValueAtTime(Math.max(80, opts.frequency), now);
+    if (opts.q !== undefined) filter.Q.value = opts.q;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.linearRampToValueAtTime(Math.max(0.0002, opts.gain), now + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + opts.duration);
+    src.connect(filter);
+    filter.connect(g);
+    g.connect(this.masterGain);
+    src.start(now, Math.random() * 1.5, opts.duration + 0.02);
+  }
+
+  /**
+   * Realistic reload foley: metal-on-metal clicks, magazine spring thunks,
+   * shotgun hull slides, revolver cylinder snaps and belt-feed clatter.
+   * Every stage is a short one-shot, so nothing is left scheduled if the
+   * player cancels the reload or fires mid-way.
+   */
+  private playReloadStage(kind: ReloadSfxKind, weaponId: string): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const voice = GUN_VOICES[weaponId];
+    const pitch = voice?.pitch ?? 1;
+    const weight = Math.sqrt(voice?.weight ?? 1);
+
+    switch (kind) {
+      case 'mag_release':
+        this.sfxClick(now, 2700 * pitch, 0.045 * weight, 0.026);
+        this.sfxNoise(now, { filter: 'highpass', frequency: 3200, gain: 0.02, duration: 0.022 });
+        break;
+      case 'mag_out':
+        this.sfxTone(now, 235, 105, 0.12 * weight, 0.1, 'triangle');
+        this.sfxNoise(now, { filter: 'bandpass', frequency: 760, q: 1.1, gain: 0.045, duration: 0.085 });
+        break;
+      case 'mag_in':
+        this.sfxTone(now, 155, 72, 0.18 * weight, 0.13, 'triangle');
+        this.sfxClick(now + 0.02, 1900 * pitch, 0.052 * weight, 0.03);
+        this.sfxNoise(now, { filter: 'bandpass', frequency: 460, q: 0.9, gain: 0.05, duration: 0.07 });
+        break;
+      case 'mag_seat':
+        this.sfxClick(now, 2350 * pitch, 0.045, 0.022);
+        this.sfxTone(now, 140, 78, 0.075 * weight, 0.05, 'triangle');
+        break;
+      case 'slide':
+        this.sfxNoise(now, { filter: 'bandpass', frequency: 1700 * pitch, q: 0.8, gain: 0.06, duration: 0.08 });
+        this.sfxClick(now + 0.035, 1150 * pitch, 0.058 * weight, 0.06);
+        this.sfxTone(now, 188, 90, 0.065 * weight, 0.05, 'triangle');
+        break;
+      case 'charge':
+        this.sfxNoise(now, { filter: 'highpass', frequency: 1700, gain: 0.075, duration: 0.09 });
+        this.sfxClick(now, 1500 * pitch, 0.055 * weight, 0.045);
+        this.sfxClick(now + 0.07, 950 * pitch, 0.045 * weight, 0.055);
+        break;
+      case 'bolt_open':
+        this.sfxClick(now, 1800 * pitch, 0.052 * weight, 0.035);
+        this.sfxNoise(now, { filter: 'bandpass', frequency: 1400, q: 1.0, gain: 0.05, duration: 0.07 });
+        break;
+      case 'bolt_close':
+        this.sfxClick(now, 1000 * pitch, 0.075 * weight, 0.05);
+        this.sfxTone(now, 145, 78, 0.09 * weight, 0.07, 'triangle');
+        break;
+      case 'shell_in':
+        this.sfxNoise(now, { filter: 'lowpass', frequency: 950, gain: 0.045, duration: 0.09 });
+        this.sfxTone(now, 320, 165, 0.055 * weight, 0.05, 'triangle');
+        break;
+      case 'shell_seat':
+        this.sfxClick(now, 2350 * pitch, 0.05, 0.028);
+        this.sfxTone(now, 215, 115, 0.06 * weight, 0.045, 'triangle');
+        break;
+      case 'pump':
+        this.sfxTone(now, 170, 88, 0.095 * weight, 0.08, 'triangle');
+        this.sfxNoise(now, { filter: 'bandpass', frequency: 980, q: 0.9, gain: 0.05, duration: 0.08 });
+        this.sfxClick(now + 0.11, 1450 * pitch, 0.042 * weight, 0.035);
+        this.sfxNoise(now + 0.11, { filter: 'bandpass', frequency: 1050, q: 0.9, gain: 0.048, duration: 0.07 });
+        this.sfxTone(now + 0.12, 150, 80, 0.075 * weight, 0.07, 'triangle');
+        break;
+      case 'cylinder_open':
+        this.sfxClick(now, 2100 * pitch, 0.045, 0.03);
+        this.sfxNoise(now, { filter: 'bandpass', frequency: 1500, q: 1.8, gain: 0.028, duration: 0.06 });
+        break;
+      case 'cylinder_close':
+        this.sfxClick(now, 2300 * pitch, 0.055, 0.03);
+        this.sfxTone(now, 150, 85, 0.075 * weight, 0.06, 'triangle');
+        break;
+      case 'break_open':
+        this.sfxClick(now, 2000 * pitch, 0.055, 0.03);
+        this.sfxNoise(now, { filter: 'bandpass', frequency: 1250, q: 3, gain: 0.032, duration: 0.1 });
+        this.sfxClick(now + 0.05, 1400 * pitch, 0.028, 0.04);
+        break;
+      case 'break_close':
+        this.sfxTone(now, 120, 65, 0.15 * weight, 0.11, 'triangle');
+        this.sfxClick(now, 1100 * pitch, 0.065 * weight, 0.05);
+        break;
+      case 'powder':
+        this.sfxTone(now, 360, 180, 0.045, 0.07, 'triangle');
+        this.sfxNoise(now, { filter: 'lowpass', frequency: 2600, gain: 0.026, duration: 0.1 });
+        break;
+      case 'ramrod':
+        this.sfxNoise(now, { filter: 'bandpass', frequency: 1450, q: 1.2, gain: 0.038, duration: 0.15 });
+        this.sfxClick(now + 0.14, 1200 * pitch, 0.024, 0.03);
+        break;
+      case 'cock':
+        this.sfxClick(now, 1800 * pitch, 0.05, 0.03);
+        this.sfxClick(now + 0.11, 1250 * pitch, 0.042, 0.032);
+        break;
+      case 'belt_feed':
+        this.sfxClick(now, 1350 * pitch, 0.055, 0.04);
+        this.sfxClick(now + 0.08, 1700 * pitch, 0.045, 0.045);
+        this.sfxNoise(now, { filter: 'bandpass', frequency: 900, q: 0.8, gain: 0.038, duration: 0.09 });
+        break;
+      case 'cell_out':
+        this.sfxTone(now, 950, 420, 0.045, 0.12, 'sine');
+        this.sfxClick(now, 700 * pitch, 0.03, 0.03);
+        break;
+      case 'cell_in':
+        this.sfxTone(now, 280, 950, 0.05, 0.16, 'sine');
+        this.sfxClick(now + 0.13, 1900 * pitch, 0.032, 0.03);
+        break;
+      case 'cell_latch':
+        this.sfxClick(now, 2200 * pitch, 0.045, 0.025);
+        this.sfxClick(now + 0.05, 1500 * pitch, 0.032, 0.045);
+        break;
+      case 'action_open':
+        this.sfxClick(now, 1600 * pitch, 0.05, 0.04);
+        this.sfxNoise(now, { filter: 'bandpass', frequency: 1300, q: 1.1, gain: 0.038, duration: 0.08 });
+        break;
+      case 'action_close':
+        this.sfxTone(now, 125, 70, 0.11 * weight, 0.09, 'triangle');
+        this.sfxClick(now, 1200 * pitch, 0.055 * weight, 0.05);
+        break;
+    }
+  }
+
   public playPortalFire(): void {
     if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
@@ -801,6 +1041,43 @@ export class SoundEngine {
     thumpGain.connect(this.masterGain);
     thump.start(now);
     thump.stop(now + duration + 0.03);
+  }
+
+  /**
+   * Small brass tinkle when an ejected case hits the ground. A 12-gauge
+   * plastic hull is heavier and duller than rifle or pistol brass.
+   */
+  public playCasingBounce(heavy = false, impactSpeed = 2): void {
+    if (!this.sfxEnabled || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const force = Math.min(1, Math.max(0.22, impactSpeed / 4));
+    const duration = heavy ? 0.055 : 0.085;
+    const noise = this.createNoiseSource('white');
+    if (noise) {
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = heavy ? 820 : 3300;
+      filter.Q.value = heavy ? 1.2 : 3.6;
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime((heavy ? 0.022 : 0.034) * force, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+      noise.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.masterGain);
+      noise.start(now, Math.random() * 1.8, duration + 0.01);
+    }
+
+    const ping = this.ctx.createOscillator();
+    const pingGain = this.ctx.createGain();
+    ping.type = heavy ? 'sine' : 'triangle';
+    ping.frequency.setValueAtTime(heavy ? 430 : 2450 + Math.random() * 700, now);
+    ping.frequency.exponentialRampToValueAtTime(heavy ? 190 : 1600, now + duration);
+    pingGain.gain.setValueAtTime((heavy ? 0.014 : 0.02) * force, now);
+    pingGain.gain.exponentialRampToValueAtTime(0.0001, now + duration + 0.01);
+    ping.connect(pingGain);
+    pingGain.connect(this.masterGain);
+    ping.start(now);
+    ping.stop(now + duration + 0.015);
   }
 
   /** Pump, bolt, cylinder or slide mechanics after the shot. */
