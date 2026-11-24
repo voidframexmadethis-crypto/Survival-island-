@@ -94,6 +94,8 @@ export interface ModularVehicleMeshHandles {
   rudders: THREE.Object3D[];
   helmWheel?: THREE.Object3D;
   trunkLid?: THREE.Object3D;
+  licensePlate?: THREE.Object3D;
+  rearDeck?: THREE.Object3D;
   doorLeft?: THREE.Object3D;
   doorRight?: THREE.Object3D;
   convertibleTop?: THREE.Object3D;
@@ -1922,6 +1924,57 @@ function buildCustomStreetShowCar(
   plateFrame.position.set(0, 0.26, frontZ + 0.19);
   const plateInner = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.13, 0.036), darkTrimMat);
   plateInner.position.set(0, 0.26, frontZ + 0.192);
+
+  // Real rear license plate on the bumper. The panel buzzes independently of
+  // the trunk lid, driven by the live sub-bass energy.
+  const rearPlate = new THREE.Group();
+  rearPlate.name = 'rear_license_plate';
+  const rearPlateFrame = new THREE.Mesh(
+    new THREE.BoxGeometry(0.36, 0.19, 0.02),
+    chromeMat,
+  );
+  const rearPlateFace = new THREE.Mesh(
+    new THREE.BoxGeometry(0.31, 0.145, 0.018),
+    new THREE.MeshStandardMaterial({
+      color: 0xe7e5e4,
+      roughness: 0.58,
+      metalness: 0.08,
+    }),
+  );
+  rearPlateFace.position.z = -0.008;
+  const rearPlateStripe = new THREE.Mesh(
+    new THREE.BoxGeometry(0.24, 0.022, 0.006),
+    darkTrimMat,
+  );
+  rearPlateStripe.position.set(0, 0.028, -0.018);
+  rearPlate.add(rearPlateFrame, rearPlateFace, rearPlateStripe);
+  rearPlate.position.set(0, 0.32, rearZ - 0.2);
+  handles.chassisGroup.add(rearPlate);
+  handles.licensePlate = rearPlate;
+
+  // Rear-deck 6×9 speaker grilles on the parcel shelf: the deck gets its own
+  // subtle bass movement instead of the whole cabin shaking as one block.
+  const rearDeck = new THREE.Group();
+  rearDeck.name = 'rear_speaker_deck';
+  const deckGrilleMat = new THREE.MeshStandardMaterial({
+    color: 0x15181d,
+    roughness: 0.82,
+    metalness: 0.25,
+  });
+  [-0.42, 0.42].forEach((dx) => {
+    const grille = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.115, 0.115, 0.012, 20),
+      deckGrilleMat,
+    );
+    grille.position.set(dx, 0, 0);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.117, 0.008, 6, 20), chromeMat);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.set(dx, 0.008, 0);
+    rearDeck.add(grille, ring);
+  });
+  rearDeck.position.set(0, lowerBodyH + 0.15, rearStartZ + 0.34);
+  handles.chassisGroup.add(rearDeck);
+  handles.rearDeck = rearDeck;
 
   handles.chassisGroup.add(frontBumper, rearBumper, grilleAssy, plateFrame, plateInner);
 

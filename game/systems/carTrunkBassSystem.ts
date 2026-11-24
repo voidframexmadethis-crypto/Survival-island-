@@ -1,3 +1,7 @@
+import {
+  VEHICLE_AUDIO_TUNINGS,
+  type CarCabinAudioTuning,
+} from './carAudioTunings';
 import { Delta88TrunkRattleSynth } from './delta88TrunkRattleSynth';
 
 /**
@@ -7,6 +11,25 @@ import { Delta88TrunkRattleSynth } from './delta88TrunkRattleSynth';
  * live cabin graph this system reuses that AudioContext and source bus instead
  * of creating a second MediaElementAudioSourceNode. The same class can still be
  * used standalone with `init(audioElement)`.
+ *
+ * Signal path (all linear until the shared cabin compressor):
+ *
+ *   input
+ *     -> 2x 28 Hz highpass        (removes inaudible subsonic energy)
+ *     -> 58 Hz bass shelf         (broad old-school weight)
+ *     -> 38-58 Hz sub band        (30-60 Hz subwoofer)
+ *     -> 72-96 Hz low band        (60-100 Hz low bass)
+ *     -> 118-148 Hz punch band    (100-160 Hz mid-bass)
+ *     -> body resonance peak      (sheet-metal/cabin tuning)
+ *     -> cabin lowpass
+ *     -> compressor -> analyser -> master
+ *
+ * A parallel harmonic exciter takes the 90-220 Hz band, generates 2nd/3rd
+ * harmonics and high-passes them at ~200 Hz. That is what lets phone speakers
+ * convey the bass without needing 40 Hz reproduction.
+ *
+ * The cabin sub gain is a bass-only parallel branch ahead of the compressor,
+ * so the final radio limiter always owns the ceiling.
  *
  * Hot-path rules:
  * - FFT data is allocated once.
@@ -21,7 +44,7 @@ const TRUNK_RATTLE_NEAR_METERS = 14;
  * The metallic trunk voice gets its own hot output stage so it stays audible
  * over the boosted sub-bass instead of being buried by the cabin compressor.
  */
-const RATTLE_OUTPUT_GAIN = 8;
+const RATTLE_OUTPUT_GAIN = 12;
 
 /**
  * Extra low-end the driver's seat gets while sitting in the car. The gain runs
@@ -44,8 +67,17 @@ export function averageSubBassBins(data: Uint8Array, firstBin = 1, lastBin = 3):
 export class CarTrunkBassSystem {
   private ctx: AudioContext | null = null;
   private sourceNode: MediaElementAudioSourceNode | null = null;
+  private subsonicA: BiquadFilterNode | null = null;
+  private subsonicB: BiquadFilterNode | null = null;
   private subBoostFilter: BiquadFilterNode | null = null;
   private subPeakFilter: BiquadFilterNode | null = null;
+  private subBandFilter: BiquadFilterNode | null = null;
+  private lowBandFilter: BiquadFilterNode | null = null;
+  private midBandFilter: BiquadFilterNode | null = null;
+  private harmonicSend: BiquadFilterNode | null = null;
+  private harmonicShaper: WaveShaperNode | null = null;
+  private harmonicHighpass: BiquadFilterNode | null = null;
+  private harmonicGain: GainNode | null = null;
   private cabinLowpassFilter: BiquadFilterNode | null = null;
   private compressor: DynamicsCompressorNode | null = null;
   private masterGain: GainNode | null = null;
@@ -63,12 +95,13 @@ export class CarTrunkBassSystem {
   private readonly fftData = new Uint8Array(new ArrayBuffer(64));
   private previousSubBass = 0;
   // Off unless a profile explicitly asks for it (DONK/Tahoe). Lowriders must
-  // stay clean, and the default graph is built before a vehicle profile lands.
+  // stay clean outside, and the default graph is built before a profile lands.
   private rattleEnabled = false;
   // Old-school cars can rattle in the cabin even when their profile keeps the
   // outside trunk quiet. Enabled from the radio profile.
   private cabinRattleEnabled = false;
   private rattleMultiplier = 1;
+  private tuning: CarCabinAudioTuning = VEHICLE_AUDIO_TUNINGS.classic;
 
   /** 0.0 to 1.0, driven by the real playing track's sub-band energy. */
   public bassEnergy = 0;
@@ -91,10 +124,10 @@ export class CarTrunkBassSystem {
     this.ctx = new AudioCtx();
     this.ownsContext = true;
     this.buildChain(this.ctx, this.ctx.destination, 0.95);
-    if (audioElement && this.ctx && this.subBoostFilter) {
+    if (audioElement && this.ctx && this.subsonicA) {
       try {
         this.sourceNode = this.ctx.createMediaElementSource(audioElement);
-        this.sourceNode.connect(this.subBoostFilter);
+        this.sourceNode.connect(this.subsonicA);
       } catch {
         // The element is already bound to another graph; leave the DSP idle.
         this.sourceNode = null;
@@ -120,9 +153,9 @@ export class CarTrunkBassSystem {
     this.ownsContext = false;
     this.buildChain(ctx, output, 1);
     let connected = false;
-    if (this.subBoostFilter) {
+    if (this.subsonicA) {
       try {
-        input.connect(this.subBoostFilter);
+        input.connect(this.subsonicA);
         connected = true;
       } catch {
         // Caller restores its original direct bus connection if this fails.
@@ -135,9 +168,35 @@ export class CarTrunkBassSystem {
   }
 
   /**
-   * Set the extra trunk sub EQ. Loud, heavily boosted sub-bass is the main
-   * source of clipping and speaker chatter, so profiles with more cabin bass
-   * use a smaller additive shelf and let the clean subwoofer gain do the work.
+   * Apply a whole vehicle tuning at once. All gains/frequencies ramp, so
+   * swapping cars never produces a click or a sudden volume spike.
+   */
+  public setTuning(tuning: CarCabinAudioTuning): void {
+    this.tuning = tuning;
+    this.rattleSynth?.setCharacter(tuning.rattle);
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    const ramp = 0.05;
+    const set = (param: AudioParam | undefined, value: number) => {
+      param?.setTargetAtTime(value, now, ramp);
+    };
+    set(this.subBandFilter?.frequency, tuning.subHz);
+    set(this.subBandFilter?.gain, tuning.subDb);
+    set(this.lowBandFilter?.frequency, tuning.lowHz);
+    set(this.lowBandFilter?.gain, tuning.lowDb);
+    set(this.midBandFilter?.frequency, tuning.midHz);
+    set(this.midBandFilter?.gain, tuning.midDb);
+    set(this.subBoostFilter?.gain, tuning.shelfDb);
+    set(this.subPeakFilter?.frequency, tuning.bodyHz);
+    set(this.subPeakFilter?.gain, tuning.bodyDb);
+    set(this.subPeakFilter?.Q, tuning.bodyQ);
+    set(this.harmonicGain?.gain, tuning.harmonics * 0.42);
+    set(this.harmonicSend?.frequency, (tuning.lowHz + tuning.midHz) * 0.5);
+  }
+
+  /**
+   * Set the extra trunk sub EQ. Kept for callers/tests that only change the
+   * broad shelf; full vehicle tuning goes through `setTuning`.
    */
   public setSubBoost(shelfDb: number, peakDb: number): void {
     if (!this.ctx) return;
@@ -161,8 +220,7 @@ export class CarTrunkBassSystem {
 
   /**
    * Low-end for the driver only. Applied to a bass-only parallel branch ahead
-   * of the cabin limiter, so it never clips the radio output. The Blue DONK
-   * passes a much hotter gain than the other profiles so it is the loudest car.
+   * of the cabin limiter, so it never clips the radio output.
    */
   public setCabinBassBoost(insideCar: boolean, gain = CABIN_BASS_GAIN): void {
     if (!this.ctx || !this.cabinBassGain) return;
@@ -177,52 +235,121 @@ export class CarTrunkBassSystem {
     this.rattleMultiplier = Math.max(0, Math.min(3, multiplier));
   }
 
+  public getTuning(): CarCabinAudioTuning {
+    return this.tuning;
+  }
+
   private buildChain(ctx: AudioContext, output: AudioNode, masterLevel: number): void {
-    // 1. Deep slab shelf: 58 Hz with +18 dB of trunk-moving weight, plus a
-    // focused 64 Hz resonance so the sub reads through the mix.
+    // 1. Subsonic protection: two cascaded 28 Hz highpasses (24 dB/oct). This
+    // is the part that stops cone-flapping, clicks and lost headroom.
+    this.subsonicA = ctx.createBiquadFilter();
+    this.subsonicA.type = 'highpass';
+    this.subsonicA.frequency.value = 28;
+    this.subsonicA.Q.value = 0.707;
+
+    this.subsonicB = ctx.createBiquadFilter();
+    this.subsonicB.type = 'highpass';
+    this.subsonicB.frequency.value = 28;
+    this.subsonicB.Q.value = 0.707;
+
+    // 2. Broad old-school bass shelf.
     this.subBoostFilter = ctx.createBiquadFilter();
     this.subBoostFilter.type = 'lowshelf';
     this.subBoostFilter.frequency.value = 58;
-    this.subBoostFilter.gain.value = 18;
+    this.subBoostFilter.gain.value = 4;
+
+    // 3. Four audible bands: sub, low bass, punch and body resonance.
+    this.subBandFilter = ctx.createBiquadFilter();
+    this.subBandFilter.type = 'peaking';
+    this.subBandFilter.frequency.value = 48;
+    this.subBandFilter.Q.value = 0.95;
+    this.subBandFilter.gain.value = 3.6;
+
+    this.lowBandFilter = ctx.createBiquadFilter();
+    this.lowBandFilter.type = 'peaking';
+    this.lowBandFilter.frequency.value = 82;
+    this.lowBandFilter.Q.value = 1.0;
+    this.lowBandFilter.gain.value = 3;
+
+    this.midBandFilter = ctx.createBiquadFilter();
+    this.midBandFilter.type = 'peaking';
+    this.midBandFilter.frequency.value = 128;
+    this.midBandFilter.Q.value = 1.1;
+    this.midBandFilter.gain.value = 2.8;
 
     this.subPeakFilter = ctx.createBiquadFilter();
     this.subPeakFilter.type = 'peaking';
-    this.subPeakFilter.frequency.value = 64;
-    this.subPeakFilter.Q.value = 0.9;
-    this.subPeakFilter.gain.value = 7;
+    this.subPeakFilter.frequency.value = 70;
+    this.subPeakFilter.Q.value = 1.5;
+    this.subPeakFilter.gain.value = 2.4;
 
-    // 2. Cabin vs. outside-trunk acoustics.
+    // 4. Cabin vs. outside-trunk acoustics.
     this.cabinLowpassFilter = ctx.createBiquadFilter();
     this.cabinLowpassFilter.type = 'lowpass';
     this.cabinLowpassFilter.frequency.value = 18000;
     this.cabinLowpassFilter.Q.value = 1.1;
 
-    // 3. Glue limiter so the boosted sub never clips into harsh distortion.
-    this.compressor = ctx.createDynamicsCompressor();
-    this.compressor.threshold.value = -14;
-    this.compressor.knee.value = 10;
-    this.compressor.ratio.value = 8;
-    this.compressor.attack.value = 0.008;
-    this.compressor.release.value = 0.18;
+    // 5. Harmonic exciter: 2nd/3rd harmonics of the 90-220 Hz band. Mobile
+    // speakers cannot move at 40 Hz, but they can reproduce the octave above.
+    this.harmonicSend = ctx.createBiquadFilter();
+    this.harmonicSend.type = 'bandpass';
+    this.harmonicSend.frequency.value = 105;
+    this.harmonicSend.Q.value = 0.7;
 
-    // 4. FFT analyser for trunk flex and camera pressure.
+    this.harmonicShaper = ctx.createWaveShaper();
+    const curve = new Float32Array(1024);
+    for (let i = 0; i < curve.length; i += 1) {
+      const x = (i / (curve.length - 1)) * 2 - 1;
+      // Mostly odd (tanh) with a touch of even harmonic for warmth.
+      curve[i] = Math.tanh(x * 2.1) * 0.82 + x * x * 0.18;
+    }
+    this.harmonicShaper.curve = curve;
+    this.harmonicShaper.oversample = '4x';
+
+    this.harmonicHighpass = ctx.createBiquadFilter();
+    this.harmonicHighpass.type = 'highpass';
+    this.harmonicHighpass.frequency.value = 165;
+    this.harmonicHighpass.Q.value = 0.7;
+
+    this.harmonicGain = ctx.createGain();
+    this.harmonicGain.gain.value = 0.11;
+
+    // 6. Glue compressor: smooths the layered bass before the final limiter.
+    this.compressor = ctx.createDynamicsCompressor();
+    this.compressor.threshold.value = -18;
+    this.compressor.knee.value = 12;
+    this.compressor.ratio.value = 4;
+    this.compressor.attack.value = 0.012;
+    this.compressor.release.value = 0.25;
+
+    // 7. FFT analyser for trunk flex, rattle and camera pressure.
     this.analyser = ctx.createAnalyser();
-    // 1024 gives ~43 Hz bin spacing: enough resolution for sub-bass at half
-    // the FFT cost of the meter pass.
     this.analyser.fftSize = 1024;
-    // Lower smoothing keeps kick/808 attacks sharp enough to drive the rattle
-    // on the beat instead of smearing hits into a constant buzz.
     this.analyser.smoothingTimeConstant = 0.45;
 
     this.masterGain = ctx.createGain();
     this.masterGain.gain.value = masterLevel;
 
-    this.subBoostFilter.connect(this.subPeakFilter);
+    this.subsonicA.connect(this.subsonicB);
+    this.subsonicB.connect(this.subBoostFilter);
+    this.subBoostFilter.connect(this.subBandFilter);
+    this.subBandFilter.connect(this.lowBandFilter);
+    this.lowBandFilter.connect(this.midBandFilter);
+    this.midBandFilter.connect(this.subPeakFilter);
     this.subPeakFilter.connect(this.cabinLowpassFilter);
     this.cabinLowpassFilter.connect(this.compressor);
     this.compressor.connect(this.analyser);
     this.analyser.connect(this.masterGain);
     this.masterGain.connect(output);
+
+    // Harmonics run in parallel from the band-split output and join *after* the
+    // bass compressor. Otherwise a 20-48x cabin boost squashes them and the
+    // phone-speaker layer disappears exactly when the bass is loudest.
+    this.lowBandFilter.connect(this.harmonicSend);
+    this.harmonicSend.connect(this.harmonicShaper);
+    this.harmonicShaper.connect(this.harmonicHighpass);
+    this.harmonicHighpass.connect(this.harmonicGain);
+    this.harmonicGain.connect(this.analyser);
 
     // Dedicated rattle limiter keeps the metallic pulses punchy and prevents
     // them from clipping the cabin mix on heavy 808s or the Blue DONK profile.
@@ -238,14 +365,14 @@ export class CarTrunkBassSystem {
     this.rattleLimiter.connect(this.rattleOutputGain);
     this.rattleOutputGain.connect(this.masterGain);
     this.rattleSynth = new Delta88TrunkRattleSynth(ctx, this.rattleLimiter);
+    this.rattleSynth.setCharacter(this.tuning.rattle);
 
-    // Cabin-only 20x low-end. A bass-only parallel branch (150 Hz lowpass)
-    // joins the main path before the compressor, so the final cabin limiter
-    // still owns the ceiling: no hard clipping, no distorted buzz on top, just
-    // the trunk panel rattling.
+    // Cabin-only bass: a 160 Hz lowpass parallel branch joins the main path
+    // before the compressor. The final cabin limiter still owns the ceiling:
+    // no hard clipping, no distorted buzz on top, just panel rattle.
     this.cabinBassFilter = ctx.createBiquadFilter();
     this.cabinBassFilter.type = 'lowpass';
-    this.cabinBassFilter.frequency.value = 150;
+    this.cabinBassFilter.frequency.value = 160;
     this.cabinBassFilter.Q.value = 0.7;
 
     this.cabinBassGain = ctx.createGain();
@@ -256,7 +383,7 @@ export class CarTrunkBassSystem {
     this.cabinBassGain.connect(this.compressor);
   }
 
-  /** Short Delta 88-style metal pulse on a bass hit. */
+  /** Short multi-panel metal pulse on a bass hit. */
   private triggerTrunkRattle(intensity: number): void {
     if ((!this.rattleEnabled && !this.cabinRattleEnabled) || !this.rattleSynth) {
       return;
@@ -324,9 +451,9 @@ export class CarTrunkBassSystem {
     this.previousSubBass = subAvg;
 
     // The trunk panel is what makes the noise: while the sub is genuinely
-    // moving it, the panel keeps chattering, and the synth's 65 ms cap paces the
-    // pulses into a rattle instead of one hit per beat. Outside the cabin only
-    // fresh attacks rattle the sheet metal.
+    // moving it, the panel keeps chattering, and the synth's 60 ms cap paces
+    // the pulses into a rattle instead of one hit per beat. Outside the cabin
+    // only fresh attacks rattle the sheet metal.
     const rattleGate = isInsideCar ? 0.32 : 0.5;
     const riseGate = isInsideCar ? 0.04 : 0.075;
     const sustainedShake = isInsideCar && subAvg > 0.4;
@@ -353,8 +480,17 @@ export class CarTrunkBassSystem {
     }
     this.sourceNode = null;
     try {
+      this.subsonicA?.disconnect();
+      this.subsonicB?.disconnect();
       this.subBoostFilter?.disconnect();
+      this.subBandFilter?.disconnect();
+      this.lowBandFilter?.disconnect();
+      this.midBandFilter?.disconnect();
       this.subPeakFilter?.disconnect();
+      this.harmonicSend?.disconnect();
+      this.harmonicShaper?.disconnect();
+      this.harmonicHighpass?.disconnect();
+      this.harmonicGain?.disconnect();
       this.cabinLowpassFilter?.disconnect();
       this.compressor?.disconnect();
       this.analyser?.disconnect();
@@ -366,8 +502,17 @@ export class CarTrunkBassSystem {
     } catch {
       // Already disconnected.
     }
+    this.subsonicA = null;
+    this.subsonicB = null;
     this.subBoostFilter = null;
+    this.subBandFilter = null;
+    this.lowBandFilter = null;
+    this.midBandFilter = null;
     this.subPeakFilter = null;
+    this.harmonicSend = null;
+    this.harmonicShaper = null;
+    this.harmonicHighpass = null;
+    this.harmonicGain = null;
     this.cabinLowpassFilter = null;
     this.compressor = null;
     this.analyser = null;
@@ -379,6 +524,7 @@ export class CarTrunkBassSystem {
     this.cabinBassGain = null;
     this.rattleMultiplier = 1;
     this.cabinRattleEnabled = false;
+    this.tuning = VEHICLE_AUDIO_TUNINGS.classic;
     if (this.ownsContext && this.ctx && this.ctx.state !== 'closed') {
       void this.ctx.close().catch(() => {});
     }

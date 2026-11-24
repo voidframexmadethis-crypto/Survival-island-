@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CarTrunkBassSystem, averageSubBassBins } from './carTrunkBassSystem';
+import { VEHICLE_AUDIO_TUNINGS } from './carAudioTunings';
 
 interface MockParam {
   value: number;
@@ -57,6 +58,11 @@ interface MockAnalyser extends MockNode {
   getByteFrequencyData: (data: Uint8Array) => void;
 }
 
+interface MockShaper extends MockNode {
+  curve: Float32Array | null;
+  oversample: string;
+}
+
 interface MockSource extends MockNode {
   buffer: unknown;
   playbackRate: MockParam;
@@ -72,6 +78,7 @@ function makeMockGraph() {
   const analysers: MockAnalyser[] = [];
   const gains: MockNode[] = [];
   const sources: MockSource[] = [];
+  const shapers: MockShaper[] = [];
   const connections: Array<[unknown, unknown]> = [];
   let analyserLevel = 1;
 
@@ -128,9 +135,19 @@ function makeMockGraph() {
       gains.push(gain);
       return gain;
     },
+    createWaveShaper(): MockShaper {
+      const shaper: MockShaper = {
+        ...makeNode('waveshaper'),
+        curve: null,
+        oversample: 'none',
+      };
+      shapers.push(shaper);
+      return shaper;
+    },
     createBuffer(_channels: number, length: number) {
       return {
         getChannelData: () => new Float32Array(length),
+        duration: length / 48000,
       };
     },
     createBufferSource(): MockSource {
@@ -162,6 +179,7 @@ function makeMockGraph() {
     analysers,
     gains,
     sources,
+    shapers,
     connections,
     setAnalyserLevel(level: number) {
       analyserLevel = level;
@@ -179,7 +197,7 @@ test('averageSubBassBins isolates the 40-170 Hz analyser window', () => {
   assert.ok(Math.abs(averageSubBassBins(bins) - (128 + 64) / (3 * 255)) < 1e-6);
 });
 
-test('attachGraph builds the 58 Hz trunk DSP without a second media source', () => {
+test('attachGraph builds the layered trunk DSP without a second media source', () => {
   const graph = makeMockGraph();
   const inputConnections: unknown[] = [];
   const input = {
@@ -201,36 +219,59 @@ test('attachGraph builds the 58 Hz trunk DSP without a second media source', () 
     true,
   );
 
-  const subBoost = graph.filters.find((f) => f.frequency.value === 58);
-  const subPeak = graph.filters.find((f) => f.frequency.value === 64);
+  const subsonic = graph.filters.filter(
+    (f) => f.type === 'highpass' && f.frequency.value === 28,
+  );
+  const subBoost = graph.filters.find(
+    (f) => f.frequency.value === 58 && f.type === 'lowshelf',
+  );
+  const subBand = graph.filters.find(
+    (f) => f.type === 'peaking' && f.frequency.value === 48,
+  );
+  const lowBand = graph.filters.find(
+    (f) => f.type === 'peaking' && f.frequency.value === 82,
+  );
+  const midBand = graph.filters.find(
+    (f) => f.type === 'peaking' && f.frequency.value === 128,
+  );
+  const body = graph.filters.find(
+    (f) => f.type === 'peaking' && f.frequency.value === 70,
+  );
   const cabin = graph.filters.find((f) => f.frequency.value === 18000);
+  assert.equal(subsonic.length, 2, 'two cascaded subsonic highpasses');
   assert.ok(subBoost);
-  assert.equal(subBoost.type, 'lowshelf');
-  assert.equal(subBoost.gain.value, 18);
-  assert.ok(subPeak);
-  assert.equal(subPeak.type, 'peaking');
-  assert.equal(subPeak.gain.value, 7);
+  assert.ok(subBand);
+  assert.ok(lowBand);
+  assert.ok(midBand);
+  assert.ok(body);
   assert.ok(cabin);
   assert.equal(cabin.type, 'lowpass');
-  assert.equal(graph.compressors[0].threshold.value, -14);
-  assert.equal(graph.compressors[0].ratio.value, 8);
+  assert.equal(graph.compressors[0].threshold.value, -18);
+  assert.equal(graph.compressors[0].ratio.value, 4);
   assert.equal(graph.compressors[1].threshold.value, -8);
   assert.equal(graph.compressors[1].ratio.value, 12);
   assert.equal(graph.analysers[0].fftSize, 1024);
   assert.equal(graph.analysers[0].smoothingTimeConstant, 0.45);
+  // Harmonics are shaped and high-passed out of the bass fundamental.
+  assert.equal(graph.shapers.length, 1);
+  assert.ok((graph.shapers[0].curve?.length ?? 0) > 0);
+  assert.equal(
+    graph.filters.filter((f) => f.frequency.value === 165).length,
+    1,
+    'harmonic highpass keeps generated harmonics above the 160 Hz band',
+  );
   // No rattle voice runs continuously; pulses are created only on hits.
   assert.equal(graph.sources.length, 0);
 
-  // Lowrider profiles use less additive trunk EQ so the clean sub gain can be
-  // pushed harder without slamming the limiter into audible clicks.
+  // Direct shelf changes remain available for callers that only tweak EQ.
   system.setSubBoost(11, 4);
   assert.equal(subBoost.gain.value, 11);
-  assert.equal(subPeak.gain.value, 4);
+  assert.equal(body.gain.value, 4);
 
   // The existing radio source bus feeds only the new DSP, and the DSP returns
   // into the existing cabin chain instead of opening another destination.
   assert.equal(inputConnections.length, 1);
-  assert.equal(inputConnections[0], subBoost);
+  assert.equal(inputConnections[0], subsonic[0]);
   assert.ok(graph.connections.some(([, b]) => b === output));
   system.dispose();
 });
@@ -272,16 +313,18 @@ test('step converts sub-bass hits into rattle bursts and respects proximity', ()
   assert.equal(graph.sources[0].started, true);
   assert.equal(graph.sources[0].stopped, true);
   assert.ok(
-    graph.sources[0].playbackRate.value >= 0.92 - 1e-6 &&
-      graph.sources[0].playbackRate.value <= 1.16 + 1e-6,
+    graph.sources[0].playbackRate.value >= 0.94 - 1e-6 &&
+      graph.sources[0].playbackRate.value <= 1.14 + 1e-6,
   );
-  const bodyBand = graph.filters.find(
-    (f) => f.type === 'bandpass' && f.frequency.value >= 480 && f.frequency.value <= 760,
+  const tone = graph.filters.find(
+    (f) => f.type === 'lowpass' && f.frequency.value > 2000,
   );
-  const edgeHigh = graph.filters.find((f) => f.frequency.value === 2100);
-  assert.ok(bodyBand);
-  assert.ok(edgeHigh);
-  assert.equal(edgeHigh.gain.value, 3.5);
+  const presence = graph.filters.find(
+    (f) => f.type === 'peaking' && f.frequency.value > 2400,
+  );
+  assert.ok(tone);
+  assert.ok(presence);
+  assert.ok(presence.gain.value >= 1.5);
 
   // A sustained 808 keeps the trunk panel shaking, so it keeps rattling. The
   // synth's 65 ms cap paces this into a rattle instead of a solid buzz.
@@ -336,5 +379,52 @@ test('cabin bass boost takes the hot Blue DONK gain and reverts to unity outside
 
   system.setCabinBassBoost(false, 48);
   assert.equal(gainValues().filter((v) => v === 48).length, 0);
+  system.dispose();
+});
+
+test('setTuning moves every band, harmonic mix and rattle voice per vehicle', () => {
+  const graph = makeMockGraph();
+  const input = { kind: 'input', connect() {}, disconnect() {} };
+  const output = { kind: 'output', connect() {}, disconnect() {} };
+  const system = new CarTrunkBassSystem();
+  system.attachGraph(
+    graph.ctx as unknown as AudioContext,
+    input as unknown as AudioNode,
+    output as unknown as AudioNode,
+  );
+
+  const [subsonicA, subsonicB, shelf, subBand, lowBand, midBand, body] = graph.filters;
+  assert.equal(subsonicA.frequency.value, 28);
+  assert.equal(subsonicB.frequency.value, 28);
+
+  system.setTuning(VEHICLE_AUDIO_TUNINGS.donk);
+  assert.equal(system.getTuning().id, 'donk');
+  assert.equal(subBand.frequency.value, 38);
+  assert.equal(subBand.gain.value, 7);
+  assert.equal(lowBand.frequency.value, 72);
+  assert.equal(lowBand.gain.value, 6);
+  assert.equal(midBand.frequency.value, 148);
+  assert.equal(midBand.gain.value, 4);
+  assert.equal(body.frequency.value, 52);
+  assert.equal(body.gain.value, 5);
+  assert.equal(shelf.gain.value, 12);
+
+  const harmonicGain = graph.gains
+    .map((g) => (g as unknown as { gain: MockParam }).gain.value)
+    .find((v) => Math.abs(v - 0.5 * 0.42) < 1e-6);
+  assert.ok(harmonicGain, 'DONK harmonic exciter mix is applied');
+
+  // Distinct body: crossover, resonance and rattle mix all move.
+  system.setTuning(VEHICLE_AUDIO_TUNINGS.cadillac_coupe_deville);
+  assert.equal(subBand.frequency.value, 46);
+  assert.equal(lowBand.frequency.value, 80);
+  assert.equal(midBand.frequency.value, 134);
+  assert.equal(body.frequency.value, 58);
+  assert.equal(body.Q.value, 1.6);
+
+  // A hit still produces exactly one pre-rendered five-layer rattle voice.
+  system.setRattleEnabled(true);
+  system.step(true, 0, true);
+  assert.equal(graph.sources.length, 1);
   system.dispose();
 });

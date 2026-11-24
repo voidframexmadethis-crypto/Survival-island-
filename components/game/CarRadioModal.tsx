@@ -26,6 +26,7 @@ import {
   RadioCarDescriptor,
   resolveCarAudioType,
 } from '@/game/systems/carRadioSystem';
+import { resolveCarAudioTuning } from '@/game/systems/carAudioTunings';
 
 interface CarRadioModalProps {
   car: RadioCarDescriptor;
@@ -75,6 +76,7 @@ export function CarRadioModal({
   const [volume, setVolume] = useState(CABIN_BASS_AND_FIRST_PERSON.stereoVolume);
   const carAudioType: CarType = resolveCarAudioType(car);
   const audioProfile = AUDIO_PROFILES[carAudioType];
+  const tuning = resolveCarAudioTuning(car);
   const [meters, setMeters] = useState({
     bassLevel: 0,
     chestThump: 0,
@@ -249,7 +251,7 @@ export function CarRadioModal({
                       : 'bg-sky-500/20 border border-sky-400/40 text-sky-200'
                   }`}
                 >
-                  {`${carAudioType.toUpperCase()} EQ · 100Hz +${(6 * audioProfile.bass).toFixed(1)}dB · 48Hz +${(5 * audioProfile.low).toFixed(1)}dB`}
+                  {`3-WAY BASS · ${tuning.subHz}Hz +${tuning.subDb} · ${tuning.lowHz}Hz +${tuning.lowDb} · ${tuning.midHz}Hz +${tuning.midDb}`}
                 </span>
                 <span
                   title="Stylised in-game SPL showcase rating, not a real sound-pressure measurement"
@@ -259,12 +261,15 @@ export function CarRadioModal({
                       : 'bg-slate-800 border border-white/10 text-stone-300'
                   }`}
                 >
-                  {`${audioProfile.splDb} dB${carAudioType === 'donk' ? ' SHOWCASE' : ' SPL'}`}
+                  {`${tuning.splDb} dB${carAudioType === 'donk' ? ' SHOWCASE' : ' SPL'}`}
                 </span>
               </div>
               <h2 className="text-sm sm:text-base font-black text-white truncate">
                 {car.name || 'Vehicle Stereo'}
               </h2>
+              <p className="text-[10px] text-stone-400 truncate">
+                {tuning.speakers} · {Math.round(tuning.harmonics * 100)}% phone-speaker harmonics
+              </p>
             </div>
           </div>
 

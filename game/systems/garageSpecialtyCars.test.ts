@@ -159,6 +159,41 @@ test('Town Car, mini truck and El Camino support the three-wheel stance', () => 
   assert.ok(targets.rl > targets.fl);
 });
 
+test('old-school bodies carry animated license plate and rear-deck panels', () => {
+  const presets: VehiclePresetKey[] = [
+    'lowrider',
+    'donk',
+    'slab',
+    'cadillac_coupe_deville',
+  ];
+  for (const preset of presets) {
+    const vehicle = createVehicleFromPreset(`rear_${preset}`, preset, 0, 0, 0);
+    const handles = createModularVehicleMesh(vehicle);
+    assert.ok(handles.licensePlate, `${preset} has no license plate`);
+    assert.ok(handles.rearDeck, `${preset} has no rear-deck panel`);
+    assert.equal(handles.licensePlate?.name, 'rear_license_plate');
+    assert.equal(handles.rearDeck?.name, 'rear_speaker_deck');
+    // Both sit on the rear half of the car, not floating in the cabin front.
+    assert.ok((handles.licensePlate?.position.z ?? 0) < -1);
+    assert.ok((handles.rearDeck?.position.z ?? 0) < 0);
+    let plateMeshes = 0;
+    handles.licensePlate?.traverse((object) => {
+      if (object instanceof THREE.Mesh) plateMeshes += 1;
+    });
+    assert.ok(plateMeshes >= 3, `${preset} plate needs frame, face and stripe`);
+    let deckMeshes = 0;
+    handles.rearDeck?.traverse((object) => {
+      if (object instanceof THREE.Mesh) deckMeshes += 1;
+    });
+    assert.equal(deckMeshes, 4, `${preset} rear deck needs two grilles and two rings`);
+  }
+
+  const exotic = createVehicleFromPreset('exotic_rear', 'sports_car', 0, 0, 0);
+  const exoticHandles = createModularVehicleMesh(exotic);
+  assert.equal(exoticHandles.licensePlate, undefined);
+  assert.equal(exoticHandles.rearDeck, undefined);
+});
+
 test('new garage cars resolve to real preview profiles', () => {
   const expectations: Record<string, string> = {
     'mini-truck': 'slab',

@@ -1,5 +1,11 @@
 import * as THREE from 'three';
 import { CarTrunkBassSystem } from './carTrunkBassSystem';
+import {
+  VEHICLE_AUDIO_TUNINGS,
+  buildAntiClipCurve,
+  resolveCarAudioTuning,
+  type CarCabinAudioTuning,
+} from './carAudioTunings';
 
 export interface RadioCarDescriptor {
   id?: string;
@@ -34,7 +40,8 @@ export function isOldSchoolVehicleDescriptor(car: RadioCarDescriptor = {}): bool
     preset === 'chevy_2000_sub' ||
     preset === 'mini_truck' ||
     preset === 'el_camino' ||
-    preset === 'town_car'
+    preset === 'town_car' ||
+    preset === 'van_90s'
   ) {
     return true;
   }
@@ -310,6 +317,7 @@ export interface SetupCarAudioHandles {
   panner: PannerNode;
   profile: CarAudioProfile;
   subwoofer: CarSubwooferHandles;
+  tuning: CarCabinAudioTuning;
   destroy: () => void;
 }
 
@@ -330,6 +338,8 @@ export function setupCarAudio(
   const carPanner = ctx.createPanner();
 
   const profile = AUDIO_PROFILES[car];
+  const tuning =
+    car === 'supercar' ? VEHICLE_AUDIO_TUNINGS.modern : VEHICLE_AUDIO_TUNINGS[car];
 
   bass.type = 'lowshelf';
   bass.frequency.value = 100;
@@ -415,6 +425,7 @@ export function setupCarAudio(
     panner: carPanner,
     profile,
     subwoofer,
+    tuning,
     destroy: () => {
       destroyed = true;
       if (rafId) {
@@ -454,7 +465,13 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
   subFilter: null as BiquadFilterNode | null,
   compressor: null as DynamicsCompressorNode | null,
   masterGain: null as GainNode | null,
+  mixTrim: null as GainNode | null,
   limiter: null as DynamicsCompressorNode | null,
+  ceilingShaper: null as WaveShaperNode | null,
+  outputAnalyser: null as AnalyserNode | null,
+  outputSamples: null as Float32Array<ArrayBuffer> | null,
+  outputPeak: 0,
+  peakHold: 0,
   carPanner: null as PannerNode | null,
   subwoofer: null as CarSubwooferHandles | null,
   trunkBassSystem: null as CarTrunkBassSystem | null,
@@ -463,6 +480,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
   cameraMode: 'CHASE' as DrivingCameraMode,
   lastThumpMs: 0,
   activeCarType: 'classic' as CarType,
+  activeTuning: VEHICLE_AUDIO_TUNINGS.classic as CarCabinAudioTuning,
 
   // Stereo playback state (user-supplied audio only; nothing is generated).
   stereoPlaying: false,
@@ -530,21 +548,27 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       this.compressor.attack.value = 0.004;
       this.compressor.release.value = 0.22;
 
+      // Mix trim keeps the summed cabin bass/sub/rattle peaks near unity at
+      // the limiter input. The DONK is still the loudest car, but its limiter
+      // now catches transients instead of clamping the whole track and
+      // generating constant distortion.
+      this.mixTrim = this.audioCtx.createGain();
+      this.mixTrim.gain.value = 0.42;
+
       this.masterGain = this.audioCtx.createGain();
       this.masterGain.gain.value = stereoOutputGain(
         this.stereoVolume,
         this.spatialAttenuation,
       );
 
-      // Hard safety limiter so a loud cabin mix never clips the output device.
+      // Peak limiter: low threshold, moderate knee, fast attack and a 12:1
+      // ratio. It only works on peaks, so normal bass stays uncompressed.
       this.limiter = this.audioCtx.createDynamicsCompressor();
-      this.limiter.threshold.value = -2.5;
-      this.limiter.knee.value = 0;
-      // Brick-wall ratio with no attack delay: the Blue DONK runs a much hotter
-      // sub gain and its peaks still land under full scale, so nothing clips.
-      this.limiter.ratio.value = 20;
-      this.limiter.attack.value = 0;
-      this.limiter.release.value = 0.1;
+      this.limiter.threshold.value = -1.5;
+      this.limiter.knee.value = 2;
+      this.limiter.ratio.value = 12;
+      this.limiter.attack.value = 0.001;
+      this.limiter.release.value = 0.12;
 
       this.carPanner = this.audioCtx.createPanner();
       this.carPanner.panningModel = 'HRTF';
@@ -570,20 +594,17 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       } else {
         // The graph can be created after a lowrider profile was already
         // selected, so apply its trunk EQ/rattle policy immediately.
-        this.trunkBassSystem.setSubBoost(
-          profile.trunkShelfDb,
-          profile.trunkPeakDb,
-        );
+        this.trunkBassSystem.setTuning(this.activeTuning);
         this.trunkBassSystem.setRattleEnabled(profile.rattle);
         this.trunkBassSystem.setCabinRattleEnabled(
           this.activeCarType !== 'supercar',
         );
         this.trunkBassSystem.setRattleMultiplier(
-          this.activeCarType === 'donk' ? 1.65 : 1,
+          this.activeTuning.rattle.intensity,
         );
         this.trunkBassSystem.setCabinBassBoost(
           this.cabinInside,
-          profile.cabinBoost,
+          this.activeTuning.cabinBoost,
         );
       }
       rumbleFilter.connect(this.bassFilter);
@@ -591,10 +612,27 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       this.subFilter.connect(this.analyser);
       this.analyser.connect(this.compressor);
       this.compressor.connect(this.carPanner);
-      this.carPanner.connect(this.masterGain);
+      this.carPanner.connect(this.mixTrim);
+      this.mixTrim.connect(this.masterGain);
       this.masterGain.connect(this.limiter);
-            this.limiter.connect(this.audioCtx.destination);
 
+      // Final anti-clip ceiling: a soft-knee WaveShaper after the limiter. Its
+      // curve is linear to 0.8 FS and tops out at 0.98 FS, and a WaveShaper
+      // clamps anything hotter to the curve endpoint. Even a stack of subs,
+      // harmonics and rattle can therefore never reach 0 dBFS.
+      this.ceilingShaper = this.audioCtx.createWaveShaper();
+      this.ceilingShaper.curve = buildAntiClipCurve(0.8, 0.98);
+      this.ceilingShaper.oversample = '4x';
+
+      // Post-limiter meter used by the deck and by audio regression tests.
+      this.outputAnalyser = this.audioCtx.createAnalyser();
+      this.outputAnalyser.fftSize = 2048;
+      this.outputAnalyser.smoothingTimeConstant = 0;
+      this.outputSamples = new Float32Array(2048);
+
+      this.limiter.connect(this.ceilingShaper);
+      this.ceilingShaper.connect(this.outputAnalyser);
+      this.outputAnalyser.connect(this.audioCtx.destination);
 
       this.subwoofer?.destroy();
       this.subwoofer = addCarSubwoofer(this.sourceBus, this.carPanner, profile);
@@ -640,8 +678,33 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     this.cabinInside = Boolean(insideCar);
     this.trunkBassSystem?.setCabinBassBoost(
       this.cabinInside,
-      AUDIO_PROFILES[this.activeCarType].cabinBoost,
+      this.activeTuning.cabinBoost,
     );
+  },
+
+  /**
+   * Post-limiter output peak (0..1) plus a hard-clip flag. The ceiling makes
+   * `clipped` impossible in a healthy graph, which is exactly what the audio
+   * regression test asserts while a bass-heavy track plays.
+   */
+  getOutputLevels(): { peak: number; clipped: boolean } {
+    if (!this.outputAnalyser || !this.outputSamples) {
+      return { peak: 0, clipped: false };
+    }
+    this.outputAnalyser.getFloatTimeDomainData(this.outputSamples);
+    let peak = 0;
+    for (let i = 0; i < this.outputSamples.length; i += 1) {
+      const a = Math.abs(this.outputSamples[i]);
+      if (a > peak) peak = a;
+    }
+    this.outputPeak = peak;
+    this.peakHold = Math.max(peak, this.peakHold * 0.92);
+    return { peak, clipped: peak >= 0.999 };
+  },
+
+  resetPeakHold(): void {
+    this.peakHold = 0;
+    this.outputPeak = 0;
   },
 
   bassBoost: false,
@@ -686,21 +749,24 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     oldSchool: boolean;
     carType: CarType;
     profile: CarAudioProfile;
+    tuning: CarCabinAudioTuning;
     radioMode: 'OLD_SCHOOL_TRUNK_AND_CHEST_BASS' | 'STANDARD_RADIO';
   } {
     const oldSchool = this.isOldSchoolCar(car);
     const carType = resolveCarAudioType(car);
     const profile = AUDIO_PROFILES[carType];
+    const tuning = resolveCarAudioTuning(car);
     this.activeCarType = carType;
+    this.activeTuning = tuning;
     this.trunkBassSystem?.setRattleEnabled(
       shouldEnableTrunkRattle(carType, oldSchool),
     );
     this.trunkBassSystem?.setCabinRattleEnabled(oldSchool);
-    this.trunkBassSystem?.setRattleMultiplier(carType === 'donk' ? 1.65 : 1);
-    this.trunkBassSystem?.setSubBoost(profile.trunkShelfDb, profile.trunkPeakDb);
+    this.trunkBassSystem?.setRattleMultiplier(tuning.rattle.intensity);
+    this.trunkBassSystem?.setTuning(tuning);
     this.trunkBassSystem?.setCabinBassBoost(
       this.cabinInside,
-      profile.cabinBoost,
+      tuning.cabinBoost,
     );
     const boost = this.bassBoost ? 1 : 0;
     const now = this.audioCtx?.currentTime ?? 0;
@@ -734,6 +800,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       oldSchool,
       carType,
       profile,
+      tuning,
       radioMode: oldSchool ? 'OLD_SCHOOL_TRUNK_AND_CHEST_BASS' : 'STANDARD_RADIO',
     };
   },
@@ -875,7 +942,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     carType: CarType;
   } {
     const carType = resolveCarAudioType(car);
-    const profile = AUDIO_PROFILES[carType];
+    const tuning = resolveCarAudioTuning(car);
     if (!this.stereoPlaying || !this.analyser || !this.freqData) {
       return { bassLevel: 0, chestThump: 0, trunkPump: 0, quarterFlex: 0, carType };
     }
@@ -888,7 +955,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
       sum += this.freqData[i] || 0;
     }
     const rawIntensity = sum / (10 * 255);
-    const quarterFlex = Math.min(1, rawIntensity * profile.shake * 1.35);
+    const quarterFlex = Math.min(1, rawIntensity * tuning.shake * 1.35);
 
     if (!this.isOldSchoolCar(car)) {
       return {
@@ -1230,3 +1297,11 @@ export const PANDORA_APP_LAUNCHER = {
     return { launched: 'web_fallback', url: webUrl };
   },
 };
+
+// Dev-only handle so the browser audio regression test can drive and measure
+// the real cabin graph. Tree-shaken out of production builds.
+if (typeof window !== 'undefined' && process.env.NODE_ENV !== 'production') {
+  (
+    window as unknown as { __lostWorldAudio?: typeof CABIN_BASS_AND_FIRST_PERSON }
+  ).__lostWorldAudio = CABIN_BASS_AND_FIRST_PERSON;
+}

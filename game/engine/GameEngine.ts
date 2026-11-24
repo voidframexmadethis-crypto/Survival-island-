@@ -457,15 +457,17 @@ import {
   VAULT_COMPUTER_VOICE,
 } from '../systems/undergroundElevator';
 import {
-  AUDIO_PROFILES,
   CABIN_BASS_AND_FIRST_PERSON,
   CAR_RADIO_TRUNK_SYSTEM,
   DrivingCameraMode,
   RadioCarDescriptor,
-  resolveCarAudioType,
   updateCarAudioPosition,
   updateCarStereo3D,
 } from '../systems/carRadioSystem';
+import {
+  resolveCarAudioTuning,
+  type CarCabinAudioTuning,
+} from '../systems/carAudioTunings';
 import {
   buildIslandWorld,
   CaveCeilingCluster,
@@ -1354,6 +1356,7 @@ export class GameEngine {
     ReturnType<typeof computeVehicleSpecs>
   >();
   private vehicleRattleCache = new Map<string, number>();
+  private vehicleAudioTuningCache = new Map<string, CarCabinAudioTuning>();
   private vehicleRestCache = new Map<
     string,
     {
@@ -23484,6 +23487,8 @@ export class GameEngine {
       this.disposeObject3D(mesh.root);
       this.vehicleMeshes.delete(vehicleId);
       this.vehicleShadowDiscs.delete(vehicleId);
+      this.vehicleRattleCache.delete(vehicleId);
+      this.vehicleAudioTuningCache.delete(vehicleId);
     }
     for (const c of v.cargoItems) {
       this.addItem(c.itemId, c.quantity, false);
@@ -23592,7 +23597,8 @@ export class GameEngine {
         v.preset === 'chevy_2000_sub' ||
         v.preset === 'mini_truck' ||
         v.preset === 'el_camino' ||
-        v.preset === 'town_car',
+        v.preset === 'town_car' ||
+        v.preset === 'van_90s',
     };
   }
 
@@ -25510,17 +25516,17 @@ export class GameEngine {
               : 0;
       // Cached per vehicle: building a fresh radio descriptor every frame
       // allocated garbage for every car on the island.
+      let tuning = this.vehicleAudioTuningCache.get(v.id);
+      if (!tuning) {
+        tuning = resolveCarAudioTuning(this.toRadioCarDescriptor(v));
+        this.vehicleAudioTuningCache.set(v.id, tuning);
+      }
       let rattleShake = this.vehicleRattleCache.get(v.id);
       if (rattleShake === undefined) {
-        const audioProfile =
-          AUDIO_PROFILES[resolveCarAudioType(this.toRadioCarDescriptor(v))];
-        // The trunk panel is what makes the rattle noise, so every old-school
-        // car shakes its lid even when its radio profile is the clean one.
-        rattleShake = audioProfile.rattle
-          ? audioProfile.shake
-          : vIsOldSchool
-            ? 0.55
-            : 0;
+        // Every old-school body has its own panel-rattle energy. The trunk
+        // panel is what makes the noise, so even the clean lowrider profile
+        // keeps a light sheet-metal chatter in the cabin.
+        rattleShake = vIsOldSchool ? Math.max(0.25, tuning.rattle.intensity) : 0;
         this.vehicleRattleCache.set(v.id, rattleShake);
       }
 
@@ -25643,17 +25649,26 @@ export class GameEngine {
         // Sheet metal buzz: the lid lifts with the beat and chatters hard on the
         // harmonics, exactly like a real trunk lid on a loud system.
         const flex = showBassPulse * showBassPulse;
+        const lidEnergy = Math.max(0.15, tuning.rattle.lid);
         const rattle =
           rattleShake > 0 && showBassPulse > 0.02
-            ? Math.sin(this.elapsed * 57) * showBassPulse * (0.02 + 0.03 * rattleShake)
+            ? Math.sin(this.elapsed * 57) *
+              showBassPulse *
+              (0.02 + 0.03 * rattleShake) *
+              lidEnergy
             : 0;
         const targetTrunk =
           (v.trunkOpen ? 0.96 : 0) +
-          (showBassPulse > 0.01 ? -0.05 * showBassPulse - flex * 0.035 : 0) +
+          (showBassPulse > 0.01
+            ? -0.05 * showBassPulse - flex * 0.035 * lidEnergy
+            : 0) +
           rattle;
         handles.trunkLid.position.y =
           showBassPulse > 0.01
-            ? baseTrunkY + showBassPulse * 0.05 + flex * 0.018 + rattle * 0.9
+            ? baseTrunkY +
+              showBassPulse * 0.05 * lidEnergy +
+              flex * 0.018 * lidEnergy +
+              rattle * 0.9
             : baseTrunkY;
         handles.trunkLid.rotation.x = THREE.MathUtils.damp(
           handles.trunkLid.rotation.x,
@@ -25661,6 +25676,51 @@ export class GameEngine {
           14,
           dt,
         );
+      }
+
+      // License plate: a thin stamped plate on rubber mounts buzzes fast and
+      // independently of the heavier lid. Amplitude follows live sub energy.
+      if (handles.licensePlate) {
+        const plate = handles.licensePlate;
+        if (plate.userData.baseY === undefined) {
+          plate.userData.baseX = plate.position.x;
+          plate.userData.baseY = plate.position.y;
+          plate.userData.baseZ = plate.position.z;
+        }
+        const plateAmp =
+          showBassPulse * 0.0035 * Math.max(0.2, tuning.rattle.plate);
+        if (showBassPulse > 0.02 && rattleShake > 0) {
+          plate.position.x =
+            (plate.userData.baseX as number) +
+            Math.sin(this.elapsed * 91) * plateAmp * 0.7;
+          plate.position.y =
+            (plate.userData.baseY as number) +
+            Math.abs(Math.sin(this.elapsed * 63)) * plateAmp;
+          plate.rotation.z = Math.sin(this.elapsed * 77) * plateAmp * 1.6;
+        } else {
+          plate.position.x = plate.userData.baseX as number;
+          plate.position.y = plate.userData.baseY as number;
+          plate.rotation.z = 0;
+        }
+      }
+
+      // Rear deck moves subtly: a low-frequency bob, never a hard shake.
+      if (handles.rearDeck) {
+        const deck = handles.rearDeck;
+        if (deck.userData.baseY === undefined) {
+          deck.userData.baseY = deck.position.y;
+        }
+        const deckAmp =
+          showBassPulse * 0.004 * Math.max(0.2, tuning.rattle.deck);
+        if (showBassPulse > 0.02) {
+          deck.position.y =
+            (deck.userData.baseY as number) +
+            Math.sin(this.elapsed * 68) * deckAmp;
+          deck.rotation.x = Math.sin(this.elapsed * 68 + 0.6) * deckAmp * 0.08;
+        } else {
+          deck.position.y = deck.userData.baseY as number;
+          deck.rotation.x = 0;
+        }
       }
 
       // Cadillac Coupe DeVille Real-Life 2-Stage Articulated Folding Black Droptop + 3D Button
@@ -25755,7 +25815,7 @@ export class GameEngine {
 
       // Animate Behind-Driver Subwoofer Cones & Enclosure LED Bars
       if (handles.subwooferCones && handles.subwooferCones.length > 0) {
-        const excursion = showBassPulse * 0.085;
+        const excursion = showBassPulse * 0.085 * Math.max(0.5, tuning.shake);
         const flutter =
           showBassPulse > 0.05 ? Math.sin(this.elapsed * 52) * 0.016 * showBassPulse : 0;
         for (const cone of handles.subwooferCones) {
@@ -25765,9 +25825,10 @@ export class GameEngine {
         }
       }
       if (handles.quarterPanels && handles.quarterPanels.length > 0) {
-        // DONK rear quarters get an extra multiplier so they visibly slap harder
-        // than the doors, trunk lid, and the rest of the body.
-        const quarterPanelBoost = v.preset === 'donk' ? 2.35 : 1;
+        // Each body has its own rear-quarter resonance. The DONK still slaps
+        // hardest, but the DeVille and Tahoe panels have their own character.
+        const quarterPanelBoost =
+          Math.max(0.35, tuning.rattle.quarter) * (v.preset === 'donk' ? 1.5 : 1);
         const shakeAmp = showBassPulse * 0.022 * rattleShake * quarterPanelBoost;
         const flexWave = Math.sin(this.elapsed * 52);
         const panelBuzz =
@@ -25803,7 +25864,8 @@ export class GameEngine {
             Math.sin(this.elapsed * 59 + (door === handles.doorLeft ? 0 : 1.7)) *
             0.005 *
             showBassPulse *
-            rattleShake;
+            rattleShake *
+            Math.max(0.2, tuning.rattle.trim);
         } else if (door.rotation.z !== 0) {
           door.rotation.z = 0;
         }
