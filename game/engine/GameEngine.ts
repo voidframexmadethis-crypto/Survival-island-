@@ -18516,7 +18516,7 @@ export class GameEngine {
     const resolved = resolveCustomShopBuild(plan.build);
     const route =
       plan.build.donorSource === 'freight'
-        ? 'The wrapped auction shell arrives on the fast barge in about 30 seconds'
+        ? 'The wrapped salvage shell arrives on the fast barge in about 30 seconds'
         : 'Duke is taking the shop truck to Cave 12';
     const noiseLine =
       resolved.engine.loudness >= 0.95
@@ -18841,7 +18841,7 @@ export class GameEngine {
     const resolved = resolveCustomShopBuild(state.build);
     if (resolved.build.donorSource === 'freight') {
       this.toast(
-        `Duke and Rae ordered a wrapped ${resolved.donor.name} auction shell. The fast Crescent City barge makes the island in 30 seconds while Rae fuels the forklift; the red ship stays on its slow 30-minute run.`,
+        `Duke and Rae ordered a wrapped ${resolved.donor.name} salvage shell. The fast Crescent City barge makes the island in 30 seconds while Rae fuels the forklift; the red ship stays on its slow 30-minute run.`,
         'craft',
       );
     } else {
@@ -19744,7 +19744,7 @@ export class GameEngine {
         shop.forkliftShellPallet.visible = false;
         if (playerDistance < 90) {
           this.toast(
-            'Rae set the plastic-wrapped auction shell on the lift — bare body and chassis on its timber tray, no engine. The parts crates are next.',
+            'Rae set the plastic-wrapped salvage shell on the lift — bare body and chassis on its timber tray, no engine. The parts crates are next.',
             'craft',
           );
         }
@@ -19819,7 +19819,7 @@ export class GameEngine {
         if (playerDistance < 90) {
           this.toast(
             event.crate.id === 'donor_shell'
-              ? 'The wrapped auction shell and chassis are on the ground at the bay — Rae is cutting the shrink wrap.'
+              ? 'The wrapped salvage shell and chassis are on the ground at the bay — Rae is cutting the shrink wrap.'
               : `${event.crate.label} landed at the bay: ${event.crate.manifest.slice(0, 3).join(', ')}.`,
             'craft',
           );
@@ -19910,7 +19910,7 @@ export class GameEngine {
           : state.phase === 'inbound'
             ? 'Towing the donor back to the shop for a frame-off build.'
             : state.phase === 'waiting_donor'
-              ? 'Rae is fueling the forklift and staging the timber tray while the wrapped auction shell crosses from Crescent City.'
+              ? 'Rae is fueling the forklift and staging the timber tray while the wrapped salvage shell crosses from Crescent City.'
             : state.phase === 'complete'
               ? `${resolved.name} is finished. Ask the computer for another car and the crew will clear the bay.`
               : state.waitingForParts

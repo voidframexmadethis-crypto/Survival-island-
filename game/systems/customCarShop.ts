@@ -337,7 +337,7 @@ export interface DonorSourceOption {
 
 /**
  * Two realistic supply routes: winch a wreck out of Cave 12, or buy a
- * plastic-wrapped auction shell that crosses from Crescent City on the barge.
+ * plastic-wrapped salvage shell that crosses from Crescent City on the barge.
  */
 export const DONOR_SOURCES: readonly DonorSourceOption[] = [
   {
@@ -348,7 +348,7 @@ export const DONOR_SOURCES: readonly DonorSourceOption[] = [
   },
   {
     id: 'freight',
-    label: 'Crescent City auction shell',
+    label: 'Crescent City salvage shell',
     detail:
       'A bare shell and chassis from a car sale, wrapped in plastic on a huge wooden tray. It rides the barge from the mainland; the engine and parts follow in the crates.',
   },
@@ -1079,7 +1079,7 @@ export type PartsCrateId =
   | 'interior_roof'
   | 'wheels_lights';
 
-/** A wrapped auction shell is freight, not a parts box, so it has its own id. */
+/** A wrapped salvage shell is freight, not a parts box, so it has its own id. */
 export type CargoCrateId = PartsCrateId | 'donor_shell';
 
 export interface PartsCrate {
@@ -1094,7 +1094,7 @@ export const DONOR_SHELL_CRATE: PartsCrate = {
   manifest: [
     'Bare body shell shrink-wrapped to a 4.8 m timber tray',
     'Chassis rails, floor pan and subframe',
-    'Core support, glass and auction paperwork',
+    'Core support, glass and salvage paperwork',
     'No engine or driveline — those follow in the crates',
   ],
 };
@@ -1167,7 +1167,7 @@ export function getPartsCrate(id: CargoCrateId): PartsCrate {
   );
 }
 
-/** The wrapped auction shell is unloaded before the parts crates. */
+/** The wrapped salvage shell is unloaded before the parts crates. */
 export function getCargoSchedule(build: CustomShopBuild): CargoCrateId[] {
   const parts = CUSTOM_SHOP_PART_CRATES.map((crate) => crate.id);
   return build.donorSource === 'freight'
@@ -1825,7 +1825,7 @@ export function advanceCustomShopState(
 
   let remaining = step;
 
-  // A Crescent City auction shell has no cave tow: the car only appears once
+  // A Crescent City salvage shell has no cave tow: the car only appears once
   // the wrapped shell has been forklifted off the barge and unloaded.
   if (
     state.phase === 'waiting_donor' &&
@@ -1979,7 +1979,7 @@ export function getCustomShopPhaseLabel(state: CustomShopState): string {
     case 'inbound':
       return 'Towing the donor back to Bayou Royal Customs';
     case 'waiting_donor':
-      return `Waiting for the wrapped auction shell · barge ETA ${formatCargoEta(
+      return `Waiting for the wrapped salvage shell · barge ETA ${formatCargoEta(
         getCargoEtaSeconds(state.cargo),
       )}`;
     case 'complete':

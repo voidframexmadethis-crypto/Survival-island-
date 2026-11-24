@@ -915,7 +915,7 @@ function buildWrappedShellCargo(
   tireMat: THREE.MeshStandardMaterial,
 ): { cargo: THREE.Group; shell: THREE.Group } {
   const cargo = new THREE.Group();
-  cargo.name = 'wrapped-auction-shell';
+  cargo.name = 'wrapped-salvage-shell';
   const timber = new THREE.MeshStandardMaterial({ color: 0x8b6239, roughness: 0.9 });
   const darkTimber = new THREE.MeshStandardMaterial({ color: 0x5b3f26, roughness: 0.96 });
   const wrap = new THREE.MeshStandardMaterial({
@@ -929,7 +929,7 @@ function buildWrappedShellCargo(
   });
   const strapMat = new THREE.MeshStandardMaterial({ color: 0x302a22, roughness: 0.85 });
 
-  // Huge timber tray the auction yard loads the shell on.
+  // Huge timber tray the salvage yard loads the shell on.
   const tray = new THREE.Mesh(roundedBox(3.0, 0.26, 5.7, 0.05), timber);
   tray.position.y = 0.16;
   cargo.add(tray);
@@ -951,7 +951,7 @@ function buildWrappedShellCargo(
     fireDamage: false,
     trash: 'none',
     glassMissing: false,
-    summary: 'Straight auction shell with one dent and a small rust hole.',
+    summary: 'Straight salvage shell with one dent and a small rust hole.',
   });
   shell.position.y = 0.27;
   shell.rotation.y = 0.035;
@@ -967,7 +967,7 @@ function buildWrappedShellCargo(
     strap.position.set(0, 1.02, z);
     cargo.add(strap);
   }
-  const trayLabel = crateLabelTexture('AUCTION SHELL', 'chassis · no engine');
+  const trayLabel = crateLabelTexture('SALVAGE SHELL', 'chassis · no engine');
   if (trayLabel) {
     const label = new THREE.Mesh(
       new THREE.PlaneGeometry(2.2, 0.55),
@@ -2531,7 +2531,7 @@ export function buildCustomCarShop(
       freightRoad.add(patch);
     }
   }
-  // The auction shell rides the pier on a huge timber tray under plastic wrap.
+  // The salvage shell rides the pier on a huge timber tray under plastic wrap.
   const { cargo: wrappedShell } = buildWrappedShellCargo(
     new THREE.MeshStandardMaterial({ color: 0x5c5148, roughness: 0.92 }),
     new THREE.MeshStandardMaterial({ color: 0x8a4b2d, roughness: 0.99 }),
