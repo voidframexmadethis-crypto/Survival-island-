@@ -527,7 +527,7 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
           </form>
         )}
 
-        <div className="flex items-center gap-2 landscape:gap-3">
+        <div className="controls-utility-row flex items-center gap-2 landscape:gap-3">
           {!isDriving && !mirroredJoystickOnly && (
             <>
               <button
@@ -619,7 +619,7 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
           )}
         </div>
 
-        <div className="flex items-end gap-2 landscape:gap-3">
+        <div className="controls-main-row flex items-end gap-2 landscape:gap-3">
           <div
             ref={joyPadRef}
             className="xbox-stick relative w-28 h-28 sm:w-36 sm:h-36 shrink-0 rounded-full border-2 flex items-center justify-center touch-surface"
@@ -659,7 +659,7 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
           </div>
 
           {!isDriving && (onFlyAscendChange || onFlyDescendChange) && (
-            <div id="flight-controls" className="flex flex-col gap-1.5 shrink-0">
+            <div id="flight-controls" className="flex flex-col gap-1.5 landscape:gap-3 shrink-0">
               {onFlyAscendChange && (
                 <button
                   type="button"
@@ -863,7 +863,7 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
           ) : (
             <>
               {/* Compact Utility Row: Backpack, Craft, Build */}
-              <div className="flex items-center gap-2 landscape:gap-3">
+              <div className="controls-utility-row flex items-center gap-2 landscape:gap-3">
                 {onOpenBackpack && (
                   <button
                     type="button"
@@ -912,7 +912,7 @@ export const TouchControls = React.memo(forwardRef<TouchControlsHandle, TouchCon
               </div>
 
               {/* Thumb Arc: Reload + Kick + Jump + Primary Action */}
-              <div className="flex items-end gap-2 landscape:gap-3">
+              <div className="controls-action-row flex items-end gap-2 landscape:gap-3">
                 {showReload && onReload && (
                   <button
                     type="button"

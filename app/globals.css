@@ -194,11 +194,20 @@
   .player-controls-left {
     left: max(env(safe-area-inset-left), 24px) !important;
     bottom: max(env(safe-area-inset-bottom), 18px) !important;
+    width: min(44vw, 430px);
   }
 
   .player-controls-right {
     right: max(env(safe-area-inset-right), 24px) !important;
     bottom: max(env(safe-area-inset-bottom), 18px) !important;
+    width: min(44vw, 430px);
+  }
+
+  .controls-utility-row,
+  .controls-main-row,
+  .controls-action-row {
+    width: 100%;
+    justify-content: space-between;
   }
 }
 
