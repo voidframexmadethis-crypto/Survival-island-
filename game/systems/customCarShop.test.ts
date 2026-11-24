@@ -11,6 +11,7 @@ import {
   CUSTOM_SHOP_PART_CRATES,
   CUSTOM_SHOP_TRIP_BACK_SECONDS,
   CARGO_SHIP_STEAM_IN_SECONDS,
+  RED_CARGO_SHIP_VOYAGE_SECONDS,
   CUSTOM_SHOP_TRIP_OUT_SECONDS,
   CUSTOM_SHOP_LOAD_SECONDS,
   CUSTOM_SHOP_WORKERS,
@@ -34,6 +35,7 @@ import {
   beginCustomShopRestoration,
   createCargoSupplyState,
   createCustomShopState,
+  createNpcBuild,
   formatCargoEta,
   getCargoEtaSeconds,
   getCargoSchedule,
@@ -44,10 +46,12 @@ import {
   getCustomShopFreightRoutePoint,
   getCustomShopLiftOffset,
   getCustomShopOverallProgress,
+  getCustomShopPaintBoothTransfer,
   isCustomShopTestDrive,
   isCustomShopTrunkOpen,
   isOnCustomShopFreightRoute,
   markCustomShopComplete,
+  matchDonorRequest,
   resolveCustomShopBuild,
 } from './customCarShop';
 import { caveSystem } from './caveSystem';
@@ -220,14 +224,15 @@ test('the Crescent City barge moors on real water one forklift run from the shop
   assert.ok(Math.hypot(end.x - 95.4, end.z - 149.8) < 0.1);
 });
 
-test('the Crescent City crossing takes three minutes and lands five crates', () => {
-  assert.equal(CARGO_SHIP_STEAM_IN_SECONDS, 180);
+test('the fast Crescent City barge lands five crates in 30 seconds', () => {
+  assert.equal(CARGO_SHIP_STEAM_IN_SECONDS, 30);
+  assert.equal(RED_CARGO_SHIP_VOYAGE_SECONDS, 1800);
   const cargo = createCargoSupplyState();
   cargo.phase = 'steaming_in';
-  advanceCargoSupply(cargo, 60);
-  assert.ok(getCargoEtaSeconds(cargo) > 110);
+  advanceCargoSupply(cargo, 10);
+  assert.ok(getCargoEtaSeconds(cargo) > 15);
   assert.equal(formatCargoEta(125), '2:05');
-  assert.ok(getCargoSupplyLabel(cargo).includes('ETA 2:00'));
+  assert.ok(getCargoSupplyLabel(cargo).includes('ETA 0:20'));
 
   const events = advanceCargoSupply(cargo, 500);
   const delivered = events.filter((event) => event.type === 'crate_delivered');
@@ -257,8 +262,8 @@ test('a freight donor puts the wrapped shell on the barge before the parts', () 
   assert.equal(state.cargo.phase, 'steaming_in');
   assert.equal(state.cargo.crateIds[0], DONOR_SHELL_CRATE.id);
 
-  // The shell only appears after the three-minute crossing and unloading.
-  advanceCustomShopState(state, 180);
+  // The shell only appears after the barge crossing and unloading.
+  advanceCustomShopState(state, 30);
   assert.equal(state.phase, 'waiting_donor');
   const landed = advanceCustomShopState(state, 20);
   assert.equal(state.phase, 'restoring');
@@ -432,4 +437,69 @@ test('workers hold the right tool and the finished car goes on a road test', () 
     getCustomShopTestDrivePoint(0).z !== getCustomShopTestDrivePoint(0.5).z ||
       getCustomShopTestDrivePoint(0).x !== getCustomShopTestDrivePoint(0.5).x,
   );
+});
+
+test('the shop computer matches a named car and lets the NPC crew surprise the player', () => {
+  assert.equal(matchDonorRequest("I want a '64 Impala")?.id, 'impala_64');
+  assert.equal(matchDonorRequest('96 Impala SS')?.id, 'impala_96');
+  assert.equal(matchDonorRequest('box chevy on Daytons')?.id, 'caprice_74');
+  assert.equal(matchDonorRequest('Buick Regal')?.id, 'regal_87');
+  assert.equal(matchDonorRequest('Coupe de Ville')?.id, 'deville_79');
+  assert.equal(matchDonorRequest('El Camino')?.id, 'elcamino_86');
+  assert.equal(matchDonorRequest('Lincoln Town Car')?.id, 'towncar_03');
+  assert.equal(matchDonorRequest('a banana'), null);
+
+  const surprised = createNpcBuild("build me a '64 Impala", () => 0.1);
+  assert.ok(surprised);
+  assert.equal(surprised.requestedDonor.id, 'impala_64');
+  assert.equal(surprised.surprise, true);
+  assert.notEqual(surprised.actualDonor.id, 'impala_64');
+  assert.equal(surprised.build.donorCarId, surprised.actualDonor.id);
+
+  const straight = createNpcBuild("build me a '64 Impala", () => 0.99);
+  assert.ok(straight);
+  assert.equal(straight.surprise, false);
+  assert.equal(straight.actualDonor.id, 'impala_64');
+  assert.ok(straight.build.paintId.length > 0);
+  assert.equal(createNpcBuild('a banana'), null);
+
+  const randomPick = createNpcBuild('surprise me', () => 0.5);
+  assert.ok(randomPick);
+  assert.equal(randomPick.surprise, true);
+});
+
+test('the paint stage drives the car into the booth, closes the door and returns', () => {
+  const state = createCustomShopState();
+  state.phase = 'restoring';
+  state.stageIndex = CUSTOM_RESTORATION_STAGES.findIndex(
+    (stage) => stage.id === 'paint',
+  );
+
+  state.stageProgress = 0;
+  let transfer = getCustomShopPaintBoothTransfer(state);
+  assert.equal(transfer.active, true);
+  assert.equal(transfer.inside, false);
+  assert.equal(transfer.doorsClosed, false);
+
+  state.stageProgress = 0.5;
+  transfer = getCustomShopPaintBoothTransfer(state);
+  assert.equal(transfer.inside, true);
+  assert.equal(transfer.doorsClosed, true);
+  assert.ok(transfer.x > 8.5);
+
+  state.stageProgress = 0.55;
+  const held = getCustomShopPaintBoothTransfer(state);
+  assert.equal(held.x, transfer.x);
+  assert.equal(held.z, transfer.z);
+
+  state.stageProgress = 0.95;
+  transfer = getCustomShopPaintBoothTransfer(state);
+  assert.equal(transfer.inside, false);
+  assert.equal(transfer.doorsClosed, false);
+
+  state.stageIndex = CUSTOM_RESTORATION_STAGES.findIndex(
+    (stage) => stage.id === 'engine_install',
+  );
+  assert.equal(getCustomShopPaintBoothTransfer(state).active, false);
+  assert.ok(getCustomShopLiftOffset(state) > 0);
 });

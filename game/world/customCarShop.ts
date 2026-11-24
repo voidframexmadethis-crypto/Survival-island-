@@ -12,6 +12,7 @@ import {
   CUSTOM_FREIGHT_PIER_DECK_ABOVE_WATER,
   CUSTOM_FREIGHT_ROUTE,
   CUSTOM_FREIGHT_SHIP_MOORING,
+  CUSTOM_SHOP_PAINT_BOOTH,
   CUSTOM_SHOP_WORKERS,
   getCustomShopShipRoutePoint,
   JUNKYARD_CAVE,
@@ -67,6 +68,10 @@ export interface CustomCarShopHandles {
   forkliftPallet: THREE.Group;
   forkliftShellPallet: THREE.Group;
   wrappedShell: THREE.Group;
+  paintBooth: THREE.Group;
+  paintBoothDoor: THREE.Group;
+  paintBoothLight: THREE.PointLight;
+  redCargoShip: THREE.Group;
   freightDeckY: number;
   setStatus: (headline: string, detail: string, progress: number) => void;
 }
@@ -1000,16 +1005,20 @@ function buildEngineCrate(): THREE.Group {
   return group;
 }
 
-function buildFreightShip(): { ship: THREE.Group; containers: THREE.Group } {
+function buildFreightShip(palette?: {
+  hullColor?: number;
+  stripeColor?: number;
+  name?: string;
+}): { ship: THREE.Group; containers: THREE.Group } {
   const ship = new THREE.Group();
-  ship.name = 'crescent-city-freight-barge';
+  ship.name = palette?.name ?? 'crescent-city-freight-barge';
   const hullMat = new THREE.MeshStandardMaterial({
-    color: 0x1e2b33,
+    color: palette?.hullColor ?? 0x1e2b33,
     roughness: 0.62,
     metalness: 0.32,
   });
   const hullStripe = new THREE.MeshStandardMaterial({
-    color: 0x8c2d24,
+    color: palette?.stripeColor ?? 0x8c2d24,
     roughness: 0.66,
     metalness: 0.2,
   });
@@ -1661,6 +1670,102 @@ export function buildCustomCarShop(
     liftPlatform.add(hazard);
   }
 
+  // Paint and wrap booth extension east of the main bay. The car drives out
+  // of the shop, across the apron and into the booth for paint.
+  const paintBooth = new THREE.Group();
+  paintBooth.name = 'bayou-royal-paint-booth';
+  paintBooth.position.set(CUSTOM_SHOP_PAINT_BOOTH.x, 0, CUSTOM_SHOP_PAINT_BOOTH.z);
+  const boothFloor = new THREE.Mesh(roundedBox(6.0, 0.14, 6.8, 0.03), floorMat);
+  boothFloor.position.y = 0.07;
+  const boothApron = new THREE.Mesh(roundedBox(6.4, 0.08, 3.4, 0.03), floorMat);
+  boothApron.position.set(0, 0.04, 4.9);
+  const boothBack = new THREE.Mesh(roundedBox(6.0, 3.5, 0.18, 0.03), wallMat);
+  boothBack.position.set(0, 1.82, -3.38);
+  const boothSideL = new THREE.Mesh(roundedBox(0.18, 3.5, 6.8, 0.03), wallMat);
+  boothSideL.position.set(-3.0, 1.82, 0);
+  const boothSideR = boothSideL.clone();
+  boothSideR.position.x = 3.0;
+  const boothRoof = new THREE.Mesh(roundedBox(6.3, 0.22, 7.0, 0.05), wallDarkMat);
+  boothRoof.position.set(0, 3.62, 0);
+  const boothHeader = new THREE.Mesh(roundedBox(6.0, 0.72, 0.24, 0.03), wallDarkMat);
+  boothHeader.position.set(0, 3.18, 3.38);
+  paintBooth.add(boothFloor, boothApron, boothBack, boothSideL, boothSideR, boothRoof, boothHeader);
+
+  // Filter wall and wet-floor grate.
+  for (let index = 0; index < 4; index++) {
+    const filter = new THREE.Mesh(
+      roundedBox(1.15, 2.2, 0.08, 0.02),
+      new THREE.MeshStandardMaterial({ color: 0xd8d2bf, roughness: 0.96 }),
+    );
+    filter.position.set(-2.1 + index * 1.4, 1.9, -3.24);
+    const frame = new THREE.Mesh(roundedBox(1.3, 2.35, 0.05, 0.02), blackMat);
+    frame.position.set(filter.position.x, 1.9, -3.3);
+    paintBooth.add(frame, filter);
+  }
+  const grate = new THREE.Mesh(roundedBox(2.8, 0.03, 2.2, 0.01), blackMat);
+  grate.position.set(0, 0.15, -0.5);
+  paintBooth.add(grate);
+
+  // Roll-up door with slats; it lifts into the header when the car enters.
+  const paintBoothDoor = new THREE.Group();
+  paintBoothDoor.name = 'paint-booth-rollup-door';
+  paintBoothDoor.position.set(0, 2.92, 3.36);
+  const doorPanel = new THREE.Mesh(roundedBox(5.8, 2.85, 0.1, 0.02), wallDarkMat);
+  doorPanel.position.y = 1.43;
+  paintBoothDoor.add(doorPanel);
+  for (let index = 0; index < 10; index++) {
+    const slat = new THREE.Mesh(roundedBox(5.75, 0.05, 0.12, 0.01), blackMat);
+    slat.position.set(0, 0.24 + index * 0.27, 0.03);
+    paintBoothDoor.add(slat);
+  }
+  const doorHandle = new THREE.Mesh(roundedBox(0.9, 0.12, 0.12, 0.02), rustMat);
+  doorHandle.position.set(0, 0.52, 0.09);
+  paintBoothDoor.add(doorHandle);
+  paintBooth.add(paintBoothDoor);
+
+  // Ceiling lights, exhaust stack and a mixing bench.
+  const paintBoothLight = new THREE.PointLight(0xfff1cf, 0.5, 9, 1.6);
+  paintBoothLight.position.set(0, 3.0, 0.4);
+  paintBooth.add(paintBoothLight);
+  for (const x of [-1.6, 1.6]) {
+    const tube = new THREE.Mesh(
+      roundedBox(2.2, 0.06, 0.22, 0.01),
+      warmLightMat,
+    );
+    tube.position.set(x, 3.5, 0.7);
+    paintBooth.add(tube);
+  }
+  const exhaust = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.34, 0.4, 3.2, 12),
+    rustMat,
+  );
+  exhaust.position.set(2.1, 3.9, -2.1);
+  paintBooth.add(exhaust);
+  const mixer = new THREE.Mesh(roundedBox(1.7, 0.85, 0.7, 0.04), blackMat);
+  mixer.position.set(-2.15, 0.55, 1.1);
+  const mixTop = new THREE.Mesh(roundedBox(1.8, 0.08, 0.8, 0.02), woodTexMaterial(woodTex));
+  mixTop.position.set(-2.15, 0.99, 1.1);
+  paintBooth.add(mixer, mixTop);
+  for (let index = 0; index < 5; index++) {
+    const can = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.1, 0.1, 0.26, 10),
+      index % 2 === 0 ? rustMat : wallDarkMat,
+    );
+    can.position.set(-2.75 + index * 0.26, 1.16, 1.0);
+    paintBooth.add(can);
+  }
+  const paintSign = crateLabelTexture('PAINT & WRAP', 'booth 02 · dust-controlled');
+  if (paintSign) {
+    const sign = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.3, 0.9),
+      new THREE.MeshBasicMaterial({ map: paintSign, transparent: true }),
+    );
+    sign.position.set(0, 3.36, 3.51);
+    paintBooth.add(sign);
+  }
+  addShadow(paintBooth);
+  group.add(paintBooth);
+
   // Parts, tools, upholstery and paint displays around the bay.
   const bench = new THREE.Mesh(roundedBox(4.8, 0.2, 0.95, 0.04), woodTexMaterial(woodTex));
   bench.position.set(-3.35, 0.92, -3.75);
@@ -2059,6 +2164,18 @@ export function buildCustomCarShop(
   );
   cargoShip.rotation.y = shipPoint.yaw;
   cargoShip.visible = false;
+  const { ship: redCargoShip } = buildFreightShip({
+    hullColor: 0x8f2a20,
+    stripeColor: 0xe9dcc0,
+    name: 'red-crescent-deep-water-freighter',
+  });
+  redCargoShip.position.set(
+    CUSTOM_FREIGHT_SHIP_MOORING.x - CUSTOM_SHOP_POS.x + 18,
+    freightWaterY - groundY,
+    CUSTOM_FREIGHT_SHIP_MOORING.z - CUSTOM_SHOP_POS.z + 12,
+  );
+  redCargoShip.rotation.y = Math.PI * 0.35;
+  group.add(redCargoShip);
   const { forklift, forks: forkliftForks, pallet: forkliftPallet } = buildShopForklift();
   const forkliftShellPallet = new THREE.Group();
   forkliftShellPallet.name = 'forklift-shell-pallet';
@@ -2192,6 +2309,25 @@ export function buildCustomCarShop(
     { x: CUSTOM_SHOP_POS.x + 5.75, z: CUSTOM_SHOP_POS.z + 4.45, radius: 0.75, minY: wallMinY, maxY: wallMaxY },
   );
 
+  // Paint booth walls: the south face stays open for the car and painters.
+  const boothWorldX = CUSTOM_SHOP_POS.x + CUSTOM_SHOP_PAINT_BOOTH.x;
+  const boothWorldZ = CUSTOM_SHOP_POS.z + CUSTOM_SHOP_PAINT_BOOTH.z;
+  for (let z = -2.9; z <= 3.3; z += 0.75) {
+    colliders.push(
+      { x: boothWorldX - 3.0, z: boothWorldZ + z, radius: 0.55, minY: wallMinY, maxY: wallMaxY },
+      { x: boothWorldX + 3.0, z: boothWorldZ + z, radius: 0.55, minY: wallMinY, maxY: wallMaxY },
+    );
+  }
+  for (let x = -2.8; x <= 2.8; x += 0.75) {
+    colliders.push({
+      x: boothWorldX + x,
+      z: boothWorldZ - 3.35,
+      radius: 0.55,
+      minY: wallMinY,
+      maxY: wallMaxY,
+    });
+  }
+
   group.traverse((object) => {
     if (object instanceof THREE.Mesh && !object.userData.dynamic) {
       object.castShadow = true;
@@ -2243,6 +2379,10 @@ export function buildCustomCarShop(
     forkliftPallet,
     forkliftShellPallet,
     wrappedShell,
+    paintBooth,
+    paintBoothDoor,
+    paintBoothLight,
+    redCargoShip,
     freightDeckY: freightDeckWorldY,
     setStatus,
   };

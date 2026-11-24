@@ -439,6 +439,7 @@ import {
 import {
   CUSTOM_FREIGHT_PIER_DECK_ABOVE_WATER,
   CUSTOM_FREIGHT_ROUTE,
+  CUSTOM_FREIGHT_SHIP_MOORING,
   CUSTOM_SHOP_PART_CRATES,
   CUSTOM_SHOP_ROUTE,
   CUSTOM_SHOP_VEHICLE_ID,
@@ -451,13 +452,16 @@ import {
   ROOF_OPTIONS,
   STEERING_WHEEL_OPTIONS,
   UNDERCARRIAGE_OPTIONS,
+  RED_CARGO_SHIP_VOYAGE_SECONDS,
   advanceCustomShopState,
   areCustomShopWheelsRemoved,
   beginCustomShopRestoration,
   createCustomShopState,
+  createNpcBuild,
   getCargoSupplyLabel,
   getCustomShopFreightRoutePoint,
   getCustomShopLiftOffset,
+  getCustomShopPaintBoothTransfer,
   getCustomShopShellRemoval,
   getCustomShopTestDrivePoint,
   getCustomShopWorkerTool,
@@ -1691,6 +1695,8 @@ export class GameEngine {
   private garageCrewToastAt = -Infinity;
   private customShopState: CustomShopState = createCustomShopState();
   private customShopSpawned = false;
+  private customShopCourtesySpawned = false;
+  private customShopPaintFxAt = -Infinity;
   private customShopToastAt = -Infinity;
   private customShopStatusKey = '';
 
@@ -13958,16 +13964,16 @@ export class GameEngine {
       if (distance < 7.5) {
         const shopState = this.customShopState;
         return {
-          id: 'restoration_shop_build_sheet',
+          id: 'restoration_shop_terminal',
           label:
             shopState.phase === 'idle'
-              ? 'Write a Bayou Royal build sheet'
+              ? 'Use the Bayou Royal shop computer'
               : shopState.phase === 'complete'
-                ? 'Bayou Royal Customs service desk'
-                : 'Check the Bayou Royal restoration',
+                ? 'Bayou Royal Customs terminal'
+                : 'Check the Bayou Royal job',
           sublabel:
             shopState.phase === 'idle'
-              ? 'Pick a donor, rims, steering wheel, roof and interior'
+              ? 'Tell the NPC crew what car to build — they do the rest'
               : getCustomShopPhaseLabel(shopState),
           kind: 'restoration_shop',
           actionCategory: 'craft',
@@ -18234,7 +18240,53 @@ export class GameEngine {
     this.spawnParticles(car.x - 0.8, car.y + 0.6, car.z, wash.accentColor, 6);
   }
 
-  /** Live build-sheet state for the Bayou Royal shop modal. */
+  /** First line the shop computer prints when the terminal opens. */
+  public getRestorationShopGreeting(): string {
+    const state = this.customShopState;
+    const resolved = resolveCustomShopBuild(state.build);
+    if (state.completed) {
+      return `That ${resolved.name} is done, aligned and sitting in the bay with the keys in it. Take it out and enjoy it. The red deep-water ship is still on its slow 30-minute run, but your car needed nothing from it.`;
+    }
+    if (state.phase !== 'idle') {
+      return `${getCustomShopPhaseLabel(state)}. The crew is on it — tell me if you want something else, but this one is already moving.`;
+    }
+    return "Bayou Royal Customs terminal online. There's a teal '64 Impala parked out front with the keys in it — take it for a spin while we talk. Tell me what kind of car you want Duke and Rae to build: year, make and model is enough. The fast barge makes the island in 30 seconds; the red deep-water ship takes 30 minutes, but it only carries background stock.";
+  }
+
+  /**
+   * The only player-facing shop interface: a shop computer chat. The player
+   * names a car; the NPCs pick the spec, route and all the work.
+   */
+  public chatWithRestorationShop(message: string): string {
+    const text = message.trim();
+    if (!text) return 'Say a car — for example “64 Impala”, “Box Chevy”, “Regal” or “surprise me”.';
+    const state = this.customShopState;
+    const resolved = resolveCustomShopBuild(state.build);
+    if (state.completed) {
+      return `The ${resolved.name} is finished. Keys are in it — take it out. I can't start another build until this one leaves the shop.`;
+    }
+    if (state.phase !== 'idle') {
+      return `${getCustomShopPhaseLabel(state)}. Duke and Rae are already working; I'll holler when it's done.`;
+    }
+    const plan = createNpcBuild(text);
+    if (!plan) {
+      return 'I need a real car to tell the crew. Try “64 Impala”, “74 Caprice”, “87 Regal”, “96 Impala SS”, “79 Coupe de Ville”, “El Camino”, “Town Car” — or say “surprise me”.';
+    }
+    state.build = plan.build;
+    if (!this.startRestorationBuild()) {
+      return 'The bay is busy right now. Give the crew a minute and ask me again.';
+    }
+    const route =
+      plan.build.donorSource === 'freight'
+        ? 'the wrapped auction shell arrives on the fast barge in about 30 seconds'
+        : 'Duke is taking the shop truck to Cave 12';
+    if (plan.surprise) {
+      return `You asked for a ${plan.requestedDonor.shortName}, but Duke found a ${plan.actualDonor.name} instead and he's already loading it. Trust me — you'll love it. ${route}. The crew is picking the paint, rims, wheel, roof and interior themselves.`;
+    }
+    return `Done — a ${plan.actualDonor.name}. ${route}. Duke and Rae are handling the teardown, hydraulics, engine, paint booth, interior, roof, wheels, alignment and road test. Close the terminal and we'll get to work.`;
+  }
+
+  /** Live shop state for the terminal and HUD. */
   public getRestorationShopHudState(): RestorationShopHudState {
     return buildRestorationShopHudState(this.customShopState);
   }
@@ -18263,7 +18315,7 @@ export class GameEngine {
     return true;
   }
 
-  /** Sends Duke and Rae to Cave 12 with the current build sheet. */
+  /** Sends the NPC crew out with the car the shop computer matched. */
   public startRestorationBuild(): boolean {
     const state = this.customShopState;
     if (state.phase !== 'idle' || state.completed) return false;
@@ -18284,12 +18336,12 @@ export class GameEngine {
     const resolved = resolveCustomShopBuild(state.build);
     if (resolved.build.donorSource === 'freight') {
       this.toast(
-        `Build sheet filed for a wrapped ${resolved.donor.name} auction shell. Duke is waiting on the Crescent City barge — three-minute run up the bayou — while Rae fuels the forklift.`,
+        `Duke and Rae ordered a wrapped ${resolved.donor.name} auction shell. The fast Crescent City barge makes the island in 30 seconds while Rae fuels the forklift; the red ship stays on its slow 30-minute run.`,
         'craft',
       );
     } else {
       this.toast(
-        `Duke & Rae are rolling out to Cave 12 for a ${resolved.donor.name}. Build sheet: ${resolved.paint.label}, ${resolved.rims.label}, ${resolved.steeringWheel.label}, ${resolved.roof.label}. It needs ${resolved.damage.summary.toLowerCase()}`,
+        `Duke & Rae are rolling out to Cave 12 for a ${resolved.donor.name}. They picked ${resolved.paint.label}, ${resolved.rims.label}, ${resolved.steeringWheel.label} and ${resolved.roof.label} themselves. It needs ${resolved.damage.summary.toLowerCase()}`,
         'craft',
       );
     }
@@ -18328,16 +18380,18 @@ export class GameEngine {
         shop.towDonor.visible = false;
         this.placeCustomShopTruckAtHome(shop);
         this.resetCustomShopFreight(shop);
+        this.ensureCustomShopCourtesyCar(shop);
         if (playerDistance < 28 && this.elapsed - this.customShopToastAt > 45) {
           this.customShopToastAt = this.elapsed;
           this.toast(
-            'Duke & Rae have the lift open at Bayou Royal Customs — press E at the shop for a build sheet.',
+            'The shop computer is on at Bayou Royal Customs — press E at the door to tell Duke and Rae what to build.',
             'discovery',
           );
         }
       }
     }
 
+    this.animateRedCargoShip(shop);
     if (state.phase === 'idle') {
       this.setCustomShopStatus(shop, state);
       this.animateCustomShopWorkers(shop, state, dt);
@@ -18361,6 +18415,73 @@ export class GameEngine {
     ) {
       shop.liftCar.visible = state.phase !== 'complete';
     }
+  }
+
+  private animateRedCargoShip(
+    shop: NonNullable<WorldHandles['customCarShop']>,
+  ): void {
+    // The red deep-water freighter never blocks the build; it is a slow,
+    // 30-minute background supply run that stays visible out in the bay.
+    const progress =
+      (this.elapsed % RED_CARGO_SHIP_VOYAGE_SECONDS) / RED_CARGO_SHIP_VOYAGE_SECONDS;
+    // Deep-water approach from offshore: the red ship spends 30 minutes
+    // closing on the pier while the fast barge handles the actual build.
+    const startX = 112;
+    const startZ = 162;
+    const x = THREE.MathUtils.lerp(startX, CUSTOM_FREIGHT_SHIP_MOORING.x, progress);
+    const z = THREE.MathUtils.lerp(startZ, CUSTOM_FREIGHT_SHIP_MOORING.z, progress);
+    const waterY = getWaterLevelAt(x, z);
+    shop.redCargoShip.visible = true;
+    shop.redCargoShip.position.set(
+      x - CUSTOM_SHOP_POS.x,
+      waterY - shop.groundY + Math.sin(this.elapsed * 0.55) * 0.05,
+      z - CUSTOM_SHOP_POS.z,
+    );
+    shop.redCargoShip.rotation.y = Math.atan2(
+      CUSTOM_FREIGHT_SHIP_MOORING.x - startX,
+      CUSTOM_FREIGHT_SHIP_MOORING.z - startZ,
+    );
+    shop.redCargoShip.rotation.z = Math.sin(this.elapsed * 0.42) * 0.01;
+  }
+
+  private ensureCustomShopCourtesyCar(
+    shop: NonNullable<WorldHandles['customCarShop']>,
+  ): void {
+    if (this.customShopCourtesySpawned) return;
+    const existing = this.vehicles.find(
+      (vehicle) => vehicle.id === 'veh_bayou_royal_courtesy',
+    );
+    if (existing) {
+      this.customShopCourtesySpawned = true;
+      return;
+    }
+    const x = shop.position.x - 8.8;
+    const z = shop.position.z + 7.8;
+    const vehicle = createVehicleFromPreset(
+      'veh_bayou_royal_courtesy',
+      'lowrider',
+      x,
+      getTerrainHeight(x, z) + 0.08,
+      z,
+      Math.PI * 0.08,
+    );
+    vehicle.name = "Bayou Royal '64 Impala";
+    vehicle.paintColor = '#0f5f5c';
+    vehicle.customStripeColor = '#e8d9b0';
+    vehicle.interiorColor = '#5c1f24';
+    vehicle.rimColor = '#d9d7cf';
+    vehicle.wheelScale = Math.min(1.85, (vehicle.wheelScale ?? 1) * 0.86);
+    vehicle.suspensionOffset = 0.45;
+    vehicle.hydraulicHop = true;
+    vehicle.hasAirbagSuspension = true;
+    vehicle.hydraulicBounceBoost = 1.3;
+    vehicle.airbagSpeed = 0.95;
+    vehicle.hydraulicsDanceEnabled = true;
+    vehicle.hydraulicsDanceAvailable = true;
+    vehicle.hp = vehicle.maxHp;
+    vehicle.fuel = 100;
+    this.spawnVehicleInstance(vehicle);
+    this.customShopCourtesySpawned = true;
   }
 
   private resetCustomShopFreight(
@@ -18498,7 +18619,8 @@ export class GameEngine {
   ): void {
     const stage = getCustomShopStage(state);
     const testDrive = isCustomShopTestDrive(state);
-    const liftTarget = testDrive ? 0 : getCustomShopLiftOffset(state);
+    const boothTransfer = getCustomShopPaintBoothTransfer(state);
+    const liftTarget = testDrive || boothTransfer.active ? 0 : getCustomShopLiftOffset(state);
     shop.liftPlatform.position.y = THREE.MathUtils.lerp(
       shop.liftPlatform.position.y,
       liftTarget,
@@ -18506,7 +18628,31 @@ export class GameEngine {
     );
     const removal = getCustomShopShellRemoval(state);
 
-    if (testDrive) {
+    if (boothTransfer.active) {
+      shop.liftCar.position.set(boothTransfer.x, 0.46, boothTransfer.z);
+      shop.liftCar.rotation.y = boothTransfer.heading;
+      const doorTarget = boothTransfer.doorsClosed ? 0.06 : 2.92;
+      shop.paintBoothDoor.position.y = THREE.MathUtils.lerp(
+        shop.paintBoothDoor.position.y,
+        doorTarget,
+        Math.min(1, dt * 4.5),
+      );
+      shop.paintBoothLight.intensity = THREE.MathUtils.lerp(
+        shop.paintBoothLight.intensity,
+        boothTransfer.inside ? 2.4 : 1.1,
+        Math.min(1, dt * 5),
+      );
+      if (boothTransfer.inside && this.elapsed - this.customShopPaintFxAt > 0.18) {
+        this.customShopPaintFxAt = this.elapsed;
+        this.spawnParticles(
+          shop.position.x + boothTransfer.x,
+          shop.position.y + 1.1,
+          shop.position.z + boothTransfer.z,
+          stage?.particleColor ?? 0x9f2948,
+          3,
+        );
+      }
+    } else if (testDrive) {
       const point = getCustomShopTestDrivePoint(state.stageProgress);
       shop.liftCar.position.set(point.x, 0.46, point.z);
       shop.liftCar.rotation.y = point.heading;
@@ -18530,6 +18676,16 @@ export class GameEngine {
       shop.liftCar.rotation.y = THREE.MathUtils.lerp(
         shop.liftCar.rotation.y,
         0,
+        Math.min(1, dt * 3),
+      );
+      shop.paintBoothDoor.position.y = THREE.MathUtils.lerp(
+        shop.paintBoothDoor.position.y,
+        2.92,
+        Math.min(1, dt * 3.5),
+      );
+      shop.paintBoothLight.intensity = THREE.MathUtils.lerp(
+        shop.paintBoothLight.intensity,
+        0.45,
         Math.min(1, dt * 3),
       );
     }
@@ -18891,7 +19047,7 @@ export class GameEngine {
     const headline = getCustomShopPhaseLabel(state);
     const resolved = resolveCustomShopBuild(state.build);
     const detail = state.phase === 'idle'
-      ? 'Open the build sheet at the shop desk and pick the donor, rims, wheel and roof.'
+      ? 'Use the shop computer to tell the crew what car you want; they handle the spec and every stage.'
       : state.phase === 'outbound'
         ? `Heading north to Cave 12 Salvage for the ${resolved.donor.name}.`
         : state.phase === 'loading'

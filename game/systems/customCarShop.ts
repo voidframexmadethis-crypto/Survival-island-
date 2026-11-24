@@ -695,6 +695,73 @@ export function createCustomShopBuild(
   return { ...DEFAULT_CUSTOM_BUILD, ...overrides };
 }
 
+function pickOption<T extends { id: string }>(
+  options: readonly T[],
+  random: () => number,
+): T {
+  return options[Math.min(options.length - 1, Math.floor(random() * options.length))];
+}
+
+const DONOR_REQUEST_RULES: readonly {
+  donorId: DonorCarId;
+  patterns: readonly RegExp[];
+}[] = [
+  { donorId: 'impala_96', patterns: [/\b96\b/, /impala\s*ss/, /\bss\b/, /\b1996\b/] },
+  { donorId: 'impala_64', patterns: [/\b64\b/, /\b1964\b/, /impala/, /lowrider/] },
+  { donorId: 'caprice_74', patterns: [/caprice/, /box\s*chevy/, /\b74\b/, /\b1974\b/] },
+  { donorId: 'regal_87', patterns: [/regal/, /buick/, /g-?body/, /\b87\b/] },
+  { donorId: 'deville_79', patterns: [/de\s*ville/, /deville/, /cadillac/, /\b79\b/] },
+  { donorId: 'elcamino_86', patterns: [/el\s*camino/, /elco/, /\b86\b/] },
+  { donorId: 'towncar_03', patterns: [/town\s*car/, /lincoln/, /\b03\b/] },
+];
+
+export function matchDonorRequest(message: string): DonorCarOption | null {
+  const text = message.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').replace(/\s+/g, ' ');
+  for (const rule of DONOR_REQUEST_RULES) {
+    if (rule.patterns.some((pattern) => pattern.test(text))) {
+      return DONOR_CARS.find((donor) => donor.id === rule.donorId) ?? null;
+    }
+  }
+  return null;
+}
+
+export interface NpcBuildPlan {
+  build: CustomShopBuild;
+  requestedDonor: DonorCarOption;
+  actualDonor: DonorCarOption;
+  surprise: boolean;
+}
+
+/**
+ * The shop computer does the spec itself: the player only names the car. Duke
+ * occasionally brings back a different donor he is sure the player will love.
+ */
+export function createNpcBuild(
+  message: string,
+  random: () => number = Math.random,
+): NpcBuildPlan | null {
+  const wantsSurprise = /surprise|you pick|your pick|whatever|dealer'?s choice/i.test(message);
+  const requested = wantsSurprise ? pickOption(DONOR_CARS, random) : matchDonorRequest(message);
+  if (!requested) return null;
+  const surprise = wantsSurprise || random() < 0.22;
+  const alternatives = DONOR_CARS.filter((donor) => donor.id !== requested.id);
+  const actualDonor = surprise
+    ? alternatives[Math.min(alternatives.length - 1, Math.floor(random() * alternatives.length))]
+    : requested;
+  const build: CustomShopBuild = {
+    donorSource: random() < 0.35 ? 'freight' : 'cave',
+    donorCarId: actualDonor.id,
+    paintId: pickOption(PAINT_OPTIONS, random).id,
+    rimId: pickOption(RIM_OPTIONS, random).id,
+    steeringWheelId: pickOption(STEERING_WHEEL_OPTIONS, random).id,
+    roofId: pickOption(ROOF_OPTIONS, random).id,
+    interiorId: pickOption(INTERIOR_OPTIONS, random).id,
+    headlightId: pickOption(HEADLIGHT_OPTIONS, random).id,
+    undercarriageId: pickOption(UNDERCARRIAGE_OPTIONS, random).id,
+  };
+  return { build, requestedDonor: requested, actualDonor, surprise };
+}
+
 function findOption<T extends { id: string }>(
   options: readonly T[],
   id: string | undefined,
@@ -905,8 +972,10 @@ export interface CargoSupplyState {
   crateIds: CargoCrateId[];
 }
 
-/** Crescent City is a three-minute run up the bayou in real time. */
-export const CARGO_SHIP_STEAM_IN_SECONDS = 180;
+/** The fast Crescent City parts barge covers the bayou run in 30 seconds. */
+export const CARGO_SHIP_STEAM_IN_SECONDS = 30;
+/** The red deep-water freighter is a slow 30-minute background supply run. */
+export const RED_CARGO_SHIP_VOYAGE_SECONDS = 30 * 60;
 export const CARGO_FORKLIFT_LOAD_SECONDS = 2.4;
 export const CARGO_FORKLIFT_OUTBOUND_SECONDS = 6;
 export const CARGO_FORKLIFT_UNLOAD_SECONDS = 2.4;
@@ -1275,8 +1344,8 @@ export const CUSTOM_RESTORATION_STAGES: readonly RestorationStage[] = [
     announce: true,
     requiresCrate: 'body_paint',
     workerOffsets: [
-      { x: -2.5, z: 0.1 },
-      { x: 2.5, z: 1.4 },
+      { x: 8.1, z: 1.2 },
+      { x: 10.9, z: -0.2 },
     ],
   },
   {
@@ -1704,10 +1773,13 @@ export function getCustomShopLiftOffset(state: CustomShopState): number {
     case 'hydraulics':
     case 'undercarriage':
     case 'body':
-    case 'paint':
     case 'interior':
     case 'steering':
       return 1.35;
+    case 'engine_install':
+      return 1.15;
+    case 'paint':
+      return 0;
     case 'roof':
       return 0.9;
     default:
@@ -1822,6 +1894,81 @@ export const CUSTOM_SHOP_TEST_DRIVE_POINTS: readonly {
 
 export function isCustomShopTestDrive(state: CustomShopState): boolean {
   return state.phase === 'restoring' && getCustomShopStage(state)?.id === 'road_test';
+}
+
+export const CUSTOM_SHOP_PAINT_BOOTH = {
+  /** Local-space centre of the booth extension east of the shop. */
+  x: 9.5,
+  z: 0.5,
+  width: 6.0,
+  depth: 6.8,
+  doorZ: 3.75,
+} as const;
+
+const PAINT_BOOTH_ROUTE: readonly { x: number; z: number }[] = [
+  { x: 0, z: 0.35 },
+  { x: 0, z: 6.4 },
+  { x: CUSTOM_SHOP_PAINT_BOOTH.x, z: 6.4 },
+  { x: CUSTOM_SHOP_PAINT_BOOTH.x, z: CUSTOM_SHOP_PAINT_BOOTH.z },
+];
+
+function paintBoothRoutePoint(t: number): { x: number; z: number; heading: number } {
+  const clamped = Math.min(0.999, Math.max(0, t));
+  const segments = PAINT_BOOTH_ROUTE.length - 1;
+  const raw = clamped * segments;
+  const index = Math.min(segments - 1, Math.floor(raw));
+  const local = raw - index;
+  const from = PAINT_BOOTH_ROUTE[index];
+  const to = PAINT_BOOTH_ROUTE[index + 1];
+  return {
+    x: from.x + (to.x - from.x) * local,
+    z: from.z + (to.z - from.z) * local,
+    heading: Math.atan2(to.x - from.x, to.z - from.z),
+  };
+}
+
+export interface CustomShopPaintBoothTransfer {
+  active: boolean;
+  x: number;
+  z: number;
+  heading: number;
+  inside: boolean;
+  doorsClosed: boolean;
+}
+
+/** Drives the car into the booth, holds it for paint, then brings it back. */
+export function getCustomShopPaintBoothTransfer(
+  state: CustomShopState,
+): CustomShopPaintBoothTransfer {
+  const stage = getCustomShopStage(state);
+  const active = state.phase === 'restoring' && stage?.id === 'paint';
+  if (!active) {
+    return {
+      active: false,
+      x: 0,
+      z: 0.35,
+      heading: 0,
+      inside: false,
+      doorsClosed: false,
+    };
+  }
+  const progress = Math.min(1, Math.max(0, state.stageProgress));
+  const entering = progress < 0.26;
+  const leaving = progress > 0.8;
+  const t = entering
+    ? progress / 0.26
+    : leaving
+      ? 1 - (progress - 0.8) / 0.2
+      : 1;
+  const point = paintBoothRoutePoint(t);
+  return {
+    active: true,
+    x: point.x,
+    z: point.z,
+    heading: point.heading,
+    inside: !entering && !leaving,
+    doorsClosed: progress > 0.28 && progress < 0.78,
+  };
 }
 
 export function getCustomShopTestDrivePoint(progress: number): {
