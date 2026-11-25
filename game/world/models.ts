@@ -266,6 +266,16 @@ export function createSkyCelestialBodies(): SkyCelestialHandles {
         sky += amberGlow * (wideScatter + horizonSunMask * (0.14 + uTwilight * 0.86)) * sunVisible;
         sky += mix(uSunColor, vec3(1.0, 0.98, 0.94), 0.55) * (midHalo + tightCorona + sunDisc * 2.8) * sunVisible;
 
+        // Fantasy golden-hour backdrop: a soft nebula veil and a huge ringed
+        // gas giant, matching the oversized-planet island look. Both are pure
+        // shader work, so they add no draw calls or texture memory.
+        float nebulaElev = smoothstep(0.08, 0.62, elev) * (1.0 - smoothstep(0.72, 1.0, elev));
+        float nebulaAz = atan(dir.z, dir.x);
+        float nebulaWave = 0.5 + 0.5 * sin(nebulaAz * 2.35 + elev * 11.0 + uTime * 0.012);
+        float nebulaMask = nebulaElev * smoothstep(0.35, 0.82, nebulaWave);
+        vec3 nebulaColor = mix(vec3(0.16, 0.04, 0.44), vec3(0.06, 0.42, 0.78), nebulaWave);
+        sky += nebulaColor * nebulaMask * (0.22 + 0.28 * uDaylight);
+
         // Crisp bright white midday cumulus/cirrus clouds, transitioning smoothly to golden-rimmed sunset clouds at twilight
         if (elev > 0.02) {
           vec2 cloudUv = dir.xz / (elev + 0.22) * 1.48 + vec2(uTime * 0.0085, uTime * 0.004);
@@ -292,6 +302,30 @@ export function createSkyCelestialBodies(): SkyCelestialHandles {
 
           sky = mix(sky, cloudBase, cloudDensity * horizonFade * (0.64 + 0.30 * uDaylight));
         }
+
+        // The gas giant sits in front of the cloud deck so its bands and rings
+        // stay readable through an overcast golden-hour sky.
+        vec3 planetDir = normalize(vec3(0.92, 0.50, -0.18));
+        float planetDot = dot(dir, planetDir);
+        vec3 planetRight = normalize(cross(vec3(0.0, 1.0, 0.0), planetDir));
+        vec3 planetUp = normalize(cross(planetDir, planetRight));
+        vec3 planetRel = dir - planetDir * planetDot;
+        float planetRadius = length(planetRel);
+        vec3 planetNormal = planetRadius > 0.0001 ? planetRel / planetRadius : vec3(0.0, 1.0, 0.0);
+        float planetDisc = smoothstep(0.902, 0.914, planetDot);
+        float planetBands = 0.5 + 0.5 * sin(planetNormal.y * 95.0 + sin(planetNormal.x * 18.0) * 2.0);
+        float planetBands2 = 0.5 + 0.5 * sin(planetNormal.y * 230.0 + planetNormal.z * 7.0);
+        vec3 planetColor = mix(vec3(0.35, 0.10, 0.06), vec3(1.5, 0.75, 0.30), planetBands);
+        planetColor = mix(planetColor, vec3(0.35, 0.18, 0.65), smoothstep(0.35, 0.95, planetBands2) * 0.55);
+        float planetLight = smoothstep(-0.5, 0.6, dot(planetNormal, sunDir));
+        planetColor *= 0.75 + planetLight * 0.55;
+        planetColor += vec3(0.8, 0.42, 0.95) * pow(1.0 - clamp(planetDot, 0.0, 1.0), 2.0) * 0.65;
+        sky = mix(sky, planetColor, planetDisc * 0.94);
+
+        float ringEllipse = length(vec2(dot(planetRel, planetRight), dot(planetRel, planetUp) * 3.8));
+        float ringMask = smoothstep(0.48, 0.52, ringEllipse) * (1.0 - smoothstep(0.79, 0.83, ringEllipse));
+        vec3 ringColor = mix(vec3(0.55, 0.28, 0.32), vec3(1.6, 1.15, 0.7), 0.5 + 0.5 * sin(ringEllipse * 95.0));
+        sky = mix(sky, ringColor, ringMask * 0.9 * (0.45 + 0.55 * planetLight));
 
         // Below-horizon atmospheric haze match
         float belowHorizon = smoothstep(0.02, -0.14, elev);

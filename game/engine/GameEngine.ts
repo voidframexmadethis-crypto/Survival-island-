@@ -13524,6 +13524,11 @@ export class GameEngine {
       (isEating || isDrinking || isWashing || isBottleEquipped || isFoodHeld);
     const isGun =
       !showConsumable && !isWashingMeat && !isCuttingMeat && isFirearmItem(eqId);
+    const gunKind =
+      isGun && eqId
+        ? resolveFirearmModelKind(eqId, FIREARM_SPECS[eqId]?.soundProfile)
+        : 'pistol';
+    const isLongGun = isGun && gunKind !== 'pistol' && gunKind !== 'revolver';
     const hasTool = Boolean(
       isCuttingMeat ||
         (!showConsumable &&
@@ -13539,10 +13544,7 @@ export class GameEngine {
     this.handsRig.gunMesh.visible = isGun;
     this.handsRig.setFirearmGrip(isGun);
     if (isGun && eqId) {
-      const gunSpec = FIREARM_SPECS[eqId];
-      this.handsRig.setFirearmModel(
-        resolveFirearmModelKind(eqId, gunSpec?.soundProfile),
-      );
+      this.handsRig.setFirearmModel(gunKind);
       // Only a uniform scale for the oversized hand cannon. No more stretching
       // one pistol model along Z to fake every rifle and sniper.
       this.handsRig.gunMesh.scale.setScalar(eqId === 'desert_eagle' ? 1.16 : 1);
@@ -13747,34 +13749,77 @@ export class GameEngine {
     if (isGun) {
       const reloadingTilt =
         this.reloadingItemId && this.reloadingItemId === eqId ? 0.36 : 0;
-      // Exact 1:1 tactical two-handed pistol hold angled inward at bottom-right
-      this.handsRig.rightHand.position.set(
-        0.21 + moveBobX * 0.45,
-        -0.22 - idleBob - moveBobY * 0.45 + recoil * 0.065 - reloadingTilt * 0.14,
-        -0.315 + recoil * 0.09,
-      );
-      this.handsRig.rightHand.rotation.set(
-        -recoil * 0.38 - reloadingTilt + 0.04,
-        0.14,
-        -0.06,
-      );
-      this.handsRig.gunMesh.rotation.x = -recoil * 0.42 - reloadingTilt * 0.35;
 
-      // Left gloved support hand rising from bottom-center-right to cradle right knuckles & trigger guard
-      this.handsRig.leftHand.position.set(
-        0.11 - moveBobX * 0.25,
-        -0.242 + idleBob - moveBobY * 0.35 + recoil * 0.03,
-        -0.335 + recoil * 0.055,
-      );
-      this.handsRig.leftHand.rotation.set(
-        this.isSwimming
-          ? -0.4 + Math.sin(this.elapsed * 6) * 0.35
-          : 0.16,
-        -0.42,
-        0.28,
-      );
+      if (isLongGun) {
+        // Long-gun silhouette from the reference: stock tucked into the lower
+        // right shoulder, receiver canted inward and the muzzle climbing toward
+        // the centre of the screen. The right hand grips the pistol grip, the
+        // left support hand reaches the handguard.
+        this.handsRig.gunMesh.position.set(0, 0.015, 0);
+        this.handsRig.gunMesh.rotation.set(
+          0.1 - recoil * 0.34 - reloadingTilt * 0.3,
+          0.06,
+          -0.1,
+        );
+        this.handsRig.rightHand.position.set(
+          0.42 + moveBobX * 0.5,
+          -0.29 - idleBob - moveBobY * 0.5 + recoil * 0.05 - reloadingTilt * 0.16,
+          -0.38 + recoil * 0.08,
+        );
+        this.handsRig.rightHand.rotation.set(
+          -recoil * 0.3 - reloadingTilt + 0.04,
+          0.02,
+          -0.06,
+        );
+        this.handsRig.leftHand.position.set(
+          0.39 - moveBobX * 0.3,
+          -0.23 + idleBob - moveBobY * 0.4 + recoil * 0.025,
+          -0.82 + recoil * 0.06,
+        );
+        this.handsRig.leftHand.rotation.set(
+          this.isSwimming
+            ? -0.4 + Math.sin(this.elapsed * 6) * 0.35
+            : 0.18,
+          -0.62,
+          0.36,
+        );
+      } else {
+        // Compact pistol / revolver: both hands stacked at the lower right and
+        // the muzzle angled subtly inward.
+        this.handsRig.gunMesh.position.set(0, 0.02, -0.06);
+        this.handsRig.gunMesh.rotation.set(
+          -recoil * 0.42 - reloadingTilt * 0.35,
+          0,
+          0,
+        );
+        this.handsRig.rightHand.position.set(
+          0.21 + moveBobX * 0.45,
+          -0.22 - idleBob - moveBobY * 0.45 + recoil * 0.065 - reloadingTilt * 0.14,
+          -0.315 + recoil * 0.09,
+        );
+        this.handsRig.rightHand.rotation.set(
+          -recoil * 0.38 - reloadingTilt + 0.04,
+          0.14,
+          -0.06,
+        );
+
+        // Left gloved support hand rising from bottom-center-right to cradle right knuckles & trigger guard
+        this.handsRig.leftHand.position.set(
+          0.11 - moveBobX * 0.25,
+          -0.242 + idleBob - moveBobY * 0.35 + recoil * 0.03,
+          -0.335 + recoil * 0.055,
+        );
+        this.handsRig.leftHand.rotation.set(
+          this.isSwimming
+            ? -0.4 + Math.sin(this.elapsed * 6) * 0.35
+            : 0.16,
+          -0.42,
+          0.28,
+        );
+      }
     } else {
-      this.handsRig.gunMesh.rotation.x = 0;
+      this.handsRig.gunMesh.position.set(0, 0.02, -0.06);
+      this.handsRig.gunMesh.rotation.set(0, 0, 0);
       this.handsRig.leftHand.position.set(
         -0.26 - moveBobX * 0.7,
         -0.25 + idleBob - moveBobY * 0.7,
