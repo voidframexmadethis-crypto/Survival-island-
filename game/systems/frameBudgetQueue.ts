@@ -282,6 +282,7 @@ export class Permanent60FpsController {
   private rafId: number | null = null;
   private lastNowMs = 0;
   private accumulator = 0;
+  private renderAccumulatorMs = 0;
   private elapsedSeconds = 0;
   private running = false;
 
@@ -289,6 +290,7 @@ export class Permanent60FpsController {
     const now = typeof performance !== 'undefined' ? performance.now() : 0;
     this.lastNowMs = now;
     this.accumulator = 0;
+    this.renderAccumulatorMs = 0;
   }
 
   public start(handlers: StepHandlers): void {
@@ -298,6 +300,7 @@ export class Permanent60FpsController {
     const now = typeof performance !== 'undefined' ? performance.now() : 0;
     this.lastNowMs = now;
     this.accumulator = 0;
+    this.renderAccumulatorMs = 0;
 
     const tick = (currentMs: number) => {
       if (!this.running) return;
@@ -306,14 +309,12 @@ export class Permanent60FpsController {
       if (typeof document !== 'undefined' && document.hidden) {
         this.lastNowMs = currentMs;
         this.accumulator = 0;
+        this.renderAccumulatorMs = 0;
         return;
       }
 
-      // Render every display refresh. The old 15.33 ms pacing gate silently
-      // halved the frame rate on 75/90/144 Hz displays (e.g. 37-48 FPS), which
-      // was itself a major source of perceived stutter. Simulation still runs
-      // on the fixed 60 Hz step below, so gameplay timing is unchanged.
-      const rawDt = Math.min((currentMs - this.lastNowMs) / 1000, 0.05);
+      const rawDtMs = Math.max(0, currentMs - this.lastNowMs);
+      const rawDt = Math.min(rawDtMs / 1000, 0.05);
       this.lastNowMs = currentMs;
 
       if (rawDt <= 0) return;
@@ -331,6 +332,26 @@ export class Permanent60FpsController {
       if (substeps === 3 && this.accumulator > Permanent60FpsController.FIXED_DT) {
         this.accumulator = Permanent60FpsController.FIXED_DT;
       }
+
+      // Render on a true 60 FPS cadence. Rendering every display refresh made
+      // 90/120/144 Hz devices do 1.5-2.4x the GPU work, which heated phones and
+      // produced periodic throttling stutter. A small tolerance keeps native
+      // 60 Hz panels from skipping frames, while the accumulator still averages
+      // 60 renders/second on 75, 90, 120 and 144 Hz displays.
+      this.renderAccumulatorMs = Math.min(
+        this.renderAccumulatorMs + rawDtMs,
+        Permanent60FpsController.FRAME_BUDGET_MS * 2,
+      );
+      if (
+        this.renderAccumulatorMs + 1.5 <
+        Permanent60FpsController.FRAME_BUDGET_MS
+      ) {
+        return;
+      }
+      this.renderAccumulatorMs = Math.max(
+        0,
+        this.renderAccumulatorMs - Permanent60FpsController.FRAME_BUDGET_MS,
+      );
 
       const alpha = this.accumulator / Permanent60FpsController.FIXED_DT;
       handlers.onRender(alpha, this.elapsedSeconds);
