@@ -314,7 +314,7 @@ export function createSkyCelestialBodies(): SkyCelestialHandles {
         vec3 planetNormal = planetRadius > 0.0001 ? planetRel / planetRadius : vec3(0.0, 1.0, 0.0);
         float planetDisc = smoothstep(0.902, 0.914, planetDot);
         float planetBands = 0.5 + 0.5 * sin(planetNormal.y * 95.0 + sin(planetNormal.x * 18.0) * 2.0);
-        float planetBands2 = 0.5 + 0.5 * sin(planetNormal.y * 230.0 + planetNormal.z * 7.0);
+        float planetBands2 = 0.5 + 0.5 * sin(planetNormal.y * 150.0 + planetNormal.z * 7.0);
         vec3 planetColor = mix(vec3(0.35, 0.10, 0.06), vec3(1.5, 0.75, 0.30), planetBands);
         planetColor = mix(planetColor, vec3(0.35, 0.18, 0.65), smoothstep(0.35, 0.95, planetBands2) * 0.55);
         float planetLight = smoothstep(-0.5, 0.6, dot(planetNormal, sunDir));
@@ -323,7 +323,7 @@ export function createSkyCelestialBodies(): SkyCelestialHandles {
         sky = mix(sky, planetColor, planetDisc * 0.94);
 
         float ringEllipse = length(vec2(dot(planetRel, planetRight), dot(planetRel, planetUp) * 3.8));
-        float ringMask = smoothstep(0.48, 0.52, ringEllipse) * (1.0 - smoothstep(0.79, 0.83, ringEllipse));
+        float ringMask = smoothstep(0.44, 0.48, ringEllipse) * (1.0 - smoothstep(0.66, 0.7, ringEllipse));
         vec3 ringColor = mix(vec3(0.55, 0.28, 0.32), vec3(1.6, 1.15, 0.7), 0.5 + 0.5 * sin(ringEllipse * 95.0));
         sky = mix(sky, ringColor, ringMask * 0.9 * (0.45 + 0.55 * planetLight));
 
