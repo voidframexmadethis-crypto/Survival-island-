@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Clock3,
   Compass,
+  Download,
   Gamepad2,
   Grid,
   Layers,
@@ -40,6 +41,7 @@ import {
   WorldType,
   resolveAllowedGameMode,
 } from '@/game/types';
+import { exportSaveTransfer, importSaveTransferFile } from '@/game/systems/saveTransfer';
 
 interface WorldSelectionMenuProps {
   latestSave: SaveSlotSummary | null;
@@ -126,6 +128,8 @@ export function WorldSelectionMenu({
   const [islandSiteOpen, setIslandSiteOpen] = useState(false);
   const [islandSiteMessage, setIslandSiteMessage] = useState('');
   const [islandSiteBusy, setIslandSiteBusy] = useState(false);
+  const [saveTransferMessage, setSaveTransferMessage] = useState('');
+  const [saveTransferBusy, setSaveTransferBusy] = useState(false);
 
   const handleSelectWorldType = (nextType: WorldType) => {
     setSelectedWorldType(nextType);
@@ -170,6 +174,31 @@ export function WorldSelectionMenu({
       playerGender,
       dayNightMode: selectedWorldType === 'island' ? dayNightMode : undefined,
     });
+  };
+
+  const handleExportAllSaves = async () => {
+    setSaveTransferBusy(true);
+    const result = await exportSaveTransfer();
+    setSaveTransferMessage(result.message);
+    setSaveTransferBusy(false);
+  };
+
+  const handleRestoreAllSaves = async (file: File | undefined) => {
+    if (!file) return;
+    if (
+      !window.confirm(
+        'Restore this backup into local storage? Existing worlds with the same save ids will be overwritten. Export a backup first if unsure.',
+      )
+    ) {
+      return;
+    }
+    setSaveTransferBusy(true);
+    const result = await importSaveTransferFile(file);
+    setSaveTransferMessage(result.message);
+    setSaveTransferBusy(false);
+    if (result.ok) {
+      window.setTimeout(() => window.location.reload(), 650);
+    }
   };
 
   const handleIslandUpload = async (file: File | undefined) => {
@@ -1020,6 +1049,53 @@ export function WorldSelectionMenu({
                 </div>
               </div>
             )}
+
+            <div className="island-stone-slab w-full min-w-0 space-y-2.5 rounded-3xl border border-sky-500/45 p-4 sm:p-5">
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <div className="text-xs font-bold uppercase tracking-wider text-stone-200">
+                  Save Transfer
+                </div>
+                <div className="text-[11px] text-stone-300">
+                  Backup all worlds and settings
+                </div>
+              </div>
+              <p className="text-[11px] leading-relaxed text-stone-300">
+                Export a JSON backup, then restore it on another device. The existing save schema,
+                world slots, and settings are preserved. Authentication tokens are never exported.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={saveTransferBusy}
+                  onClick={() => void handleExportAllSaves()}
+                  className="inline-flex min-h-[38px] items-center gap-2 rounded-lg border border-sky-400/70 bg-sky-950/60 px-3 text-xs font-bold text-sky-100 transition hover:bg-sky-800/70 disabled:opacity-50"
+                >
+                  <Download className="h-4 w-4" />
+                  Export backup
+                </button>
+                <label
+                  className={`inline-flex min-h-[38px] cursor-pointer items-center gap-2 rounded-lg border border-emerald-400/70 bg-emerald-950/60 px-3 text-xs font-bold text-emerald-100 transition hover:bg-emerald-800/70 ${
+                    saveTransferBusy ? 'pointer-events-none opacity-50' : ''
+                  }`}
+                >
+                  <Upload className="h-4 w-4" />
+                  Restore backup
+                  <input
+                    type="file"
+                    accept=".json,application/json"
+                    className="hidden"
+                    disabled={saveTransferBusy}
+                    onChange={(event) => {
+                      void handleRestoreAllSaves(event.target.files?.[0]);
+                      event.currentTarget.value = '';
+                    }}
+                  />
+                </label>
+              </div>
+              {saveTransferMessage ? (
+                <div className="text-[11px] font-semibold text-sky-200">{saveTransferMessage}</div>
+              ) : null}
+            </div>
           </div>
         </div>
       </div>

@@ -1,0 +1,23 @@
+@import "../../app/globals.css";
+@source "../../components";
+@source "../../game";
+@source "../../app";
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+.capacitor-native body {
+  overscroll-behavior: none;
+}
+
+.capacitor-native {
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+}

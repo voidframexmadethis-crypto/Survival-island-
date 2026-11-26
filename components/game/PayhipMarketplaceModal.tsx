@@ -18,6 +18,7 @@ import {
   subscribeExchangeState,
 } from '@/game/systems/exchangeManager';
 import { PlayerAccountAuthPanel } from './PlayerAccountAuthPanel';
+import { isNativeMobileApp } from '@/game/systems/apiConfig';
 import { createSafeWebGLRenderer } from '@/game/world/webglUtils';
 
 export interface MarketplaceProps {
@@ -133,6 +134,7 @@ export const PayhipMarketplaceModal: React.FC<MarketplaceProps> = ({
 }) => {
   const [selectedId, setSelectedId] = useState<string>(items[0]?.id ?? '');
   const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
+  const nativePurchasesBlocked = isNativeMobileApp();
   const [activeCheckoutId, setActiveCheckoutId] = useState<string | null>(null);
   const [purchaseStatus, setPurchaseStatus] = useState<PayhipPurchaseStatus | null>(null);
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
@@ -289,6 +291,10 @@ export const PayhipMarketplaceModal: React.FC<MarketplaceProps> = ({
   };
 
   const handleBuyWithPayhip = async () => {
+    if (nativePurchasesBlocked) {
+      setStatusBanner('Purchases are available on the website. Items already owned can be equipped here.');
+      return;
+    }
     if (!storeSnapshot.authenticated) {
       setShowAuthPrompt(true);
       setStatusBanner('Sign in to your Survival Island account to complete Payhip checkout.');
@@ -508,6 +514,10 @@ export const PayhipMarketplaceModal: React.FC<MarketplaceProps> = ({
                       >
                         {isEquipped ? 'Unequip Skin' : 'Equip Skin Now'}
                       </button>
+                    ) : nativePurchasesBlocked ? (
+                      <div className="flex-1 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-center text-xs text-zinc-300">
+                        Purchases are available on the website. Items already owned can be equipped here.
+                      </div>
                     ) : (
                       <button
                         type="button"

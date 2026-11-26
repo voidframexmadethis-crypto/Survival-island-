@@ -8,6 +8,7 @@ import { buildSculptedBackpackMesh, SkinCatalogItem } from '@/game/data/exchange
 import { applySafeStandardMaps, ensureGeometryHasUv } from '@/game/world/textures';
 import { createSafeWebGLRenderer } from '@/game/world/webglUtils';
 import { extractPayhipCheckoutUrl } from './PayhipMarketplaceModal';
+import { isNativeMobileApp } from '@/game/systems/apiConfig';
 import {
   MARKETPLACE_UPLOAD_MAX_BYTES,
   checkMarketplaceUploadFile,
@@ -144,6 +145,7 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
   );
 
   const resolvedTargetSkinId = targetSkinId || selectedSkin?.id || skins[0]?.id || '';
+  const nativePurchasesBlocked = isNativeMobileApp();
   const checkoutUrlActive =
     checkoutState && selectedSkin && checkoutState.skinId === selectedSkin.id
       ? checkoutState.url
@@ -755,7 +757,7 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
                         </button>
                       ) : (
                         <>
-                          {selectedSkin.payhipUrl && (
+                          {!nativePurchasesBlocked && selectedSkin.payhipUrl && (
                             <button
                               type="button"
                               onClick={() => {
@@ -773,7 +775,9 @@ export const BlankPhoneMarketplaceModal: React.FC<BlankPhoneMarketplaceProps> = 
                           )}
 
                           <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-2 text-[11px] text-zinc-400">
-                            Paid Payhip items unlock automatically after server webhook confirmation. Manage official Payhip products in Owner Admin.
+                            {nativePurchasesBlocked
+                              ? 'Purchases are available on the website. Items already owned on your account can be equipped here.'
+                              : 'Paid Payhip items unlock automatically after server webhook confirmation. Manage official Payhip products in Owner Admin.'}
                           </div>
                         </>
                       )}

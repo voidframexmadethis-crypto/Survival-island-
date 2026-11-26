@@ -343,7 +343,9 @@ export function verifyPlayerSessionToken(token: string | undefined | null): stri
 }
 
 export function getAuthenticatedPlayer(req: NextRequest): PlayerAccountRecord | null {
-  const token = req.cookies.get(PLAYER_COOKIE_NAME)?.value;
+  const authorization = req.headers.get('authorization') || '';
+  const bearerMatch = authorization.match(/^Bearer\s+(.+)$/i);
+  const token = bearerMatch?.[1]?.trim() || req.cookies.get(PLAYER_COOKIE_NAME)?.value;
   const playerId = verifyPlayerSessionToken(token);
   if (!playerId) return null;
   const db = getExchangeDb();

@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react';
 import { MultiplayerStatusSnapshot } from '@/game/types';
+import { getWebUrl } from '@/game/systems/apiConfig';
 
 interface MultiplayerModalProps {
   mpState?: MultiplayerStatusSnapshot;
@@ -98,7 +99,7 @@ export const MultiplayerModal: React.FC<MultiplayerModalProps> = ({
 
   const copyInviteLink = () => {
     if (!mpState?.roomCode || typeof window === 'undefined') return;
-    const url = new URL(window.location.href);
+    const url = new URL(getWebUrl() || window.location.href);
     url.searchParams.set('room', mpState.roomCode);
     navigator.clipboard?.writeText(url.toString()).catch(() => {});
     setCopiedLink(true);

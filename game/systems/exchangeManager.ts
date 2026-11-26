@@ -10,6 +10,16 @@ import {
   toExchangeProductFromSkinCatalogItem,
 } from '../data/exchangeCatalog';
 import { ItemId } from '../types';
+import { apiUrl } from './apiConfig';
+import { getAuthHeaders, setSessionToken } from './sessionToken';
+
+async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  for (const [key, value] of Object.entries(getAuthHeaders())) {
+    if (!headers.has(key)) headers.set(key, value);
+  }
+  return fetch(apiUrl(path), { ...init, headers });
+}
 
 export interface PaymentProviderStatus {
   configured: boolean;
@@ -453,7 +463,7 @@ export function getEquippedBackpackSkin(): ExchangeProduct | null {
 }
 
 export async function refreshStorefront(): Promise<ExchangeStorefrontState> {
-  const res = await fetch('/api/exchange/storefront', { cache: 'no-store' });
+  const res = await apiFetch('/api/exchange/storefront', { cache: 'no-store' });
   if (!res.ok) {
     throw new Error('Failed to load Survival Island Exchange storefront.');
   }
@@ -473,7 +483,7 @@ export async function loginPlayerAccount(
   email: string,
   password: string,
 ): Promise<{ ok: boolean; account?: PlayerProfileSummary; error?: string }> {
-  const res = await fetch('/api/exchange/auth', {
+  const res = await apiFetch('/api/exchange/auth', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mode: 'login', email, password }),
@@ -481,11 +491,13 @@ export async function loginPlayerAccount(
   const data = (await res.json()) as {
     ok?: boolean;
     account?: PlayerProfileSummary;
+    sessionToken?: string;
     error?: string;
   };
   if (!res.ok || !data.ok) {
     return { ok: false, error: data.error || 'Sign in failed.' };
   }
+  setSessionToken(data.sessionToken || null);
   await refreshStorefront();
   return { ok: true, account: data.account };
 }
@@ -495,7 +507,7 @@ export async function registerPlayerAccount(
   password: string,
   username?: string,
 ): Promise<{ ok: boolean; account?: PlayerProfileSummary; error?: string }> {
-  const res = await fetch('/api/exchange/auth', {
+  const res = await apiFetch('/api/exchange/auth', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mode: 'register', email, password, username }),
@@ -503,17 +515,20 @@ export async function registerPlayerAccount(
   const data = (await res.json()) as {
     ok?: boolean;
     account?: PlayerProfileSummary;
+    sessionToken?: string;
     error?: string;
   };
   if (!res.ok || !data.ok) {
     return { ok: false, error: data.error || 'Registration failed.' };
   }
+  setSessionToken(data.sessionToken || null);
   await refreshStorefront();
   return { ok: true, account: data.account };
 }
 
 export async function logoutPlayerAccount(): Promise<void> {
-  await fetch('/api/exchange/auth', { method: 'DELETE' });
+  setSessionToken(null);
+  await apiFetch('/api/exchange/auth', { method: 'DELETE' });
   cachedCustomPhoneState = {
     ...cachedCustomPhoneState,
     equippedBackpackId: null,
@@ -533,7 +548,7 @@ export async function createPayhipCheckout(productId: string): Promise<{
   statusMessage?: string;
   error?: string;
 }> {
-  const res = await fetch('/api/exchange/payhip/checkout', {
+  const res = await apiFetch('/api/exchange/payhip/checkout', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ productId }),
@@ -571,7 +586,7 @@ export async function pollPayhipCheckoutStatus(checkoutId: string): Promise<{
   owned?: boolean;
   error?: string;
 }> {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/exchange/payhip/status?checkoutId=${encodeURIComponent(checkoutId)}`,
     { cache: 'no-store' },
   );
@@ -603,7 +618,7 @@ export async function markPayhipCheckoutPending(checkoutId: string): Promise<{
   status?: PayhipPurchaseStatus;
   statusMessage?: string;
 }> {
-  const res = await fetch('/api/exchange/payhip/status', {
+  const res = await apiFetch('/api/exchange/payhip/status', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ checkoutId }),
@@ -626,7 +641,7 @@ export async function purchaseExchangeProduct(productId: string): Promise<{
   error?: string;
   insufficientFunds?: boolean;
 }> {
-  const res = await fetch('/api/exchange/purchase', {
+  const res = await apiFetch('/api/exchange/purchase', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ productId }),
@@ -653,7 +668,7 @@ export async function equipExchangeProduct(
   productId: string,
   action: 'equip' | 'unequip',
 ): Promise<{ ok: boolean; authRequired?: boolean; error?: string }> {
-  const res = await fetch('/api/exchange/equip', {
+  const res = await apiFetch('/api/exchange/equip', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ productId, action }),
@@ -680,7 +695,7 @@ export async function requestCoinPackageCheckout(packageId: string): Promise<{
   providerRequired?: boolean;
   message: string;
 }> {
-  const res = await fetch('/api/exchange/coins/checkout', {
+  const res = await apiFetch('/api/exchange/coins/checkout', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ packageId }),
@@ -707,7 +722,7 @@ export async function requestCoinPackageCheckout(packageId: string): Promise<{
 // ---- Owner Admin API Client ----
 
 export async function checkAdminAuthStatus(): Promise<AdminAuthStatus> {
-  const res = await fetch('/api/exchange/admin/auth', { cache: 'no-store' });
+  const res = await apiFetch('/api/exchange/admin/auth', { cache: 'no-store' });
   if (!res.ok) {
     return {
       authenticated: false,
@@ -724,7 +739,7 @@ export async function authenticateOwnerAdmin(
   passphrase: string,
   mode: 'login' | 'setup',
 ): Promise<{ ok: boolean; error?: string }> {
-  const res = await fetch('/api/exchange/admin/auth', {
+  const res = await apiFetch('/api/exchange/admin/auth', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ passphrase, mode }),
@@ -737,11 +752,11 @@ export async function authenticateOwnerAdmin(
 }
 
 export async function logoutOwnerAdmin(): Promise<void> {
-  await fetch('/api/exchange/admin/auth', { method: 'DELETE' });
+  await apiFetch('/api/exchange/admin/auth', { method: 'DELETE' });
 }
 
 export async function fetchAdminCatalog(): Promise<AdminCatalogState> {
-  const res = await fetch('/api/exchange/admin/catalog', { cache: 'no-store' });
+  const res = await apiFetch('/api/exchange/admin/catalog', { cache: 'no-store' });
   if (!res.ok) {
     throw new Error('Owner authorization required.');
   }
@@ -752,7 +767,7 @@ export async function fetchAdminCatalog(): Promise<AdminCatalogState> {
 export async function adminCreateProduct(
   payload: Partial<ExchangeProduct>,
 ): Promise<{ ok: boolean; product?: ExchangeProduct; error?: string }> {
-  const res = await fetch('/api/exchange/admin/products', {
+  const res = await apiFetch('/api/exchange/admin/products', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -773,7 +788,7 @@ export async function adminUpdateProduct(
   id: string,
   patch: Partial<ExchangeProduct>,
 ): Promise<{ ok: boolean; product?: ExchangeProduct; error?: string }> {
-  const res = await fetch(`/api/exchange/admin/products/${encodeURIComponent(id)}`, {
+  const res = await apiFetch(`/api/exchange/admin/products/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
@@ -793,7 +808,7 @@ export async function adminUpdateProduct(
 export async function adminDeleteProduct(
   id: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const res = await fetch(`/api/exchange/admin/products/${encodeURIComponent(id)}`, {
+  const res = await apiFetch(`/api/exchange/admin/products/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   });
   const data = (await res.json()) as { ok?: boolean; error?: string };
@@ -811,7 +826,7 @@ export async function adminUploadAsset(
   const fd = new FormData();
   fd.append('file', file);
   fd.append('kind', kind);
-  const res = await fetch('/api/exchange/admin/upload', {
+  const res = await apiFetch('/api/exchange/admin/upload', {
     method: 'POST',
     body: fd,
   });
@@ -830,7 +845,7 @@ export async function adminUploadAsset(
 export async function adminCreateCoinPackage(
   payload: Partial<CoinPackage>,
 ): Promise<{ ok: boolean; coinPackage?: CoinPackage; error?: string }> {
-  const res = await fetch('/api/exchange/admin/coins', {
+  const res = await apiFetch('/api/exchange/admin/coins', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -851,7 +866,7 @@ export async function adminUpdateCoinPackage(
   id: string,
   patch: Partial<CoinPackage>,
 ): Promise<{ ok: boolean; coinPackage?: CoinPackage; error?: string }> {
-  const res = await fetch(`/api/exchange/admin/coins/${encodeURIComponent(id)}`, {
+  const res = await apiFetch(`/api/exchange/admin/coins/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
@@ -871,7 +886,7 @@ export async function adminUpdateCoinPackage(
 export async function adminDeleteCoinPackage(
   id: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const res = await fetch(`/api/exchange/admin/coins/${encodeURIComponent(id)}`, {
+  const res = await apiFetch(`/api/exchange/admin/coins/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   });
   const data = (await res.json()) as { ok?: boolean; error?: string };

@@ -42,6 +42,7 @@ import {
   normalizeTvBassMode,
 } from '@/game/systems/smartTvSystem';
 import type { HUDStateSnapshot, TvSafetyMode } from '@/game/types';
+import { apiUrl } from '@/game/systems/apiConfig';
 
 export interface YouTubeStreamSelection {
   videoId: string;
@@ -427,7 +428,7 @@ export function TvPlayerModal({
 
     try {
       const res = await fetch(
-        `/api/youtube/search?q=${encodeURIComponent(raw)}`,
+        apiUrl(`/api/youtube/search?q=${encodeURIComponent(raw)}`),
         { signal: controller.signal },
       );
       if (res.ok) {

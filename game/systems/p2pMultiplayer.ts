@@ -8,6 +8,7 @@ import {
   StructuralBlock,
   WeatherType,
 } from '../types';
+import { apiUrl } from './apiConfig';
 
 export type RemoteAnimState =
   | 'idle'
@@ -242,7 +243,7 @@ export class P2PMultiplayerManager {
             .then((offer) => pc.setLocalDescription(offer))
             .then(() => {
               if (!this.roomCode || !pc.localDescription) return;
-              return fetch('/api/p2p', {
+              return fetch(apiUrl('/api/p2p'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -429,7 +430,7 @@ export class P2PMultiplayerManager {
     this.leaveRoom();
 
     try {
-      const res = await fetch('/api/p2p', {
+      const res = await fetch(apiUrl('/api/p2p'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -471,7 +472,7 @@ export class P2PMultiplayerManager {
     this.leaveRoom();
 
     try {
-      const res = await fetch('/api/p2p', {
+      const res = await fetch(apiUrl('/api/p2p'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -585,7 +586,7 @@ export class P2PMultiplayerManager {
     this.statusMessage = 'Offline · Play solo or host/join a P2P Island Room';
 
     if (oldCode) {
-      fetch('/api/p2p', {
+      fetch(apiUrl('/api/p2p'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -676,7 +677,7 @@ export class P2PMultiplayerManager {
     const batch = this.relayQueue.splice(0, 6);
     for (const item of batch) {
       try {
-        await fetch('/api/p2p', {
+        await fetch(apiUrl('/api/p2p'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -766,9 +767,9 @@ export class P2PMultiplayerManager {
   private async pollSignaling(): Promise<void> {
     if (!this.connected || !this.roomCode) return;
     try {
-      const url = `/api/p2p?roomCode=${encodeURIComponent(this.roomCode)}&peerId=${encodeURIComponent(
+      const url = apiUrl(`/api/p2p?roomCode=${encodeURIComponent(this.roomCode)}&peerId=${encodeURIComponent(
         this.localPeerId,
-      )}&name=${encodeURIComponent(this.playerName)}`;
+      )}&name=${encodeURIComponent(this.playerName)}`);
       const res = await fetch(url);
       if (!res.ok) return;
       const data = await res.json();
@@ -849,7 +850,7 @@ export class P2PMultiplayerManager {
 
       pc.onicecandidate = (e) => {
         if (e.candidate && this.roomCode) {
-          fetch('/api/p2p', {
+          fetch(apiUrl('/api/p2p'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -892,7 +893,7 @@ export class P2PMultiplayerManager {
           .then((offer) => pc.setLocalDescription(offer))
           .then(() => {
             if (!this.roomCode || !pc.localDescription) return;
-            return fetch('/api/p2p', {
+            return fetch(apiUrl('/api/p2p'), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -934,7 +935,7 @@ export class P2PMultiplayerManager {
         if (desc.type === 'offer') {
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-          await fetch('/api/p2p', {
+          await fetch(apiUrl('/api/p2p'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

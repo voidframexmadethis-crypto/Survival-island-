@@ -12,6 +12,7 @@ import React, {
 import { Pause, Play, SlidersHorizontal, Tv, X } from 'lucide-react';
 import type { TvScreenProjection } from '@/game/engine/GameEngine';
 import type { TvBassMode, TvSafetyMode } from '@/game/types';
+import { getWebUrl } from '@/game/systems/apiConfig';
 
 export interface PersistentYouTubeOverlayHandle {
   updateProjection: (proj: TvScreenProjection | null) => void;
@@ -498,8 +499,9 @@ export const PersistentYouTubeOverlay = forwardRef<
     if (safeStart > 0) {
       params.set('start', String(safeStart));
     }
-    if (typeof window !== 'undefined' && window.location?.origin) {
-      params.set('origin', window.location.origin);
+    const webOrigin = getWebUrl();
+    if (webOrigin) {
+      params.set('origin', webOrigin);
     }
     return `${host}/embed/${videoId}?${params.toString()}`;
   }, [active, videoId, useNocookie, startSec]);

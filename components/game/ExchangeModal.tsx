@@ -42,6 +42,7 @@ import {
 import { ExchangePreview3D } from './ExchangePreview3D';
 import { ExchangeAdminPanel } from './ExchangeAdminPanel';
 import { PlayerAccountAuthPanel } from './PlayerAccountAuthPanel';
+import { isNativeMobileApp } from '@/game/systems/apiConfig';
 
 interface ExchangeModalProps {
   onClose: () => void;
@@ -70,6 +71,7 @@ export function ExchangeModal({
   const [state, setState] = useState<ExchangeStorefrontState>(() =>
     getExchangeStateSnapshot(),
   );
+  const nativePurchasesBlocked = isNativeMobileApp();
   const [topView, setTopView] = useState<TopView>('store');
   const [section, setSection] = useState<StoreSection>('featured');
   const [weaponFilter, setWeaponFilter] = useState<GunWeaponClass | 'all'>('all');
@@ -218,6 +220,13 @@ export function ExchangeModal({
   };
 
   const handleStartPayhipPurchase = async (product: ExchangeProduct) => {
+    if (nativePurchasesBlocked) {
+      setNotice({
+        text: 'Purchases are available on the website. Items already owned can be equipped here.',
+        tone: 'warn',
+      });
+      return;
+    }
     if (!state.authenticated) {
       setShowAuthPrompt(true);
       setNotice({
@@ -264,6 +273,14 @@ export function ExchangeModal({
 
   const handleConfirmPurchase = async () => {
     if (!confirmItem) return;
+    if (nativePurchasesBlocked) {
+      setConfirmItem(null);
+      setNotice({
+        text: 'Purchases are available on the website. Items already owned can be equipped here.',
+        tone: 'warn',
+      });
+      return;
+    }
     if (!state.authenticated) {
       setConfirmItem(null);
       setShowAuthPrompt(true);
@@ -322,6 +339,13 @@ export function ExchangeModal({
   };
 
   const handleBuyCoinPackage = async (packageId: string) => {
+    if (nativePurchasesBlocked) {
+      setNotice({
+        text: 'Purchases are available on the website. Your coin balance and owned items remain visible here.',
+        tone: 'warn',
+      });
+      return;
+    }
     if (!state.authenticated) {
       setShowAuthPrompt(true);
       setNotice({
@@ -587,7 +611,18 @@ export function ExchangeModal({
                   </div>
                 )}
 
-                {state.coinPackages.length === 0 ? (
+                {nativePurchasesBlocked ? (
+                  <div className="rounded-2xl border border-stone-800 bg-stone-900/60 p-8 text-center space-y-2.5">
+                    <Coins className="w-10 h-10 text-stone-600 mx-auto" />
+                    <div className="text-base font-bold text-stone-200">
+                      Purchases are available on the website
+                    </div>
+                    <p className="text-xs text-stone-400 max-w-md mx-auto">
+                      Your coin balance, owned items, and transaction history remain available in
+                      the app. New digital purchases are not initiated inside the mobile app.
+                    </p>
+                  </div>
+                ) : state.coinPackages.length === 0 ? (
                   <div className="rounded-2xl border border-stone-800 bg-stone-900/60 p-12 text-center space-y-2.5">
                     <Coins className="w-10 h-10 text-stone-600 mx-auto" />
                     <div className="text-base font-bold text-stone-200">
@@ -929,6 +964,10 @@ export function ExchangeModal({
                           >
                             {isEquipped(selectedProduct) ? 'Unequip Cosmetic' : 'Equip Cosmetic'}
                           </button>
+                        ) : nativePurchasesBlocked ? (
+                          <div className="w-full py-3 rounded-xl border border-stone-700 bg-stone-900 px-4 text-center text-xs text-stone-300">
+                            Purchases are available on the website. Items already owned can be equipped here.
+                          </div>
                         ) : isPayhipProduct(selectedProduct) ? (
                           <button
                             type="button"
