@@ -1,11 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  flushExchangeDb,
   getAuthenticatedPlayer,
   getPayhipCheckoutForPlayer,
+  loadExchangeDb,
   markPayhipCheckoutPendingVerification,
 } from '@/lib/exchangeStore';
 
 export async function GET(req: NextRequest) {
+  try {
+    await loadExchangeDb();
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: 'Exchange database is unavailable. Please try again shortly.' },
+      { status: 503 },
+    );
+  }
   const account = getAuthenticatedPlayer(req);
   if (!account) {
     return NextResponse.json(
@@ -45,6 +55,14 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  try {
+    await loadExchangeDb();
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: 'Exchange database is unavailable. Please try again shortly.' },
+      { status: 503 },
+    );
+  }
   const account = getAuthenticatedPlayer(req);
   if (!account) {
     return NextResponse.json(
@@ -60,6 +78,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'Missing checkoutId.' }, { status: 400 });
     }
     const checkout = markPayhipCheckoutPendingVerification(account, checkoutId);
+    await flushExchangeDb();
     if (!checkout) {
       return NextResponse.json(
         { ok: false, error: 'Checkout session not found for this account.' },

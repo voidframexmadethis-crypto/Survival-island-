@@ -31,6 +31,11 @@ const createNextConfig = (phase: string): NextConfig => ({
     ],
   },
   output: 'standalone',
+  // Keep local test screenshots, backups, and native build output out of the
+  // standalone server bundle. Production account data lives in MongoDB.
+  outputFileTracingExcludes: {
+    '*': ['.data/**/*', 'sandbox/**/*', 'mobile/dist/**/*', 'ios/**/*', 'android/**/*'],
+  },
   transpilePackages: ['motion'],
   webpack: (config, {dev, isServer}) => {
     // HMR is disabled in AI Studio via DISABLE_HMR env var.

@@ -3,6 +3,7 @@ import { ExchangeProduct } from '@/game/data/exchangeCatalog';
 import {
   getExchangeDb,
   isAdminRequestAuthorized,
+  loadExchangeDb,
   normalizeProductInput,
   persistExchangeDb,
 } from '@/lib/exchangeStore';
@@ -11,6 +12,14 @@ export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
+  try {
+    await loadExchangeDb();
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: 'Exchange database is unavailable. Please try again shortly.' },
+      { status: 503 },
+    );
+  }
   if (!isAdminRequestAuthorized(req)) {
     return NextResponse.json({ ok: false, error: 'Owner authorization required.' }, { status: 401 });
   }
@@ -29,7 +38,7 @@ export async function PATCH(
       return NextResponse.json({ ok: false, error: 'Product name cannot be empty.' }, { status: 400 });
     }
     db.products[idx] = updated;
-    persistExchangeDb();
+    await persistExchangeDb();
 
     return NextResponse.json({ ok: true, product: updated });
   } catch {
@@ -41,6 +50,14 @@ export async function DELETE(
   req: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
+  try {
+    await loadExchangeDb();
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: 'Exchange database is unavailable. Please try again shortly.' },
+      { status: 503 },
+    );
+  }
   if (!isAdminRequestAuthorized(req)) {
     return NextResponse.json({ ok: false, error: 'Owner authorization required.' }, { status: 401 });
   }
@@ -54,7 +71,7 @@ export async function DELETE(
 
   // Note: Players who already purchased this product retain ownership via ownedProductSnapshots
   db.products.splice(idx, 1);
-  persistExchangeDb();
+  await persistExchangeDb();
 
   return NextResponse.json({ ok: true, deletedId: id });
 }

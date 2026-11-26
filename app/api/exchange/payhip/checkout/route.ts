@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   createPayhipCheckoutForPlayer,
+  flushExchangeDb,
   getAuthenticatedPlayer,
+  loadExchangeDb,
 } from '@/lib/exchangeStore';
 
 export async function POST(req: NextRequest) {
+  try {
+    await loadExchangeDb();
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: 'Exchange database is unavailable. Please try again shortly.' },
+      { status: 503 },
+    );
+  }
   const account = getAuthenticatedPlayer(req);
   if (!account) {
     return NextResponse.json(
@@ -28,6 +38,7 @@ export async function POST(req: NextRequest) {
     }
 
     const result = createPayhipCheckoutForPlayer(account, productId);
+    await flushExchangeDb();
     if (!result.ok || !result.checkout) {
       return NextResponse.json(
         { ok: false, error: result.error || 'Could not initiate Payhip checkout.' },

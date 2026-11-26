@@ -3,9 +3,18 @@ import {
   getExchangeDb,
   getPaymentProviderStatus,
   isAdminRequestAuthorized,
+  loadExchangeDb,
 } from '@/lib/exchangeStore';
 
 export async function GET(req: NextRequest) {
+  try {
+    await loadExchangeDb();
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: 'Exchange database is unavailable. Please try again shortly.' },
+      { status: 503 },
+    );
+  }
   if (!isAdminRequestAuthorized(req)) {
     return NextResponse.json({ ok: false, error: 'Owner authorization required.' }, { status: 401 });
   }

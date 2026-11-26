@@ -6,10 +6,19 @@ import {
 import {
   getAuthenticatedPlayer,
   getExchangeDb,
+  loadExchangeDb,
   persistExchangeDb,
 } from '@/lib/exchangeStore';
 
 export async function POST(req: NextRequest) {
+  try {
+    await loadExchangeDb();
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: 'Exchange database is unavailable. Please try again shortly.' },
+      { status: 503 },
+    );
+  }
   const account = getAuthenticatedPlayer(req);
   if (!account) {
     return NextResponse.json(
@@ -93,7 +102,7 @@ export async function POST(req: NextRequest) {
     }
 
     account.updatedAt = Date.now();
-    persistExchangeDb();
+    await persistExchangeDb();
 
     return NextResponse.json({
       ok: true,

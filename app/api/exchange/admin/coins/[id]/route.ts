@@ -3,6 +3,7 @@ import { CoinPackage } from '@/game/data/exchangeCatalog';
 import {
   getExchangeDb,
   isAdminRequestAuthorized,
+  loadExchangeDb,
   normalizeCoinPackageInput,
   persistExchangeDb,
 } from '@/lib/exchangeStore';
@@ -11,6 +12,14 @@ export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
+  try {
+    await loadExchangeDb();
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: 'Exchange database is unavailable. Please try again shortly.' },
+      { status: 503 },
+    );
+  }
   if (!isAdminRequestAuthorized(req)) {
     return NextResponse.json({ ok: false, error: 'Owner authorization required.' }, { status: 401 });
   }
@@ -29,7 +38,7 @@ export async function PATCH(
       return NextResponse.json({ ok: false, error: 'Package name cannot be empty.' }, { status: 400 });
     }
     db.coinPackages[idx] = updated;
-    persistExchangeDb();
+    await persistExchangeDb();
 
     return NextResponse.json({ ok: true, coinPackage: updated });
   } catch {
@@ -41,6 +50,14 @@ export async function DELETE(
   req: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
+  try {
+    await loadExchangeDb();
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: 'Exchange database is unavailable. Please try again shortly.' },
+      { status: 503 },
+    );
+  }
   if (!isAdminRequestAuthorized(req)) {
     return NextResponse.json({ ok: false, error: 'Owner authorization required.' }, { status: 401 });
   }
@@ -53,7 +70,7 @@ export async function DELETE(
   }
 
   db.coinPackages.splice(idx, 1);
-  persistExchangeDb();
+  await persistExchangeDb();
 
   return NextResponse.json({ ok: true, deletedId: id });
 }

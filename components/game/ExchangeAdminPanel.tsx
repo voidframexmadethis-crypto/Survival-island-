@@ -135,7 +135,11 @@ const EMPTY_COIN_FORM: CoinPackageFormState = {
 
 export function ExchangeAdminPanel({ onStorefrontUpdated }: ExchangeAdminPanelProps) {
   const [authStatus, setAuthStatus] = useState<AdminAuthStatus | null>(null);
-  const [passphrase, setPassphrase] = useState('');
+  const [ownerEmail, setOwnerEmail] = useState('');
+  const [ownerPassword, setOwnerPassword] = useState('');
+  const [ownerUsername, setOwnerUsername] = useState('');
+  const [ownerSetupCode, setOwnerSetupCode] = useState('');
+  const [ownerRecoveryCode, setOwnerRecoveryCode] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
 
@@ -181,13 +185,21 @@ export function ExchangeAdminPanel({ onStorefrontUpdated }: ExchangeAdminPanelPr
     setAuthError(null);
     setAuthBusy(true);
     const mode = authStatus?.needsSetup ? 'setup' : 'login';
-    const res = await authenticateOwnerAdmin(passphrase, mode);
+    const res = await authenticateOwnerAdmin({
+      email: ownerEmail,
+      password: ownerPassword,
+      username: ownerUsername,
+      setupCode: ownerSetupCode,
+      mode,
+    });
     setAuthBusy(false);
     if (!res.ok) {
       setAuthError(res.error || 'Authentication failed.');
       return;
     }
-    setPassphrase('');
+    if (res.recoveryCode) setOwnerRecoveryCode(res.recoveryCode);
+    setOwnerPassword('');
+    setOwnerSetupCode('');
     const nextStatus = await checkAdminAuthStatus();
     setAuthStatus(nextStatus);
     await loadCatalog();
@@ -428,18 +440,82 @@ export function ExchangeAdminPanel({ onStorefrontUpdated }: ExchangeAdminPanelPr
               <span>Owner access active.</span>
             </div>
           )}
+          {authStatus.needsSetup && (
+            <p className="text-[11px] text-amber-200/90 leading-relaxed">
+              Create the one owner account for this store. Customers cannot use this form.
+            </p>
+          )}
+          {ownerRecoveryCode && (
+            <div className="rounded-xl border border-amber-400/60 bg-amber-950/40 p-3 text-[11px] text-amber-100 space-y-1.5">
+              <div className="font-bold uppercase tracking-wide text-amber-300">
+                Save the owner recovery code
+              </div>
+              <code className="block select-all rounded-lg border border-amber-500/40 bg-stone-950 px-3 py-2 font-mono text-base tracking-widest text-amber-200">
+                {ownerRecoveryCode}
+              </code>
+              <p className="text-amber-200/80">
+                It is shown once and is required to reset the owner password.
+              </p>
+            </div>
+          )}
+          {authStatus.needsSetup && (
+            <div>
+              <label className="block text-xs font-semibold text-stone-300 mb-1">
+                Owner Name
+              </label>
+              <input
+                type="text"
+                value={ownerUsername}
+                onChange={(e) => setOwnerUsername(e.target.value)}
+                placeholder="Store owner"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-700 text-sm text-stone-100 focus:outline-none focus:border-amber-500"
+              />
+            </div>
+          )}
           <div>
             <label className="block text-xs font-semibold text-stone-300 mb-1">
-              Owner Passphrase
+              Owner Email
             </label>
             <input
-              type="password"
-              value={passphrase}
-              onChange={(e) => setPassphrase(e.target.value)}
-              placeholder="Enter any owner passphrase"
+              type="email"
+              required
+              value={ownerEmail}
+              onChange={(e) => setOwnerEmail(e.target.value)}
+              placeholder="Owner email"
+              autoComplete="email"
               className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-700 text-sm text-stone-100 focus:outline-none focus:border-amber-500"
             />
           </div>
+          <div>
+            <label className="block text-xs font-semibold text-stone-300 mb-1">
+              Owner Password
+            </label>
+            <input
+              type="password"
+              required
+              minLength={6}
+              value={ownerPassword}
+              onChange={(e) => setOwnerPassword(e.target.value)}
+              placeholder="Owner password (min 6 chars)"
+              autoComplete={authStatus.needsSetup ? 'new-password' : 'current-password'}
+              className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-700 text-sm text-stone-100 focus:outline-none focus:border-amber-500"
+            />
+          </div>
+          {authStatus.needsSetup && authStatus.setupCodeRequired && (
+            <div>
+              <label className="block text-xs font-semibold text-stone-300 mb-1">
+                Owner Setup Code
+              </label>
+              <input
+                type="password"
+                value={ownerSetupCode}
+                onChange={(e) => setOwnerSetupCode(e.target.value)}
+                placeholder="EXCHANGE_ADMIN_SECRET"
+                autoComplete="off"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-700 text-sm text-stone-100 focus:outline-none focus:border-amber-500"
+              />
+            </div>
+          )}
           {authError && (
             <div className="text-xs text-red-400 font-medium">{authError}</div>
           )}
@@ -448,7 +524,11 @@ export function ExchangeAdminPanel({ onStorefrontUpdated }: ExchangeAdminPanelPr
             disabled={authBusy}
             className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-stone-950 font-bold text-sm transition"
           >
-            {authBusy ? 'Signing In...' : 'Sign In as Owner'}
+            {authBusy
+              ? 'Please wait...'
+              : authStatus.needsSetup
+                ? 'Create Owner Account'
+                : 'Sign In as Owner'}
           </button>
         </form>
       </div>
@@ -457,6 +537,20 @@ export function ExchangeAdminPanel({ onStorefrontUpdated }: ExchangeAdminPanelPr
 
   return (
     <div className="space-y-5">
+      {ownerRecoveryCode && (
+        <div className="rounded-xl border border-amber-400/60 bg-amber-950/40 p-3 text-xs text-amber-100 space-y-1.5">
+          <div className="font-bold uppercase tracking-wide text-amber-300">
+            Save the owner recovery code
+          </div>
+          <code className="block select-all rounded-lg border border-amber-500/40 bg-stone-950 px-3 py-2 font-mono text-base tracking-widest text-amber-200">
+            {ownerRecoveryCode}
+          </code>
+          <p className="text-amber-200/80">
+            It is shown once and is required to reset the owner password.
+          </p>
+        </div>
+      )}
+
       {/* Admin Top Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-stone-800">
         <div className="flex flex-wrap items-center gap-2">

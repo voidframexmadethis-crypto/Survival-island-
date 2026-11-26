@@ -33,6 +33,7 @@ export interface PlayerProfileSummary {
   playerId: string;
   username: string;
   email: string;
+  role?: 'owner' | 'customer';
   createdAt: number;
 }
 
@@ -75,10 +76,13 @@ export interface ExchangeStorefrontState {
 
 export interface AdminAuthStatus {
   authenticated: boolean;
+  ownerExists: boolean;
   configuredViaEnv: boolean;
+  setupCodeRequired: boolean;
   configuredViaLocalSetup: boolean;
   needsSetup: boolean;
   productionBlocked: boolean;
+  durableStoreConfigured: boolean;
 }
 
 export interface AdminCatalogState {
@@ -506,7 +510,12 @@ export async function registerPlayerAccount(
   email: string,
   password: string,
   username?: string,
-): Promise<{ ok: boolean; account?: PlayerProfileSummary; error?: string }> {
+): Promise<{
+  ok: boolean;
+  account?: PlayerProfileSummary;
+  recoveryCode?: string;
+  error?: string;
+}> {
   const res = await apiFetch('/api/exchange/auth', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -516,6 +525,7 @@ export async function registerPlayerAccount(
     ok?: boolean;
     account?: PlayerProfileSummary;
     sessionToken?: string;
+    recoveryCode?: string;
     error?: string;
   };
   if (!res.ok || !data.ok) {
@@ -523,7 +533,28 @@ export async function registerPlayerAccount(
   }
   setSessionToken(data.sessionToken || null);
   await refreshStorefront();
-  return { ok: true, account: data.account };
+  return { ok: true, account: data.account, recoveryCode: data.recoveryCode };
+}
+
+export async function resetPlayerPassword(
+  email: string,
+  recoveryCode: string,
+  newPassword: string,
+): Promise<{ ok: boolean; recoveryCode?: string; error?: string }> {
+  const res = await apiFetch('/api/exchange/auth/reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, recoveryCode, newPassword }),
+  });
+  const data = (await res.json()) as {
+    ok?: boolean;
+    recoveryCode?: string;
+    error?: string;
+  };
+  if (!res.ok || !data.ok) {
+    return { ok: false, error: data.error || 'Password reset failed.' };
+  }
+  return { ok: true, recoveryCode: data.recoveryCode };
 }
 
 export async function logoutPlayerAccount(): Promise<void> {
@@ -726,29 +757,39 @@ export async function checkAdminAuthStatus(): Promise<AdminAuthStatus> {
   if (!res.ok) {
     return {
       authenticated: false,
+      ownerExists: false,
       configuredViaEnv: false,
+      setupCodeRequired: false,
       configuredViaLocalSetup: false,
-      needsSetup: false,
+      needsSetup: true,
       productionBlocked: false,
+      durableStoreConfigured: false,
     };
   }
   return (await res.json()) as AdminAuthStatus;
 }
 
-export async function authenticateOwnerAdmin(
-  passphrase: string,
-  mode: 'login' | 'setup',
-): Promise<{ ok: boolean; error?: string }> {
+export async function authenticateOwnerAdmin(params: {
+  email: string;
+  password: string;
+  username?: string;
+  setupCode?: string;
+  mode: 'login' | 'setup';
+}): Promise<{ ok: boolean; recoveryCode?: string; error?: string }> {
   const res = await apiFetch('/api/exchange/admin/auth', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ passphrase, mode }),
+    body: JSON.stringify(params),
   });
-  const data = (await res.json()) as { ok?: boolean; error?: string };
+  const data = (await res.json()) as {
+    ok?: boolean;
+    recoveryCode?: string;
+    error?: string;
+  };
   if (!res.ok || !data.ok) {
     return { ok: false, error: data.error || 'Authentication failed.' };
   }
-  return { ok: true };
+  return { ok: true, recoveryCode: data.recoveryCode };
 }
 
 export async function logoutOwnerAdmin(): Promise<void> {

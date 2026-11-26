@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  flushExchangeDb,
+  loadExchangeDb,
   processPayhipWebhookEvent,
   verifyPayhipWebhookSignature,
 } from '@/lib/exchangeStore';
@@ -14,6 +16,15 @@ import {
  *  - Returns HTTP 200 upon successful verification & processing
  */
 export async function POST(req: NextRequest) {
+  try {
+    await loadExchangeDb();
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: 'Exchange database is unavailable. Please try again shortly.' },
+      { status: 503 },
+    );
+  }
+
   const rawBody = await req.text();
   let payload: Record<string, unknown>;
   try {
@@ -46,6 +57,7 @@ export async function POST(req: NextRequest) {
   }
 
   const result = processPayhipWebhookEvent(payload);
+  await flushExchangeDb();
   if (!result.ok) {
     return NextResponse.json(
       { ok: false, error: result.error || 'Webhook processing error.' },

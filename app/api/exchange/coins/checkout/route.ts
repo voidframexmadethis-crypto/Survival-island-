@@ -4,6 +4,7 @@ import {
   getAuthenticatedPlayer,
   getExchangeDb,
   getPaymentProviderStatus,
+  loadExchangeDb,
   persistExchangeDb,
 } from '@/lib/exchangeStore';
 
@@ -12,6 +13,14 @@ import {
  * Real-money product purchases use Payhip checkout (/api/exchange/payhip/checkout + /api/payhip/webhook).
  */
 export async function POST(req: NextRequest) {
+  try {
+    await loadExchangeDb();
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: 'Exchange database is unavailable. Please try again shortly.' },
+      { status: 503 },
+    );
+  }
   const account = getAuthenticatedPlayer(req);
   if (!account) {
     return NextResponse.json(
@@ -62,7 +71,7 @@ export async function POST(req: NextRequest) {
 
     db.transactions.unshift(tx);
     if (db.transactions.length > 500) db.transactions.length = 500;
-    persistExchangeDb();
+    await persistExchangeDb();
 
     if (!providerStatus.configured) {
       return NextResponse.json(

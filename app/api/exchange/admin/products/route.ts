@@ -3,11 +3,20 @@ import { ExchangeProduct } from '@/game/data/exchangeCatalog';
 import {
   getExchangeDb,
   isAdminRequestAuthorized,
+  loadExchangeDb,
   normalizeProductInput,
   persistExchangeDb,
 } from '@/lib/exchangeStore';
 
 export async function POST(req: NextRequest) {
+  try {
+    await loadExchangeDb();
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: 'Exchange database is unavailable. Please try again shortly.' },
+      { status: 503 },
+    );
+  }
   if (!isAdminRequestAuthorized(req)) {
     return NextResponse.json({ ok: false, error: 'Owner authorization required.' }, { status: 401 });
   }
@@ -31,7 +40,7 @@ export async function POST(req: NextRequest) {
     const product = normalizeProductInput(body);
     const db = getExchangeDb();
     db.products.unshift(product);
-    persistExchangeDb();
+    await persistExchangeDb();
 
     return NextResponse.json({ ok: true, product }, { status: 201 });
   } catch {

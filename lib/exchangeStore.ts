@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { NextRequest } from 'next/server';
+import { MongoClient, type Collection } from 'mongodb';
 import {
   CoinPackage,
   DEFAULT_EXCHANGE_CATALOG,
@@ -64,11 +65,17 @@ export interface ProcessedPayhipEvent {
   revoked?: boolean;
 }
 
+export type AccountRole = 'owner' | 'customer';
+
 export interface PlayerAccountRecord {
   playerId: string;
   username?: string;
   email?: string;
   passwordHash?: string;
+  role?: AccountRole;
+  recoveryCodeHash?: string;
+  sessionVersion?: number;
+  passwordUpdatedAt?: number;
   coinBalance: number;
   ownedProductIds: string[];
   revokedProductIds?: string[];
@@ -85,13 +92,17 @@ export interface PublicPlayerProfile {
   playerId: string;
   username: string;
   email: string;
+  role: AccountRole;
   createdAt: number;
 }
 
 export interface ExchangeDatabaseState {
-  version: 2 | 3;
-  /** Optional owner passphrase hash set via one-time local setup when EXCHANGE_ADMIN_SECRET is unset in dev */
+  version: 2 | 3 | 4;
+  /** Legacy owner passphrase hash. New accounts use an email/password owner account. */
   localDevAdminPassphraseHash?: string | null;
+  ownerPlayerId?: string | null;
+  /** Server-only secret used to sign player and owner sessions. */
+  signingSecret?: string;
   seededDefaultIds?: string[];
   products: ExchangeProduct[];
   coinPackages: CoinPackage[];
@@ -103,18 +114,31 @@ export interface ExchangeDatabaseState {
 
 const ADMIN_COOKIE_NAME = 'si_exchange_admin_session';
 const PLAYER_COOKIE_NAME = 'si_player_session';
-const DATA_DIR = path.join(process.cwd(), '.data');
+const DATA_DIR = process.env.EXCHANGE_DATA_DIR?.trim() || path.join(process.cwd(), '.data');
 const DATA_FILE = path.join(DATA_DIR, 'exchange-store.json');
+const MONGO_STATE_ID = 'exchange-state';
+const MONGO_COLLECTION = 'exchange_store';
+const MONGO_DB = process.env.MONGODB_DB?.trim() || 'survival_island';
+
+interface MongoExchangeStateDocument {
+  _id: string;
+  data?: Partial<ExchangeDatabaseState>;
+  updatedAt?: Date;
+}
 
 const globalForExchange = globalThis as unknown as {
   __siExchangeDb?: ExchangeDatabaseState;
   __siExchangeEphemeralSigningKey?: string;
+  __siMongoClientPromise?: Promise<MongoClient>;
+  __siExchangeWriteQueue?: Promise<void>;
 };
 
 function createEmptyDb(): ExchangeDatabaseState {
   return {
-    version: 3,
+    version: 4,
     localDevAdminPassphraseHash: null,
+    ownerPlayerId: null,
+    signingSecret: crypto.randomBytes(32).toString('hex'),
     seededDefaultIds: [],
     products: [],
     coinPackages: [],
@@ -125,7 +149,7 @@ function createEmptyDb(): ExchangeDatabaseState {
   };
 }
 
-function seedDefaultCatalogOnce(db: ExchangeDatabaseState): void {
+function seedDefaultCatalogOnce(db: ExchangeDatabaseState): boolean {
   if (!Array.isArray(db.seededDefaultIds)) {
     db.seededDefaultIds = [];
   }
@@ -147,9 +171,37 @@ function seedDefaultCatalogOnce(db: ExchangeDatabaseState): void {
     db.processedPayhipEvents = {};
     changed = true;
   }
-  if (changed) {
-    tryWriteDiskDb(db);
+  if (!db.ownerPlayerId) {
+    const owner = Object.values(db.players).find((p) => p.role === 'owner');
+    db.ownerPlayerId = owner?.playerId ?? null;
   }
+  if (!db.signingSecret) {
+    db.signingSecret = crypto.randomBytes(32).toString('hex');
+    changed = true;
+  }
+  return changed;
+}
+
+function normalizeDb(parsed: Partial<ExchangeDatabaseState> | null | undefined): ExchangeDatabaseState {
+  return {
+    version: 4,
+    localDevAdminPassphraseHash: parsed?.localDevAdminPassphraseHash ?? null,
+    ownerPlayerId: parsed?.ownerPlayerId ?? null,
+    signingSecret: parsed?.signingSecret || crypto.randomBytes(32).toString('hex'),
+    seededDefaultIds: Array.isArray(parsed?.seededDefaultIds) ? parsed.seededDefaultIds : [],
+    products: Array.isArray(parsed?.products) ? parsed.products : [],
+    coinPackages: Array.isArray(parsed?.coinPackages) ? parsed.coinPackages : [],
+    players: parsed?.players && typeof parsed.players === 'object' ? parsed.players : {},
+    transactions: Array.isArray(parsed?.transactions) ? parsed.transactions : [],
+    payhipCheckouts:
+      parsed?.payhipCheckouts && typeof parsed.payhipCheckouts === 'object'
+        ? parsed.payhipCheckouts
+        : {},
+    processedPayhipEvents:
+      parsed?.processedPayhipEvents && typeof parsed.processedPayhipEvents === 'object'
+        ? parsed.processedPayhipEvents
+        : {},
+  };
 }
 
 function tryReadDiskDb(): ExchangeDatabaseState | null {
@@ -158,23 +210,7 @@ function tryReadDiskDb(): ExchangeDatabaseState | null {
     const raw = fs.readFileSync(DATA_FILE, 'utf8');
     const parsed = JSON.parse(raw) as Partial<ExchangeDatabaseState>;
     if (!parsed || typeof parsed !== 'object') return null;
-    return {
-      version: 3,
-      localDevAdminPassphraseHash: parsed.localDevAdminPassphraseHash ?? null,
-      seededDefaultIds: Array.isArray(parsed.seededDefaultIds) ? parsed.seededDefaultIds : [],
-      products: Array.isArray(parsed.products) ? parsed.products : [],
-      coinPackages: Array.isArray(parsed.coinPackages) ? parsed.coinPackages : [],
-      players: parsed.players && typeof parsed.players === 'object' ? parsed.players : {},
-      transactions: Array.isArray(parsed.transactions) ? parsed.transactions : [],
-      payhipCheckouts:
-        parsed.payhipCheckouts && typeof parsed.payhipCheckouts === 'object'
-          ? parsed.payhipCheckouts
-          : {},
-      processedPayhipEvents:
-        parsed.processedPayhipEvents && typeof parsed.processedPayhipEvents === 'object'
-          ? parsed.processedPayhipEvents
-          : {},
-    };
+    return normalizeDb(parsed);
   } catch {
     return null;
   }
@@ -185,10 +221,79 @@ function tryWriteDiskDb(db: ExchangeDatabaseState): void {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
-    fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2), 'utf8');
+    const tempFile = `${DATA_FILE}.${process.pid}.tmp`;
+    const { signingSecret: _serverOnlySecret, ...diskState } = db;
+    fs.writeFileSync(tempFile, JSON.stringify(diskState, null, 2), 'utf8');
+    fs.renameSync(tempFile, DATA_FILE);
   } catch {
     // Gracefully keep state in memory if disk write is restricted.
   }
+}
+
+function getMongoUri(): string {
+  return process.env.MONGODB_URI?.trim() || '';
+}
+
+export function isDurableExchangeStoreConfigured(): boolean {
+  return Boolean(getMongoUri());
+}
+
+async function getMongoCollection(): Promise<Collection<MongoExchangeStateDocument> | null> {
+  const uri = getMongoUri();
+  if (!uri) return null;
+  if (!globalForExchange.__siMongoClientPromise) {
+    const client = new MongoClient(uri, { maxPoolSize: 5 });
+    globalForExchange.__siMongoClientPromise = client.connect();
+  }
+  const client = await globalForExchange.__siMongoClientPromise;
+  return client
+    .db(MONGO_DB)
+    .collection<MongoExchangeStateDocument>(MONGO_COLLECTION);
+}
+
+async function writeMongoDb(db: ExchangeDatabaseState): Promise<void> {
+  const collection = await getMongoCollection();
+  if (!collection) return;
+  const snapshot = JSON.parse(JSON.stringify(db)) as ExchangeDatabaseState;
+  await collection.updateOne(
+    { _id: MONGO_STATE_ID },
+    { $set: { data: snapshot, updatedAt: new Date() } },
+    { upsert: true },
+  );
+}
+
+/**
+ * Loads the persisted exchange state. MongoDB is used in production so accounts,
+ * purchases, and owner credentials survive serverless restarts. Local development
+ * and tests keep the existing file-backed fallback.
+ */
+export async function loadExchangeDb(): Promise<ExchangeDatabaseState> {
+  if (getMongoUri()) {
+    const collection = await getMongoCollection();
+    const doc = collection
+      ? await collection.findOne({ _id: MONGO_STATE_ID })
+      : null;
+    if (doc?.data) {
+      const db = normalizeDb(doc.data);
+      const changed = seedDefaultCatalogOnce(db);
+      globalForExchange.__siExchangeDb = db;
+      if (changed || !doc.data.signingSecret) await writeMongoDb(db);
+      return db;
+    }
+
+    const db = tryReadDiskDb() ?? createEmptyDb();
+    seedDefaultCatalogOnce(db);
+    globalForExchange.__siExchangeDb = db;
+    await writeMongoDb(db);
+    return db;
+  }
+
+  if (!globalForExchange.__siExchangeDb) {
+    const db = tryReadDiskDb() ?? createEmptyDb();
+    seedDefaultCatalogOnce(db);
+    globalForExchange.__siExchangeDb = db;
+  }
+  return globalForExchange.__siExchangeDb;
 }
 
 export function getExchangeDb(): ExchangeDatabaseState {
@@ -200,10 +305,27 @@ export function getExchangeDb(): ExchangeDatabaseState {
   return globalForExchange.__siExchangeDb;
 }
 
-export function persistExchangeDb(): void {
-  if (globalForExchange.__siExchangeDb) {
-    tryWriteDiskDb(globalForExchange.__siExchangeDb);
+export async function persistExchangeDb(): Promise<void> {
+  const db = globalForExchange.__siExchangeDb;
+  if (!db) return;
+  if (!getMongoUri()) {
+    tryWriteDiskDb(db);
+    return;
   }
+
+  const previous = globalForExchange.__siExchangeWriteQueue ?? Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(() => writeMongoDb(db));
+  // Keep fire-and-forget callers from producing unhandled rejections while
+  // still surfacing failures to callers that explicitly await persistence.
+  next.catch(() => undefined);
+  globalForExchange.__siExchangeWriteQueue = next;
+  await next;
+}
+
+export async function flushExchangeDb(): Promise<void> {
+  await (globalForExchange.__siExchangeWriteQueue ?? Promise.resolve());
 }
 
 export function reloadExchangeDbFromDisk(): ExchangeDatabaseState {
@@ -212,6 +334,12 @@ export function reloadExchangeDbFromDisk(): ExchangeDatabaseState {
   globalForExchange.__siExchangeDb = db;
   return db;
 }
+
+export function resetExchangeStoreForTests(): void {
+  globalForExchange.__siExchangeDb = undefined;
+  globalForExchange.__siExchangeWriteQueue = undefined;
+}
+
 
 export function sanitizePlayerId(raw: string | null | undefined): string {
   const cleaned = (raw || '')
@@ -257,6 +385,10 @@ function getAdminSigningKey(): string {
   if (envSecret && envSecret.length >= 8) {
     return crypto.createHash('sha256').update(`si-exchange-sign:${envSecret}`).digest('hex');
   }
+  const dbSecret = getExchangeDb().signingSecret;
+  if (dbSecret) {
+    return crypto.createHash('sha256').update(`si-exchange-sign:${dbSecret}`).digest('hex');
+  }
   if (!globalForExchange.__siExchangeEphemeralSigningKey) {
     globalForExchange.__siExchangeEphemeralSigningKey = crypto.randomBytes(32).toString('hex');
   }
@@ -267,6 +399,10 @@ function getPlayerSigningKey(): string {
   const envSecret = process.env.EXCHANGE_ADMIN_SECRET?.trim();
   if (envSecret && envSecret.length >= 8) {
     return crypto.createHash('sha256').update(`si-player-sign:${envSecret}`).digest('hex');
+  }
+  const dbSecret = getExchangeDb().signingSecret;
+  if (dbSecret) {
+    return crypto.createHash('sha256').update(`si-player-sign:${dbSecret}`).digest('hex');
   }
   if (!globalForExchange.__siExchangeEphemeralSigningKey) {
     globalForExchange.__siExchangeEphemeralSigningKey = crypto.randomBytes(32).toString('hex');
@@ -310,14 +446,80 @@ function verifyPlayerPassword(password: string, storedHash: string | undefined):
 
 // ---- Server-Side Player Account Auth & Session Cookies ----
 
+const RECOVERY_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const MIN_PASSWORD_LENGTH = 6;
+
+export function validateAccountEmail(email: string): string | null {
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return 'Please enter a valid email address.';
+  }
+  return null;
+}
+
+export function validateAccountPassword(password: string): string | null {
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters long.`;
+  }
+  if (password.length > 200) {
+    return 'Password is too long.';
+  }
+  return null;
+}
+
+function generateRecoveryCode(): string {
+  const bytes = crypto.randomBytes(12);
+  let raw = '';
+  for (const byte of bytes) {
+    raw += RECOVERY_ALPHABET[byte % RECOVERY_ALPHABET.length];
+  }
+  return `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}`;
+}
+
+function normalizeRecoveryCode(code: string): string {
+  return String(code || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 32);
+}
+
+function hashRecoveryCode(code: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(normalizeRecoveryCode(code), salt, 64).toString('hex');
+  return `recovery:${salt}:${derived}`;
+}
+
+function verifyRecoveryCode(code: string, storedHash: string | undefined): boolean {
+  if (!storedHash || !storedHash.startsWith('recovery:')) return false;
+  const parts = storedHash.split(':');
+  if (parts.length !== 3) return false;
+  const [, salt, hexHash] = parts;
+  if (!salt || !hexHash) return false;
+  try {
+    const derived = crypto
+      .scryptSync(normalizeRecoveryCode(code), salt, 64)
+      .toString('hex');
+    return safeEqualString(derived, hexHash);
+  } catch {
+    return false;
+  }
+}
+
+function findAccountByEmail(email: string): PlayerAccountRecord | undefined {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return undefined;
+  return Object.values(getExchangeDb().players).find(
+    (p) => p.email && normalizeEmail(p.email) === normalized,
+  );
+}
+
 export function getPlayerCookieName(): string {
   return PLAYER_COOKIE_NAME;
 }
 
-export function createPlayerSessionToken(playerId: string): string {
+export function createPlayerSessionToken(playerId: string, sessionVersion = 0): string {
   const exp = Date.now() + 1000 * 60 * 60 * 24 * 30; // 30 days
   const nonce = crypto.randomBytes(12).toString('hex');
-  const payload = `player.${playerId}.${exp}.${nonce}`;
+  const payload = `player.${playerId}.${sessionVersion}.${exp}.${nonce}`;
   const sig = crypto
     .createHmac('sha256', getPlayerSigningKey())
     .update(payload)
@@ -325,32 +527,48 @@ export function createPlayerSessionToken(playerId: string): string {
   return `${payload}.${sig}`;
 }
 
-export function verifyPlayerSessionToken(token: string | undefined | null): string | null {
+type ParsedPlayerSession = { playerId: string; sessionVersion: number };
+
+function parsePlayerSessionToken(token: string | undefined | null): ParsedPlayerSession | null {
   if (!token) return null;
   const parts = token.split('.');
-  if (parts.length !== 5) return null;
-  const [role, playerId, expStr, nonce, sig] = parts;
-  if (role !== 'player' || !playerId) return null;
+  // Five-part tokens are the old format and have no session version.
+  if (parts.length !== 5 && parts.length !== 6) return null;
+  const hasVersion = parts.length === 6;
+  const [role, playerId, versionOrExp, expOrNonce, nonceOrSig, maybeSig] = parts;
+  const version = hasVersion ? Number(versionOrExp) : 0;
+  const expStr = hasVersion ? expOrNonce : versionOrExp;
+  const nonce = hasVersion ? nonceOrSig : expOrNonce;
+  const sig = hasVersion ? maybeSig : nonceOrSig;
+  if (role !== 'player' || !playerId || !sig) return null;
+  if (!Number.isFinite(version) || version < 0) return null;
   const exp = Number(expStr);
   if (!Number.isFinite(exp) || Date.now() > exp) return null;
-  const payload = `${role}.${playerId}.${expStr}.${nonce}`;
+  const payload = hasVersion
+    ? `${role}.${playerId}.${versionOrExp}.${expStr}.${nonce}`
+    : `${role}.${playerId}.${expStr}.${nonce}`;
   const expectedSig = crypto
     .createHmac('sha256', getPlayerSigningKey())
     .update(payload)
     .digest('hex');
   if (!safeEqualString(sig, expectedSig)) return null;
-  return sanitizePlayerId(playerId);
+  return { playerId: sanitizePlayerId(playerId), sessionVersion: version };
+}
+
+export function verifyPlayerSessionToken(token: string | undefined | null): string | null {
+  return parsePlayerSessionToken(token)?.playerId ?? null;
 }
 
 export function getAuthenticatedPlayer(req: NextRequest): PlayerAccountRecord | null {
   const authorization = req.headers.get('authorization') || '';
   const bearerMatch = authorization.match(/^Bearer\s+(.+)$/i);
   const token = bearerMatch?.[1]?.trim() || req.cookies.get(PLAYER_COOKIE_NAME)?.value;
-  const playerId = verifyPlayerSessionToken(token);
-  if (!playerId) return null;
+  const session = parsePlayerSessionToken(token);
+  if (!session) return null;
   const db = getExchangeDb();
-  const account = db.players[playerId];
+  const account = db.players[session.playerId];
   if (!account || !account.email || !account.passwordHash) return null;
+  if ((account.sessionVersion ?? 0) !== session.sessionVersion) return null;
   if (!Array.isArray(account.revokedProductIds)) account.revokedProductIds = [];
   if (!Array.isArray(account.equippedCosmeticIds)) account.equippedCosmeticIds = [];
   return account;
@@ -361,35 +579,33 @@ export function toPublicPlayerProfile(account: PlayerAccountRecord): PublicPlaye
     playerId: account.playerId,
     username: account.username || account.email?.split('@')[0] || account.playerId,
     email: account.email || '',
+    role: account.role === 'owner' ? 'owner' : 'customer',
     createdAt: account.createdAt || account.updatedAt,
   };
 }
 
-export function registerPlayerAccount(params: {
+export async function registerPlayerAccount(params: {
   email: string;
   password: string;
   username?: string;
-}): { ok: boolean; account?: PlayerAccountRecord; error?: string; status?: number } {
+}): Promise<{
+  ok: boolean;
+  account?: PlayerAccountRecord;
+  recoveryCode?: string;
+  error?: string;
+  status?: number;
+}> {
   const email = normalizeEmail(params.email);
   const password = String(params.password || '');
   const rawName = String(params.username || '').trim().slice(0, 32);
 
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return { ok: false, error: 'Please enter a valid email address.', status: 400 };
-  }
-  if (password.length < 6) {
-    return {
-      ok: false,
-      error: 'Password must be at least 6 characters long.',
-      status: 400,
-    };
-  }
+  const emailError = validateAccountEmail(email);
+  if (emailError) return { ok: false, error: emailError, status: 400 };
+  const passwordError = validateAccountPassword(password);
+  if (passwordError) return { ok: false, error: passwordError, status: 400 };
 
   const db = getExchangeDb();
-  const existing = Object.values(db.players).find(
-    (p) => p.email && normalizeEmail(p.email) === email,
-  );
-  if (existing) {
+  if (findAccountByEmail(email)) {
     return {
       ok: false,
       error: 'An account with this email already exists. Please sign in instead.',
@@ -400,12 +616,17 @@ export function registerPlayerAccount(params: {
   const playerId = `acct_${crypto.randomBytes(6).toString('hex')}`;
   const now = Date.now();
   const username = rawName || email.split('@')[0];
+  const recoveryCode = generateRecoveryCode();
 
   const account: PlayerAccountRecord = {
     playerId,
     username,
     email,
     passwordHash: hashPlayerPassword(password),
+    role: 'customer',
+    recoveryCodeHash: hashRecoveryCode(recoveryCode),
+    sessionVersion: 0,
+    passwordUpdatedAt: now,
     coinBalance: 0,
     ownedProductIds: ['vault_backpack_explorer'],
     revokedProductIds: [],
@@ -418,8 +639,8 @@ export function registerPlayerAccount(params: {
   };
 
   db.players[playerId] = account;
-  persistExchangeDb();
-  return { ok: true, account };
+  await persistExchangeDb();
+  return { ok: true, account, recoveryCode };
 }
 
 export function authenticatePlayerAccount(params: {
@@ -432,10 +653,7 @@ export function authenticatePlayerAccount(params: {
     return { ok: false, error: 'Email and password are required.', status: 400 };
   }
 
-  const db = getExchangeDb();
-  const account = Object.values(db.players).find(
-    (p) => p.email && normalizeEmail(p.email) === email,
-  );
+  const account = findAccountByEmail(email);
   if (!account || !verifyPlayerPassword(password, account.passwordHash)) {
     return { ok: false, error: 'Invalid email or password.', status: 401 };
   }
@@ -445,56 +663,164 @@ export function authenticatePlayerAccount(params: {
   return { ok: true, account };
 }
 
-// ---- Server-Side Admin Authorization (Never Exposed to Client) ----
+export async function resetPlayerPassword(params: {
+  email: string;
+  recoveryCode: string;
+  newPassword: string;
+}): Promise<{
+  ok: boolean;
+  recoveryCode?: string;
+  error?: string;
+  status?: number;
+}> {
+  const email = normalizeEmail(params.email);
+  const recoveryCode = normalizeRecoveryCode(params.recoveryCode);
+  const newPassword = String(params.newPassword || '');
+  if (!email || !recoveryCode) {
+    return { ok: false, error: 'Email and recovery code are required.', status: 400 };
+  }
+  const passwordError = validateAccountPassword(newPassword);
+  if (passwordError) return { ok: false, error: passwordError, status: 400 };
 
-function hashPassphrase(passphrase: string): string {
-  return crypto.createHash('sha256').update(`si-owner-v2:${passphrase}`).digest('hex');
+  const account = findAccountByEmail(email);
+  if (!account || !verifyRecoveryCode(recoveryCode, account.recoveryCodeHash)) {
+    return { ok: false, error: 'Invalid email or recovery code.', status: 401 };
+  }
+
+  const nextRecoveryCode = generateRecoveryCode();
+  account.passwordHash = hashPlayerPassword(newPassword);
+  account.recoveryCodeHash = hashRecoveryCode(nextRecoveryCode);
+  account.passwordUpdatedAt = Date.now();
+  account.sessionVersion = (account.sessionVersion ?? 0) + 1;
+  account.updatedAt = Date.now();
+  await persistExchangeDb();
+  return { ok: true, recoveryCode: nextRecoveryCode };
 }
 
-export function getAdminAuthConfigStatus(): {
-  configuredViaEnv: boolean;
-  configuredViaLocalSetup: boolean;
+// ---- Server-Side Owner Authorization (Separate From Customer Sessions) ----
+
+export interface OwnerAuthStatus {
+  ownerExists: boolean;
   needsSetup: boolean;
+  configuredViaEnv: boolean;
+  setupCodeRequired: boolean;
+  configuredViaLocalSetup: boolean;
   productionBlocked: boolean;
-} {
+  durableStoreConfigured: boolean;
+}
+
+export function getAdminAuthConfigStatus(): OwnerAuthStatus {
+  const db = getExchangeDb();
+  const ownerExists = Object.values(db.players).some((p) => p.role === 'owner');
   const envSecret = process.env.EXCHANGE_ADMIN_SECRET?.trim();
   const configuredViaEnv = Boolean(envSecret && envSecret.length > 0);
   return {
+    ownerExists,
+    needsSetup: !ownerExists,
     configuredViaEnv,
-    configuredViaLocalSetup: true,
-    needsSetup: false,
+    setupCodeRequired: configuredViaEnv,
+    configuredViaLocalSetup: false,
     productionBlocked: false,
+    durableStoreConfigured: isDurableExchangeStoreConfigured(),
   };
 }
 
-export function verifyOrInitializeOwnerPassphrase(
-  passphrase: string,
-  _mode: 'login' | 'setup',
-): { ok: boolean; error?: string } {
-  void _mode;
-  const trimmed = (passphrase || '').trim();
-  const status = getAdminAuthConfigStatus();
-
-  if (status.configuredViaEnv) {
-    const expected = hashPassphrase(process.env.EXCHANGE_ADMIN_SECRET!.trim());
-    const provided = hashPassphrase(trimmed);
-    return safeEqualString(expected, provided)
-      ? { ok: true }
-      : { ok: false, error: 'Invalid owner passphrase.' };
+export async function createOwnerAccount(params: {
+  email: string;
+  password: string;
+  username?: string;
+  setupCode?: string;
+}): Promise<{
+  ok: boolean;
+  account?: PlayerAccountRecord;
+  recoveryCode?: string;
+  error?: string;
+  status?: number;
+}> {
+  const db = getExchangeDb();
+  if (Object.values(db.players).some((p) => p.role === 'owner')) {
+    return {
+      ok: false,
+      error: 'An owner account already exists. Sign in instead.',
+      status: 409,
+    };
   }
 
-  if (trimmed.length > 0) {
-    const db = getExchangeDb();
-    db.localDevAdminPassphraseHash = hashPassphrase(trimmed);
-    persistExchangeDb();
+  const email = normalizeEmail(params.email);
+  const password = String(params.password || '');
+  const rawName = String(params.username || '').trim().slice(0, 32);
+  const emailError = validateAccountEmail(email);
+  if (emailError) return { ok: false, error: emailError, status: 400 };
+  const passwordError = validateAccountPassword(password);
+  if (passwordError) return { ok: false, error: passwordError, status: 400 };
+
+  const envSecret = process.env.EXCHANGE_ADMIN_SECRET?.trim();
+  if (envSecret && !safeEqualString(String(params.setupCode || '').trim(), envSecret)) {
+    return { ok: false, error: 'Invalid owner setup code.', status: 401 };
   }
-  return { ok: true };
+
+  if (findAccountByEmail(email)) {
+    return {
+      ok: false,
+      error: 'An account with this email already exists.',
+      status: 409,
+    };
+  }
+
+  const playerId = `owner_${crypto.randomBytes(6).toString('hex')}`;
+  const now = Date.now();
+  const recoveryCode = generateRecoveryCode();
+  const account: PlayerAccountRecord = {
+    playerId,
+    username: rawName || 'Owner',
+    email,
+    passwordHash: hashPlayerPassword(password),
+    role: 'owner',
+    recoveryCodeHash: hashRecoveryCode(recoveryCode),
+    sessionVersion: 0,
+    passwordUpdatedAt: now,
+    coinBalance: 0,
+    ownedProductIds: ['vault_backpack_explorer'],
+    revokedProductIds: [],
+    ownedProductSnapshots: {},
+    equippedGunSkinsByClass: {},
+    equippedBackpackSkinId: null,
+    equippedCosmeticIds: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  db.players[playerId] = account;
+  db.ownerPlayerId = playerId;
+  await persistExchangeDb();
+  return { ok: true, account, recoveryCode };
 }
 
-export function createAdminSessionToken(): string {
+export function authenticateOwnerAccount(params: {
+  email: string;
+  password: string;
+}): { ok: boolean; account?: PlayerAccountRecord; error?: string; status?: number } {
+  const email = normalizeEmail(params.email);
+  const password = String(params.password || '');
+  if (!email || !password) {
+    return { ok: false, error: 'Owner email and password are required.', status: 400 };
+  }
+
+  const account = findAccountByEmail(email);
+  if (
+    !account ||
+    account.role !== 'owner' ||
+    !verifyPlayerPassword(password, account.passwordHash)
+  ) {
+    return { ok: false, error: 'Invalid owner email or password.', status: 401 };
+  }
+  return { ok: true, account };
+}
+
+export function createAdminSessionToken(account: PlayerAccountRecord): string {
   const exp = Date.now() + 1000 * 60 * 60 * 12; // 12 hours
   const nonce = crypto.randomBytes(12).toString('hex');
-  const payload = `owner.${exp}.${nonce}`;
+  const payload = `owner.${account.playerId}.${account.sessionVersion ?? 0}.${exp}.${nonce}`;
   const sig = crypto
     .createHmac('sha256', getAdminSigningKey())
     .update(payload)
@@ -502,25 +828,42 @@ export function createAdminSessionToken(): string {
   return `${payload}.${sig}`;
 }
 
-export function verifyAdminSessionToken(token: string | undefined | null): boolean {
-  if (!token) return false;
+type ParsedAdminSession = { playerId: string; sessionVersion: number };
+
+function parseAdminSessionToken(token: string | undefined | null): ParsedAdminSession | null {
+  if (!token) return null;
   const parts = token.split('.');
-  if (parts.length !== 4) return false;
-  const [role, expStr, nonce, sig] = parts;
-  if (role !== 'owner') return false;
+  // Reject legacy owner tokens that were not tied to an owner account.
+  if (parts.length !== 6) return null;
+  const [role, playerId, versionStr, expStr, nonce, sig] = parts;
+  if (role !== 'owner' || !playerId || !sig) return null;
+  const version = Number(versionStr);
   const exp = Number(expStr);
-  if (!Number.isFinite(exp) || Date.now() > exp) return false;
-  const payload = `${role}.${expStr}.${nonce}`;
+  if (!Number.isFinite(version) || version < 0) return null;
+  if (!Number.isFinite(exp) || Date.now() > exp) return null;
+  const payload = `${role}.${playerId}.${versionStr}.${expStr}.${nonce}`;
   const expectedSig = crypto
     .createHmac('sha256', getAdminSigningKey())
     .update(payload)
     .digest('hex');
-  return safeEqualString(sig, expectedSig);
+  if (!safeEqualString(sig, expectedSig)) return null;
+  return { playerId: sanitizePlayerId(playerId), sessionVersion: version };
+}
+
+export function verifyAdminSessionToken(token: string | undefined | null): boolean {
+  return Boolean(parseAdminSessionToken(token));
 }
 
 export function isAdminRequestAuthorized(req: NextRequest): boolean {
   const cookieToken = req.cookies.get(ADMIN_COOKIE_NAME)?.value;
-  return verifyAdminSessionToken(cookieToken);
+  const session = parseAdminSessionToken(cookieToken);
+  if (!session) return false;
+  const account = getExchangeDb().players[session.playerId];
+  return Boolean(
+    account &&
+      account.role === 'owner' &&
+      (account.sessionVersion ?? 0) === session.sessionVersion,
+  );
 }
 
 export function getAdminCookieName(): string {

@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isAdminRequestAuthorized } from '@/lib/exchangeStore';
+import { isAdminRequestAuthorized, loadExchangeDb } from '@/lib/exchangeStore';
 
 const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024; // 4 MB
 const MAX_MODEL_BYTES = 8 * 1024 * 1024; // 8 MB
 
 export async function POST(req: NextRequest) {
+  try {
+    await loadExchangeDb();
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: 'Exchange database is unavailable. Please try again shortly.' },
+      { status: 503 },
+    );
+  }
   if (!isAdminRequestAuthorized(req)) {
     return NextResponse.json({ ok: false, error: 'Owner authorization required.' }, { status: 401 });
   }
