@@ -3601,6 +3601,31 @@ export function SurvivalGameClient() {
                           >
                             Lock [X]
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('coil_bounce')}
+                            className="min-h-[32px] px-2.5 py-1 rounded-lg bg-purple-950/90 border border-purple-500/60 text-purple-100 text-[11px] font-bold"
+                          >
+                            Bounce
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('three_wheel')}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg border text-[11px] font-bold ${
+                              hud.activeVehicle.hydraulicMode === 'three_wheel'
+                                ? 'bg-amber-500 border-amber-300 text-stone-950'
+                                : 'bg-stone-900 border-stone-700 text-stone-200'
+                            }`}
+                          >
+                            3-Wheel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => engineRef.current?.triggerHydraulicAction('full_hop')}
+                            className="min-h-[32px] px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 border border-amber-300 text-stone-950 text-[11px] font-bold"
+                          >
+                            Full Hop
+                          </button>
                           {(hud.activeVehicle.hydraulicsDanceAvailable ||
                             hud.activeVehicle.hydraulicsDanceEnabled) && (
                             <button

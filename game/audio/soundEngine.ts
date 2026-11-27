@@ -74,6 +74,11 @@ export class SoundEngine {
   private engineSubGain: GainNode | null = null;
   private engineForcedGain: GainNode | null = null;
   private engineMasterGain: GainNode | null = null;
+  private engineBassShelf: BiquadFilterNode | null = null;
+  private engineNoiseSrc: AudioBufferSourceNode | null = null;
+  private engineNoiseFilter: BiquadFilterNode | null = null;
+  private engineNoiseGain: GainNode | null = null;
+  private engineStartupUntil = 0;
   private engineRunning = false;
   private activeEngineProfileId: string | null = null;
   private lastBlowOffAt = 0;
@@ -2742,7 +2747,15 @@ export class SoundEngine {
     const master = this.ctx.createGain();
     master.gain.setValueAtTime(0.0001, now);
     filter.connect(master);
-    master.connect(this.masterGain);
+
+    // A real exhaust/cabin has more low-frequency weight than a bare oscillator.
+    // Keep it subtle on modern cars and let each profile ask for extra thump.
+    const bassShelf = this.ctx.createBiquadFilter();
+    bassShelf.type = 'lowshelf';
+    bassShelf.frequency.value = 120;
+    bassShelf.gain.value = 1.8 + Math.max(0, config.lowEndBoostDb ?? 0) * 0.65;
+    master.connect(bassShelf);
+    bassShelf.connect(this.masterGain);
 
     const osc1 = this.ctx.createOscillator();
     osc1.type = config.primaryWave;
@@ -2795,12 +2808,33 @@ export class SoundEngine {
     forcedOsc.connect(forcedGain);
     forcedGain.connect(master);
 
+    // Brown-noise exhaust texture gives every engine a mechanical, breathing
+    // character instead of a thin oscillator tone.
+    const noiseFilter = this.ctx.createBiquadFilter();
+    noiseFilter.type = 'lowpass';
+    noiseFilter.frequency.value = 520;
+    noiseFilter.Q.value = 0.7;
+    const noiseGain = this.ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.0001, now);
+    const noise = this.createNoiseSource('brown');
+    if (noise) {
+      noise.connect(noiseFilter);
+      noiseFilter.connect(noiseGain);
+      noiseGain.connect(master);
+      noise.start(now);
+    }
+
     osc1.start(now);
     osc2.start(now);
     subOsc.start(now);
     lfo.start(now);
     forcedOsc.start(now);
 
+    this.engineBassShelf = bassShelf;
+    this.engineNoiseSrc = noise;
+    this.engineNoiseFilter = noiseFilter;
+    this.engineNoiseGain = noiseGain;
+    this.engineStartupUntil = now + 1.1;
     this.engineOsc1 = osc1;
     this.engineOsc2 = osc2;
     this.engineSubOsc = subOsc;
@@ -2814,6 +2848,100 @@ export class SoundEngine {
     this.engineMasterGain = master;
     this.engineRunning = true;
     this.activeEngineProfileId = config.profileId;
+    this.playEngineStartSequence(config, now);
+  }
+
+  /**
+   * Short physical start-up: fuel-pump prime, starter crank, ignition catch,
+   * then the idle settles under the continuous engine layer. Every vehicle
+   * profile uses it, scaled to the engine's idle speed and cylinder count.
+   */
+  private playEngineStartSequence(config: EngineAudioConfig, now: number): void {
+    if (!this.ctx || !this.masterGain) return;
+
+    const prime = this.ctx.createOscillator();
+    const primeGain = this.ctx.createGain();
+    prime.type = 'sine';
+    prime.frequency.setValueAtTime(860, now);
+    prime.frequency.exponentialRampToValueAtTime(430, now + 0.26);
+    primeGain.gain.setValueAtTime(0.0001, now);
+    primeGain.gain.linearRampToValueAtTime(0.018, now + 0.035);
+    primeGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.3);
+    prime.connect(primeGain);
+    primeGain.connect(this.masterGain);
+    prime.start(now);
+    prime.stop(now + 0.32);
+
+    const heavyV8 =
+      config.profileId === 'classic_v8_lowrider' ||
+      config.profileId === 'big_block_v8' ||
+      config.profileId.includes('v8');
+    const crankDuration = heavyV8 ? 0.62 : 0.42;
+    const crankStart = now + 0.18;
+
+    const starter = this.ctx.createOscillator();
+    const starterFilter = this.ctx.createBiquadFilter();
+    const starterGain = this.ctx.createGain();
+    starter.type = 'sawtooth';
+    starter.frequency.setValueAtTime(118, crankStart);
+    starter.frequency.linearRampToValueAtTime(176, crankStart + crankDuration * 0.55);
+    starter.frequency.linearRampToValueAtTime(142, crankStart + crankDuration);
+    starterFilter.type = 'lowpass';
+    starterFilter.frequency.value = 480;
+    starterGain.gain.setValueAtTime(0.0001, crankStart);
+    starterGain.gain.linearRampToValueAtTime(0.04, crankStart + 0.045);
+    starterGain.gain.exponentialRampToValueAtTime(0.0001, crankStart + crankDuration);
+    starter.connect(starterFilter);
+    starterFilter.connect(starterGain);
+    starterGain.connect(this.masterGain);
+    starter.start(crankStart);
+    starter.stop(crankStart + crankDuration + 0.02);
+
+    const crankNoise = this.createNoiseSource('brown');
+    if (crankNoise) {
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 165;
+      bp.Q.value = 1.1;
+      const ng = this.ctx.createGain();
+      ng.gain.setValueAtTime(0.0001, crankStart);
+      ng.gain.linearRampToValueAtTime(0.035, crankStart + 0.05);
+      ng.gain.exponentialRampToValueAtTime(0.0001, crankStart + crankDuration);
+      crankNoise.connect(bp);
+      bp.connect(ng);
+      ng.connect(this.masterGain);
+      crankNoise.start(crankStart, Math.random() * 1.2, crankDuration + 0.02);
+    }
+
+    // Ignition catch and first exhaust thump.
+    const catchAt = crankStart + crankDuration * 0.82;
+    const fire = this.ctx.createOscillator();
+    const fireGain = this.ctx.createGain();
+    fire.type = 'sine';
+    fire.frequency.setValueAtTime(Math.max(34, config.idleHz * 0.82), catchAt);
+    fire.frequency.exponentialRampToValueAtTime(24, catchAt + 0.24);
+    fireGain.gain.setValueAtTime(0.0001, catchAt);
+    fireGain.gain.linearRampToValueAtTime(0.16, catchAt + 0.018);
+    fireGain.gain.exponentialRampToValueAtTime(0.0001, catchAt + 0.34);
+    fire.connect(fireGain);
+    fireGain.connect(this.masterGain);
+    fire.start(catchAt);
+    fire.stop(catchAt + 0.36);
+
+    const puff = this.createNoiseSource('brown');
+    if (puff) {
+      const lp = this.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 360;
+      const pg = this.ctx.createGain();
+      pg.gain.setValueAtTime(0.0001, catchAt);
+      pg.gain.linearRampToValueAtTime(0.075, catchAt + 0.015);
+      pg.gain.exponentialRampToValueAtTime(0.0001, catchAt + 0.32);
+      puff.connect(lp);
+      lp.connect(pg);
+      pg.connect(this.masterGain);
+      puff.start(catchAt, Math.random() * 1.1, 0.34);
+    }
   }
 
   private playExhaustShiftPop(gainScale: number): void {
@@ -2918,6 +3046,9 @@ export class SoundEngine {
     const throttle = Math.max(0, Math.min(1, telemetry.throttle));
     const speedRatio = Math.max(0, Math.min(1.2, telemetry.speedRatio));
     const loadBoost = throttle * 0.55 + (telemetry.boosting ? 0.3 : 0);
+    const startupBlend = now < this.engineStartupUntil
+      ? Math.max(0.22, Math.min(1, 1 - (this.engineStartupUntil - now) / 1.1))
+      : 1;
 
     // Non-linear realistic RPM pitch curve
     const pitchNorm = Math.pow(rpm, 1.08);
@@ -2973,10 +3104,25 @@ export class SoundEngine {
       0.04,
     );
     this.engineSubGain.gain.setTargetAtTime(
-      config.subHarmonicMix * (0.48 + (1 - rpm) * 0.18),
+      config.subHarmonicMix *
+        (0.58 + (1 - rpm) * 0.2 + Math.max(0, config.lowEndBoostDb ?? 0) * 0.02),
       now,
       0.04,
     );
+
+    // Exhaust turbulence: low at idle, opening into a hard-edged roar under load.
+    if (this.engineNoiseGain && this.engineNoiseFilter) {
+      this.engineNoiseFilter.frequency.setTargetAtTime(
+        360 + rpm * 1450 + throttle * 620,
+        now,
+        0.05,
+      );
+      this.engineNoiseGain.gain.setTargetAtTime(
+        Math.max(0.0001, (0.012 + rpm * 0.02 + throttle * 0.026) * startupBlend),
+        now,
+        0.045,
+      );
+    }
 
     // Forced induction / hybrid e-motor / steam / rotor layer
     let forcedFreq = 400;
@@ -3016,7 +3162,8 @@ export class SoundEngine {
     const shiftDip = telemetry.shifting ? 0.62 : 1.0;
     const masterLevel =
       (0.052 + rpm * 0.068 + throttle * 0.052 + (telemetry.boosting ? 0.025 : 0)) *
-      shiftDip;
+      shiftDip *
+      startupBlend;
     if (Number.isFinite(masterLevel)) {
       this.engineMasterGain.gain.setTargetAtTime(
         Math.max(0.001, Math.min(0.24, masterLevel)),
@@ -3055,12 +3202,23 @@ export class SoundEngine {
         // Ignore already stopped oscillators
       }
     }
+    if (this.engineNoiseSrc) {
+      try {
+        this.engineNoiseSrc.stop();
+        this.engineNoiseSrc.disconnect();
+      } catch {
+        // Ignore already stopped noise source
+      }
+    }
     const gains: Array<AudioNode | null> = [
       this.engineLfoGain,
       this.engineHarmGain,
       this.engineSubGain,
       this.engineForcedGain,
       this.engineFilter,
+      this.engineNoiseFilter,
+      this.engineNoiseGain,
+      this.engineBassShelf,
       this.engineMasterGain,
     ];
     for (const g of gains) {
@@ -3082,6 +3240,11 @@ export class SoundEngine {
     this.engineSubGain = null;
     this.engineForcedGain = null;
     this.engineMasterGain = null;
+    this.engineNoiseSrc = null;
+    this.engineNoiseFilter = null;
+    this.engineNoiseGain = null;
+    this.engineBassShelf = null;
+    this.engineStartupUntil = 0;
     this.engineRunning = false;
     this.activeEngineProfileId = null;
   }

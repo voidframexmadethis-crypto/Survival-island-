@@ -65,6 +65,8 @@ export interface EngineAudioConfig {
   forcedInductionGain: number;
   gearCount: number;
   shiftPopGain: number;
+  /** Extra low-shelf dB on the engine/exhaust bus. */
+  lowEndBoostDb?: number;
 }
 
 export interface VehicleHandlingConfig {
@@ -984,6 +986,7 @@ export const VEHICLE_PROFILES: Record<string, VehicleProfile> = {
       forcedInductionGain: 0,
       gearCount: 4,
       shiftPopGain: 0.1,
+      lowEndBoostDb: 2.5,
     },
     handling: {
       topLandSpeedMs: 24,
@@ -1033,6 +1036,7 @@ export const VEHICLE_PROFILES: Record<string, VehicleProfile> = {
       forcedInductionGain: 0,
       gearCount: 5,
       shiftPopGain: 0.14,
+      lowEndBoostDb: 6,
     },
     handling: {
       topLandSpeedMs: 25.5,

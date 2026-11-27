@@ -332,26 +332,39 @@ export class Permanent60FpsController {
       if (substeps === 3 && this.accumulator > Permanent60FpsController.FIXED_DT) {
         this.accumulator = Permanent60FpsController.FIXED_DT;
       }
+      // Do not let a tab switch, asset load or long frame leave a backlog that
+      // fires back-to-back renders afterwards. That catch-up burst reads as a
+      // second stutter even though the original hitch is already over.
+      if (rawDtMs > 100) {
+        this.accumulator = 0;
+        this.renderAccumulatorMs = 0;
+      }
 
       // Render on a true 60 FPS cadence. Rendering every display refresh made
       // 90/120/144 Hz devices do 1.5-2.4x the GPU work, which heated phones and
       // produced periodic throttling stutter. A small tolerance keeps native
       // 60 Hz panels from skipping frames, while the accumulator still averages
       // 60 renders/second on 75, 90, 120 and 144 Hz displays.
-      this.renderAccumulatorMs = Math.min(
-        this.renderAccumulatorMs + rawDtMs,
-        Permanent60FpsController.FRAME_BUDGET_MS * 2,
-      );
+      //
+      // Keep the fractional overshoot so 90/120/144 Hz displays average a true
+      // 60 renders/second instead of losing time on every cadence cycle.
+      const nextRenderAccumulator = this.renderAccumulatorMs + rawDtMs;
       if (
-        this.renderAccumulatorMs + 1.5 <
+        nextRenderAccumulator + 1.5 <
         Permanent60FpsController.FRAME_BUDGET_MS
       ) {
+        this.renderAccumulatorMs = nextRenderAccumulator;
         return;
       }
-      this.renderAccumulatorMs = Math.max(
-        0,
-        this.renderAccumulatorMs - Permanent60FpsController.FRAME_BUDGET_MS,
-      );
+      // A genuinely long frame must not leave render debt. Preserve normal
+      // overshoot for high-refresh pacing, but clear the backlog after a hitch.
+      const longFrame = rawDtMs > 30;
+      this.renderAccumulatorMs = longFrame
+        ? 0
+        : Math.min(
+            Math.max(0, nextRenderAccumulator - Permanent60FpsController.FRAME_BUDGET_MS),
+            Permanent60FpsController.FRAME_BUDGET_MS * 0.5,
+          );
 
       const alpha = this.accumulator / Permanent60FpsController.FIXED_DT;
       handlers.onRender(alpha, this.elapsedSeconds);

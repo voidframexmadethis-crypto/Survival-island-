@@ -218,6 +218,7 @@ import {
   VEHICLE_MODULE_SPECS,
   VehiclePresetKey,
 } from '../systems/modularVehicle';
+import { resolveVehicleProfile } from '../systems/vehicleProfiles';
 import {
   REAR_BUMPER_MAX_LEVEL,
   rearBumperBounceScale,
@@ -1775,13 +1776,16 @@ export class GameEngine {
   private activeVehicleId: string | null = null;
   private selectedCargoVehicleId: string | null = null;
   private vehicleForwardSpeed = 0;
+  private vehicleAudioGear = 1;
+  private vehicleAudioRpm = 0;
+  private vehicleAudioThrottle = 0;
+  private vehicleAudioShiftPulse = 0;
   private vehicleSteerAngle = 0;
   private vehicleVisualPitch = 0;
   private vehicleVisualRoll = 0;
   private vehicleAltitudeVel = 0;
   private vehicleAscendHold = false;
   private vehicleDescendHold = false;
-  private vehicleEngineSoundAccum = 0;
   private hydraulicMode: HydraulicMode = 'level';
   /** True while the lowrider is held up on locked hydraulic cylinders. */
   private hydraulicLocked = false;
@@ -26056,6 +26060,10 @@ export class GameEngine {
     this.activeVehicleId = v.id;
     this.lastRadioVehicleId = v.id;
     this.vehicleForwardSpeed = 0;
+    this.vehicleAudioGear = 1;
+    this.vehicleAudioRpm = 0;
+    this.vehicleAudioThrottle = 0;
+    this.vehicleAudioShiftPulse = 0;
     this.vehicleSteerAngle = 0;
     this.vehicleAltitudeVel = 0;
     this.vehicleAscendHold = false;
@@ -26172,11 +26180,16 @@ export class GameEngine {
    * The rig is never a wheel-only visual overlay.
    */
   private usesLowriderRig(v?: ModularVehicleData | null): boolean {
-    // Classic hydraulics are the supported behavior. The later independent
-    // cylinder rig stays disabled so every hydraulic car uses the original
-    // four-corner spring/damper path: front/rear/side hops, lock, drop and the
-    // traditional three-wheel stance.
-    return false;
+    if (!v) return false;
+    // Traditional four-corner pump cars use the physical actuator rig. Airbag
+    // and DONK packages keep their own long-travel/side-to-side behavior.
+    if (this.isAirbagVehicle(v) || this.isDonkHydraulicVehicle(v)) return false;
+    return (
+      v.preset === 'lowrider' ||
+      v.preset === 'town_car' ||
+      v.preset === 'mini_truck' ||
+      v.preset === 'el_camino'
+    );
   }
 
   /**
@@ -26252,9 +26265,14 @@ export class GameEngine {
     const v = this.vehicles.find((x) => x.id === this.activeVehicleId);
     const exitSpeed = this.vehicleForwardSpeed;
     this.activeVehicleId = null;
+    this.sound.stopVehicleEngine();
     this.vehicleInteriorCamera = false;
     CABIN_BASS_AND_FIRST_PERSON.setCameraMode('CHASE');
     this.vehicleForwardSpeed = 0;
+    this.vehicleAudioGear = 1;
+    this.vehicleAudioRpm = 0;
+    this.vehicleAudioThrottle = 0;
+    this.vehicleAudioShiftPulse = 0;
     this.vehicleAltitudeVel = 0;
     this.vehicleAscendHold = false;
     this.vehicleDescendHold = false;
@@ -26601,14 +26619,24 @@ export class GameEngine {
     }
 
     if (action === 'lock_up') {
-      setLowriderBodyTrim(controls, 0.18);
-      this.sound.playHydraulicPump('up');
+      const lock = LOWRIDER_CORNERS.some((corner) => !controls.locked[corner]);
+      for (const corner of LOWRIDER_CORNERS) controls.locked[corner] = lock;
+      this.hydraulicLocked = lock;
+      this.hydraulicMode = 'lock_up';
+      this.sound.playHydraulicPump(lock ? 'lock' : 'unlock');
+      this.toast(
+        lock
+          ? `${av.name}: All four cylinders locked at current ride height`
+          : `${av.name}: Lock released — hydraulics live`,
+        lock ? 'discovery' : 'info',
+      );
       this.emitHud();
       return true;
     }
 
     if (action === 'drop') {
       setLowriderBodyTrim(controls, -0.18);
+      this.hydraulicMode = 'drop_down';
       this.sound.playHydraulicPump('down');
       this.emitHud();
       return true;
@@ -26839,7 +26867,9 @@ export class GameEngine {
       | 'front_lock'
       | 'rear_lock'
       | 'side_to_side'
-      | 'coil_bounce',
+      | 'coil_bounce'
+      | 'three_wheel'
+      | 'full_hop',
   ): void {
     if (!this.activeVehicleId || this.mode !== 'playing' || this.gameOver) return;
     const av = this.vehicles.find((v) => v.id === this.activeVehicleId);
@@ -26848,6 +26878,13 @@ export class GameEngine {
     this.sound.unlock();
     const isDonk = this.isDonkHydraulicVehicle(av);
     const isAirbag = this.isAirbagVehicle(av);
+    // Traditional pump cars drive the real four-corner actuator rig. This is
+    // the path with independent corner travel, actual tyre contact, body heave,
+    // three-wheel stance and ballistic hops; keep the airbag/DONK branches for
+    // their distinct long-travel packages.
+    if (this.usesLowriderRig(av) && this.handleLowriderHydraulicAction(action, av)) {
+      return;
+    }
     // Cadillac Coupe DeVille Airbag + Coil-Over Spring Suspension
     if (isAirbag) {
       const speed = THREE.MathUtils.clamp(av.airbagSpeed ?? 1.0, 0.25, 2.0);
@@ -27685,12 +27722,76 @@ export class GameEngine {
       dt,
     );
 
-    this.vehicleEngineSoundAccum += dt;
-    if ((spd > 2 || airborne) && this.vehicleEngineSoundAccum >= 0.45) {
-      this.vehicleEngineSoundAccum = 0;
-      this.sound.playKineticGearTick();
-    }
+    this.updateActiveVehicleAudio(dt, v, moveForward, boosting, spd);
     this.nearbyInteraction = null;
+  }
+
+  /**
+   * Drives the synthesized engine from actual wheel speed and throttle. The
+   * previous build only played a periodic gear tick, so cars had no continuous
+   * engine note. Gear steps are speed-derived with hysteresis, which also feeds
+   * the shift dip and exhaust-pop path in the sound engine.
+   */
+  private updateActiveVehicleAudio(
+    dt: number,
+    v: ModularVehicleData,
+    moveForward: number,
+    boosting: boolean,
+    speedMps: number,
+  ): void {
+    const profile = resolveVehicleProfile(v);
+    const config = profile.audio;
+    const gearCount = Math.max(1, config.gearCount);
+    const gearSpan = 1 / gearCount;
+    const topSpeed = Math.max(6, profile.handling.topLandSpeedMs);
+    const speedRatio = THREE.MathUtils.clamp(speedMps / topSpeed, 0, 1.15);
+    const throttle = THREE.MathUtils.clamp(moveForward, 0, 1);
+    const braking =
+      moveForward < -0.08 || this.gamepadHandbrake || this.touchHandbrake;
+
+    let gear = Math.max(1, Math.min(gearCount, this.vehicleAudioGear));
+    const currentFloor = (gear - 1) * gearSpan;
+    const currentCeil = gear * gearSpan;
+    let justShifted = false;
+    if (speedRatio > currentCeil + 0.015 && gear < gearCount) {
+      gear += 1;
+      justShifted = true;
+    } else if (speedRatio < currentFloor - 0.02 && gear > 1) {
+      gear -= 1;
+      justShifted = true;
+    }
+    this.vehicleAudioGear = gear;
+    if (justShifted) this.vehicleAudioShiftPulse = 0.16;
+    this.vehicleAudioShiftPulse = Math.max(0, this.vehicleAudioShiftPulse - dt);
+
+    const inGear = THREE.MathUtils.clamp(
+      (speedRatio - (gear - 1) * gearSpan) / gearSpan,
+      0,
+      1,
+    );
+    const targetRpm = Math.min(
+      1.08,
+      0.2 + inGear * 0.58 + throttle * 0.16 + (boosting ? 0.06 : 0),
+    );
+    this.vehicleAudioRpm = THREE.MathUtils.damp(this.vehicleAudioRpm, targetRpm, 7, dt);
+    const previousThrottle = this.vehicleAudioThrottle;
+    this.vehicleAudioThrottle = THREE.MathUtils.damp(
+      this.vehicleAudioThrottle,
+      throttle,
+      9,
+      dt,
+    );
+
+    this.sound.updateVehicleEngine(dt, config, {
+      rpmNorm: this.vehicleAudioRpm,
+      throttle: this.vehicleAudioThrottle,
+      braking,
+      speedRatio,
+      boosting,
+      shifting: this.vehicleAudioShiftPulse > 0,
+      justShifted,
+      throttleReleased: previousThrottle > 0.5 && throttle < 0.15,
+    });
   }
 
   private getVehicleSpecs(v: ModularVehicleData): ReturnType<typeof computeVehicleSpecs> {
