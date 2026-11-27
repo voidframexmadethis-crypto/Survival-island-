@@ -47,6 +47,8 @@ interface WorldSelectionMenuProps {
   latestSave: SaveSlotSummary | null;
   saveSlots: SaveSlotSummary[];
   multiplayerRoomCode?: string | null;
+  /** Rooms live inside a running world, so the fresh menu hides this entry. */
+  multiplayerAvailable?: boolean;
   onContinueLatest: () => void;
   onLoadSlot: (slotId: string) => void;
   onDeleteSlot: (slotId: string) => void;
@@ -104,6 +106,7 @@ export function WorldSelectionMenu({
   latestSave,
   saveSlots,
   multiplayerRoomCode,
+  multiplayerAvailable = true,
   onContinueLatest,
   onLoadSlot,
   onDeleteSlot,
@@ -269,16 +272,18 @@ export function WorldSelectionMenu({
             <span className="hidden text-stone-400 sm:inline"> · World Selection</span>
           </div>
           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end">
-            <button
-              type="button"
-              onClick={onOpenMultiplayer}
-              className="menu-top-action island-wood-plank flex min-h-[42px] min-w-0 items-center justify-center gap-1.5 rounded-lg border border-sky-400/45 px-2.5 text-[11px] font-semibold text-sky-200 sm:px-3.5 sm:text-xs"
-            >
-              <Users className="h-4 w-4 shrink-0 text-sky-300" />
-              <span className="min-w-0 break-words text-left">
-                Multiplayer{multiplayerRoomCode ? ` (${multiplayerRoomCode})` : ''}
-              </span>
-            </button>
+            {multiplayerAvailable && (
+              <button
+                type="button"
+                onClick={onOpenMultiplayer}
+                className="menu-top-action island-wood-plank flex min-h-[42px] min-w-0 items-center justify-center gap-1.5 rounded-lg border border-sky-400/45 px-2.5 text-[11px] font-semibold text-sky-200 sm:px-3.5 sm:text-xs"
+              >
+                <Users className="h-4 w-4 shrink-0 text-sky-300" />
+                <span className="min-w-0 break-words text-left">
+                  Multiplayer{multiplayerRoomCode ? ` (${multiplayerRoomCode})` : ''}
+                </span>
+              </button>
+            )}
             <button
               type="button"
               onClick={onOpenExchange}
@@ -482,27 +487,31 @@ export function WorldSelectionMenu({
               </span>
             </button>
 
-            <button
-              type="button"
-              onClick={onOpenMap}
-              className="menu-nav-row island-wood-plank flex min-h-[48px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-amber-800/70 px-4 py-2.5 text-left text-stone-100"
-            >
-              <MapPin className="w-5 h-5 text-stone-300 shrink-0" />
-              <span className="min-w-0 break-words font-display text-sm font-bold uppercase tracking-wider">
-                MAP
-              </span>
-            </button>
+            {onOpenMap && (
+              <button
+                type="button"
+                onClick={onOpenMap}
+                className="menu-nav-row island-wood-plank flex min-h-[48px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-amber-800/70 px-4 py-2.5 text-left text-stone-100"
+              >
+                <MapPin className="w-5 h-5 text-stone-300 shrink-0" />
+                <span className="min-w-0 break-words font-display text-sm font-bold uppercase tracking-wider">
+                  MAP
+                </span>
+              </button>
+            )}
 
-            <button
-              type="button"
-              onClick={onOpenAchievements}
-              className="menu-nav-row island-wood-plank flex min-h-[48px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-amber-800/70 px-4 py-2.5 text-left text-stone-100"
-            >
-              <Trophy className="w-5 h-5 text-amber-300 shrink-0" />
-              <span className="min-w-0 break-words font-display text-sm font-bold uppercase tracking-wider">
-                ACHIEVEMENTS
-              </span>
-            </button>
+            {onOpenAchievements && (
+              <button
+                type="button"
+                onClick={onOpenAchievements}
+                className="menu-nav-row island-wood-plank flex min-h-[48px] w-full min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-amber-800/70 px-4 py-2.5 text-left text-stone-100"
+              >
+                <Trophy className="w-5 h-5 text-amber-300 shrink-0" />
+                <span className="min-w-0 break-words font-display text-sm font-bold uppercase tracking-wider">
+                  ACHIEVEMENTS
+                </span>
+              </button>
+            )}
 
             <button
               type="button"

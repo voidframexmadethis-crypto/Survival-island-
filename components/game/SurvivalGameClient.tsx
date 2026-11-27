@@ -77,7 +77,7 @@ import {
 } from 'lucide-react';
 import { ITEMS, isActiveWeaponItem, isAmmoItem, isFirearmItem } from '@/game/data/items';
 import { STAGE_1_MISSIONS } from '@/game/data/missions';
-import { GameEngine } from '@/game/engine/GameEngine';
+import type { GameEngine } from '@/game/engine/GameEngine';
 import { formatFerryDuration } from '@/game/systems/louisianaFerryVoyage';
 import {
   formatAirShuttleCountdown,
@@ -196,6 +196,22 @@ function mainlandTabFromId(id?: string): MainlandTab {
   return 'district';
 }
 
+type GameEngineModule = typeof import('@/game/engine/GameEngine');
+
+let gameEngineModulePromise: Promise<GameEngineModule> | null = null;
+
+/**
+ * The engine and its world systems are several megabytes of JavaScript. Load
+ * them as their own chunk so the main menu can hydrate and respond to taps
+ * without first parsing the entire 3D game.
+ */
+function loadGameEngineModule(): Promise<GameEngineModule> {
+  if (!gameEngineModulePromise) {
+    gameEngineModulePromise = import('@/game/engine/GameEngine');
+  }
+  return gameEngineModulePromise;
+}
+
 function formatTimePhase(t: number): string {
   if (t < 0.2 || t >= 0.84) return 'Night';
   if (t < 0.31) return 'Dawn';
@@ -208,7 +224,7 @@ function formatTimePhase(t: number): string {
 export function SurvivalGameClient() {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<GameEngine | null>(null);
-  const engineFactoryRef = useRef<(() => GameEngine | null) | null>(null);
+  const engineFactoryRef = useRef<(() => Promise<GameEngine | null>) | null>(null);
   const lookPointerId = useRef<number | null>(null);
   const lastLookPos = useRef({ x: 0, y: 0 });
   const pointerDownPos = useRef({ x: 0, y: 0 });
@@ -686,12 +702,22 @@ export function SurvivalGameClient() {
     // The menu is pure DOM and no longer waits for the full island build. The
     // heavy engine is created only when a world is launched, so the first
     // screen is interactive immediately instead of sitting behind a loader.
-    const createEngine = (): GameEngine | null => {
+    const createEngine = async (): Promise<GameEngine | null> => {
       if (engine) return engine;
       if (cancelled) return null;
       const initialSettings = loadSettings();
+      let GameEngineClass: typeof GameEngine;
       try {
-        engine = new GameEngine(mountEl, initialSettings, {
+        GameEngineClass = (await loadGameEngineModule()).GameEngine;
+      } catch {
+        if (!cancelled) {
+          setWebglError('Unable to load the 3D game engine. Check your connection and retry.');
+        }
+        return null;
+      }
+      if (cancelled) return null;
+      try {
+        engine = new GameEngineClass(mountEl, initialSettings, {
           onHudUpdate: (snapshot) => {
             setHud(snapshot);
             const eq = snapshot.equippedSlot;
@@ -775,15 +801,25 @@ export function SurvivalGameClient() {
       return engine;
     };
     engineFactoryRef.current = createEngine;
+
+    // Start fetching/parsing the engine chunk once the menu is idle. This keeps
+    // first paint light while making the first Play press feel instant.
+    const prefetchId = window.setTimeout(() => {
+      if (cancelled) return;
+      void loadGameEngineModule().catch(() => {
+        // The launch path retries and surfaces a readable error if this fails.
+      });
+    }, 400);
+
     const params = new URLSearchParams(window.location.search);
     const autostart = params.get('autostart') === '1';
     setEngineReady(!autostart);
 
     const bootId =
       autostart
-        ? window.setTimeout(() => {
-            const bootedEngine = createEngine();
-            if (!bootedEngine) {
+        ? window.setTimeout(async () => {
+            const bootedEngine = await createEngine();
+            if (!bootedEngine || cancelled) {
               setEngineReady(true);
               return;
             }
@@ -793,6 +829,7 @@ export function SurvivalGameClient() {
               gameMode: 'survival',
             });
             bootedEngine.ensurePlayerHasGun(true);
+            bootedEngine.prewarmLandmarks();
             bootedEngine.setMode('playing');
             window.requestAnimationFrame(() => {
               setCurrentSlotId('slot_1');
@@ -805,6 +842,7 @@ export function SurvivalGameClient() {
 
     return () => {
       cancelled = true;
+      window.clearTimeout(prefetchId);
       if (bootId) window.clearTimeout(bootId);
       if (engineFactoryRef.current === createEngine) engineFactoryRef.current = null;
       engine?.dispose();
@@ -1042,9 +1080,10 @@ export function SurvivalGameClient() {
     // The engine is normally created here, on first launch, instead of blocking
     // the initial menu. Show the loader while the synchronous build runs.
     setEngineReady(false);
-    window.setTimeout(() => {
+    window.setTimeout(async () => {
       try {
-        const engine = engineRef.current ?? engineFactoryRef.current?.() ?? null;
+        const engine =
+          engineRef.current ?? (await engineFactoryRef.current?.()) ?? null;
         if (!engine) return;
         engine.unlockAudio();
         const safeMode = resolveAllowedGameMode(opts.worldType, opts.gameMode);
@@ -1061,12 +1100,20 @@ export function SurvivalGameClient() {
         if (opts.worldType === 'island') {
           engine.ensurePlayerHasGun(true);
         }
+        engine.prewarmLandmarks();
         saveGameToSlot(engine.exportSaveData(slotId));
         refreshSaves();
         engine.setMode('playing');
         setCurrentSlotId(slotId);
         setActiveModal(null);
         setScreen('playing');
+      } catch (err) {
+        console.error('Failed to start world', err);
+        pushToast({
+          id: `start_failed_${Date.now()}`,
+          text: 'Could not start that world. Please try again.',
+          tone: 'warning',
+        });
       } finally {
         launchPendingRef.current = false;
         setEngineReady(true);
@@ -1083,9 +1130,10 @@ export function SurvivalGameClient() {
     engineRef.current?.unlockAudio();
     launchPendingRef.current = true;
     setEngineReady(false);
-    window.setTimeout(() => {
+    window.setTimeout(async () => {
       try {
-        const engine = engineRef.current ?? engineFactoryRef.current?.() ?? null;
+        const engine =
+          engineRef.current ?? (await engineFactoryRef.current?.()) ?? null;
         if (!engine) return;
         engine.unlockAudio();
         engine.loadFromSave(data);
@@ -1093,6 +1141,7 @@ export function SurvivalGameClient() {
         if (data.worldType !== 'flat') {
           engine.ensurePlayerHasGun(false);
         }
+        engine.prewarmLandmarks();
         if (data.hudPreferences) {
           const merged: GameSettings = {
             ...settings,
@@ -1113,6 +1162,13 @@ export function SurvivalGameClient() {
               ? `Loaded ${data.worldName || 'Flat Park World'} · Creative Park Ready`
               : `Loaded ${data.worldName || `Day ${data.dayCount} Expedition`}`,
           tone: 'info',
+        });
+      } catch (err) {
+        console.error('Failed to load save', err);
+        pushToast({
+          id: `load_failed_${Date.now()}`,
+          text: 'Could not load that world save. Please try again.',
+          tone: 'warning',
         });
       } finally {
         launchPendingRef.current = false;
@@ -1633,6 +1689,7 @@ export function SurvivalGameClient() {
           latestSave={latestSave}
           saveSlots={saveSlots}
           multiplayerRoomCode={hud?.multiplayerState?.roomCode}
+          multiplayerAvailable={Boolean(engineInstance)}
           onContinueLatest={() => {
             if (latestSave) handleContinueGame(latestSave.slotId);
           }}
@@ -1649,8 +1706,8 @@ export function SurvivalGameClient() {
           onOpenMods={() => setActiveModal('mods')}
           onOpenSettings={() => setActiveModal('settings')}
           onOpenControls={() => setActiveModal('controls')}
-          onOpenMap={() => setActiveModal('map')}
-          onOpenAchievements={() => setActiveModal('missions')}
+          onOpenMap={hud ? () => setActiveModal('map') : undefined}
+          onOpenAchievements={hud ? () => setActiveModal('missions') : undefined}
           onQuit={() => {
             pushToast({
               id: `quit_${Date.now()}`,

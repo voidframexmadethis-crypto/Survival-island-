@@ -1546,6 +1546,7 @@ export class GameEngine {
   private worldName = 'Survival Island';
   private flatSurfaceStyle: FlatSurfaceStyle = 'turf_grid';
   private flatWorld!: FlatWorldHandles;
+  private waterparkRevealLatched = false;
   private coasterRuntime!: RollerCoasterRuntime;
   private amusementParkRuntime!: AmusementParkRuntime;
   private waterpark!: WaterparkRuntime;
@@ -3002,16 +3003,19 @@ export class GameEngine {
   /** Keeps the heavy waterpark and coaster meshes out of the renderer when far away. */
   private updateAttractionVisibility(cx: number, cz: number, maxDist: number): void {
     if (this.currentDimension !== 'overworld') {
+      this.waterparkRevealLatched = false;
       this.waterpark?.setVisible(false);
       this.coasterRuntime?.setViewDistance(cx, cz, 0, 0, 0);
       return;
     }
     if (this.worldType === 'flat') {
+      this.waterparkRevealLatched = false;
       this.waterpark?.setVisible(false);
       this.coasterRuntime?.setViewDistance(cx, cz, Math.max(280, maxDist), 0, 0);
       return;
     }
     if (this.mode === 'menu') {
+      this.waterparkRevealLatched = false;
       this.waterpark?.setVisible(false);
       this.coasterRuntime?.setViewDistance(cx, cz, 0, 0, 0);
       return;
@@ -3023,12 +3027,21 @@ export class GameEngine {
     );
     const wpDx = cx - WATERPARK_SITE.x;
     const wpDz = cz - WATERPARK_SITE.z;
+    const wpDistSq = wpDx * wpDx + wpDz * wpDz;
     const waterparkRange = this.isSoftwareGl
       ? 300
       : Math.min(420, Math.max(300, maxDist + 80));
-    this.waterpark?.setVisible(
-      waterparkForced || wpDx * wpDx + wpDz * wpDz <= waterparkRange * waterparkRange,
-    );
+    // Keep the park visible slightly past the reveal radius. Walking along the
+    // cutoff used to hide/show every slide and pool in the same frame.
+    const waterparkKeepRange = waterparkRange * 1.2;
+    const nearWaterpark =
+      waterparkForced ||
+      wpDistSq <=
+        (this.waterparkRevealLatched
+          ? waterparkKeepRange * waterparkKeepRange
+          : waterparkRange * waterparkRange);
+    this.waterparkRevealLatched = nearWaterpark;
+    this.waterpark?.setVisible(nearWaterpark);
     this.coasterRuntime?.setViewDistance(
       cx,
       cz,
@@ -3036,6 +3049,99 @@ export class GameEngine {
       820,
       380,
     );
+  }
+
+  /**
+   * Uploads the coaster, waterpark, garage and mansion meshes while the world is
+   * still behind the loading overlay. These landmarks are built lazily after
+   * the boot compile, so without this pass their first on-screen frame paid for
+   * hundreds of geometry/texture uploads at once — the hitch players felt when
+   * walking up to the park, waterpark, garage or mansion.
+   */
+  public prewarmLandmarks(): void {
+    if (this.disposed || this.isSoftwareGl || !this.world || this.worldType === 'flat') return;
+    if (typeof document !== 'undefined' && document.hidden) return;
+    const renderer = this.renderer;
+    if (!renderer) return;
+
+    const anchors: { x: number; y: number; z: number }[] = [
+      { x: WATERPARK_SITE.x, y: WATERPARK_SITE.y, z: WATERPARK_SITE.z },
+      {
+        x: this.world.garagePos.x,
+        y: this.world.garagePos.y,
+        z: this.world.garagePos.z,
+      },
+      {
+        x: this.world.premadeMansion.group.position.x,
+        y: this.world.premadeMansion.group.position.y,
+        z: this.world.premadeMansion.group.position.z,
+      },
+      ...this.coasterRuntime.getStationAnchors(),
+    ];
+
+    // Hide/show state must be restored to whatever the active cull wants.
+    const prevWaterparkVisible = this.waterparkRevealLatched;
+    this.waterpark?.setVisible(true);
+    this.coasterRuntime.setWarmupVisible(true);
+
+    // Also warm the ground chunks around each landmark so the approach path
+    // does not upload a fresh 64 m chunk every few steps.
+    const chunkRestore: { group: THREE.Group; visible: boolean }[] = [];
+    const warmRadiusSq = 190 * 190;
+    for (const chunk of this.world.worldChunks) {
+      const chunkX = (chunk.x + 0.5) * 64;
+      const chunkZ = (chunk.z + 0.5) * 64;
+      let nearAnchor = false;
+      for (const anchor of anchors) {
+        const dx = chunkX - anchor.x;
+        const dz = chunkZ - anchor.z;
+        if (dx * dx + dz * dz <= warmRadiusSq) {
+          nearAnchor = true;
+          break;
+        }
+      }
+      if (nearAnchor && !chunk.group.visible) {
+        chunkRestore.push({ group: chunk.group, visible: false });
+        chunk.group.visible = true;
+      }
+    }
+
+    const camera = this.camera;
+    const prevPos = camera.position.clone();
+    const prevQuat = camera.quaternion.clone();
+    const prevTarget = renderer.getRenderTarget();
+    const warmupTarget = new THREE.WebGLRenderTarget(160, 90, {
+      depthBuffer: true,
+      stencilBuffer: false,
+    });
+    warmupTarget.texture.generateMipmaps = false;
+
+    try {
+      renderer.setRenderTarget(warmupTarget);
+      for (const anchor of anchors) {
+        camera.position.set(anchor.x + 34, anchor.y + 22, anchor.z + 34);
+        camera.lookAt(anchor.x, anchor.y + 4, anchor.z);
+        camera.updateMatrixWorld();
+        renderer.render(this.scene, camera);
+      }
+    } finally {
+      renderer.setRenderTarget(prevTarget);
+      warmupTarget.dispose();
+      camera.position.copy(prevPos);
+      camera.quaternion.copy(prevQuat);
+      camera.updateMatrixWorld();
+      for (const entry of chunkRestore) entry.group.visible = entry.visible;
+      this.waterpark?.setVisible(prevWaterparkVisible);
+      this.coasterRuntime.setWarmupVisible(false);
+      this.updateAttractionVisibility(
+        this.playerX,
+        this.playerZ,
+        this.effectiveMaxDrawDistance,
+      );
+      // Shadow maps were rendered from the warm-up camera; force a fresh one.
+      this.shadowLastCamX = Number.NaN;
+      renderer.shadowMap.needsUpdate = true;
+    }
   }
 
   private registerWorldPerformanceObjects(): void {

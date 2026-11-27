@@ -90,6 +90,10 @@ interface ActiveCoasterEntry {
   arrivedAtStation: boolean;
   hudNodesCache?: SavedCoasterNode[];
   validationCache?: { valid: boolean; errors: string[] };
+  /** Cached reveal state so range culling uses hysteresis instead of popping. */
+  trackVisible?: boolean;
+  envVisible?: boolean;
+  detailVisible?: boolean;
 }
 
 type CoasterTheme = NonNullable<ActiveCoasterEntry['theme']>;
@@ -1619,19 +1623,66 @@ export class RollerCoasterRuntime {
     const trackSq = maxTrackDist * maxTrackDist;
     const envSq = maxEnvironmentDist * maxEnvironmentDist;
     const detailSq = maxDetailDist * maxDetailDist;
+    // Keep meshes already on screen a little longer than the reveal radius. The
+    // old hard cutoff made the coaster and its themed mountain blink in and out
+    // when walking the exact boundary, and each reveal forced a fresh GPU upload.
+    const exitFactorSq = 1.18 * 1.18;
     for (const entry of this.coasters.values()) {
       const dx = entry.stationPos.x - playerX;
       const dz = entry.stationPos.z - playerZ;
       const distSq = dx * dx + dz * dz;
-      entry.meshGroup.visible = maxTrackDist > 0 && distSq <= trackSq;
+      const showTrack =
+        maxTrackDist > 0 &&
+        (distSq <= trackSq || Boolean(entry.trackVisible && distSq <= trackSq * exitFactorSq));
+      entry.trackVisible = showTrack;
+      entry.meshGroup.visible = showTrack;
       const themed = this.themedEnvironments.get(entry.id);
       if (themed) {
-        themed.root.visible =
+        const envRange = themeConfig(entry.theme) ? envSq : trackSq;
+        const showEnv =
           maxEnvironmentDist > 0 &&
-          (themeConfig(entry.theme) ? distSq <= envSq : distSq <= trackSq);
-        themed.setDetailVisible(maxDetailDist > 0 && distSq <= detailSq);
+          (distSq <= envRange || Boolean(entry.envVisible && distSq <= envRange * exitFactorSq));
+        entry.envVisible = showEnv;
+        themed.root.visible = showEnv;
+        const showDetail =
+          maxDetailDist > 0 &&
+          (distSq <= detailSq || Boolean(entry.detailVisible && distSq <= detailSq * exitFactorSq));
+        entry.detailVisible = showDetail;
+        themed.setDetailVisible(showDetail);
       }
     }
+  }
+
+  /**
+   * Forces every coaster mesh and themed environment visible for a one-off GPU
+   * warm-up during loading, so the first ride/approach does not compile and
+   * upload the whole park mid-frame.
+   */
+  public setWarmupVisible(visible: boolean): void {
+    for (const entry of this.coasters.values()) {
+      entry.meshGroup.visible = visible;
+      entry.trackVisible = visible;
+      const themed = this.themedEnvironments.get(entry.id);
+      if (themed) {
+        themed.root.visible = visible;
+        themed.setDetailVisible(visible);
+        entry.envVisible = visible;
+        entry.detailVisible = visible;
+      }
+    }
+  }
+
+  /** Station coordinates of every loaded coaster, used by the landmark warm-up. */
+  public getStationAnchors(): { x: number; y: number; z: number }[] {
+    const out: { x: number; y: number; z: number }[] = [];
+    for (const entry of this.coasters.values()) {
+      out.push({
+        x: entry.stationPos.x,
+        y: entry.stationPos.y,
+        z: entry.stationPos.z,
+      });
+    }
+    return out;
   }
 
   public getHudSummaries(): CoasterHudSummaryItem[] {
