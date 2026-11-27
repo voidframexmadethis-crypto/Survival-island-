@@ -12,8 +12,20 @@ export const VOLCANO_FLEX_ID = 'volcano_flex';
 export const VOLCANO_FLEX_NAME = 'VOLCANO FLEX';
 export const VOLCANO_FLEX_INVERSIONS = 15;
 /** Bumped when the island attraction is moved or regraded so old saves migrate. */
-export const VOLCANO_FLEX_LAYOUT_TAG = 'observation_tower_v2';
+export const VOLCANO_FLEX_LAYOUT_TAG = 'observation_tower_v3_boarding';
 export const VOLCANO_FLEX_HEIGHT_M = 274.32; // 900 ft
+
+/**
+ * Ride speed envelope. The circuit is 1.35 km long with a 274 m tower, so an
+ * unconstrained gravity descent reached 317 km/h and threw the train through
+ * the inversions. The island ride is governed like a real controlled coaster:
+ * a gentle powered climb and a hard upper limit on the descent.
+ */
+export const VOLCANO_FLEX_MAX_SPEED_MPS = 20; // 72 km/h
+export const VOLCANO_FLEX_STATION_SPEED_MPS = 2.4; // 8.6 km/h
+export const VOLCANO_FLEX_LAUNCH_TARGET_MPS = 13; // 47 km/h
+export const VOLCANO_FLEX_ASCENT_TARGET_MPS = 11; // 40 km/h
+export const VOLCANO_FLEX_BRAKE_TARGET_MPS = 3; // 11 km/h
 
 const STATION_X = WATERPARK_SITE.x + WATERPARK_DECK_HALF_W + VOLCANO_FLEX_CLEARANCE_M;
 const STATION_Z = WATERPARK_SITE.z;
@@ -120,7 +132,7 @@ export function buildVolcanoFlexNodes(): SavedCoasterNode[] {
       },
       bank: 0,
       segmentType: 'station',
-      targetSpeed: 4.8,
+      targetSpeed: VOLCANO_FLEX_STATION_SPEED_MPS,
     });
   }
 
@@ -137,7 +149,7 @@ export function buildVolcanoFlexNodes(): SavedCoasterNode[] {
       },
       bank: 0,
       segmentType: 'lsm_launch',
-      targetSpeed: 88,
+      targetSpeed: VOLCANO_FLEX_LAUNCH_TARGET_MPS,
     });
   }
 
@@ -154,7 +166,7 @@ export function buildVolcanoFlexNodes(): SavedCoasterNode[] {
       },
       bank: Math.sin(theta * 1.5) * 8,
       segmentType: 'lsm_launch',
-      targetSpeed: 88,
+      targetSpeed: VOLCANO_FLEX_ASCENT_TARGET_MPS,
     });
   }
 
@@ -162,16 +174,25 @@ export function buildVolcanoFlexNodes(): SavedCoasterNode[] {
   for (let i = 1; i <= 108; i++) {
     const t = i / 108;
     const theta = t * Math.PI * 6;
+    // The powered/upside-down block used to snap the roll from 3600 deg to
+    // 3780 deg between two nodes (180 deg in 3.5 m). Ramp the extra half roll
+    // across the last 10% of the descent so every car rolls smoothly through
+    // it instead of flipping sideways.
     let bank = rollBankAt(t);
+    if (t > 0.92) {
+      // Start from the 10th roll's upright exit (3600) and add the block's
+      // remaining half roll without stepping back to 3551 at t = 0.9.
+      bank = Math.max(
+        bank,
+        ROLL_BANK_END + 180 * smoothstep((t - 0.92) / 0.08),
+      );
+    }
     let segmentType: SavedCoasterNode['segmentType'] = 'coast';
     let targetSpeed: number | undefined;
 
     if (t >= 0.938 && t <= 0.984) {
-      bank = 3780;
       segmentType = 'lsm_launch';
-      targetSpeed = 76;
-    } else if (t > 0.922) {
-      bank = ROLL_BANK_END;
+      targetSpeed = VOLCANO_FLEX_ASCENT_TARGET_MPS;
     }
 
     nodes.push({
@@ -186,17 +207,19 @@ export function buildVolcanoFlexNodes(): SavedCoasterNode[] {
     });
   }
 
-  // Half-turn tunnel exit, descending to the return inversions.
+  // Half-turn tunnel exit, descending to the return inversions. The first
+  // third rolls the block's extra 180 deg back to upright.
   for (let i = 1; i <= 30; i++) {
     const t = i / 30;
     const theta = t * Math.PI;
+    const rollBack = 1 - smoothstep(t / 0.35);
     nodes.push({
       position: {
         x: VOLCANO_LOCAL_X + Math.cos(theta) * TOWER_RADIUS,
         y: DESCENT_BOTTOM_Y - smoothstep(t) * 25,
         z: VOLCANO_LOCAL_Z + Math.sin(theta) * TOWER_RADIUS,
       },
-      bank: ROLL_BANK_END,
+      bank: ROLL_BANK_END + 180 * rollBack,
       segmentType: 'coast',
     });
   }
@@ -282,10 +305,18 @@ export function buildVolcanoFlexNodes(): SavedCoasterNode[] {
     new THREE.Vector3(elementStart.x + 52, elementStart.y - 5, elementStart.z - 40),
     new THREE.Vector3(elementStart.x + 58, elementStart.y - 10, elementStart.z - 16),
     new THREE.Vector3(elementStart.x + 50, elementStart.y - 14, elementStart.z + 2),
-    new THREE.Vector3(elementStart.x + 30, 14, -36),
-    new THREE.Vector3(16, 11, -24),
-    new THREE.Vector3(8, 8, -12),
-    new THREE.Vector3(2, 5.5, -5),
+    // Swing smoothly back toward the station. The old boundary-fence waypoint
+    // jumped from x +10 to x -10 and then to x +24, doubling back 159 deg in
+    // 1.5 m and throwing the train sideways as it docked.
+    new THREE.Vector3(elementStart.x + 54, 14, -48),
+    new THREE.Vector3(elementStart.x + 56, 11, -36),
+    new THREE.Vector3(elementStart.x + 52, 8, -26),
+    new THREE.Vector3(6, 4.5, -22),
+    new THREE.Vector3(1.5, 2.0, -16),
+    // Final 10 m are dead level and aligned with the boarding straight so the
+    // train enters the station flat instead of diving into it.
+    new THREE.Vector3(0, 1.35, -10),
+    new THREE.Vector3(0, 1.35, -5),
     new THREE.Vector3(0, 1.35, 0),
   ]);
   const closureSamples = 76;
@@ -297,13 +328,13 @@ export function buildVolcanoFlexNodes(): SavedCoasterNode[] {
       position: { x: pd.x, y: pd.y, z: pd.z },
       bank: baseBank,
       segmentType: braking ? 'trim_brake' : 'coast',
-      targetSpeed: braking ? 6 : undefined,
+      targetSpeed: braking ? VOLCANO_FLEX_BRAKE_TARGET_MPS : undefined,
     });
   }
   // A fixed station target on the closing node keeps the train moving through
   // the load bay after it wraps around the circuit.
   nodes[nodes.length - 1].segmentType = 'station';
-  nodes[nodes.length - 1].targetSpeed = 4.8;
+  nodes[nodes.length - 1].targetSpeed = VOLCANO_FLEX_STATION_SPEED_MPS;
   nodes[nodes.length - 1].bank = 5040;
 
   return nodes.map((node) => ({

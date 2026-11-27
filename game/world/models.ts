@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { roundedBox } from './roundedBox';
+import type { CoasterStationPlatformSpec } from './coasterStationLayout';
 import {
   createFirearmModelSet,
   type FirearmModelKind,
@@ -3163,6 +3164,7 @@ export function createCreatureModel(species: CreatureSpecies): CreatureRig {
 export function createCampStructureModel(
   type: CampStructureType,
   woodTex?: THREE.Texture,
+  coasterPlatform?: CoasterStationPlatformSpec,
 ): { group: THREE.Group; fireLight?: THREE.PointLight; flameGroup?: THREE.Group } {
   const group = new THREE.Group();
   const woodMat = new THREE.MeshStandardMaterial({
@@ -3682,68 +3684,138 @@ export function createCampStructureModel(
       roughness: 0.2,
     });
 
-    // Raised station boarding platform alongside track heartline
-    const deck = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.24, 5.2), deckMat);
-    deck.position.set(1.9, 0.92, 0);
+    // Boarding platform alongside the track. The island coaster passes a deck
+    // spec whose top matches the train's car floor; other coasters keep the
+    // original 1.04 m platform.
+    const deckTop = coasterPlatform?.deckTop ?? 1.04;
+    const deckWidth = coasterPlatform?.deckWidth ?? 3.4;
+    const deckLength = coasterPlatform?.deckLength ?? 5.2;
+    const deckCenterX = coasterPlatform?.deckCenterX ?? 1.9;
+    const deckCenterZ = coasterPlatform?.deckCenterZ ?? 0;
+    const deckThickness = 0.24;
+    const deckNearZ = deckCenterZ + deckLength * 0.5;
+    const railEdgeX = deckCenterX - deckWidth * 0.5;
+    const outerEdgeX = deckCenterX + deckWidth * 0.5;
+    const roofY = coasterPlatform ? deckTop + 2.65 : 3.55;
+    const roofColBottom = deckTop;
+    const roofColHeight = Math.max(1.2, roofY - roofColBottom);
+
+    const deck = new THREE.Mesh(
+      new THREE.BoxGeometry(deckWidth, deckThickness, deckLength),
+      deckMat,
+    );
+    deck.position.set(deckCenterX, deckTop - deckThickness * 0.5, deckCenterZ);
+    deck.name = 'coaster-station-deck';
     deck.receiveShadow = true;
     deck.castShadow = true;
     group.add(deck);
 
-    // Steel pier supports under deck
-    for (const px of [0.5, 3.3]) {
-      for (const pz of [-2.1, 2.1]) {
-        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 0.92, 8), steelMat);
-        leg.position.set(px, 0.46, pz);
+    // Steel pier supports sized to the actual deck height.
+    const legHeight = Math.max(0.3, deckTop - deckThickness);
+    const legZ: number[] = [];
+    for (let z = deckCenterZ - deckLength * 0.5 + 0.6; z <= deckCenterZ + deckLength * 0.5 - 0.4; z += 3.2) {
+      legZ.push(z);
+    }
+    if (legZ.length === 0) legZ.push(deckCenterZ);
+    for (const px of [railEdgeX + 0.3, outerEdgeX - 0.3]) {
+      for (const pz of legZ) {
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, legHeight, 8), steelMat);
+        leg.position.set(px, legHeight * 0.5, pz);
         leg.castShadow = true;
         group.add(leg);
       }
     }
 
-    // Yellow safety edging stripe on track-side edge
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.04, 5.05), hazardMat);
-    stripe.position.set(0.32, 1.05, 0);
+    // Yellow safety edging stripe on the track-side edge.
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.04, deckLength - 0.15), hazardMat);
+    stripe.position.set(railEdgeX + 0.12, deckTop + 0.02, deckCenterZ);
     group.add(stripe);
 
-    // Automatic boarding air-gates along the track loading edge
-    for (const gz of [-1.5, -0.5, 0.5, 1.5]) {
+    // Automatic boarding air-gates along the track loading edge.
+    const gateStart = deckCenterZ - deckLength * 0.5 + 1.1;
+    const gateEnd = deckCenterZ + deckLength * 0.5 - 0.9;
+    const gateSpacing = coasterPlatform ? 2 : 1;
+    for (let gz = gateStart; gz <= gateEnd + 0.001; gz += gateSpacing) {
       const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.95, 0.1), steelMat);
-      post.position.set(0.45, 1.5, gz);
+      post.position.set(railEdgeX + 0.25, deckTop + 0.475, gz);
       const bar = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.09, 0.72), hazardMat);
-      bar.position.set(0.45, 1.72, gz + 0.36);
+      bar.position.set(railEdgeX + 0.25, deckTop + 0.72, gz + 0.36);
       group.add(post, bar);
     }
 
-    // Four structural roof canopy columns & gable rafters
-    for (const px of [0.45, 3.35]) {
-      for (const pz of [-2.2, 2.2]) {
-        const col = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.1, 2.5, 8), steelMat);
-        col.position.set(px, 2.25, pz);
+    // Roof columns stay above head height at the raised boarding deck.
+    for (const px of [railEdgeX + 0.25, outerEdgeX - 0.25]) {
+      for (const pz of [deckCenterZ - deckLength * 0.5 + 0.35, deckCenterZ + deckLength * 0.5 - 0.35]) {
+        const col = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.1, roofColHeight, 8), steelMat);
+        col.position.set(px, roofColBottom + roofColHeight * 0.5, pz);
         col.castShadow = true;
         group.add(col);
       }
     }
-    const roofPlate = new THREE.Mesh(new THREE.BoxGeometry(3.55, 0.14, 5.5), canopyMat);
-    roofPlate.position.set(1.9, 3.55, 0);
+    const roofPlate = new THREE.Mesh(
+      new THREE.BoxGeometry(deckWidth + 0.15, 0.14, deckLength + 0.3),
+      canopyMat,
+    );
+    roofPlate.position.set(deckCenterX, roofY, deckCenterZ);
     roofPlate.castShadow = true;
     group.add(roofPlate);
 
-    const fascia = new THREE.Mesh(new THREE.BoxGeometry(3.62, 0.24, 5.56), accentMat);
-    fascia.position.set(1.9, 3.45, 0);
+    const fascia = new THREE.Mesh(
+      new THREE.BoxGeometry(deckWidth + 0.22, 0.24, deckLength + 0.36),
+      accentMat,
+    );
+    fascia.position.set(deckCenterX, roofY - 0.1, deckCenterZ);
     group.add(fascia);
 
-    // Operator dispatch console booth
+    // Boarding staircase from grade up to the deck (island coaster only).
+    const stairRun = coasterPlatform?.stairRun ?? 0;
+    if (stairRun > 0) {
+      const stairWidth = coasterPlatform?.stairWidth ?? 1.2;
+      const stairCenterX = coasterPlatform?.stairCenterX ?? deckCenterX;
+      const steps = 12;
+      const stepDepth = stairRun / steps;
+      const stepRise = deckTop / steps;
+      for (let i = 0; i < steps; i++) {
+        const top = stepRise * (i + 1);
+        const step = new THREE.Mesh(
+          new THREE.BoxGeometry(stairWidth, top, stepDepth * 1.04),
+          deckMat,
+        );
+        step.position.set(
+          stairCenterX,
+          top * 0.5,
+          deckNearZ + stepDepth * (steps - i - 0.5),
+        );
+        step.receiveShadow = true;
+        step.castShadow = true;
+        group.add(step);
+      }
+      const slope = Math.atan2(deckTop, stairRun);
+      const railLength = Math.hypot(stairRun, deckTop);
+      for (const sx of [stairCenterX - stairWidth * 0.5 + 0.05, stairCenterX + stairWidth * 0.5 - 0.05]) {
+        const rail = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.035, 0.035, railLength, 6),
+          steelMat,
+        );
+        rail.rotation.x = Math.PI * 0.5 - slope;
+        rail.position.set(sx, deckTop * 0.5 + 0.95, deckNearZ + stairRun * 0.5);
+        group.add(rail);
+      }
+    }
+
+    // Operator dispatch console booth.
     const consoleBox = new THREE.Mesh(new THREE.BoxGeometry(0.75, 1.05, 0.6), steelMat);
-    consoleBox.position.set(2.8, 1.56, -1.6);
+    consoleBox.position.set(deckCenterX + 0.9, deckTop + 0.525, deckNearZ - 1.9);
     consoleBox.castShadow = true;
     group.add(consoleBox);
 
     const consolePanel = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.1, 0.45), lampMat);
-    consolePanel.position.set(2.8, 2.1, -1.6);
+    consolePanel.position.set(deckCenterX + 0.9, deckTop + 1.06, deckNearZ - 1.9);
     consolePanel.rotation.x = 0.25;
     group.add(consolePanel);
 
     const stationLight = new THREE.PointLight(0x38bdf8, 1.6, 12, 1.6);
-    stationLight.position.set(1.9, 3.1, 0);
+    stationLight.position.set(deckCenterX, roofY - 0.55, deckCenterZ);
     group.add(stationLight);
 
     return { group, fireLight: stationLight };

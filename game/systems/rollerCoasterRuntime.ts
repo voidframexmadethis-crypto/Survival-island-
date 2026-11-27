@@ -8,6 +8,14 @@ import {
 } from '../types';
 import { getTerrainHeight } from '../world/terrain';
 import {
+  VOLCANO_FLEX_MAX_SPEED_MPS,
+  VOLCANO_FLEX_STATION_SPEED_MPS,
+} from '../world/volcanoFlexLayout';
+import {
+  VOLCANO_FLEX_BOARDING_DISTANCE_M,
+  VOLCANO_FLEX_BOARDING_SETBACK_M,
+} from '../world/coasterStationLayout';
+import {
   buildVolcanoFlexEnvironment,
   buildVolcanoFlexTrainCar,
   type VolcanoFlexEnvironment,
@@ -28,6 +36,7 @@ import {
   getSegmentDisplayLabel,
   validateTrack,
 } from './rollerCoasterSystem';
+
 
 export type CoasterPiecePresetKey =
   | 'straight'
@@ -64,6 +73,12 @@ interface ActiveCoasterEntry {
   estPeakSpeedKmh: number;
   inversionsCount: number;
   theme: 'volcano_flex' | null;
+  /** Train lead-car distance where the whole train is inside the station. */
+  boardingDistance: number;
+  /** A full lap has wrapped and the train is rolling in to park. */
+  arrivalPending: boolean;
+  /** Train has parked at the loading position and the rider can get off. */
+  arrivedAtStation: boolean;
   hudNodesCache?: SavedCoasterNode[];
   validationCache?: { valid: boolean; errors: string[] };
 }
@@ -96,46 +111,53 @@ const _coasterFwd = new THREE.Vector3();
 const _coasterPos = new THREE.Vector3();
 const _coasterBasis = new THREE.Matrix4();
 
+/**
+ * Proper right-handed car/tie basis. The stored frame uses
+ * `up = side x tangent`, so the side vector is the *negative* of the proper
+ * right axis; using it directly produced a reflection matrix (determinant -1)
+ * and `setFromRotationMatrix` then returned unreliable car rotations.
+ */
 function makeBasisMatrix(sample: TrackSample): THREE.Matrix4 {
-  _coasterRight.set(sample.right.x, sample.right.y, sample.right.z).normalize();
   _coasterUp.set(sample.up.x, sample.up.y, sample.up.z).normalize();
   _coasterFwd.set(sample.tangent.x, sample.tangent.y, sample.tangent.z).normalize();
+  _coasterRight.crossVectors(_coasterUp, _coasterFwd).normalize();
   return _coasterBasis.makeBasis(_coasterRight, _coasterUp, _coasterFwd);
 }
 
-function stabilizeVolcanoFrames(samples: TrackSample[]): void {
-  if (samples.length < 3) return;
-  let peakIndex = 0;
-  let lastInversionIndex = -1;
-  for (let i = 0; i < samples.length; i++) {
-    if (samples[i].position.y > samples[peakIndex].position.y) peakIndex = i;
-    if (samples[i].segmentType === 'inversion') lastInversionIndex = i;
-  }
-  const peakY = samples[peakIndex].position.y;
+/**
+ * VOLCANO FLEX authors its bank as an absolute roll from the horizon (0 at the
+ * station, 360-degree multiples through the rolls, 5040 at the dock). Parallel
+ * transport ignores that and accumulates its own roll around the 377 m spiral,
+ * leaving the train upside down for ~90 m of the climb and twisted at the
+ * station. Build the frame from the horizon plus the authored bank instead, and
+ * carry the previous side vector through near-vertical tangents so loops stay
+ * continuous.
+ */
+function applyVolcanoHorizonFrames(samples: TrackSample[]): void {
+  if (samples.length < 2) return;
   const worldUp = new THREE.Vector3(0, 1, 0);
-  for (let i = 0; i < samples.length; i++) {
-    const sample = samples[i];
-    // Stabilise the powered ascent and the flat docking run. Without this the
-    // parallel-transport frame accumulates a false roll after several laps of
-    // the tower. The inversion descent and return elements keep their authored
-    // bank rotations.
-    if (
-      i <= peakIndex ||
-      sample.position.y >= peakY - 2 ||
-      (lastInversionIndex >= 0 && i >= lastInversionIndex)
-    ) {
-      const tangent = new THREE.Vector3(
-        sample.tangent.x,
-        sample.tangent.y,
-        sample.tangent.z,
-      ).normalize();
-      const right = new THREE.Vector3().crossVectors(tangent, worldUp);
-      if (right.lengthSq() < 0.001) right.set(-1, 0, 0);
-      right.normalize();
-      const up = new THREE.Vector3().crossVectors(right, tangent).normalize();
-      sample.right = { x: right.x, y: right.y, z: right.z };
-      sample.up = { x: up.x, y: up.y, z: up.z };
+  const tangent = new THREE.Vector3();
+  const side = new THREE.Vector3();
+  const flatUp = new THREE.Vector3();
+  const up = new THREE.Vector3();
+  let previousSide: THREE.Vector3 | null = null;
+  for (const sample of samples) {
+    tangent.set(sample.tangent.x, sample.tangent.y, sample.tangent.z).normalize();
+    side.crossVectors(tangent, worldUp);
+    if (side.lengthSq() < 0.02) {
+      if (previousSide) {
+        side.copy(previousSide).addScaledVector(tangent, -previousSide.dot(tangent));
+      }
+      if (side.lengthSq() < 1e-4) side.set(1, 0, 0);
     }
+    side.normalize();
+    flatUp.crossVectors(side, tangent).normalize();
+    const bank = (sample.bank * Math.PI) / 180;
+    side.multiplyScalar(Math.cos(bank)).addScaledVector(flatUp, -Math.sin(bank)).normalize();
+    up.crossVectors(side, tangent).normalize();
+    sample.right = { x: side.x, y: side.y, z: side.z };
+    sample.up = { x: up.x, y: up.y, z: up.z };
+    previousSide = side.clone();
   }
 }
 
@@ -252,6 +274,9 @@ export class RollerCoasterRuntime {
       estPeakSpeedKmh: 0,
       inversionsCount: 0,
       theme: null,
+      boardingDistance: 0,
+      arrivalPending: false,
+      arrivedAtStation: false,
     };
     this.coasters.set(id, entry);
 
@@ -662,8 +687,11 @@ export class RollerCoasterRuntime {
     const val = validateTrack(entry.editor.nodes);
     if (!val.valid || entry.samples.length < 2) return false;
     entry.running = typeof running === 'boolean' ? running : !entry.running;
+    entry.arrivalPending = false;
+    entry.arrivedAtStation = false;
     if (entry.running && entry.train.speed < 5.5) {
-      entry.train.speed = 6.5;
+      entry.train.speed =
+        entry.theme === 'volcano_flex' ? VOLCANO_FLEX_STATION_SPEED_MPS : 6.5;
     }
     this.hudCacheDirty = true;
     return true;
@@ -673,13 +701,51 @@ export class RollerCoasterRuntime {
     const entry = this.coasters.get(coasterId);
     if (!entry) return false;
     entry.running = false;
-    entry.train.position = 0;
+    entry.train.position =
+      entry.theme === 'volcano_flex' ? entry.boardingDistance : 0;
     entry.train.speed = 0;
     entry.train.verticalG = 1;
     entry.train.lateralG = 0;
+    entry.arrivalPending = false;
+    entry.arrivedAtStation = true;
     this.syncTrainCarsTransform(entry);
     this.hudCacheDirty = true;
     return true;
+  }
+
+  /** Distance to the boarding platform centreline, for walk-up interaction. */
+  public getBoardingProximity(
+    coasterId: string,
+    x: number,
+    z: number,
+  ): number | null {
+    const entry = this.coasters.get(coasterId);
+    if (!entry || entry.samples.length < 2) return null;
+    let best = Number.POSITIVE_INFINITY;
+    for (const sample of entry.samples) {
+      if (sample.segmentType !== 'station' || sample.distance > 20) continue;
+      const dx = sample.position.x - x;
+      const dz = sample.position.z - z;
+      best = Math.min(best, Math.hypot(dx, dz));
+    }
+    return Number.isFinite(best) ? best : null;
+  }
+
+  /** True once per lap, after the train has parked back at the platform. */
+  public consumeStationArrival(coasterId: string): boolean {
+    const entry = this.coasters.get(coasterId);
+    if (!entry?.arrivedAtStation) return false;
+    entry.arrivedAtStation = false;
+    return true;
+  }
+
+  public isTrainAtStation(coasterId: string): boolean {
+    const entry = this.coasters.get(coasterId);
+    if (!entry || entry.samples.length < 2) return false;
+    return (
+      !entry.running &&
+      Math.abs(entry.train.position - entry.boardingDistance) <= 0.5
+    );
   }
 
   private rebuildEntryGeometry(entry: ActiveCoasterEntry): void {
@@ -692,9 +758,18 @@ export class RollerCoasterRuntime {
 
     entry.samples = entry.editor.getTrack();
     if (entry.theme === 'volcano_flex') {
-      stabilizeVolcanoFrames(entry.samples);
+      applyVolcanoHorizonFrames(entry.samples);
     }
     entry.train.track = entry.samples;
+    entry.boardingDistance = this.computeBoardingDistance(entry);
+    entry.train.maxSpeed =
+      entry.theme === 'volcano_flex' ? VOLCANO_FLEX_MAX_SPEED_MPS : Number.POSITIVE_INFINITY;
+    // 8.5 m/s² clears the 27-degree powered spiral (5.1 m/s² of grade) with
+    // margin while staying far below the old 2 g launch.
+    entry.train.driveAccel = entry.theme === 'volcano_flex' ? 8.5 : 19.5;
+    if (entry.theme === 'volcano_flex' && !entry.running) {
+      entry.train.position = entry.boardingDistance;
+    }
     const totalLength =
       entry.samples.length >= 2
         ? entry.samples[entry.samples.length - 1].distance
@@ -716,7 +791,12 @@ export class RollerCoasterRuntime {
     entry.inversionsCount = entry.coasterType === 'wooden' ? 0 : invTransitions;
     const hasLaunch = entry.samples.some((s) => s.segmentType === 'lsm_launch');
     const gravSpeed = Math.sqrt(2 * 9.81 * Math.max(1, entry.maxHeightM)) * 3.6;
-    entry.estPeakSpeedKmh = Math.round(Math.max(hasLaunch ? 108 : 0, gravSpeed));
+    const estimated = Math.max(hasLaunch ? 108 : 0, gravSpeed);
+    entry.estPeakSpeedKmh = Math.round(
+      entry.theme === 'volcano_flex'
+        ? Math.min(estimated, VOLCANO_FLEX_MAX_SPEED_MPS * 3.6)
+        : estimated,
+    );
 
     if (entry.samples.length >= 2) {
       const leftPts: THREE.Vector3[] = [];
@@ -934,6 +1014,29 @@ export class RollerCoasterRuntime {
     this.rootGroup.add(entry.meshGroup);
   }
 
+  /**
+   * Lead-car distance that keeps the whole train on the station straight.
+   * The island station run is 16 m; a five-car train is 11.75 m long, so the
+   * lead car parks at the end of the run minus the trailing train length.
+   */
+  private computeBoardingDistance(entry: ActiveCoasterEntry): number {
+    if (entry.samples.length < 2) return 0;
+    if (entry.theme === 'volcano_flex') {
+      const total = entry.samples[entry.samples.length - 1].distance;
+      return Math.max(0, Math.min(VOLCANO_FLEX_BOARDING_DISTANCE_M, total - 2));
+    }
+    let stationEnd = 0;
+    for (const sample of entry.samples) {
+      if (sample.segmentType === 'station') {
+        stationEnd = sample.distance;
+      } else if (stationEnd > 0) {
+        break;
+      }
+    }
+    if (stationEnd <= 0.5) return 0;
+    return Math.max(0, stationEnd - VOLCANO_FLEX_BOARDING_SETBACK_M);
+  }
+
   private sampleAtDistance(
     samples: TrackSample[],
     targetDist: number,
@@ -972,8 +1075,10 @@ export class RollerCoasterRuntime {
       _coasterUp.set(sample.up.x, sample.up.y, sample.up.z).normalize();
       const basis = makeBasisMatrix(sample);
 
+      // 0.275 m puts the wheel flanges on top of the rails (0.085 m rail top
+      // plus the 0.19 m wheel radius) instead of sinking them into the tube.
       const verticalOffset =
-        entry.theme === 'volcano_flex' ? (isInverted ? 1.04 : 0.215) : isInverted ? 0.95 : 0.12;
+        entry.theme === 'volcano_flex' ? (isInverted ? 1.04 : 0.275) : isInverted ? 0.95 : 0.12;
       car.position.copy(_coasterPos).addScaledVector(_coasterUp, verticalOffset);
       car.quaternion.setFromRotationMatrix(basis);
       const wheels = car.userData.wheels as THREE.Mesh[] | undefined;
@@ -1024,12 +1129,34 @@ export class RollerCoasterRuntime {
       if (entry.train.position >= total - 0.15) {
         if (entry.closedCircuit) {
           entry.train.position = 0;
-          if (entry.train.speed < 4.5) entry.train.speed = 5.2;
+          if (entry.theme === 'volcano_flex') {
+            // Roll gently through the station and park at the boarding mark
+            // instead of looping straight back out at line speed.
+            entry.arrivalPending = true;
+            if (entry.train.speed > VOLCANO_FLEX_STATION_SPEED_MPS) {
+              entry.train.speed = VOLCANO_FLEX_STATION_SPEED_MPS;
+            }
+          } else if (entry.train.speed < 4.5) {
+            entry.train.speed = 5.2;
+          }
         } else {
           entry.train.position = total;
           entry.train.speed = 0;
           entry.running = false;
         }
+      }
+
+      if (
+        entry.theme === 'volcano_flex' &&
+        entry.arrivalPending &&
+        entry.running &&
+        entry.train.position >= entry.boardingDistance
+      ) {
+        entry.train.position = entry.boardingDistance;
+        entry.train.speed = 0;
+        entry.running = false;
+        entry.arrivalPending = false;
+        entry.arrivedAtStation = true;
       }
 
       if (hasCoords) {
@@ -1072,7 +1199,14 @@ export class RollerCoasterRuntime {
       sample.tangent.z,
     ).normalize();
 
-    const seatHeight = entry.coasterType === 'inverted' ? -0.2 : 1.15;
+    // Seat eye height above the rail centreline. The island car's floor sits
+    // 0.695 m above the rails, so the rider's eye is ~1.5 m up.
+    const seatHeight =
+      entry.coasterType === 'inverted'
+        ? -0.2
+        : entry.theme === 'volcano_flex'
+          ? 1.5
+          : 1.15;
     const seatPos = new THREE.Vector3(
       sample.position.x,
       sample.position.y,
@@ -1240,6 +1374,9 @@ export class RollerCoasterRuntime {
       estPeakSpeedKmh: 0,
       inversionsCount: 0,
       theme: item.pieceTags?.includes('volcano_flex') ? 'volcano_flex' : null,
+      boardingDistance: 0,
+      arrivalPending: false,
+      arrivedAtStation: true,
     };
     this.coasters.set(entry.id, entry);
     this.rebuildEntryGeometry(entry);

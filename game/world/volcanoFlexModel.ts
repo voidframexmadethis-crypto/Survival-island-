@@ -1249,15 +1249,18 @@ export function buildVolcanoFlexTrainCar(index: number, front: boolean): THREE.G
     car.add(glowStrip);
   }
 
+  // Wheels sit on the rails: the track gauge half-width is 0.46 m, so the
+  // running wheels must straddle those two tube centrelines exactly.
+  const RAIL_GAUGE_HALF = 0.46;
   const wheels: THREE.Mesh[] = [];
   const wheelGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.12, 16);
   wheelGeo.rotateZ(Math.PI / 2);
   for (const side of [-1, 1]) {
     for (const axleZ of [-0.76, 0.76]) {
-      for (const offset of [-0.11, 0.11]) {
+      for (const offset of [-0.07, 0.07]) {
         const wheel = new THREE.Mesh(wheelGeo, steel);
         wheel.name = 'coaster-wheel';
-        wheel.position.set(side * 0.6, 0.01, axleZ + offset);
+        wheel.position.set(side * RAIL_GAUGE_HALF, 0.01, axleZ + offset);
         wheel.userData.radius = 0.2;
         car.add(wheel);
         wheels.push(wheel);
@@ -1267,11 +1270,18 @@ export function buildVolcanoFlexTrainCar(index: number, front: boolean): THREE.G
   for (const side of [-1, 1]) {
     for (const axleZ of [-0.76, 0.76]) {
       const housing = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.28, 0.34), armor);
-      housing.position.set(side * 0.62, 0.16, axleZ);
+      housing.position.set(side * RAIL_GAUGE_HALF, 0.16, axleZ);
       car.add(housing);
     }
   }
   car.userData.wheels = wheels;
+
+  // Couplers bridge the 0.17 m gap to the next car.
+  for (const couplerZ of [-1.16, 1.16]) {
+    const coupler = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.14, 0.22), steel);
+    coupler.position.set(0, 0.2, couplerZ);
+    car.add(coupler);
+  }
 
   const floor = new THREE.Mesh(new THREE.BoxGeometry(1.22, 0.12, 1.78), armor);
   floor.position.y = 0.36;

@@ -128,8 +128,8 @@ test('the train launches, completes every inversion, brakes and returns to the s
   let minY = Infinity;
   let maxY = -Infinity;
 
-  // Simulate at real ride-duration resolution. The circuit is roughly a minute
-  // at full launch speed, so 150 seconds is enough for a complete lap.
+  // Simulate at real ride-duration resolution. The governed circuit takes
+  // roughly 100 seconds, so 150 seconds is enough for a complete lap.
   for (let i = 0; i < 150 * 60; i++) {
     runtime.update(1 / 60);
     const cam = runtime.getRideCameraTransform(id);
@@ -147,7 +147,9 @@ test('the train launches, completes every inversion, brakes and returns to the s
   }
 
   assert.equal(maxProgress, 100);
-  assert.ok(maxSpeed > 250, `peak speed ${maxSpeed} km/h`);
+  assert.ok(maxSpeed > 40, `ride never accelerated (peak ${maxSpeed} km/h)`);
+  assert.ok(maxSpeed <= 80, `peak speed ${maxSpeed} km/h exceeds the 72 km/h envelope`);
+  assert.ok(runtime.isTrainAtStation(id), 'train must park at the boarding mark after a lap');
   assert.ok(minY > 2.5, `train dipped below terrain at ${minY}`);
   assert.ok(maxY > 190, `train never reached the tower apex (${maxY})`);
   assert.ok(sawLaunch);

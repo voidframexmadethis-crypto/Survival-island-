@@ -726,6 +726,10 @@ export class CoasterTrain {
   verticalG = 1;
   lateralG = 0;
   currentSegmentType: TrackSegmentType = "station";
+  /** Hard ride-speed envelope (m/s). Infinity keeps the old free-running behaviour. */
+  maxSpeed = Number.POSITIVE_INFINITY;
+  /** Drive/launch acceleration (m/s²). */
+  driveAccel = 19.5;
 
   constructor(public track: TrackSample[]) {}
 
@@ -774,7 +778,7 @@ export class CoasterTrain {
       } else if (seg === "lsm_launch") {
         const launchTarget = current.targetSpeed ?? 30;
         if (this.speed < launchTarget) {
-          accel += 19.5;
+          accel += this.driveAccel;
         }
       } else if (seg === "trim_brake" || seg === "block_brake" || seg === "station") {
         const brakeTarget = current.targetSpeed ?? (seg === "station" ? 4.8 : 5.5);
@@ -791,6 +795,8 @@ export class CoasterTrain {
       if (seg !== "chain_lift") {
         this.speed = Math.max(0, this.speed + accel * dt);
       }
+      // Governed descent: the mountain layout would otherwise reach 317 km/h.
+      if (this.speed > this.maxSpeed) this.speed = this.maxSpeed;
 
       // Gentle drive-wheel anti-stall safeguard if stalled mid-course during custom editing
       if (this.speed < 2.2 && seg === "coast" && current.tangent.y >= -0.05) {

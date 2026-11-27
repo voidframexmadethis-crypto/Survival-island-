@@ -621,6 +621,12 @@ import {
   buildVolcanoFlexCoasterData,
   getVolcanoFlexSite,
 } from '../world/volcanoFlexLayout';
+import {
+  VOLCANO_FLEX_STATION_PLACEMENT,
+  VOLCANO_FLEX_STATION_PLATFORM,
+  getCoasterStationExitPoint,
+  getCoasterStationSurfaceY,
+} from '../world/coasterStationLayout';
 import { CoasterRideAudio } from '../systems/coasterRideAudio';
 import { stepSwimPhysics } from '../systems/swimmingPhysics';
 import { RealisticOcean } from '../world/RealisticOcean';
@@ -6909,7 +6915,13 @@ export class GameEngine {
   }
 
   private spawnStructure(st: PlacedStructure): void {
-    const built = createCampStructureModel(st.type, this.world.woodTex);
+    const built = createCampStructureModel(
+      st.type,
+      this.world.woodTex,
+      st.type === 'coaster_station' && st.id === 'volcano_flex_station'
+        ? VOLCANO_FLEX_STATION_PLATFORM
+        : undefined,
+    );
     built.group.position.set(st.x, st.y, st.z);
     built.group.rotation.y = st.rotationY;
     let lightMeta:
@@ -15764,7 +15776,20 @@ export class GameEngine {
     }
 
     for (const st of this.structures) {
-      const d = Math.hypot(st.x - this.playerX, st.z - this.playerZ);
+      // The island station's boarding deck is 13.6 m long, so measure to the
+      // platform/train rather than only to the structure origin.
+      const platformDistance =
+        st.id === 'volcano_flex_station'
+          ? this.coasterRuntime?.getBoardingProximity(
+              VOLCANO_FLEX_ID,
+              this.playerX,
+              this.playerZ,
+            )
+          : null;
+      const d =
+        typeof platformDistance === 'number'
+          ? platformDistance
+          : Math.hypot(st.x - this.playerX, st.z - this.playerZ);
       if (d < 3.6 && d < bestDist) {
         bestDist = d;
         const labels: Record<CampStructureType, string> = {
@@ -17125,11 +17150,14 @@ export class GameEngine {
           this.coasterRideAudio?.update(rideCam.speedKmh, rideCam.segmentLabel);
         }
 
-        if (
-          !this.coasterBoardPendingId &&
+        const parkedAtStation = this.coasterRuntime.consumeStationArrival(
+          this.ridingCoasterId,
+        );
+        const legacyArrival =
+          this.ridingCoasterId !== VOLCANO_FLEX_ID &&
           rideCam.progressPercent >= 98 &&
-          rideCam.segmentLabel === 'Load Station'
-        ) {
+          rideCam.segmentLabel === 'Load Station';
+        if (!this.coasterBoardPendingId && (parkedAtStation || legacyArrival)) {
           this.exitCoasterRide();
           this.toast('Train arrived back at Load Station — automatically disembarked rider!', 'discovery');
         }
@@ -23786,6 +23814,14 @@ export class GameEngine {
       const landmarkFloorY = getLandmarkFloorY(x, z, footY);
       if (landmarkFloorY > bestY) {
         bestY = landmarkFloorY;
+      }
+
+      // Walkable VOLCANO FLEX boarding deck and staircase. The deck height is
+      // shared with the station model and the train's car floor.
+      for (const st of this.structures) {
+        if (st.type !== 'coaster_station' || st.id !== 'volcano_flex_station') continue;
+        const stationSurfaceY = getCoasterStationSurfaceY(st, x, z, footY);
+        if (stationSurfaceY > bestY) bestY = stationSurfaceY;
       }
 
       // Raised river bridge deck (also used by the ferry car).
@@ -30829,10 +30865,12 @@ export class GameEngine {
   private ensureVolcanoFlexAttraction(): void {
     if (this.worldType !== 'island') return;
     const site = getVolcanoFlexSite();
-    const stationX = site.station.x + 2.8;
+    // The deck's inner edge sits 0.75 m from the track centreline, right at the
+    // side of the train body, so the platform floor meets the car's step.
+    const stationX = site.station.x + VOLCANO_FLEX_STATION_PLACEMENT.xOffset;
     const stationY = site.station.y;
-    const stationZ = site.station.z + 0.8;
-    const stationRotation = -Math.PI / 2;
+    const stationZ = site.station.z + VOLCANO_FLEX_STATION_PLACEMENT.zOffset;
+    const stationRotation = VOLCANO_FLEX_STATION_PLACEMENT.rotationY;
     const station = this.structures.find(
       (structure) => structure.id === 'volcano_flex_station',
     );
@@ -31391,12 +31429,30 @@ export class GameEngine {
 
   public exitCoasterRide(): void {
     if (!this.ridingCoasterId) return;
+    const coasterId = this.ridingCoasterId;
+    const ride = this.coasterRuntime?.getRideCameraTransform(coasterId) ?? null;
     this.coasterRideAudio?.stop();
     this.ridingCoasterId = null;
     this.coasterBoardPendingId = null;
     this.coasterBoardCountdown = 0;
     this.camera.rotation.order = 'YXZ';
     this.camera.up.set(0, 1, 0);
+    if (
+      coasterId === VOLCANO_FLEX_ID &&
+      ride &&
+      this.coasterRuntime?.isTrainAtStation(coasterId)
+    ) {
+      // Step the rider onto the deck beside the lead car instead of dropping
+      // them onto the rails when the train parks.
+      const station = this.structures.find((s) => s.id === 'volcano_flex_station');
+      if (station) {
+        const exit = getCoasterStationExitPoint(station, ride.position.x);
+        this.playerX = exit.x;
+        this.playerY = exit.y;
+        this.playerZ = exit.z;
+        this.playerVelY = 0;
+      }
+    }
     const groundY = this.getPlayerGroundSurfaceY(
       this.playerX,
       this.playerZ,
