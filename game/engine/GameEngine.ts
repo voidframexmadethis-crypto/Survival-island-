@@ -622,11 +622,12 @@ import {
   getVolcanoFlexSite,
 } from '../world/volcanoFlexLayout';
 import {
-  BAYOU_COMET_ID,
-  BAYOU_COMET_LAYOUT_TAG,
-  buildBayouCometCoasterData,
-  getBayouCometSite,
-} from '../world/bayouCometLayout';
+  GIANT_SNAKE_ID,
+  GIANT_SNAKE_LAYOUT_TAG,
+  GIANT_SNAKE_NAME,
+  buildGiantSnakeCoasterData,
+  getGiantSnakeSite,
+} from '../world/giantSnakeLayout';
 import {
   VOLCANO_FLEX_STATION_PLACEMENT,
   VOLCANO_FLEX_STATION_PLATFORM,
@@ -644,10 +645,11 @@ const ISLAND_COASTER_STATIONS: Record<
     name: 'VOLCANO FLEX',
     sublabel: 'Lead seat · 900-ft tower launch · 15 inversions',
   },
+  // Legacy station id retained so existing island saves keep their platform.
   bayou_comet_station: {
-    coasterId: BAYOU_COMET_ID,
-    name: 'BAYOU COMET',
-    sublabel: 'Lead seat · switch-track launch · spike towers & tunnels',
+    coasterId: GIANT_SNAKE_ID,
+    name: GIANT_SNAKE_NAME,
+    sublabel: 'Lead seat · swing launch · 46 m spike · 10 inversions & tunnels',
   },
 };
 
@@ -656,7 +658,7 @@ function islandCoasterForStation(stationId: string) {
 }
 
 function isIslandCoasterId(coasterId: string): boolean {
-  return coasterId === VOLCANO_FLEX_ID || coasterId === BAYOU_COMET_ID;
+  return coasterId === VOLCANO_FLEX_ID || coasterId === GIANT_SNAKE_ID;
 }
 import { CoasterRideAudio } from '../systems/coasterRideAudio';
 import { stepSwimPhysics } from '../systems/swimmingPhysics';
@@ -5438,7 +5440,7 @@ export class GameEngine {
     // Meat Drying Rack right next to the premade shelter (Hilltop House front porch / yard)
     this.ensurePremadeShelterDryingRack();
     this.ensureVolcanoFlexAttraction();
-    this.ensureBayouCometAttraction();
+    this.ensureGiantSnakeAttraction();
 
     this.visitedBiomes = new Set(['beach']);
     this.exploredCells = new Set();
@@ -5971,7 +5973,7 @@ export class GameEngine {
     this.coasterRuntime?.importCoasters(save.coasters);
     if (loadedWorldType === 'island') {
       this.ensureVolcanoFlexAttraction();
-      this.ensureBayouCometAttraction();
+      this.ensureGiantSnakeAttraction();
     }
     this.amusementParkRuntime?.restore(save.amusementParks);
     this.ecosystem = save.ecosystem || createInitialEcosystem();
@@ -30966,13 +30968,15 @@ export class GameEngine {
   }
 
   /**
-   * Sits BAYOU COMET on the far southern Louisiana landmass. Its station runs
-   * west, so the platform structure sits 2.8 m down-track and 0.58 m to the
-   * south, mirrored from VOLCANO FLEX's eastbound station.
+   * Sits THE GIANT SNAKE on the far southern Louisiana landmass. Its station
+   * runs west, so the platform structure sits 2.8 m down-track and 0.58 m to
+   * the south, mirrored from VOLCANO FLEX's eastbound station. The legacy
+   * BAYOU COMET coaster and station id are migrated in place so existing saves
+   * gain the rebuilt ride without gaining a second attraction.
    */
-  private ensureBayouCometAttraction(): void {
+  private ensureGiantSnakeAttraction(): void {
     if (this.worldType !== 'island') return;
-    const site = getBayouCometSite();
+    const site = getGiantSnakeSite();
     const stationX = site.station.x - 2.8;
     const stationY = site.station.y;
     const stationZ = site.station.z - 0.58;
@@ -31006,21 +31010,24 @@ export class GameEngine {
       });
     }
     if (!this.coasterRuntime) return;
-    const expected = buildBayouCometCoasterData();
-    const existing = this.coasterRuntime
-      .exportCoasters()
-      .find((coaster) => coaster.id === BAYOU_COMET_ID);
+    const expected = buildGiantSnakeCoasterData();
+    const exported = this.coasterRuntime.exportCoasters();
+    const legacy = exported.find((coaster) => coaster.id === 'bayou_comet');
+    if (legacy) {
+      this.coasterRuntime.deleteCoaster(legacy.id);
+    }
+    const existing = exported.find((coaster) => coaster.id === GIANT_SNAKE_ID);
     if (!existing) {
       this.coasterRuntime.addCoasterData(expected);
       return;
     }
-    const staleLayout = !existing.pieceTags?.includes(BAYOU_COMET_LAYOUT_TAG);
+    const staleLayout = !existing.pieceTags?.includes(GIANT_SNAKE_LAYOUT_TAG);
     const stationDrift = Math.hypot(
       existing.stationPos.x - expected.stationPos.x,
       existing.stationPos.z - expected.stationPos.z,
     );
     if (staleLayout || stationDrift > 0.01) {
-      this.coasterRuntime.deleteCoaster(BAYOU_COMET_ID);
+      this.coasterRuntime.deleteCoaster(GIANT_SNAKE_ID);
       this.coasterRuntime.addCoasterData(expected);
     }
   }

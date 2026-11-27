@@ -804,6 +804,18 @@ export type CoasterModelType =
   | 'standup'
   | 'log_flume';
 
+export interface SavedCoasterSwingLaunch {
+  switchStop: { x: number; y: number; z: number };
+  forwardStall: { x: number; y: number; z: number };
+  spikeApex: { x: number; y: number; z: number };
+  release: { x: number; y: number; z: number };
+  switchTravelM: number;
+  switchDurationS: number;
+  launchSpeedMps: number;
+  boostSpeedMps: number;
+  reverseSpeedMps: number;
+}
+
 export interface SavedCoasterData {
   id: string;
   name: string;
@@ -814,6 +826,8 @@ export interface SavedCoasterData {
   pieceTags?: string[];
   closedCircuit?: boolean;
   coasterType?: CoasterModelType;
+  /** Scripted swing launch used by THE GIANT SNAKE and future launch rides. */
+  swingLaunch?: SavedCoasterSwingLaunch;
 }
 
 export interface CoasterHudSummaryItem {

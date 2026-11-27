@@ -5,6 +5,7 @@ import {
   CoasterModelType,
   SavedCoasterData,
   SavedCoasterNode,
+  SavedCoasterSwingLaunch,
 } from '../types';
 import { getTerrainHeight } from '../world/terrain';
 import { VOLCANO_FLEX_BOARDING_SETBACK_M } from '../world/coasterStationLayout';
@@ -13,11 +14,11 @@ import {
   buildVolcanoFlexTrainCar,
   type VolcanoFlexEnvironment,
 } from '../world/volcanoFlexModel';
-import { BAYOU_COMET_THEME_TAG } from '../world/bayouCometLayout';
+import { GIANT_SNAKE_THEME_TAG } from '../world/giantSnakeLayout';
 import {
-  buildBayouCometEnvironment,
-  buildBayouCometTrainCar,
-} from '../world/bayouCometModel';
+  buildGiantSnakeEnvironment,
+  buildGiantSnakeTrainCar,
+} from '../world/giantSnakeModel';
 import {
   CoasterEditor,
   CoasterTrain,
@@ -70,7 +71,13 @@ interface ActiveCoasterEntry {
   maxHeightM: number;
   estPeakSpeedKmh: number;
   inversionsCount: number;
-  theme: 'volcano_flex' | 'bayou_comet' | null;
+  theme: 'volcano_flex' | 'giant_snake' | null;
+  /** Scripted swing-launch geometry, only present on THE GIANT SNAKE. */
+  swing: SavedCoasterSwingLaunch | null;
+  swingState: SwingState;
+  swingTimer: number;
+  swingDirection: 1 | -1;
+  swingMarkers: SwingMarkers | null;
   /** Train lead-car distance where the whole train is inside the station. */
   boardingDistance: number;
   /** A full lap has wrapped and the train is rolling in to park. */
@@ -82,6 +89,21 @@ interface ActiveCoasterEntry {
 }
 
 type CoasterTheme = NonNullable<ActiveCoasterEntry['theme']>;
+type SwingState =
+  | 'idle'
+  | 'to-switch'
+  | 'throwing-switch'
+  | 'forward-stall'
+  | 'reverse-spike'
+  | 'spike-hold'
+  | 'relaunch'
+  | 'coast';
+interface SwingMarkers {
+  switchStop: number;
+  forwardStall: number;
+  spikeApex: number;
+  release: number;
+}
 
 interface ThemedCoasterConfig {
   maxSpeed: number;
@@ -93,7 +115,7 @@ interface ThemedCoasterConfig {
 /** Both island attractions share the same governed envelope and deck geometry. */
 const THEMED_COASTER_CONFIG: Record<CoasterTheme, ThemedCoasterConfig> = {
   volcano_flex: { maxSpeed: 20, stationSpeed: 2.4, driveAccel: 8.5, boardingDistance: 12.6 },
-  bayou_comet: { maxSpeed: 20, stationSpeed: 2.4, driveAccel: 8.5, boardingDistance: 12.6 },
+  giant_snake: { maxSpeed: 33, stationSpeed: 2.4, driveAccel: 11.5, boardingDistance: 12.6 },
 };
 
 function themeConfig(theme: CoasterTheme | null): ThemedCoasterConfig | null {
@@ -322,6 +344,11 @@ export class RollerCoasterRuntime {
       estPeakSpeedKmh: 0,
       inversionsCount: 0,
       theme: null,
+      swing: null,
+      swingState: 'idle',
+      swingTimer: 0,
+      swingDirection: 1,
+      swingMarkers: null,
       boardingDistance: 0,
       arrivalPending: false,
       arrivedAtStation: false,
@@ -737,6 +764,21 @@ export class RollerCoasterRuntime {
     entry.running = typeof running === 'boolean' ? running : !entry.running;
     entry.arrivalPending = false;
     entry.arrivedAtStation = false;
+    if (entry.swing) {
+      entry.swingTimer = 0;
+      entry.swingDirection = 1;
+      if (entry.running) {
+        entry.swingState = 'to-switch';
+        entry.train.position = entry.boardingDistance;
+        entry.train.speed = 0;
+      } else {
+        entry.swingState = 'idle';
+        entry.train.speed = 0;
+      }
+      this.syncTrainCarsTransform(entry);
+      this.hudCacheDirty = true;
+      return true;
+    }
     if (entry.running && entry.train.speed < 5.5) {
       entry.train.speed = themeConfig(entry.theme)?.stationSpeed ?? 6.5;
     }
@@ -754,6 +796,9 @@ export class RollerCoasterRuntime {
     entry.train.lateralG = 0;
     entry.arrivalPending = false;
     entry.arrivedAtStation = true;
+    entry.swingState = 'idle';
+    entry.swingTimer = 0;
+    entry.swingDirection = 1;
     this.syncTrainCarsTransform(entry);
     this.hudCacheDirty = true;
     return true;
@@ -790,6 +835,7 @@ export class RollerCoasterRuntime {
     if (!entry || entry.samples.length < 2) return false;
     return (
       !entry.running &&
+      entry.swingState === 'idle' &&
       Math.abs(entry.train.position - entry.boardingDistance) <= 0.5
     );
   }
@@ -813,6 +859,14 @@ export class RollerCoasterRuntime {
       applyLoopPlaneFrames(entry.samples);
     }
     entry.train.track = entry.samples;
+    entry.swingMarkers = entry.swing
+      ? {
+          switchStop: this.nearestDistance(entry.samples, entry.swing.switchStop),
+          forwardStall: this.nearestDistance(entry.samples, entry.swing.forwardStall),
+          spikeApex: this.nearestDistance(entry.samples, entry.swing.spikeApex),
+          release: this.nearestDistance(entry.samples, entry.swing.release),
+        }
+      : null;
     entry.boardingDistance = this.computeBoardingDistance(entry);
     entry.train.maxSpeed = config?.maxSpeed ?? Number.POSITIVE_INFINITY;
     // 8.5 m/s² clears the powered climbs with margin while staying far below
@@ -1009,10 +1063,10 @@ export class RollerCoasterRuntime {
       const chassisMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.38, metalness: 0.85 });
 
       for (let c = 0; c < entry.trainCarCount; c++) {
-        if (entry.theme === 'volcano_flex' || entry.theme === 'bayou_comet') {
+        if (entry.theme === 'volcano_flex' || entry.theme === 'giant_snake') {
           const carModel =
-            entry.theme === 'bayou_comet'
-              ? buildBayouCometTrainCar(c, c === 0)
+            entry.theme === 'giant_snake'
+              ? buildGiantSnakeTrainCar(c, c === 0)
               : buildVolcanoFlexTrainCar(c, c === 0);
           entry.carMeshes.push(carModel);
           entry.meshGroup.add(carModel);
@@ -1072,6 +1126,25 @@ export class RollerCoasterRuntime {
    * The island station run is 16 m; a five-car train is 11.75 m long, so the
    * lead car parks at the end of the run minus the trailing train length.
    */
+  private nearestDistance(
+    samples: TrackSample[],
+    point: { x: number; y: number; z: number },
+  ): number {
+    let best = 0;
+    let bestD = Number.POSITIVE_INFINITY;
+    for (const sample of samples) {
+      const d =
+        (sample.position.x - point.x) ** 2 +
+        (sample.position.y - point.y) ** 2 +
+        (sample.position.z - point.z) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = sample.distance;
+      }
+    }
+    return best;
+  }
+
   private computeBoardingDistance(entry: ActiveCoasterEntry): number {
     if (entry.samples.length < 2) return 0;
     const config = themeConfig(entry.theme);
@@ -1178,8 +1251,15 @@ export class RollerCoasterRuntime {
       const total = entry.samples[entry.samples.length - 1].distance;
       if (total <= 0.5) continue;
 
-      // Anti-Collision Block System: Ensure trains never tailgate or crash into each other
-      entry.train.update(dt);
+      // The Giant Snake runs a scripted swing launch before handing control to
+      // the normal gravity/brake simulation. Every other coaster uses physics
+      // for the entire lap.
+      if (entry.swing && entry.swingState !== 'idle' && entry.swingState !== 'coast') {
+        this.updateSwing(entry, dt);
+      } else {
+        entry.train.update(dt);
+        if (entry.swing) entry.swingDirection = 1;
+      }
 
       if (entry.train.position >= total - 0.15) {
         if (entry.closedCircuit) {
@@ -1213,6 +1293,8 @@ export class RollerCoasterRuntime {
         entry.running = false;
         entry.arrivalPending = false;
         entry.arrivedAtStation = true;
+        entry.swingState = 'idle';
+        entry.swingDirection = 1;
       }
 
       if (hasCoords) {
@@ -1229,6 +1311,133 @@ export class RollerCoasterRuntime {
     if (anyMoved) {
       this.hudCacheDirty = true;
     }
+  }
+
+  /**
+   * Scripted Pantheon-style swing launch. The train leaves the station, stops
+   * on the transfer siding, launches short of the top-hat crest, rolls back
+   * through the station and up the huge final spike, then relaunches down the
+   * spike, through the station and over the top hat into the main circuit.
+   */
+  private updateSwing(entry: ActiveCoasterEntry, dt: number): void {
+    const swing = entry.swing;
+    const markers = entry.swingMarkers;
+    if (!swing || !markers || entry.samples.length < 2) return;
+    const total = entry.samples[entry.samples.length - 1].distance;
+    if (total <= 1) return;
+    const step = Math.min(0.08, Math.max(0, dt));
+    const accel = themeConfig(entry.theme)?.driveAccel ?? 11.5;
+    const brake = 14;
+    const ramp = (current: number, target: number, rate: number, time: number) =>
+      current < target
+        ? Math.min(target, current + rate * time)
+        : Math.max(target, current - rate * time);
+    const forwardDistance = (from: number, to: number) =>
+      ((to - from) % total + total) % total;
+    const backwardDistance = (from: number, to: number) =>
+      ((from - to) % total + total) % total;
+    const wrap = (value: number) => ((value % total) + total) % total;
+
+    entry.swingTimer += step;
+    switch (entry.swingState) {
+      case 'to-switch': {
+        const remaining = forwardDistance(entry.train.position, markers.switchStop);
+        entry.train.speed = ramp(entry.train.speed, 2.4, 4.5, step);
+        entry.train.position = wrap(entry.train.position + entry.train.speed * step);
+        if (remaining <= 0.12 || forwardDistance(entry.train.position, markers.switchStop) > remaining) {
+          entry.train.position = markers.switchStop;
+          entry.train.speed = 0;
+          entry.swingState = 'throwing-switch';
+          entry.swingTimer = 0;
+        }
+        break;
+      }
+      case 'throwing-switch': {
+        entry.train.speed = 0;
+        if (entry.swingTimer >= swing.switchDurationS) {
+          entry.swingState = 'forward-stall';
+          entry.swingTimer = 0;
+        }
+        break;
+      }
+      case 'forward-stall': {
+        const remaining = forwardDistance(entry.train.position, markers.forwardStall);
+        const stopDistance = (entry.train.speed * entry.train.speed) / (2 * brake);
+        const target = remaining <= stopDistance + 0.4 ? 0 : swing.launchSpeedMps;
+        entry.train.speed = ramp(entry.train.speed, target, accel, step);
+        entry.train.position = wrap(entry.train.position + entry.train.speed * step);
+        if (forwardDistance(entry.train.position, markers.forwardStall) > remaining || remaining <= 0.1) {
+          entry.train.position = markers.forwardStall;
+          entry.train.speed = 0;
+          entry.swingState = 'reverse-spike';
+          entry.swingTimer = 0;
+        }
+        break;
+      }
+      case 'reverse-spike': {
+        entry.swingDirection = -1;
+        const remaining = backwardDistance(entry.train.position, markers.spikeApex);
+        const stopDistance = (entry.train.speed * entry.train.speed) / (2 * brake);
+        const target = remaining <= stopDistance + 0.5 ? 0 : swing.reverseSpeedMps;
+        entry.train.speed = ramp(entry.train.speed, target, brake, step);
+        entry.train.position = wrap(entry.train.position - entry.train.speed * step);
+        if (
+          backwardDistance(entry.train.position, markers.spikeApex) > remaining ||
+          remaining <= 0.1 ||
+          (entry.train.speed < 0.5 && remaining < 2)
+        ) {
+          entry.train.position = markers.spikeApex;
+          entry.train.speed = 0;
+          entry.swingState = 'spike-hold';
+          entry.swingTimer = 0;
+        }
+        break;
+      }
+      case 'spike-hold': {
+        entry.train.speed = 0;
+        if (entry.swingTimer >= 1.4) {
+          entry.swingState = 'relaunch';
+          entry.swingTimer = 0;
+          entry.swingDirection = 1;
+        }
+        break;
+      }
+      case 'relaunch': {
+        entry.swingDirection = 1;
+        const remaining = forwardDistance(entry.train.position, markers.release);
+        entry.train.speed = ramp(entry.train.speed, swing.boostSpeedMps, accel, step);
+        entry.train.position = wrap(entry.train.position + entry.train.speed * step);
+        if (remaining <= 0.2 || forwardDistance(entry.train.position, markers.release) > remaining) {
+          entry.train.position = markers.release;
+          entry.train.speed = swing.boostSpeedMps;
+          entry.swingState = 'coast';
+          entry.swingTimer = 0;
+          entry.swingDirection = 1;
+        }
+        break;
+      }
+      default:
+        break;
+    }
+    entry.train.verticalG = 1;
+    entry.train.lateralG = 0;
+
+    const themed = this.themedEnvironments.get(entry.id) as unknown as
+      | { setSwitchOffset?: (offset: number) => void }
+      | undefined;
+    let offset = 0;
+    if (entry.swingState === 'throwing-switch') {
+      offset = swing.switchTravelM * Math.min(1, entry.swingTimer / swing.switchDurationS);
+    } else if (
+      entry.swingState === 'forward-stall' ||
+      entry.swingState === 'reverse-spike' ||
+      entry.swingState === 'spike-hold'
+    ) {
+      offset = swing.switchTravelM;
+    } else if (entry.swingState === 'relaunch') {
+      offset = swing.switchTravelM * Math.max(0, 1 - entry.swingTimer / 1.6);
+    }
+    themed?.setSwitchOffset?.(offset);
   }
 
   public getRideCameraTransform(coasterId: string): {
@@ -1269,9 +1478,10 @@ export class RollerCoasterRuntime {
       sample.position.z,
     ).addScaledVector(up, seatHeight);
 
+    const lookOffset = 8 * entry.swingDirection;
     const lookDist = entry.closedCircuit
-      ? (entry.train.position + 8) % total
-      : Math.min(total, entry.train.position + 8);
+      ? (entry.train.position + lookOffset + total) % total
+      : Math.max(0, Math.min(total, entry.train.position + lookOffset));
     const ahead = this.sampleAtDistance(entry.samples, lookDist);
     const lookAt = ahead
       ? new THREE.Vector3(ahead.position.x, ahead.position.y, ahead.position.z)
@@ -1377,6 +1587,7 @@ export class RollerCoasterRuntime {
         pieceTags: [...entry.pieceTags],
         closedCircuit: entry.closedCircuit,
         coasterType: entry.coasterType,
+        swingLaunch: entry.swing ?? undefined,
       });
     }
     return out;
@@ -1430,11 +1641,16 @@ export class RollerCoasterRuntime {
              maxHeightM: 0,
       estPeakSpeedKmh: 0,
       inversionsCount: 0,
-      theme: item.pieceTags?.includes(BAYOU_COMET_THEME_TAG)
-        ? 'bayou_comet'
+      theme: item.pieceTags?.includes(GIANT_SNAKE_THEME_TAG)
+        ? 'giant_snake'
         : item.pieceTags?.includes('volcano_flex')
           ? 'volcano_flex'
           : null,
+      swing: item.swingLaunch ?? null,
+      swingState: 'idle',
+      swingTimer: 0,
+      swingDirection: 1,
+      swingMarkers: null,
       boardingDistance: 0,
       arrivalPending: false,
       arrivedAtStation: true,
@@ -1443,8 +1659,8 @@ export class RollerCoasterRuntime {
     this.rebuildEntryGeometry(entry);
     if (!this.themedEnvironments.has(entry.id)) {
       const themed =
-        entry.theme === 'bayou_comet'
-          ? buildBayouCometEnvironment()
+        entry.theme === 'giant_snake'
+          ? buildGiantSnakeEnvironment()
           : entry.theme === 'volcano_flex'
             ? buildVolcanoFlexEnvironment()
             : null;

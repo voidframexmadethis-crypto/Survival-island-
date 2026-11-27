@@ -808,8 +808,14 @@ export class CoasterTrain {
       // Governed descent: the mountain layout would otherwise reach 317 km/h.
       if (this.speed > this.maxSpeed) this.speed = this.maxSpeed;
 
-      // Gentle drive-wheel anti-stall safeguard if stalled mid-course during custom editing
-      if (this.speed < 2.2 && seg === "coast" && current.tangent.y >= -0.05) {
+      // Drive-wheel / magnetic anti-stall safeguard if a custom element is
+      // entered too slowly. It also keeps the Giant Snake moving through the
+      // high overbank and tunnel exits instead of stranding guests mid-circuit.
+      if (
+        this.speed < 2.2 &&
+        (seg === "coast" || seg === "inversion" || seg === "lsm_launch") &&
+        current.tangent.y >= -0.05
+      ) {
         this.speed = Math.min(4.2, this.speed + 5.5 * dt);
       }
 
