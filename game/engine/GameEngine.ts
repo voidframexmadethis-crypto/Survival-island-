@@ -1115,6 +1115,7 @@ export class GameEngine {
   private fpsSampleFrames = 0;
   private fpsSampleAccumMs = 0;
   private lastFramePerfMs = 0;
+  private lastRenderPerfMs = 0;
   private frameWatch: FrameWatchState = createFrameWatchState();
   private masterRuntime: MasterRuntimeState = {
     ...createMasterRuntimeState(),
@@ -1130,6 +1131,9 @@ export class GameEngine {
     minGroundClearance: DEFAULT_PLAYER_CAMERA_CONFIG.minGroundClearance,
   });
   private _chaseTargetScratch = new THREE.Vector3();
+  private _coasterRideCameraMatrix = new THREE.Matrix4();
+  private _coasterRideCameraQuat = new THREE.Quaternion();
+  private coasterRideCameraId: string | null = null;
   private _sessionYawRef = { value: 0 };
   private localPlayerHandle: RemotePlayerMeshHandle | null = null;
   private localAppliedBackpackSkinId: string | null | undefined = undefined;
@@ -2953,6 +2957,7 @@ export class GameEngine {
     this.frameWatch.lastTimeMs = now;
     this.masterRuntime.lastFrameMs = now;
     this.lastFramePerfMs = now;
+    this.lastRenderPerfMs = 0;
     this.pendingCameraDt = Permanent60FpsController.FIXED_DT;
     this.fpsController.resetTiming();
     this.fpsSampleTimer = 0;
@@ -17667,9 +17672,26 @@ export class GameEngine {
       if (rideCam) {
         this.handsRig.root.visible = false;
         if (this.localPlayerHandle) this.localPlayerHandle.group.visible = false;
+        // Follow the rail exactly, but ease the camera basis between samples.
+        // Dense track sampling can still change tangent direction sharply at a
+        // valley or inversion seam; copying the raw basis every frame makes that
+        // read as a visible head-snap. Snapping is only used on the first frame
+        // of a ride, so the train never drags the view behind it.
+        this._coasterRideCameraMatrix.lookAt(
+          rideCam.position,
+          rideCam.lookAt,
+          rideCam.up,
+        );
+        this._coasterRideCameraQuat.setFromRotationMatrix(this._coasterRideCameraMatrix);
         this.camera.position.copy(rideCam.position);
+        if (this.coasterRideCameraId !== this.ridingCoasterId) {
+          this.camera.quaternion.copy(this._coasterRideCameraQuat);
+          this.coasterRideCameraId = this.ridingCoasterId;
+        } else {
+          const blend = 1 - Math.exp(-28 * Math.min(0.05, Math.max(0.001, this.lastSimDt)));
+          this.camera.quaternion.slerp(this._coasterRideCameraQuat, blend);
+        }
         this.camera.up.copy(rideCam.up);
-        this.camera.lookAt(rideCam.lookAt);
         this.playerX = rideCam.position.x;
         this.playerY = rideCam.position.y;
         this.playerZ = rideCam.position.z;
@@ -17691,6 +17713,7 @@ export class GameEngine {
         return;
       }
       this.ridingCoasterId = null;
+      this.coasterRideCameraId = null;
       this.coasterRideAudio?.stop();
     }
     this.camera.rotation.order = 'YXZ';
@@ -23320,16 +23343,23 @@ export class GameEngine {
     const frameTime = Math.min(clampedDt, 0.05);
     this.lastFramePerfMs = nowPerf;
 
-    // Measure real device FPS and cap display cleanly at 60 FPS
-    const displaySampleMs = Math.min(100, Math.max(1, rawFrameMs));
-    this.fpsDisplayAccumMs += displaySampleMs;
+    // The renderer is intentionally locked to a 60 Hz presentation cadence, so
+    // measure the interval between actual renders rather than the display's
+    // refresh interval. On a 120/144 Hz panel rawFrameMs is 7-8 ms and made the
+    // HUD claim 120-144 FPS while only 60 frames were being drawn.
+    const renderSampleMs =
+      this.lastRenderPerfMs > 0
+        ? Math.min(100, Math.max(1, nowPerf - this.lastRenderPerfMs))
+        : Permanent60FpsController.FRAME_BUDGET_MS;
+    this.lastRenderPerfMs = nowPerf;
+    this.fpsDisplayAccumMs += renderSampleMs;
     this.fpsDisplayFrames += 1;
-    this.fpsDisplayTimer += frameTime;
+    this.fpsDisplayTimer += renderSampleMs / 1000;
     if (this.fpsDisplayTimer >= 0.25) {
       const measuredFps = Math.round(
         (this.fpsDisplayFrames * 1000) / Math.max(1, this.fpsDisplayAccumMs),
       );
-      this.currentFps = Math.min(300, Math.max(1, measuredFps));
+      this.currentFps = Math.min(60, Math.max(1, measuredFps));
       this.fpsDisplayTimer = 0;
       this.fpsDisplayFrames = 0;
       this.fpsDisplayAccumMs = 0;
@@ -32049,6 +32079,7 @@ export class GameEngine {
     const ride = this.coasterRuntime?.getRideCameraTransform(coasterId) ?? null;
     this.coasterRideAudio?.stop();
     this.ridingCoasterId = null;
+    this.coasterRideCameraId = null;
     this.coasterBoardPendingId = null;
     this.coasterBoardCountdown = 0;
     this.camera.rotation.order = 'YXZ';
