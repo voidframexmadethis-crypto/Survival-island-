@@ -17891,17 +17891,12 @@ export class GameEngine {
     this.handsRig.root.visible = !isThirdPerson;
     this.updateLocalPlayerAvatar(dt, isThirdPerson);
 
-    const isMovingOnGround =
-      this.grounded && !this.isSwimming && this.currentSpeedMps > 0.35;
-    const targetBobBlend = isMovingOnGround
-      ? Math.min(1.15, this.currentSpeedMps / 7.6)
-      : 0;
-    this.camBobBlend = THREE.MathUtils.damp(this.camBobBlend, targetBobBlend, 14, dt);
+    // The horizon stays locked to the ground plane. Walking animation lives in
+    // the hands/avatar, never in a camera bob, so terrain cannot appear to float.
+    this.camBobBlend = 0;
     this.camStepOffsetY = THREE.MathUtils.damp(this.camStepOffsetY, 0, 18, dt);
     if (Math.abs(this.camStepOffsetY) < 0.0005) this.camStepOffsetY = 0;
-
-    const headBobY =
-      this.camBobBlend > 0.01 ? Math.sin(this.walkBobPhase) * 0.044 * this.camBobBlend : 0;
+    const headBobY = 0;
     const hurtKick = this.hurtFlash > 0 ? Math.sin(this.hurtFlash * 32) * 0.04 : 0;
     const chewNod =
       this.eatTimer > 0
