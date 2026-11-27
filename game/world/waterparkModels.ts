@@ -15,7 +15,10 @@ import {
   buildWaterparkSlidePath,
   getWaterparkBridgeLine,
   getWaterparkSlideAccess,
+  getWaterparkSlideExitPoint,
   getWaterparkTowerStairTurns,
+  getWaterparkTowerStepCount,
+  getWaterparkTowerStepRise,
   type WaterparkSlideKind,
   type WaterparkSlideSpec,
   type WaterparkTowerSpec,
@@ -39,6 +42,8 @@ export interface WaterparkSlideHandles {
   samples: WaterparkPathSample[];
   length: number;
   boarding: { x: number; y: number; z: number };
+  /** Rider raft/tube/mat, parked out of sight until the slide is ridden. */
+  vehicle: THREE.Group;
 }
 
 export interface WaterparkInnerTube {
@@ -54,6 +59,7 @@ export interface WaterparkModelHandles {
   wavePoolMesh: THREE.Mesh | null;
   waveGeometry: THREE.BufferGeometry | null;
   waveBasePositions: Float32Array | null;
+  waterNormalTexture: THREE.Texture | null;
   bucketPivot: THREE.Group | null;
   bucketWater: THREE.Mesh | null;
   bucketStream: THREE.Mesh | null;
@@ -189,6 +195,61 @@ function makeTileTexture(): THREE.Texture | null {
   texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(12, 11);
   texture.anisotropy = 4;
+  return texture;
+}
+
+function makeWaterNormalTexture(): THREE.Texture | null {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.fillStyle = '#8080ff';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let y = 0; y < 256; y += 8) {
+    for (let x = 0; x < 256; x += 8) {
+      const wave =
+        Math.sin((x + y) * 0.16) * 10 +
+        Math.cos((x - y) * 0.11) * 8 +
+        Math.sin(x * 0.05) * 4;
+      const r = Math.round(128 + wave);
+      const g = Math.round(128 - wave * 0.55);
+      ctx.fillStyle = `rgb(${r},${g},255)`;
+      ctx.fillRect(x + 1, y + 1, 6, 6);
+    }
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(9, 9);
+  texture.anisotropy = 4;
+  return texture;
+}
+
+function makePoolCausticTexture(): THREE.Texture | null {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.fillStyle = '#4b8b96';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 50; i++) {
+    ctx.strokeStyle = `rgba(205,250,255,${0.06 + Math.random() * 0.1})`;
+    ctx.lineWidth = 1 + Math.random() * 2;
+    ctx.beginPath();
+    const x = Math.random() * 256;
+    const y = Math.random() * 256;
+    ctx.arc(x, y, 8 + Math.random() * 34, 0, Math.PI * 1.2);
+    ctx.stroke();
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(5, 5);
+  texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
 }
 
@@ -523,6 +584,10 @@ export function buildWaterparkModel(): WaterparkModelHandles {
 
   const tileTexture = makeTileTexture();
   if (tileTexture) textures.add(tileTexture);
+  const waterNormalTexture = makeWaterNormalTexture();
+  if (waterNormalTexture) textures.add(waterNormalTexture);
+  const poolCausticTexture = makePoolCausticTexture();
+  if (poolCausticTexture) textures.add(poolCausticTexture);
   const deckMat = new THREE.MeshStandardMaterial({
     color: 0xd8caa9,
     ...(tileTexture ? { map: tileTexture } : {}),
@@ -534,14 +599,19 @@ export function buildWaterparkModel(): WaterparkModelHandles {
   materials.add(concreteMat);
   const poolWallMat = new THREE.MeshStandardMaterial({ color: 0x8fb8bd, roughness: 0.65 });
   materials.add(poolWallMat);
-  const poolFloorMat = new THREE.MeshStandardMaterial({ color: 0x2b7584, roughness: 0.7 });
+  const poolFloorMat = new THREE.MeshStandardMaterial({
+    color: 0x2b7584,
+    ...(poolCausticTexture ? { map: poolCausticTexture } : {}),
+    roughness: 0.58,
+  });
   materials.add(poolFloorMat);
   const waterMat = new THREE.MeshStandardMaterial({
     color: 0x2bb6d1,
     emissive: 0x0b4654,
-    emissiveIntensity: 0.4,
-    roughness: 0.12,
-    metalness: 0.18,
+    emissiveIntensity: 0.32,
+    ...(waterNormalTexture ? { normalMap: waterNormalTexture, normalScale: new THREE.Vector2(0.34, 0.34) } : {}),
+    roughness: 0.08,
+    metalness: 0.22,
     transparent: true,
     opacity: 0.78,
     depthWrite: false,
@@ -740,6 +810,68 @@ export function buildWaterparkModel(): WaterparkModelHandles {
       root.add(ladder);
     }
     addSign(root, pool.name, '#a7f3d0', 6.2, 0.9, pool.x, 1.0, pool.z - pool.d * 0.5 - 1.4);
+    addSign(
+      root,
+      `DEPTH ${pool.depth.toFixed(1)} m · NO DIVING`,
+      '#fef3c7',
+      2.8,
+      0.38,
+      pool.x + pool.w * 0.5 - 1.5,
+      0.72,
+      pool.z - pool.d * 0.5 - 0.45,
+    );
+    // Stainless life-ring station at the coping.
+    const ringMat = new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.55 });
+    materials.add(ringMat);
+    const lifeRing = new THREE.Mesh(new THREE.TorusGeometry(0.36, 0.11, 7, 16), ringMat);
+    geometries.add(lifeRing.geometry);
+    lifeRing.position.set(pool.x + pool.w * 0.5 - 0.55, 0.85, pool.z - pool.d * 0.5 - 0.9);
+    lifeRing.rotation.x = Math.PI / 2;
+    root.add(lifeRing);
+    addCylinder(root, steelMat, 0.045, 0.045, 1.4, pool.x + pool.w * 0.5 - 0.55, 0.7, pool.z - pool.d * 0.5 - 0.9, 6);
+    // Three easy entry steps at the quiet end.
+    for (let s = 0; s < 3; s++) {
+      addBox(
+        root,
+        poolWallMat,
+        1.05,
+        0.16,
+        0.42,
+        pool.x - pool.w * 0.5 + 1.2,
+        0.12 - s * 0.16,
+        pool.z + pool.d * 0.5 - 0.8 + s * 0.38,
+        0,
+        false,
+      );
+    }
+  }
+
+  // Lifeguard stations at the busy pool edges.
+  for (const [lx, lz, umbrellaColor] of [
+    [18, 17, 0xef4444],
+    [24, 11, 0x0ea5e9],
+    [-42, -3, 0xf59e0b],
+    [-30, 41, 0x22c55e],
+    [14, 41, 0x8b5cf6],
+  ] as const) {
+    const guard = new THREE.Group();
+    guard.position.set(lx, 0, lz);
+    root.add(guard);
+    for (const [gx, gz] of [[-0.7, -0.7], [0.7, -0.7], [-0.7, 0.7], [0.7, 0.7]] as const) {
+      addBox(guard, steelMat, 0.07, 2.2, 0.07, gx, 1.1, gz, 0, false);
+    }
+    addBox(guard, woodMat, 1.7, 0.16, 1.7, 0, 2.2, 0);
+    addBox(guard, woodMat, 0.9, 0.7, 0.1, 0, 2.6, -0.7);
+    addBox(guard, whiteMat, 0.9, 0.12, 0.7, 0, 2.4, 0.05);
+    addCylinder(guard, steelMat, 0.04, 0.04, 3.8, 0.72, 4.0, 0.72, 6);
+    const umbrellaMat = new THREE.MeshStandardMaterial({ color: umbrellaColor, roughness: 0.7 });
+    materials.add(umbrellaMat);
+    const canopy = new THREE.Mesh(new THREE.ConeGeometry(1.75, 0.42, 14, 1, true), umbrellaMat);
+    geometries.add(canopy.geometry);
+    canopy.position.set(0.72, 5.55, 0.72);
+    canopy.rotation.x = Math.PI;
+    guard.add(canopy);
+    addSign(guard, 'LIFEGUARD', '#fff7ed', 1.5, 0.36, 0, 3.1, -0.72);
   }
 
   // Lazy river: a 40 x 37 m rounded current loop with an animated inner-tube
@@ -819,6 +951,7 @@ export function buildWaterparkModel(): WaterparkModelHandles {
     ] as const;
     for (const [lx, lz] of legOffsets) {
       addBox(towerGroup, concreteMat, 0.65, tower.height, 0.65, lx, tower.height * 0.5, lz);
+      addBox(towerGroup, concreteMat, 1.05, 0.24, 1.05, lx, 0.12, lz, 0, false);
     }
     addCylinder(towerGroup, steelMat, 2.05, 2.3, tower.height + 0.3, 0, tower.height * 0.5, 0, 20);
     for (let y = 4; y < tower.height - 2; y += 5.5) {
@@ -830,6 +963,32 @@ export function buildWaterparkModel(): WaterparkModelHandles {
     }
     addBox(towerGroup, concreteMat, 9.2, 0.5, 9.2, 0, tower.height, 0);
     addBox(towerGroup, poolWallMat, 9.7, 0.18, 9.7, 0, tower.height + 0.3, 0);
+    // Summit guardrail, with a clear gap on the +X side where the stair lands.
+    for (const [w, d, x, z] of [
+      [9.2, 0.06, 0, -4.45],
+      [9.2, 0.06, 0, 4.45],
+      [0.06, 9.2, -4.45, 0],
+      [0.06, 3.0, 4.45, -3.0],
+      [0.06, 3.0, 4.45, 3.0],
+    ] as const) {
+      addBox(towerGroup, steelMat, w, 0.06, d, x, tower.height + 0.98, z);
+      const posts = Math.max(2, Math.round(Math.max(w, d) / 1.5));
+      for (let p = 0; p <= posts; p++) {
+        const f = p / posts - 0.5;
+        addBox(
+          towerGroup,
+          steelMat,
+          0.055,
+          0.95,
+          0.055,
+          w > d ? x + f * w : x,
+          tower.height + 0.5,
+          w > d ? z : z + f * d,
+          0,
+          false,
+        );
+      }
+    }
     for (const [px, pz] of [[-3.8, -3.8], [3.8, -3.8], [-3.8, 3.8], [3.8, 3.8]] as const) {
       addBox(towerGroup, steelMat, 0.18, 5.2, 0.18, px, tower.height + 2.8, pz);
     }
@@ -866,6 +1025,149 @@ export function buildWaterparkModel(): WaterparkModelHandles {
     const stairMesh = new THREE.Mesh(stair.shell, concreteMat);
     stairMesh.castShadow = true;
     towerGroup.add(stairMesh);
+
+    // The collision helix is a smooth walking surface, but the visible stair
+    // must read as a real flight. Build narrow-gauge treads and risers over the
+    // ribbon, with landings every quarter turn and continuous handrails.
+    const stepCount = getWaterparkTowerStepCount(tower.height);
+    const stepRise = getWaterparkTowerStepRise(tower.height);
+    const stepDepth = Math.max(
+      0.24,
+      ((Math.PI * 2 * WATERPARK_TOWER_STAIR.radius * turns) / stepCount) * 0.9,
+    );
+    for (let i = 0; i < stepCount; i++) {
+      const t = (i + 0.5) / stepCount;
+      const angle = t * turns * Math.PI * 2;
+      const sx = Math.cos(angle) * WATERPARK_TOWER_STAIR.radius;
+      const sz = Math.sin(angle) * WATERPARK_TOWER_STAIR.radius;
+      const y = WATERPARK_TOWER_STAIR.baseRise + t * (tower.height - 0.1);
+      addBox(
+        towerGroup,
+        concreteMat,
+        WATERPARK_TOWER_STAIR.width,
+        0.075,
+        stepDepth,
+        sx,
+        y,
+        sz,
+        -angle,
+      );
+      // Riser face at the leading edge of each tread.
+      const tangentX = -Math.sin(angle);
+      const tangentZ = Math.cos(angle);
+      addBox(
+        towerGroup,
+        concreteMat,
+        WATERPARK_TOWER_STAIR.width,
+        Math.max(0.08, stepRise * 0.9),
+        0.055,
+        sx - tangentX * stepDepth * 0.46,
+        y - stepRise * 0.45,
+        sz - tangentZ * stepDepth * 0.46,
+        -angle,
+      );
+    }
+    // Wider quarter-turn landings break the helix into realistic flights.
+    for (const t of [0.25, 0.5, 0.75]) {
+      const angle = t * turns * Math.PI * 2;
+      const y = WATERPARK_TOWER_STAIR.baseRise + t * (tower.height - 0.1);
+      addBox(
+        towerGroup,
+        concreteMat,
+        2.35,
+        0.11,
+        2.35,
+        Math.cos(angle) * WATERPARK_TOWER_STAIR.radius,
+        y,
+        Math.sin(angle) * WATERPARK_TOWER_STAIR.radius,
+        -angle,
+      );
+    }
+    // Handrails and guard posts.
+    const stairRailRuns: [number, number][] = [
+      [WATERPARK_TOWER_STAIR.radius - WATERPARK_TOWER_STAIR.width * 0.5 + 0.06, 1],
+      [WATERPARK_TOWER_STAIR.radius + WATERPARK_TOWER_STAIR.width * 0.5 - 0.06, -1],
+    ];
+    for (const [railRadius, side] of stairRailRuns) {
+      const points: THREE.Vector3[] = [];
+      for (let i = 0; i <= 96; i++) {
+        const t = i / 96;
+        const angle = t * turns * Math.PI * 2;
+        points.push(
+          new THREE.Vector3(
+            Math.cos(angle) * railRadius,
+            WATERPARK_TOWER_STAIR.baseRise + t * (tower.height - 0.1) + 1.02,
+            Math.sin(angle) * railRadius,
+          ),
+        );
+      }
+      const rail = new THREE.TubeGeometry(
+        new THREE.CatmullRomCurve3(points, false, 'centripetal'),
+        96,
+        0.045,
+        5,
+        false,
+      );
+      railGeos.push(rail);
+      for (let i = 0; i <= 16; i++) {
+        const t = i / 16;
+        const angle = t * turns * Math.PI * 2;
+        addBox(
+          towerGroup,
+          steelMat,
+          0.055,
+          1.0,
+          0.055,
+          Math.cos(angle) * railRadius,
+          WATERPARK_TOWER_STAIR.baseRise + t * (tower.height - 0.1) + 0.5,
+          Math.sin(angle) * railRadius,
+          0,
+          false,
+        );
+      }
+      // An intermediate mid-rail closes the guard gap between tread and handrail.
+      const midPoints = points.map((p) => p.clone().setY(p.y - 0.45));
+      railGeos.push(
+        new THREE.TubeGeometry(
+          new THREE.CatmullRomCurve3(midPoints, false, 'centripetal'),
+          96,
+          0.038,
+          5,
+          false,
+        ),
+      );
+      void side;
+    }
+    // Structural columns under the stair ribbon so it does not float.
+    for (let i = 1; i <= 8; i++) {
+      const t = i / 9;
+      const angle = t * turns * Math.PI * 2;
+      const y = WATERPARK_TOWER_STAIR.baseRise + t * (tower.height - 0.1);
+      const h = Math.max(0.5, y - 0.45);
+      addCylinder(
+        towerGroup,
+        steelMat,
+        0.11,
+        0.17,
+        h,
+        Math.cos(angle) * WATERPARK_TOWER_STAIR.radius,
+        h * 0.5,
+        Math.sin(angle) * WATERPARK_TOWER_STAIR.radius,
+        8,
+      );
+    }
+    addBox(
+      towerGroup,
+      concreteMat,
+      2.5,
+      0.14,
+      2.5,
+      WATERPARK_TOWER_STAIR.radius,
+      0.07,
+      0,
+      0,
+      false,
+    );
     addSign(
       towerGroup,
       `CLIMB STAIRS TO ${WATERPARK_SLIDES.filter((s) => s.tower === tower.id).length} SLIDE ENTRIES`,
@@ -907,11 +1209,48 @@ export function buildWaterparkModel(): WaterparkModelHandles {
       z: tower.z + Math.sin(angle) * boardingRadius,
     };
     const access = getWaterparkSlideAccess(spec);
-    slides.push({ spec, curve, samples, length, boarding });
+    const width = slideWidth(spec.kind);
+
+    const vehicle = new THREE.Group();
+    vehicle.name = `waterpark-vehicle-${spec.id}`;
+    vehicle.visible = false;
+    const vehicleMat = new THREE.MeshStandardMaterial({
+      color: spec.accent,
+      roughness: 0.46,
+      metalness: 0.03,
+    });
+    const vehicleDarkMat = new THREE.MeshStandardMaterial({
+      color: spec.color,
+      roughness: 0.55,
+      metalness: 0.02,
+    });
+    materials.add(vehicleMat);
+    materials.add(vehicleDarkMat);
+    const addVehicleRing = (radius: number, tube: number) => {
+      const geo = new THREE.TorusGeometry(radius, tube, 8, 18);
+      geometries.add(geo);
+      const ring = new THREE.Mesh(geo, vehicleMat);
+      ring.rotation.x = Math.PI / 2;
+      vehicle.add(ring);
+    };
+    if (spec.kind === 'tube' || spec.kind === 'drop' || spec.kind === 'bowl') {
+      addVehicleRing(width * 0.36, 0.2);
+      addBox(vehicle, vehicleDarkMat, width * 0.55, 0.1, width * 0.55, 0, -0.18, 0);
+    } else if (spec.kind === 'raft' || spec.kind === 'watercoaster') {
+      addVehicleRing(width * 0.42, 0.24);
+      addBox(vehicle, vehicleDarkMat, width * 0.66, 0.14, width * 0.66, 0, -0.2, 0);
+    } else if (spec.kind === 'log') {
+      addBox(vehicle, vehicleDarkMat, width * 0.42, 0.5, 2.1, 0, 0.18, 0);
+      addBox(vehicle, vehicleMat, width * 0.36, 0.16, 1.8, 0, 0.48, 0);
+    } else {
+      // Body/mat/kids riders use a shallow foam mat.
+      addBox(vehicle, vehicleMat, width * 0.78, 0.09, 1.55, 0, -0.12, 0);
+    }
+    root.add(vehicle);
+    slides.push({ spec, curve, samples, length, boarding, vehicle });
 
     // Metal or plastic shell.
     const isEnclosed = spec.kind === 'tube' || spec.kind === 'drop';
-    const width = slideWidth(spec.kind);
     const shellMat = new THREE.MeshStandardMaterial({
       color: spec.color,
       roughness: isEnclosed ? 0.3 : 0.4,
@@ -992,7 +1331,54 @@ export function buildWaterparkModel(): WaterparkModelHandles {
     startRing.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), startTan);
     startRing.position.addScaledVector(startUp, width * 0.5);
     root.add(startRing);
-    addBox(root, steelMat, 3.4, 0.3, 3.4, start.x, start.y - 0.15, start.z);
+    addBox(root, steelMat, 3.8, 0.32, 3.8, start.x, start.y - 0.16, start.z);
+    addBox(root, concreteMat, 3.3, 0.2, 3.3, start.x, start.y - 0.4, start.z, 0, false);
+    // Four independent launch-deck columns, each with a concrete pad.
+    const deckSupportH = Math.max(0.8, start.y - 0.45);
+    for (const sx of [-1.45, 1.45]) {
+      for (const sz of [-1.45, 1.45]) {
+        addCylinder(
+          root,
+          steelMat,
+          0.11,
+          0.16,
+          deckSupportH,
+          start.x + sx,
+          deckSupportH * 0.5,
+          start.z + sz,
+          8,
+        );
+        addBox(
+          root,
+          concreteMat,
+          0.52,
+          0.14,
+          0.52,
+          start.x + sx,
+          0.07,
+          start.z + sz,
+          0,
+          false,
+        );
+      }
+    }
+    // Guard the launch deck on three sides, leaving the flume mouth and the
+    // catwalk approach open.
+    const deckYaw = Math.atan2(startTan.x, startTan.z);
+    const deckRail = new THREE.Group();
+    deckRail.position.set(start.x, start.y, start.z);
+    deckRail.rotation.y = deckYaw;
+    root.add(deckRail);
+    for (const side of [-1, 1]) {
+      addBox(deckRail, steelMat, 0.06, 0.9, 3.0, side * 1.72, 0.45, 0);
+      for (const end of [-1.3, 1.3]) {
+        addBox(deckRail, steelMat, 0.055, 0.9, 0.055, side * 1.72, 0.45, end, 0, false);
+      }
+    }
+    addBox(deckRail, steelMat, 3.4, 0.06, 0.06, 0, 0.9, -1.72);
+    addBox(deckRail, steelMat, 3.4, 0.06, 0.06, 0, 0.9, 1.72);
+    addBox(deckRail, steelMat, 0.06, 0.9, 0.06, -1.72, 0.45, -1.72, 0, false);
+    addBox(deckRail, steelMat, 0.06, 0.9, 0.06, 1.72, 0.45, -1.72, 0, false);
     addBox(root, whiteMat, 2.4, 1.7, 0.25, start.x, start.y + 0.9, start.z + 1.5);
     addSign(root, spec.name, spec.accent, 2.4, 0.42, start.x, start.y + 0.9, start.z + 1.64);
 
@@ -1031,26 +1417,74 @@ export function buildWaterparkModel(): WaterparkModelHandles {
           -0.2,
           0,
         );
+        // Steel columns and base plates. Catwalks are long elevated walkways,
+        // so every span is visibly carried rather than floating in the air.
+        const supportH = Math.max(0.6, start.y - 0.25);
+        addCylinder(
+          root,
+          steelMat,
+          0.11,
+          0.16,
+          supportH,
+          (a.x + b.x) * 0.5,
+          supportH * 0.5,
+          (a.z + b.z) * 0.5,
+          8,
+        );
+        addBox(
+          root,
+          concreteMat,
+          0.58,
+          0.14,
+          0.58,
+          (a.x + b.x) * 0.5,
+          0.07,
+          (a.z + b.z) * 0.5,
+          0,
+          false,
+        );
         for (const side of [-1, 1]) {
+          // Continuous top handrail, mid-rail and kick plate.
+          addBox(
+            catwalk,
+            steelMat,
+            length + 0.12,
+            0.06,
+            0.06,
+            0,
+            0.99,
+            side * WATERPARK_LAUNCH.catwalkHalfWidth,
+          );
           addBox(
             catwalk,
             steelMat,
             length + 0.1,
-            0.055,
-            0.055,
+            0.045,
+            0.045,
             0,
-            0.58,
+            0.52,
             side * WATERPARK_LAUNCH.catwalkHalfWidth,
           );
-          for (const end of [-1, 1]) {
+          addBox(
+            catwalk,
+            whiteMat,
+            length + 0.1,
+            0.16,
+            0.055,
+            0,
+            0.1,
+            side * WATERPARK_LAUNCH.catwalkHalfWidth,
+          );
+          const postCount = Math.max(2, Math.ceil(length / 1.65));
+          for (let p = 0; p <= postCount; p++) {
             addBox(
               catwalk,
               steelMat,
-              0.05,
-              0.58,
-              0.05,
-              end * length * 0.5,
-              0.29,
+              0.055,
+              1.0,
+              0.055,
+              -length * 0.5 + (length * p) / postCount,
+              0.5,
               side * WATERPARK_LAUNCH.catwalkHalfWidth,
               0,
               false,
@@ -1065,6 +1499,11 @@ export function buildWaterparkModel(): WaterparkModelHandles {
     splash.position.copy(end).add(new THREE.Vector3(0, 0.12, 0));
     splash.rotation.x = Math.PI / 2;
     root.add(splash);
+    // Non-slip splash-exit landing on the dry side of the coping.
+    const safeExit = getWaterparkSlideExitPoint(spec);
+    addBox(root, deckMat, 2.35, 0.14, 1.75, safeExit.x, 0.07, safeExit.z, 0, false);
+    addBox(root, whiteMat, 2.35, 0.08, 0.12, safeExit.x, 0.1, safeExit.z + 0.86, 0, false);
+    addSign(root, 'SPLASH EXIT', '#dcfce7', 1.65, 0.3, safeExit.x, 0.18, safeExit.z + 0.92);
 
     // Rings and supports. Both are instanced, keeping 28 long slides cheap.
     const ringStep = Math.max(3, Math.round(samples.length / 28));
@@ -1084,6 +1523,8 @@ export function buildWaterparkModel(): WaterparkModelHandles {
       const scale = new THREE.Vector3(0.19, s.point.y, 0.19);
       matrix.compose(new THREE.Vector3(s.point.x, s.point.y * 0.5, s.point.z), new THREE.Quaternion(), scale);
       postMatrices.push(matrix);
+      // Concrete pier footing under every support, not a post sunk into tile.
+      addBox(root, concreteMat, 0.64, 0.18, 0.64, s.point.x, 0.09, s.point.z, 0, false);
     }
 
     // Queue kiosk at the tower base, with the actual slide entrance marked by
@@ -1101,7 +1542,14 @@ export function buildWaterparkModel(): WaterparkModelHandles {
     addSign(kiosk, spec.name, spec.accent, 2.9, 0.52, 0, 1.74, 0.14);
     for (const side of [-1, 1]) {
       addBox(kiosk, steelMat, 0.08, 1.25, 0.08, side * 1.1, 0.75, 0.5);
+      // Queue rails and a rope line in front of the kiosk.
+      for (const z of [1.3, 2.7]) {
+        addBox(kiosk, steelMat, 0.055, 1.0, 0.055, side * 1.35, 0.5, z, 0, false);
+      }
+      addBox(kiosk, steelMat, 0.05, 0.05, 1.4, side * 1.35, 0.95, 2.0, 0, false);
+      addBox(kiosk, steelMat, 0.05, 0.05, 1.4, side * 1.35, 0.48, 2.0, 0, false);
     }
+    addSign(kiosk, 'QUEUE HERE', '#fef3c7', 1.9, 0.28, 0, 0.38, 2.82);
   }
 
   // Merge edge rails into one draw call.
@@ -1319,6 +1767,62 @@ export function buildWaterparkModel(): WaterparkModelHandles {
     root.add(palm);
   }
 
+  // Shaded loungers and umbrellas along the wave-pool beach.
+  for (let i = 0; i < 8; i++) {
+    const x = -24 + i * 7;
+    const z = 40.8;
+    const lounger = new THREE.Group();
+    lounger.position.set(x, 0, z);
+    root.add(lounger);
+    addBox(lounger, whiteMat, 0.9, 0.16, 2.0, 0, 0.42, 0, 0, false);
+    const back = addBox(lounger, whiteMat, 0.9, 0.16, 0.65, 0, 0.9, -0.82, 0, false);
+    back.rotation.x = -0.72;
+    addBox(lounger, steelMat, 0.06, 0.42, 0.06, -0.35, 0.21, 0.7, 0, false);
+    addBox(lounger, steelMat, 0.06, 0.42, 0.06, 0.35, 0.21, 0.7, 0, false);
+    if (i % 2 === 0) {
+      addCylinder(lounger, whiteMat, 0.04, 0.04, 3.0, 1.25, 1.5, -0.7, 6);
+      const shadeMat = new THREE.MeshStandardMaterial({
+        color: i % 4 === 0 ? 0xf4c15f : 0x7cc7b7,
+        roughness: 0.72,
+      });
+      materials.add(shadeMat);
+      const shade = new THREE.Mesh(new THREE.ConeGeometry(1.4, 0.32, 12, 1, true), shadeMat);
+      geometries.add(shade.geometry);
+      shade.position.set(1.25, 3.0, -0.7);
+      shade.rotation.x = Math.PI;
+      lounger.add(shade);
+    }
+  }
+
+  // Planters and low tropical planting soften the concrete promenade.
+  const planterMat = new THREE.MeshStandardMaterial({ color: 0x9a8065, roughness: 0.9 });
+  const shrubMat = new THREE.MeshStandardMaterial({ color: 0x2f6b45, roughness: 0.95 });
+  materials.add(planterMat);
+  materials.add(shrubMat);
+  for (const [px, pz] of [
+    [-44, -16], [-44, 16], [44, -16], [44, 16], [-22, 42], [22, 42],
+  ] as const) {
+    addBox(root, planterMat, 2.4, 0.55, 2.4, px, 0.28, pz, 0, false);
+    for (let j = 0; j < 5; j++) {
+      const shrub = new THREE.Mesh(new THREE.IcosahedronGeometry(0.48, 1), shrubMat);
+      geometries.add(shrub.geometry);
+      shrub.position.set(px - 0.75 + (j % 3) * 0.75, 0.72 + (j % 2) * 0.18, pz - 0.55 + (j > 2 ? 0.8 : 0));
+      shrub.scale.y = 1.4;
+      root.add(shrub);
+    }
+  }
+
+  // Warm low-level lighting for evening visits without adding shadow maps.
+  for (const [lx, lz, color] of [
+    [38, -38, 0xffd7a0],
+    [-40, 36, 0xffc56e],
+    [8, 40, 0xffe1b2],
+  ] as const) {
+    const light = new THREE.PointLight(color, 0.65, 17, 2);
+    light.position.set(lx, 4.2, lz);
+    root.add(light);
+  }
+
   // A small food shack by the entry plaza.
   const shack = new THREE.Group();
   shack.position.set(38, 0, -30);
@@ -1352,6 +1856,7 @@ export function buildWaterparkModel(): WaterparkModelHandles {
   if (bucketStream) markPreserved(bucketStream);
   if (bucketSplash) markPreserved(bucketSplash);
   for (const tube of innerTubes) markPreserved(tube.mesh);
+  for (const slide of slides) markPreserved(slide.vehicle);
   const rootInverse = root.matrixWorld.clone().invert();
   const mergeBuckets = new Map<THREE.Material, THREE.Mesh[]>();
   root.traverse((obj) => {
@@ -1401,6 +1906,7 @@ export function buildWaterparkModel(): WaterparkModelHandles {
     wavePoolMesh,
     waveGeometry,
     waveBasePositions,
+    waterNormalTexture,
     bucketPivot,
     bucketWater,
     bucketStream,

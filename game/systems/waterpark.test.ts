@@ -17,9 +17,12 @@ import {
   buildWaterparkSlidePath,
   getWaterparkStats,
   getWaterparkSlideAccess,
+  getWaterparkSlideExitPoint,
   getWaterparkSurfaceY,
   getWaterparkTowerStairTurns,
   getWaterparkTowerStairY,
+  getWaterparkTowerStepCount,
+  getWaterparkTowerStepRise,
   isInWaterparkClearZone,
   sanitizeWaterparkState,
 } from '../world/waterparkLayout';
@@ -97,6 +100,10 @@ test('waterpark clear zone covers the deck and access bridge but not the wider i
 
 test('every tower staircase is continuously solid from deck to summit', () => {
   for (const tower of WATERPARK_TOWERS) {
+    const stepCount = getWaterparkTowerStepCount(tower.height);
+    const stepRise = getWaterparkTowerStepRise(tower.height);
+    assert.ok(stepCount >= 12);
+    assert.ok(stepRise > 0.1 && stepRise <= 0.18, `${tower.id} treads are too steep`);
     const turns = getWaterparkTowerStairTurns(tower.height);
     let previousY = WATERPARK_DECK_Y;
     const samples = turns * 72;
@@ -231,8 +238,9 @@ test('all 28 slides are physically ridden end-to-end at 30, 60 and 120 Hz', () =
       assert.equal(snapshot.progressPercent, 100);
       assert.equal(snapshot.speed, 0, `${slide.id} must be arrested by the splash pool`);
       assert.ok(Number.isFinite(snapshot.yaw), `${slide.id} has an invalid splashdown heading`);
-      assertClose(snapshot.x, WATERPARK_SITE.x + slide.exit.x, 0.001);
-      assertClose(snapshot.z, WATERPARK_SITE.z + slide.exit.z, 0.001);
+      const safeExit = getWaterparkSlideExitPoint(slide);
+      assertClose(snapshot.x, WATERPARK_SITE.x + safeExit.x, 0.001);
+      assertClose(snapshot.z, WATERPARK_SITE.z + safeExit.z, 0.001);
       assertClose(snapshot.y, WATERPARK_DECK_Y, 0.001);
       const exitSurface = getWaterparkSurfaceY(
         snapshot.x,
@@ -244,6 +252,30 @@ test('all 28 slides are physically ridden end-to-end at 30, 60 and 120 Hz', () =
     }
   }
   runtime.dispose();
+});
+
+test('every splashdown hands the player to a dry, walkable deck exit', () => {
+  for (const slide of WATERPARK_SLIDES) {
+    const exit = getWaterparkSlideExitPoint(slide);
+    for (const pool of WATERPARK_POOLS) {
+      const inside =
+        Math.abs(exit.x - pool.x) <= pool.w * 0.5 &&
+        Math.abs(exit.z - pool.z) <= pool.d * 0.5;
+      assert.equal(inside, false, `${slide.id} exits inside ${pool.id}`);
+    }
+    assert.ok(Math.abs(exit.x) < WATERPARK_DECK_HALF_W);
+    assert.ok(Math.abs(exit.z) < WATERPARK_DECK_HALF_D);
+    assertClose(
+      getWaterparkSurfaceY(
+        WATERPARK_SITE.x + exit.x,
+        WATERPARK_SITE.z + exit.z,
+        exit.y + 0.1,
+        exit.y + 0.1,
+      ),
+      WATERPARK_DECK_Y,
+      0.03,
+    );
+  }
 });
 
 test('steeper water channels accelerate harder than nearly flat runouts', () => {
@@ -298,6 +330,8 @@ test('waterpark model builds all 28 slides, waves, bucket and lazy river without
   for (const slide of model.slides) {
     assert.ok(slide.length > 15);
     assert.ok(slide.samples.length > 20);
+    assert.ok(slide.vehicle, `${slide.spec.id} has no aligned ride vehicle`);
+    assert.equal(slide.vehicle.visible, false, `${slide.spec.id} vehicle should be parked`);
   }
   model.dispose();
 });
@@ -357,6 +391,54 @@ test('all 28 attractions complete with finite camera physics', () => {
     assert.equal(completed, true, `${slide.id} did not complete`);
   }
   assert.equal(runtime.getStats().ridesCompleted, 28);
+  runtime.dispose();
+});
+
+test('raft, tube and mat vehicles stay glued to the ridden slide path', () => {
+  const scene = new THREE.Scene();
+  const runtime = new WaterparkRuntime(scene);
+  const handles = (
+    runtime as unknown as {
+      handles: {
+        slides: Array<{
+          spec: { id: string };
+          vehicle: THREE.Group;
+        }>;
+      };
+    }
+  ).handles;
+  for (const id of ['scorpions_tail', 'python_pit', 'sidewinder_racers']) {
+    const slide = handles.slides.find((entry) => entry.spec.id === id)!;
+    const access = getWaterparkSlideAccess(
+      WATERPARK_SLIDES.find((entry) => entry.id === id)!,
+    );
+    const entry = runtime.getPhysicalSlideEntry(id)!;
+    const snapshot = runtime.tryEnterPhysicalSlide(entry.x, access.startY + 0.1, entry.z, 3);
+    assert.ok(snapshot, `${id} did not load`);
+    assert.equal(slide.vehicle.visible, true, `${id} vehicle is missing at load`);
+    assert.ok(
+      Math.abs(slide.vehicle.position.x - (snapshot.x - WATERPARK_SITE.x)) < 0.02,
+      `${id} vehicle detached laterally`,
+    );
+    assert.ok(
+      Math.abs(slide.vehicle.position.z - (snapshot.z - WATERPARK_SITE.z)) < 0.02,
+      `${id} vehicle detached longitudinally`,
+    );
+    let current = snapshot;
+    for (let i = 0; i < 2000 && !current.finished; i++) {
+      current = runtime.stepPhysicalSlide(1 / 60)!;
+      if (!current.finished) {
+        assert.ok(slide.vehicle.visible, `${id} vehicle vanished mid-ride`);
+        assert.ok(Number.isFinite(slide.vehicle.position.y));
+      }
+    }
+    assert.equal(current.finished, true);
+    assert.equal(slide.vehicle.visible, false, `${id} vehicle did not park after splashdown`);
+    runtime.cancelPhysicalSlide();
+    (
+      runtime as unknown as { physicalCooldown: number }
+    ).physicalCooldown = 0;
+  }
   runtime.dispose();
 });
 

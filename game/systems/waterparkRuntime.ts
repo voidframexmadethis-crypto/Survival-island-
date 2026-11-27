@@ -10,6 +10,7 @@ import {
   WATERPARK_SLIDES,
   DEFAULT_WATERPARK_STATE,
   getWaterparkSlideAccess,
+  getWaterparkSlideExitPoint,
   isPointOnWaterparkSlideAccess,
   sanitizeWaterparkState,
   type WaterparkSavedState,
@@ -278,6 +279,7 @@ export class WaterparkRuntime {
     this.stats = { ...DEFAULT_WATERPARK_STATE, bestTimes: {} };
     this.active = null;
     this.physical = null;
+    for (const slide of this.handles.slides) slide.vehicle.visible = false;
     this.physicalCooldown = 0;
     this.lastRideSeconds = 0;
   }
@@ -285,7 +287,10 @@ export class WaterparkRuntime {
   public setVisible(visible: boolean): void {
     this.visible = visible;
     this.root.visible = visible;
-    if (!visible) this.physical = null;
+    if (!visible) {
+      this.physical = null;
+      for (const slide of this.handles.slides) slide.vehicle.visible = false;
+    }
   }
 
   /** Exact walk-in mouth of a slide, derived from the rendered curve. */
@@ -395,12 +400,14 @@ export class WaterparkRuntime {
       rideId: bestSlide.spec.id,
       name: bestSlide.spec.name,
     });
-    return this.buildPhysicalSnapshot(
+    const snapshot = this.buildPhysicalSnapshot(
       bestSlide,
       this.physical.distance,
       this.physical.speed,
       0,
     );
+    this.placeSlideVehicle(bestSlide, snapshot);
+    return snapshot;
   }
 
   /** Advance the player along the rendered slide curve with gravity, water and wall limits. */
@@ -409,12 +416,14 @@ export class WaterparkRuntime {
     if (!ride) return null;
     const frameDt = Number.isFinite(dt) ? Math.min(0.05, Math.max(0, dt)) : 0;
     if (frameDt <= 0) {
-      return this.buildPhysicalSnapshot(
+      const still = this.buildPhysicalSnapshot(
         ride.slide,
         ride.distance,
         ride.speed,
         ride.elapsed,
       );
+      this.placeSlideVehicle(ride.slide, still);
+      return still;
     }
     // Integrate in short fixed slices. At 30 Hz a fall can advance more than a
     // metre per frame; slicing keeps slope, speed and wall response continuous
@@ -460,17 +469,42 @@ export class WaterparkRuntime {
         ride.lateralVelocity = 0;
       }
     }
-    return this.buildPhysicalSnapshot(
+    const snapshot = this.buildPhysicalSnapshot(
       ride.slide,
       ride.distance,
       ride.speed,
       ride.elapsed,
     );
+    this.placeSlideVehicle(ride.slide, snapshot);
+    return snapshot;
   }
 
   public cancelPhysicalSlide(): void {
+    if (this.physical) this.placeSlideVehicle(this.physical.slide, null);
     this.physical = null;
     this.physicalCooldown = 0;
+  }
+
+  /** Keep the visible raft/tube/mat glued to the collision path. */
+  private placeSlideVehicle(
+    slide: WaterparkSlideHandles,
+    snapshot: PhysicalSlideSnapshot | null,
+  ): void {
+    const vehicle = slide.vehicle;
+    if (!vehicle) return;
+    if (!snapshot) {
+      vehicle.visible = false;
+      return;
+    }
+    vehicle.visible = true;
+    vehicle.position.set(
+      snapshot.x - WATERPARK_SITE.x,
+      snapshot.y - WATERPARK_SITE.y + 0.1,
+      snapshot.z - WATERPARK_SITE.z,
+    );
+    vehicle.rotation.order = 'YXZ';
+    vehicle.rotation.y = snapshot.yaw;
+    vehicle.rotation.z = snapshot.bank;
   }
 
   private physicalFootOffset(slide: WaterparkSlideHandles): number {
@@ -561,7 +595,7 @@ export class WaterparkRuntime {
       speedKmh: ride.speed * 3.6,
       newBest,
     });
-    const exit = ride.slide.spec.exit;
+    const exit = getWaterparkSlideExitPoint(ride.slide.spec);
     sampleWaterparkPath(
       ride.slide.samples,
       ride.slide.length,
@@ -590,6 +624,7 @@ export class WaterparkRuntime {
       heightM: 0,
       finished: true,
     };
+    this.placeSlideVehicle(ride.slide, null);
     this.physical = null;
     this.physicalCooldown = 0.8;
     return snapshot;
@@ -657,10 +692,11 @@ export class WaterparkRuntime {
     if (this.active) return false;
     const slide = this.handles.slides.find((entry) => entry.spec.id === rideId);
     if (slide) {
+      const exit = getWaterparkSlideExitPoint(slide.spec);
       this.lastExit = {
-        x: WATERPARK_SITE.x + slide.spec.exit.x,
+        x: WATERPARK_SITE.x + exit.x,
         y: WATERPARK_DECK_Y,
-        z: WATERPARK_SITE.z + slide.spec.exit.z,
+        z: WATERPARK_SITE.z + exit.z,
         yaw: 0,
       };
       this.active = {
@@ -724,6 +760,9 @@ export class WaterparkRuntime {
   }
 
   public exitRide(): ExitPoint {
+    if (this.active?.kind === 'slide') {
+      this.placeSlideVehicle(this.active.slide, null);
+    }
     if (this.active?.kind === 'lazy' || this.active?.kind === 'wave') {
       const transform = this.getRideTransform();
       if (transform) {
@@ -810,6 +849,10 @@ export class WaterparkRuntime {
       return;
     }
     this.elapsed += frameTime;
+    if (this.handles.waterNormalTexture) {
+      this.handles.waterNormalTexture.offset.x = this.elapsed * 0.012;
+      this.handles.waterNormalTexture.offset.y = this.elapsed * 0.007;
+    }
     this.animateWavePool(frameTime);
     this.tubeTimer += frameTime;
     if (this.tubeTimer >= 1 / 24) {
@@ -874,6 +917,24 @@ export class WaterparkRuntime {
       this.scratchRight,
       this.scratchUp,
     );
+    // The cinematic slide mode uses the same visible raft/tube/mat as the
+    // walk-in physical mode, so the vehicle never detaches from the flume.
+    this.placeSlideVehicle(ride.slide, {
+      slideId: ride.slide.spec.id,
+      name: ride.slide.spec.name,
+      x: WATERPARK_SITE.x + this.scratchPoint.x,
+      y: WATERPARK_SITE.y + this.scratchPoint.y,
+      z: WATERPARK_SITE.z + this.scratchPoint.z,
+      yaw: Math.atan2(this.scratchTangent.x, this.scratchTangent.z),
+      bank: 0,
+      lateralOffset: 0,
+      lateralLimit: 0,
+      speed: ride.speed,
+      speedKmh: ride.speed * 3.6,
+      progressPercent: 0,
+      heightM: this.scratchPoint.y,
+      finished: false,
+    });
     const boost =
       ride.slide.spec.kind === 'watercoaster' || ride.slide.spec.kind === 'log'
         ? 1
@@ -903,7 +964,7 @@ export class WaterparkRuntime {
     }
 
     if (ride.distance >= ride.slide.length - 0.15) {
-      const exit = ride.slide.spec.exit;
+      const exit = getWaterparkSlideExitPoint(ride.slide.spec);
       this.lastExit = {
         x: WATERPARK_SITE.x + exit.x,
         y: WATERPARK_DECK_Y,
@@ -931,6 +992,7 @@ export class WaterparkRuntime {
       speedKmh: ride.speed * 3.6,
       newBest,
     });
+    this.placeSlideVehicle(ride.slide, null);
     this.active = null;
   }
 

@@ -94,6 +94,15 @@ export function getWaterparkTowerStairTurns(height: number): number {
   return height > 50 ? 4 : height > 30 ? 3 : 2;
 }
 
+/** Discrete tread count used by both the visual stairs and its access tests. */
+export function getWaterparkTowerStepCount(height: number): number {
+  return Math.max(12, Math.ceil(height / 0.18));
+}
+
+export function getWaterparkTowerStepRise(height: number): number {
+  return (height - 0.1) / getWaterparkTowerStepCount(height);
+}
+
 /** Stair-walking height at t = 0 (deck) through t = 1 (summit landing). */
 export function getWaterparkTowerStairY(height: number, t: number): number {
   return (
@@ -259,12 +268,56 @@ function distanceToSegment2D(
 
 export const WATERPARK_POOLS = [
   { id: 'wave', name: 'Hurricane Bay Wave Pool', x: -2, z: 26, w: 38, d: 20, depth: 1.8 },
+  { id: 'mamba', name: 'Mamba Splash Basin', x: 10, z: 13.8, w: 8, d: 3.6, depth: 1.0 },
   { id: 'splash', name: 'Anaconda Splash Basin', x: 36, z: 12, w: 18, d: 14, depth: 1.4 },
   { id: 'family', name: 'Scorpion Family Lagoon', x: -33, z: 4, w: 20, d: 12, depth: 1.2 },
   { id: 'dump', name: 'Delta Drench Deck', x: 27, z: 28, w: 22, d: 16, depth: 0.4 },
   { id: 'kids', name: 'Tadpole Splash Pad', x: -31, z: 31, w: 22, d: 10, depth: 0.55 },
   { id: 'log', name: 'Timber Train Splash Pool', x: 36, z: 40, w: 16, d: 9, depth: 1.6 },
 ] as const;
+
+/**
+ * A safe, dry deck point for stepping out after splashdown. The authored
+ * splashdown edge remains unchanged, but the player is not left standing in
+ * the middle of a pool: the exit is placed just beyond the containing pool's
+ * coping (or beside the splash runout when no pool contains the mouth).
+ */
+function pointInWaterparkPool(x: number, z: number): boolean {
+  return WATERPARK_POOLS.some(
+    (pool) =>
+      Math.abs(x - pool.x) <= pool.w * 0.5 + 0.35 &&
+      Math.abs(z - pool.z) <= pool.d * 0.5 + 0.35,
+  );
+}
+
+export function getWaterparkSlideExitPoint(slide: WaterparkSlideSpec): WaterparkPoint {
+  const minX = -WATERPARK_DECK_HALF_W + 2.2;
+  const maxX = WATERPARK_DECK_HALF_W - 2.2;
+  const minZ = -WATERPARK_DECK_HALF_D + 2.2;
+  const maxZ = WATERPARK_DECK_HALF_D - 2.2;
+  const dry = (x: number, z: number) =>
+    x >= minX && x <= maxX && z >= minZ && z <= maxZ && !pointInWaterparkPool(x, z);
+  if (dry(slide.exit.x, slide.exit.z)) {
+    return { x: slide.exit.x, y: WATERPARK_DECK_Y, z: slide.exit.z };
+  }
+  // Walk outward from the splash lip until a dry coping/deck point is found.
+  // This also handles overlapping basins: a point can be outside its own pool
+  // but still inside an adjacent one.
+  for (let radius = 1.2; radius <= 16; radius += 0.5) {
+    const steps = Math.max(12, Math.ceil(radius * 8));
+    for (let i = 0; i < steps; i++) {
+      const angle = (i / steps) * Math.PI * 2;
+      const x = slide.exit.x + Math.cos(angle) * radius;
+      const z = slide.exit.z + Math.sin(angle) * radius;
+      if (dry(x, z)) return { x, y: WATERPARK_DECK_Y, z };
+    }
+  }
+  return {
+    x: clamp(slide.exit.x, minX, maxX),
+    y: WATERPARK_DECK_Y,
+    z: clamp(slide.exit.z, minZ, maxZ),
+  };
+}
 
 /**
  * 28 individually named slides. The list deliberately covers body slides,
