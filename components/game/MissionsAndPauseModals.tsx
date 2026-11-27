@@ -8,9 +8,11 @@ import {
   Gamepad2,
   Gauge,
   Keyboard,
+  PawPrint,
   Play,
   RotateCcw,
   Save,
+  Scissors,
   Settings,
   Sliders,
   Smartphone,
@@ -171,6 +173,10 @@ export function SettingsModal({
   const particlesOn = settings.particlesEnabled !== false;
   const autoFpsOn = settings.dynamicAutoFps !== false;
   const drawDist: DrawDistanceTier = settings.drawDistance ?? 'medium';
+  const wildlifeDensity = Math.max(
+    0,
+    Math.min(1, settings.wildlifeDensity ?? 0.75),
+  );
   const tvSafetyMode: TvSafetyMode = settings.tvSafetyMode ?? 'auto';
 
   return (
@@ -340,6 +346,91 @@ export function SettingsModal({
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div className="rounded-xl border border-emerald-900/70 bg-emerald-950/25 p-3">
+              <div className="flex items-center justify-between gap-2 text-xs text-stone-200">
+                <span className="flex items-center gap-1.5 font-semibold">
+                  <PawPrint className="w-3.5 h-3.5 text-emerald-400" />
+                  Wildlife Density
+                </span>
+                <span className="font-mono-tabular text-emerald-300">
+                  {wildlifeDensity <= 0 ? 'Off' : `${Math.round(wildlifeDensity * 100)}%`}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={wildlifeDensity}
+                onChange={(e) =>
+                  onChange({
+                    ...settings,
+                    wildlifeDensity: parseFloat(e.target.value),
+                  })
+                }
+                className="mt-2 w-full accent-emerald-500"
+                aria-label="Wildlife Density"
+              />
+              <p className="mt-1 text-[10px] leading-relaxed text-stone-400">
+                Global ambient animals spawn natively by biome. Distant wildlife
+                swaps to low-poly LODs and returns to the pool beyond 136 m.
+                Slide to 0 for a completely still wilderness.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-amber-900/70 bg-amber-950/20 p-3">
+              <div className="flex items-center justify-between gap-2 text-xs text-stone-200">
+                <span className="flex items-center gap-1.5 font-semibold">
+                  <Scissors className="w-3.5 h-3.5 text-amber-400" />
+                  Field Harvest Style
+                </span>
+                <span className="font-mono-tabular text-amber-300 text-[10px]">
+                  {settings.detailedSkinningAnimations === false ? 'Quick' : 'Detailed'}
+                </span>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {(
+                  [
+                    [true, 'Detailed Animations', 'Knife work, hide peel & progress'],
+                    [false, 'Quick Harvest Fade', 'Short fade for faster hunts'],
+                  ] as const
+                ).map(([detailed, title, subtitle]) => {
+                  const selected =
+                    (settings.detailedSkinningAnimations !== false) === detailed;
+                  return (
+                    <button
+                      key={String(detailed)}
+                      type="button"
+                      onClick={() =>
+                        onChange({
+                          ...settings,
+                          detailedSkinningAnimations: detailed,
+                        })
+                      }
+                      className={`min-h-[52px] rounded-xl border px-2 py-1.5 text-center transition-colors ${
+                        selected
+                          ? 'border-amber-300 bg-amber-500 text-stone-950'
+                          : 'border-stone-800 bg-stone-900 text-stone-300 hover:bg-stone-800'
+                      }`}
+                    >
+                      <div className="text-[11px] font-bold leading-tight">{title}</div>
+                      <div
+                        className={`mt-0.5 text-[9px] leading-tight ${
+                          selected ? 'font-semibold text-stone-900' : 'text-stone-400'
+                        }`}
+                      >
+                        {subtitle}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-1 text-[10px] leading-relaxed text-stone-400">
+                Detailed shows clean knife and hide-removal sequences with a progress bar.
+                Quick Harvest Fade keeps the same yields and knife checks in a fraction of the time.
+              </p>
             </div>
 
             <div>

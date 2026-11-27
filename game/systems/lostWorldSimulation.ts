@@ -62,6 +62,20 @@ const PERISHABLE_ITEMS: ReadonlySet<string> = new Set<ItemId>([
   'jalapeno',
   'pumpkin',
   'garlic',
+  'heart',
+  'liver',
+  'kidneys',
+  'backstrap',
+  'tenderloin',
+  'hindquarter_steak',
+  'shoulder_roast',
+  'ribs',
+  'tongue',
+  'bone_marrow',
+  'meat_bag',
+  'cooked_backstrap',
+  'cooked_organs',
+  'bone_broth',
 ]);
 
 export function isPerishableItem(itemId: string): boolean {
@@ -197,6 +211,54 @@ export function foodFreshnessFor(
   const entry = state.food.find((f) => f.itemId === itemId);
   if (!entry) return 1;
   return entry.spoiled ? 0 : entry.freshness;
+}
+
+/** Cooking or preserving resets a food's freshness clock. */
+export function markFoodFresh(state: LostWorldState, itemId: ItemId): void {
+  const entry = state.food.find((f) => f.itemId === itemId);
+  if (entry) {
+    entry.freshness = 1;
+    entry.preserved = false;
+    entry.spoiled = false;
+  } else {
+    state.food.push({ itemId, freshness: 1, preserved: false, spoiled: false });
+  }
+}
+
+/** A fridge/freezer pauses the freshness timer for carried food. */
+export function markFoodPreserved(
+  state: LostWorldState,
+  itemId: ItemId,
+  preserved: boolean,
+): void {
+  const entry = state.food.find((f) => f.itemId === itemId);
+  if (entry) {
+    entry.preserved = preserved;
+  } else if (preserved) {
+    state.food.push({ itemId, freshness: 1, preserved: true, spoiled: false });
+  }
+}
+
+/** Carry a carcass's remaining freshness onto the cuts it produces. */
+export function setFoodFreshness(
+  state: LostWorldState,
+  itemId: ItemId,
+  freshness: number,
+): void {
+  const entry = state.food.find((f) => f.itemId === itemId);
+  const clamped = Math.max(0, Math.min(1, freshness));
+  if (entry) {
+    entry.freshness = clamped;
+    entry.preserved = false;
+    entry.spoiled = clamped <= 0.02;
+  } else {
+    state.food.push({
+      itemId,
+      freshness: clamped,
+      preserved: false,
+      spoiled: clamped <= 0.02,
+    });
+  }
 }
 
 function npcTarget(activity: string, npc: LostWorldState['npcs'][number]): { x: number; z: number } {

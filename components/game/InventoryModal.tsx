@@ -909,6 +909,17 @@ export function InventoryModal({
                           : ''}
                       </div>
                     )}
+                    {(selectedDef.weightKg !== undefined ||
+                      selectedDef.sellValue !== undefined) && (
+                      <div className="text-xs text-stone-400 font-mono-tabular">
+                        {selectedDef.weightKg !== undefined
+                          ? `${selectedDef.weightKg.toFixed(1)} kg`
+                          : ''}
+                        {selectedDef.sellValue !== undefined
+                          ? `${selectedDef.weightKg !== undefined ? ' · ' : ''}Sells ${selectedDef.sellValue}c`
+                          : ''}
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-2.5">

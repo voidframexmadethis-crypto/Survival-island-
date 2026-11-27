@@ -139,6 +139,30 @@ export type ItemId =
   | 'cut_dino_meat'
   | 'hide'
   | 'bone'
+  // Field-harvested game, organs, craft & trophy parts
+  | 'heart'
+  | 'liver'
+  | 'kidneys'
+  | 'backstrap'
+  | 'tenderloin'
+  | 'hindquarter_steak'
+  | 'shoulder_roast'
+  | 'ribs'
+  | 'tongue'
+  | 'bone_marrow'
+  | 'tallow'
+  | 'soup_bones'
+  | 'sinew'
+  | 'antlers'
+  | 'horns'
+  | 'tusks'
+  | 'teeth_claws'
+  | 'raw_hide'
+  | 'pelt'
+  | 'meat_bag'
+  | 'cooked_backstrap'
+  | 'cooked_organs'
+  | 'bone_broth'
   | 'freshwater_fish'
   | 'ocean_fish'
   // Farm Vegetables
@@ -566,6 +590,10 @@ export interface ItemDefinition {
   structureType?: CampStructureType;
   structuralKind?: StructuralBlockKind;
   kineticKind?: KineticNodeKind;
+  /** Carry weight in kilograms for field-harvested game and trophies. */
+  weightKg?: number;
+  /** Farmer / trader coin value for a single unit. */
+  sellValue?: number;
 }
 
 export type FirearmReloadMode = 'magazine' | 'single';
@@ -1148,6 +1176,10 @@ export interface GameSettings {
   particlesEnabled?: boolean;
   drawDistance?: DrawDistanceTier;
   dynamicAutoFps?: boolean;
+  /** 0 disables ambient global wildlife; 1 fills every pooled instance slot. */
+  wildlifeDensity?: number;
+  /** Detailed knife/hide harvest sequences vs. a short quick-harvest fade. */
+  detailedSkinningAnimations?: boolean;
   tvSafetyMode?: TvSafetyMode;
   touchControlsMode: 'auto' | 'always' | 'off';
   cameraSensitivity: number;
@@ -1246,6 +1278,7 @@ export interface GameSaveData {
   tvBassMode?: TvBassMode;
   tamedCreatures?: { species: CreatureSpecies; name: string }[];
   weaponMagazines?: Partial<Record<ItemId, number>>;
+  knifeSharpness?: number;
   baseArmoryOpened?: boolean;
   currentDimension?: DimensionId;
   selectedPortalDimension?: DimensionId;
@@ -1277,6 +1310,75 @@ export interface CarcassSaveData {
   drops: { itemId: ItemId; quantity: number }[];
   life: number;
   owner?: 'player' | 'world';
+  processing?: CarcassProcessingState;
+}
+
+export type CarcassProcessingStage =
+  | 'whole'
+  | 'field_dressed'
+  | 'skinned'
+  | 'butchered';
+
+export interface CarcassProcessingState {
+  stage: CarcassProcessingStage;
+  /** 0 = spoiled, 1 = fresh. Field dressing slows the decay sharply. */
+  freshness: number;
+  weightKg: number;
+  dragging: boolean;
+  loadedVehicleId?: string;
+  hideRemoved: boolean;
+  organYielded: boolean;
+  trophyYielded: boolean;
+  meatYielded: boolean;
+}
+
+export interface FieldProcessingYieldView {
+  itemId: ItemId;
+  quantity: number;
+  group:
+    | 'organs'
+    | 'hide'
+    | 'prime'
+    | 'extras'
+    | 'trophies'
+    | 'legacy'
+    | 'packaging';
+  weightKg: number;
+  sellValue: number;
+}
+
+export interface FieldProcessingStepResult {
+  ok: boolean;
+  message: string;
+  yields: FieldProcessingYieldView[];
+  complete: boolean;
+}
+
+export interface FieldProcessingHudState {
+  carcassId: string;
+  displayName: string;
+  stage: CarcassProcessingStage;
+  stageLabel: string;
+  isDino: boolean;
+  weightKg: number;
+  freshness: number;
+  hasKnife: boolean;
+  knifeSharpness: number;
+  detailedAnimations: boolean;
+  dragging: boolean;
+  loadedVehicleId: string | null;
+  loadedVehicleName: string | null;
+  nearVehicleId: string | null;
+  nearVehicleName: string | null;
+  nextStep: import('./systems/fieldProcessingSystem').FieldProcessingStep | null;
+  nextStepLabel: string | null;
+  nextStepDurationMs: number;
+  nextStepSharpnessCost: number;
+  nextStepYields: FieldProcessingYieldView[];
+  remainingYields: FieldProcessingYieldView[];
+  canPerformNext: boolean;
+  blockedReason: string | null;
+  totalRemainingValue: number;
 }
 
 export type ActiveModal =
@@ -1285,6 +1387,7 @@ export type ActiveModal =
   | 'crafting'
   | 'cooking'
   | 'stove'
+  | 'field_processing'
   | 'chest'
   | 'fridge'
   | 'farmer'
@@ -1477,6 +1580,8 @@ export interface HUDStateSnapshot {
     hasKnife: boolean;
     distance: number;
   } | null;
+  fieldProcessing?: FieldProcessingHudState | null;
+  knifeSharpness?: number;
   inventory: InventorySlot[];
   hotbarItemIds: (ItemId | null)[];
   equippedSlot: number;

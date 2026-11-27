@@ -100,6 +100,7 @@ import {
   FlatSurfaceStyle,
   GameMode,
   GameSaveData,
+  FieldProcessingHudState,
   GameSettings,
   HUDStateSnapshot,
   ItemId,
@@ -109,6 +110,7 @@ import {
   resolveAllowedGameMode,
 } from '@/game/types';
 import { CookingModal } from './CookingModal';
+import { FieldProcessingModal } from './FieldProcessingModal';
 import { DryingRackModal } from './DryingRackModal';
 import { CraftingModal } from './CraftingModal';
 import { FarmerShopModal } from './FarmerShopModal';
@@ -221,6 +223,8 @@ export function SurvivalGameClient() {
   const launchPendingRef = useRef(false);
   const [currentSlotId, setCurrentSlotId] = useState<string>('slot_1');
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
+  const [fieldProcessingView, setFieldProcessingView] =
+    useState<FieldProcessingHudState | null>(null);
   const [parkCreatorOpen, setParkCreatorOpen] = useState(false);
   const [activeStationStructureId, setActiveStationStructureId] = useState<
     string | undefined
@@ -341,7 +345,12 @@ export function SurvivalGameClient() {
   }, [hud]);
 
   useEffect(() => {
+    if (hud?.fieldProcessing) setFieldProcessingView(hud.fieldProcessing);
+  }, [hud?.fieldProcessing]);
+
+  useEffect(() => {
     activeModalRef.current = activeModal;
+    if (activeModal !== 'field_processing') setFieldProcessingView(null);
   }, [activeModal]);
 
   const [rocketControlsActive, setRocketControlsActive] = useState(false);
@@ -506,7 +515,25 @@ export function SurvivalGameClient() {
 
         // If a modal is open, allow B button to close it and reset sticks cleanly
         if (modalOpen) {
+          if (modalOpen === 'field_processing') {
+            checkEdge(0, () =>
+              window.dispatchEvent(new Event('fieldProcessingAdvance')),
+            );
+            checkEdge(2, () =>
+              window.dispatchEvent(new Event('fieldProcessingSharpen')),
+            );
+            checkEdge(3, () =>
+              window.dispatchEvent(new Event('fieldProcessingDrag')),
+            );
+            checkEdge(5, () =>
+              window.dispatchEvent(new Event('fieldProcessingLoad')),
+            );
+            checkEdge(4, () =>
+              window.dispatchEvent(new Event('fieldProcessingUnload')),
+            );
+          }
           checkEdge(1, () => {
+            engine.closeCarcassProcessing();
             setActiveModal(null);
             engine.setMode('playing');
           });
@@ -2621,10 +2648,10 @@ export function SurvivalGameClient() {
                     engineRef.current?.collectNearbyCarcass(hud.nearbyCarcass!.id)
                   }
                   className="pointer-events-auto min-h-[44px] px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-300 border-2 border-emerald-200 text-stone-950 font-extrabold text-xs sm:text-sm shadow-2xl flex items-center gap-2 whitespace-nowrap shrink-0"
-                  title="Collect meat & hide from carcass (F)"
+                  title="Field dress, skin & butcher carcass (F)"
                 >
                   <PackagePlus className="w-4 h-4 shrink-0" />
-                  <span className="tracking-wide">COLLECT</span>
+                  <span className="tracking-wide">PROCESS</span>
                   <span className="font-semibold text-[11px] opacity-90">
                     {hud.nearbyCarcass.displayName} ({hud.nearbyCarcass.summary})
                   </span>
@@ -4429,6 +4456,44 @@ export function SurvivalGameClient() {
           onClose={closeModal}
         />
       )}
+
+      {activeModal === 'field_processing' &&
+        (hud?.fieldProcessing ?? fieldProcessingView) && (
+          <FieldProcessingModal
+            view={hud?.fieldProcessing ?? fieldProcessingView}
+            onStep={(step) =>
+              engineRef.current?.performCarcassStep(
+                step,
+                (hud?.fieldProcessing ?? fieldProcessingView)?.carcassId,
+              ) ?? {
+                ok: false,
+                message: 'The harvest is unavailable.',
+                yields: [],
+                complete: false,
+              }
+            }
+            onSharpen={() => engineRef.current?.sharpenHuntingKnife()}
+            onToggleDrag={() =>
+              engineRef.current?.toggleCarcassDrag(
+                (hud?.fieldProcessing ?? fieldProcessingView)?.carcassId,
+              )
+            }
+            onLoadVehicle={() =>
+              engineRef.current?.loadCarcassIntoVehicle(
+                (hud?.fieldProcessing ?? fieldProcessingView)?.carcassId,
+              )
+            }
+            onUnloadVehicle={() =>
+              engineRef.current?.unloadCarcassFromVehicle(
+                (hud?.fieldProcessing ?? fieldProcessingView)?.carcassId,
+              )
+            }
+            onClose={() => {
+              engineRef.current?.closeCarcassProcessing();
+              closeModal();
+            }}
+          />
+        )}
 
       {(activeModal === 'cooking' || activeModal === 'stove') && hud && (
         <CookingModal

@@ -104,6 +104,19 @@ export const CRAFTING_RECIPES: CraftingRecipe[] = [
     description: 'Basic utility knife for carving, defense, and harvesting meat.',
   },
   {
+    id: 'craft_cured_leather',
+    resultItemId: 'hide',
+    resultQuantity: 1,
+    category: 'survival',
+    requiresTable: false,
+    craftTimeSeconds: 2.0,
+    ingredients: [
+      { itemId: 'raw_hide', quantity: 1 },
+      { itemId: 'tallow', quantity: 1 },
+    ],
+    description: 'Scrape and cure a field-peeled raw hide with rendered tallow into durable leather.',
+  },
+  {
     id: 'craft_sickle',
     resultItemId: 'sickle',
     resultQuantity: 1,
@@ -687,6 +700,46 @@ export const CRAFTING_RECIPES: CraftingRecipe[] = [
 ];
 
 export const COOKING_RECIPES: CookingRecipe[] = [
+  {
+    id: 'cook_seared_backstrap',
+    resultItemId: 'cooked_backstrap',
+    resultQuantity: 1,
+    requiresStation: false,
+    cookTimeSeconds: 13,
+    ingredients: [
+      { itemId: 'backstrap', quantity: 1 },
+      { itemId: 'tallow', quantity: 1 },
+    ],
+    description:
+      'Sear a prime backstrap in rendered tallow. Cooking resets freshness and restores health, stamina, and hunger.',
+  },
+  {
+    id: 'cook_campfire_offal',
+    resultItemId: 'cooked_organs',
+    resultQuantity: 1,
+    requiresStation: false,
+    cookTimeSeconds: 11,
+    ingredients: [
+      { itemId: 'heart', quantity: 1 },
+      { itemId: 'liver', quantity: 1 },
+      { itemId: 'kidneys', quantity: 1 },
+    ],
+    description:
+      'Sear fresh heart, liver, and kidneys together. A rich hunter’s meal that fully resets organ freshness.',
+  },
+  {
+    id: 'cook_bone_broth',
+    resultItemId: 'bone_broth',
+    resultQuantity: 1,
+    requiresStation: false,
+    cookTimeSeconds: 16,
+    ingredients: [
+      { itemId: 'soup_bones', quantity: 2 },
+      { itemId: 'mushrooms', quantity: 1 },
+    ],
+    description:
+      'Simmer cracked marrow bones with forest mushrooms into a restorative broth for health, stamina, hunger, and thirst.',
+  },
   {
     id: 'cook_grilled_meat',
     resultItemId: 'roasted_meat',

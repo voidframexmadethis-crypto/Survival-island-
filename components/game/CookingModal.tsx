@@ -169,7 +169,20 @@ export function CookingModal({
           id === 'roasted_meat' ||
           id === 'cheeseburger' ||
           id === 'dino_feast' ||
-          id === 'hearty_stew',
+          id === 'hearty_stew' ||
+          id === 'heart' ||
+          id === 'liver' ||
+          id === 'kidneys' ||
+          id === 'backstrap' ||
+          id === 'tenderloin' ||
+          id === 'hindquarter_steak' ||
+          id === 'shoulder_roast' ||
+          id === 'ribs' ||
+          id === 'tongue' ||
+          id === 'meat_bag' ||
+          id === 'cooked_backstrap' ||
+          id === 'cooked_organs' ||
+          id === 'bone_broth',
       );
     }
     if (filter === 'fish') {

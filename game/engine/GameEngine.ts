@@ -15,10 +15,27 @@ import {
 import {
   foodFreshnessFor,
   getLostWorldHudState,
+  isPerishableItem,
+  markFoodFresh,
+  markFoodPreserved,
   normalizeLostWorldState,
+  setFoodFreshness,
   syncInventoryFood,
   tickLostWorld,
 } from '../systems/lostWorldSimulation';
+import {
+  FIELD_PROCESSING_STAGE_LABELS,
+  FIELD_PROCESSING_STEP_INFO,
+  applyFieldProcessingStep,
+  buildCarcassYieldPlan,
+  canPerformFieldProcessingStep,
+  createCarcassProcessingState,
+  fieldProcessingDurationMs,
+  nextFieldProcessingStep,
+  remainingYields,
+  stepYields,
+  type FieldProcessingStep,
+} from '../systems/fieldProcessingSystem';
 import {
   buildLostWorldActions,
   performLostWorldAction,
@@ -173,6 +190,7 @@ import {
   CreatureManager,
   ScavengerCarcassTarget,
 } from '../systems/creatureSystem';
+import { GlobalWildlifeSystem } from '../systems/globalWildlifeSystem';
 import {
   ActiveStructureEntity,
   StructureManager,
@@ -272,7 +290,11 @@ import {
   BiomeId,
   BodyZone,
   CampStructureType,
+  CarcassProcessingState,
   CarcassSaveData,
+  FieldProcessingHudState,
+  FieldProcessingStepResult,
+  FieldProcessingYieldView,
   CoasterHudSummaryItem,
   CoasterModelType,
   CoasterSegmentKind,
@@ -809,6 +831,7 @@ interface ActiveCarcass {
   mesh: THREE.Group;
   harvested: boolean;
   owner: 'player' | 'world';
+  processing: CarcassProcessingState;
 }
 
 export interface TvScreenProjection {
@@ -832,6 +855,7 @@ export interface EngineCallbacks {
       | 'cooking'
       | 'chest'
       | 'stove'
+      | 'field_processing'
       | 'fridge'
       | 'farmer'
       | 'tv'
@@ -932,6 +956,7 @@ export class GameEngine {
   private shipModel!: THREE.Group;
   private rainSystem!: RealisticRainSystem;
   private creatures!: CreatureManager;
+  private globalWildlife: GlobalWildlifeSystem | null = null;
   private structureManager!: StructureManager;
 
   private readonly fpsController = new Permanent60FpsController();
@@ -1521,6 +1546,8 @@ export class GameEngine {
   private plantedCrops: PlantedCrop[] = [];
   private cropMeshes = new Map<string, THREE.Group>();
   private fridgeItems: InventorySlot[] = [];
+  private knifeSharpness = 100;
+  private activeProcessingCarcassId: string | null = null;
   private mansionWardrobeItems: InventorySlot[] = [];
   private seatedState: {
     label: string;
@@ -2190,6 +2217,10 @@ export class GameEngine {
     this.rainSystem.group.visible = false;
 
     this.creatures = new CreatureManager(this.scene);
+    this.globalWildlife = new GlobalWildlifeSystem(this.scene, {
+      isTouchDevice: this.isTouchDevice,
+    });
+    this.globalWildlife.setDensity(this.settings.wildlifeDensity ?? 0.75);
     this.structureManager = new StructureManager(this.scene);
     registerDefaultIslandStructures(this.structureManager);
     // Caves stay in the wild: never discover, build or keep an entrance near
@@ -3190,6 +3221,7 @@ export class GameEngine {
   public updateSettings(settings: GameSettings): void {
     this.settings = settings;
     this.sound.configure(settings);
+    this.globalWildlife?.setDensity(settings.wildlifeDensity ?? 0.75);
     this.autoFpsTier = 0;
     this.consecutiveSlowSeconds = 0;
     this.consecutiveFastSeconds = 0;
@@ -3198,6 +3230,7 @@ export class GameEngine {
     this.fpsSampleFrames = 0;
     this.fpsSampleAccumMs = 0;
     this.applyGraphicsProfile();
+    this.emitHud();
   }
 
   private applyGraphicsProfile(): void {
@@ -5396,6 +5429,8 @@ export class GameEngine {
     this.setupStarterEngineeringShowcase(true, true);
 
     this.coins = 150;
+    this.knifeSharpness = 100;
+    this.activeProcessingCarcassId = null;
     this.seatedState = null;
     this.mansionWardrobeItems = [];
     this.fridgeItems = [
@@ -5753,6 +5788,11 @@ export class GameEngine {
             { itemId: 'tomato', quantity: 2 },
           ]
         : [];
+    this.knifeSharpness =
+      typeof save.knifeSharpness === 'number' && Number.isFinite(save.knifeSharpness)
+        ? Math.max(0, Math.min(100, save.knifeSharpness))
+        : 100;
+    this.activeProcessingCarcassId = null;
     this.seatedState = null;
     this.clearPlantedCrops();
     if (Array.isArray(save.plantedCrops)) {
@@ -6066,6 +6106,7 @@ export class GameEngine {
           0,
           undefined,
           c.owner ?? 'player',
+          c.processing,
         );
       });
     }
@@ -6724,6 +6765,7 @@ export class GameEngine {
               drops: c.drops.map((d) => ({ ...d })),
               life: c.life,
               owner: c.owner,
+              processing: { ...c.processing },
             }))
         : [];
 
@@ -6800,6 +6842,7 @@ export class GameEngine {
       completedMissionIds: Array.from(this.completedMissionIds),
       discoveredLocations: Array.from(this.discoveredLocations),
       coins: this.coins,
+      knifeSharpness: this.knifeSharpness,
       gameMode: effectiveMode,
       plantedCrops: this.plantedCrops.map((c) => ({ ...c })),
       fridgeItems: this.fridgeItems.map((s) => ({ ...s })),
@@ -7170,6 +7213,7 @@ export class GameEngine {
     }
 
     this.addItem(recipe.resultItemId, recipe.resultQuantity, false);
+    markFoodFresh(this.lostWorld, recipe.resultItemId);
     this.stats.mealsCooked += 1;
     this.sound.playCookSizzle();
     this.toast(`Cooked ${ITEMS[recipe.resultItemId].name}`, 'craft');
@@ -7230,6 +7274,7 @@ export class GameEngine {
     }
 
     this.addItem(recipe.resultItemId, recipe.resultQuantity, false);
+    markFoodFresh(this.lostWorld, recipe.resultItemId);
     this.stats.mealsCooked += 1;
     this.sound.playCookSizzle();
     if (flipped) {
@@ -7772,6 +7817,7 @@ export class GameEngine {
     const existing = this.fridgeItems.find((s) => s.itemId === itemId);
     if (existing) existing.quantity += qty;
     else this.fridgeItems.push({ itemId, quantity: qty });
+    if (isPerishableItem(itemId)) markFoodPreserved(this.lostWorld, itemId, true);
     this.sound.playPickup();
     this.emitHud();
   }
@@ -7783,6 +7829,7 @@ export class GameEngine {
     this.fridgeItems[idx].quantity -= take;
     if (this.fridgeItems[idx].quantity <= 0) this.fridgeItems.splice(idx, 1);
     this.addItem(itemId, take, false);
+    if (isPerishableItem(itemId)) markFoodFresh(this.lostWorld, itemId);
     this.sound.playPickup();
     this.emitHud();
   }
@@ -9356,9 +9403,7 @@ export class GameEngine {
         return;
       }
       if (near.kind === 'carcass') {
-        this.prepareCarcass(near.id);
-        this.swingTimer = 0.28;
-        this.actionCooldown = 0.32;
+        this.openCarcassProcessing(near.id);
         return;
       }
       if (near.kind === 'pickup') {
@@ -10753,6 +10798,7 @@ export class GameEngine {
     autoCollectDelay = 1.6,
     startY?: number,
     owner: 'player' | 'world' = 'player',
+    processing?: CarcassProcessingState,
   ): void {
     if (this.carcasses.length >= 24) {
       const oldest = this.carcasses.shift();
@@ -10803,7 +10849,27 @@ export class GameEngine {
       mesh,
       harvested: false,
       owner,
+      processing: (() => {
+        const base = createCarcassProcessingState({
+          isDino,
+          meatQuantity: clonedDrops
+            .filter((d) => d.itemId === 'raw_meat' || d.itemId === 'dino_meat')
+            .reduce((sum, d) => sum + d.quantity, 0),
+        });
+        return processing ? { ...base, ...processing } : base;
+      })(),
     });
+    this.refreshCarcassProcessingVisual(this.carcasses[this.carcasses.length - 1]);
+  }
+
+  private refreshCarcassProcessingVisual(carcass: ActiveCarcass): void {
+    const meatCut = carcass.mesh.userData.meatCut as THREE.Mesh | undefined;
+    if (meatCut) {
+      meatCut.visible =
+        carcass.processing.stage === 'skinned' ||
+        carcass.processing.stage === 'butchered';
+    }
+    carcass.mesh.visible = !carcass.processing.loadedVehicleId;
   }
 
   private handleCarcassScavenged(
@@ -10893,16 +10959,36 @@ export class GameEngine {
     }
   }
 
+  private getCarcassInteractionPosition(carcass: ActiveCarcass): {
+    x: number;
+    z: number;
+    loadedVehicleName: string | null;
+  } {
+    const vehicleId = carcass.processing.loadedVehicleId;
+    if (vehicleId) {
+      const vehicle = this.vehicles.find((v) => v.id === vehicleId);
+      if (vehicle) {
+        return { x: vehicle.x, z: vehicle.z, loadedVehicleName: vehicle.name };
+      }
+    }
+    return { x: carcass.x, z: carcass.z, loadedVehicleName: null };
+  }
+
   private findNearbyCarcass(): ActiveCarcass | null {
     const fwdX = -Math.sin(this.camYaw);
     const fwdZ = -Math.cos(this.camYaw);
     let bestCarcass: ActiveCarcass | null = null;
     let bestScore = Infinity;
     for (const c of this.carcasses) {
-      if (c.harvested) continue;
+      if (c.harvested || c.processing.stage === 'butchered') continue;
+      if (c.processing.loadedVehicleId) {
+        const vehicle = this.vehicles.find((v) => v.id === c.processing.loadedVehicleId);
+        if (!vehicle) continue;
+      }
+      const pos = this.getCarcassInteractionPosition(c);
       const maxRange = c.isDino ? 5.4 : 4.6;
-      const dx = c.x - this.playerX;
-      const dz = c.z - this.playerZ;
+      const dx = pos.x - this.playerX;
+      const dz = pos.z - this.playerZ;
       const d = Math.hypot(dx, dz);
       if (d > maxRange) continue;
       const dot = d > 0.001 ? (dx * fwdX + dz * fwdZ) / d : 1;
@@ -10916,24 +11002,348 @@ export class GameEngine {
   }
 
   public collectNearbyCarcass(carcassId?: string): boolean {
+    return this.openCarcassProcessing(carcassId);
+  }
+
+  public openCarcassProcessing(carcassId?: string): boolean {
     this.sound.unlock();
     if (this.mode !== 'playing' || this.gameOver || this.cinematicActive) {
       return false;
     }
-    const target = carcassId
-      ? this.carcasses.find((c) => {
-          if (c.id !== carcassId || c.harvested) return false;
-          const maxRange = c.isDino ? 5.8 : 5.0;
-          return Math.hypot(c.x - this.playerX, c.z - this.playerZ) <= maxRange;
-        }) || null
-      : this.findNearbyCarcass();
+    const target = this.resolveCarcassTarget(carcassId);
     if (!target) {
+      this.toast('Move closer to a downed animal to process the carcass.', 'info');
       this.emitHud();
       return false;
     }
-    this.prepareCarcass(target.id);
+    this.activeProcessingCarcassId = target.id;
+    this.emitHud();
+    this.callbacks.onOpenStation('field_processing', target.id);
+    return true;
+  }
+
+  public closeCarcassProcessing(): void {
+    this.activeProcessingCarcassId = null;
+    this.emitHud();
+  }
+
+  private resolveCarcassTarget(carcassId?: string): ActiveCarcass | null {
+    const target = carcassId
+      ? this.carcasses.find((c) => c.id === carcassId && !c.harvested) || null
+      : this.findNearbyCarcass();
+    if (!target) return null;
+    if (target.processing.loadedVehicleId) {
+      const vehicle = this.vehicles.find(
+        (v) => v.id === target.processing.loadedVehicleId,
+      );
+      if (!vehicle) return null;
+    }
+    const pos = this.getCarcassInteractionPosition(target);
+    const maxRange = target.processing.loadedVehicleId
+      ? 6.5
+      : target.isDino
+        ? 5.8
+        : 5.0;
+    if (Math.hypot(pos.x - this.playerX, pos.z - this.playerZ) > maxRange) {
+      return null;
+    }
+    return target;
+  }
+
+  private hasCarcassKnife(): boolean {
+    return (
+      this.hotbarItemIds[this.equippedSlot] === 'hunting_knife' ||
+      this.getItemCount('hunting_knife') > 0
+    );
+  }
+
+  private carcassYieldViews(
+    yields: { itemId: ItemId; quantity: number; group: FieldProcessingYieldView['group'] }[],
+  ): FieldProcessingYieldView[] {
+    return yields.map((y) => {
+      const def = ITEMS[y.itemId];
+      return {
+        itemId: y.itemId,
+        quantity: y.quantity,
+        group: y.group,
+        weightKg: (def.weightKg ?? 0.25) * y.quantity,
+        sellValue: (def.sellValue ?? ITEM_SELL_PRICES[y.itemId] ?? 0) * y.quantity,
+      };
+    });
+  }
+
+  private buildFieldProcessingHud(carcass: ActiveCarcass): FieldProcessingHudState {
+    const plan = buildCarcassYieldPlan({
+      isDino: carcass.isDino,
+      species: carcass.species,
+      drops: carcass.drops,
+    });
+    const step = nextFieldProcessingStep(carcass.processing.stage);
+    const check = step
+      ? canPerformFieldProcessingStep(
+          carcass.processing,
+          step,
+          this.hasCarcassKnife(),
+          this.knifeSharpness,
+        )
+      : { ok: false, reason: 'Harvest complete.' };
+    const nextStepYields = step
+      ? this.carcassYieldViews(
+          stepYields(step, carcass.processing, plan).map((y) => ({ ...y })),
+        )
+      : [];
+    const remaining = this.carcassYieldViews(
+      remainingYields(carcass.processing, plan).map((y) => ({ ...y })),
+    );
+    const loadedVehicle = carcass.processing.loadedVehicleId
+      ? this.vehicles.find((v) => v.id === carcass.processing.loadedVehicleId) || null
+      : null;
+    let nearVehicle: ModularVehicleData | null = null;
+    let bestDist = 9;
+    for (const v of this.vehicles) {
+      const d = Math.hypot(v.x - this.playerX, v.z - this.playerZ);
+      if (d < bestDist) {
+        bestDist = d;
+        nearVehicle = v;
+      }
+    }
+    const detailed = this.settings.detailedSkinningAnimations !== false;
+    return {
+      carcassId: carcass.id,
+      displayName: carcass.displayName,
+      stage: carcass.processing.stage,
+      stageLabel: FIELD_PROCESSING_STAGE_LABELS[carcass.processing.stage],
+      isDino: carcass.isDino,
+      weightKg: carcass.processing.weightKg,
+      freshness: carcass.processing.freshness,
+      hasKnife: this.hasCarcassKnife(),
+      knifeSharpness: this.knifeSharpness,
+      detailedAnimations: detailed,
+      dragging: carcass.processing.dragging,
+      loadedVehicleId: loadedVehicle?.id ?? null,
+      loadedVehicleName: loadedVehicle?.name ?? null,
+      nearVehicleId: nearVehicle?.id ?? null,
+      nearVehicleName: nearVehicle?.name ?? null,
+      nextStep: step,
+      nextStepLabel: step ? FIELD_PROCESSING_STEP_INFO[step].label : null,
+      nextStepDurationMs: step ? fieldProcessingDurationMs(step, detailed) : 0,
+      nextStepSharpnessCost: step
+        ? FIELD_PROCESSING_STEP_INFO[step].sharpnessCost
+        : 0,
+      nextStepYields,
+      remainingYields: remaining,
+      canPerformNext: Boolean(step && check.ok),
+      blockedReason: check.reason,
+      totalRemainingValue: remaining.reduce((sum, y) => sum + y.sellValue, 0),
+    };
+  }
+
+  public performNextCarcassStep(): FieldProcessingStepResult {
+    const target = this.activeProcessingCarcassId
+      ? this.carcasses.find((c) => c.id === this.activeProcessingCarcassId) || null
+      : this.resolveCarcassTarget();
+    const step = target ? nextFieldProcessingStep(target.processing.stage) : null;
+    if (!target || !step) {
+      return { ok: false, message: 'Nothing left to process.', yields: [], complete: false };
+    }
+    return this.performCarcassStep(step, target.id);
+  }
+
+  public performCarcassStep(
+    step: FieldProcessingStep,
+    carcassId?: string,
+  ): FieldProcessingStepResult {
+    this.sound.unlock();
+    const target = carcassId
+      ? this.carcasses.find((c) => c.id === carcassId && !c.harvested) || null
+      : this.activeProcessingCarcassId
+        ? this.carcasses.find((c) => c.id === this.activeProcessingCarcassId) || null
+        : this.resolveCarcassTarget();
+    if (!target) {
+      return { ok: false, message: 'Move closer to the carcass.', yields: [], complete: false };
+    }
+    const hasKnife = this.hasCarcassKnife();
+    const check = canPerformFieldProcessingStep(
+      target.processing,
+      step,
+      hasKnife,
+      this.knifeSharpness,
+    );
+    if (!check.ok) {
+      this.toast(check.reason ?? 'Cannot process this carcass yet.', 'warning');
+      return {
+        ok: false,
+        message: check.reason ?? 'Cannot process this carcass yet.',
+        yields: [],
+        complete: false,
+      };
+    }
+
+    const info = FIELD_PROCESSING_STEP_INFO[step];
+    const plan = buildCarcassYieldPlan({
+      isDino: target.isDino,
+      species: target.species,
+      drops: target.drops,
+    });
+    const applied = applyFieldProcessingStep(target.processing, step, plan);
+    target.processing = applied.state;
+    this.knifeSharpness = Math.max(0, this.knifeSharpness - info.sharpnessCost);
+    const yieldViews = this.carcassYieldViews(applied.yields);
+    for (let i = 0; i < applied.yields.length; i++) {
+      const y = applied.yields[i];
+      this.addItem(y.itemId, y.quantity, false);
+      if (isPerishableItem(y.itemId)) {
+        setFoodFreshness(this.lostWorld, y.itemId, target.processing.freshness);
+      }
+    }
+
+    if (step === 'field_dress') {
+      target.life = Math.max(target.life, 1200);
+    } else if (step === 'skin') {
+      target.life = Math.max(target.life, 1800);
+    }
     this.swingTimer = 0.28;
-    this.actionCooldown = 0.32;
+    this.actionCooldown = 0.3;
+    this.sound.playPrepareCarcass();
+    this.spawnParticles(
+      target.x,
+      target.y + (target.isDino ? 0.6 : 0.3),
+      target.z,
+      step === 'skin' ? 0xd6d3d1 : 0xdc2626,
+      target.isDino ? 12 : 7,
+    );
+
+    const complete = applied.complete;
+    if (complete) {
+      if (this.activeProcessingCarcassId === target.id) {
+        this.activeProcessingCarcassId = null;
+      }
+      target.harvested = true;
+      target.processing.dragging = false;
+      this.scene.remove(target.mesh);
+      this.disposeObject3D(target.mesh);
+      const idx = this.carcasses.findIndex((c) => c.id === target.id);
+      if (idx !== -1) this.carcasses.splice(idx, 1);
+    } else {
+      this.refreshCarcassProcessingVisual(target);
+    }
+
+    const summary = yieldViews
+      .map((y) => `+${y.quantity} ${ITEMS[y.itemId].name}`)
+      .join(', ');
+    const message = summary
+      ? `${info.label} complete: ${summary}`
+      : `${info.label} complete.`;
+    this.toast(message, 'gain');
+    this.evaluateMissions();
+    this.emitHud();
+    return { ok: true, message, yields: yieldViews, complete };
+  }
+
+  public toggleCarcassDrag(carcassId?: string): boolean {
+    const target = carcassId
+      ? this.carcasses.find((c) => c.id === carcassId && !c.harvested) || null
+      : this.activeProcessingCarcassId
+        ? this.carcasses.find((c) => c.id === this.activeProcessingCarcassId) || null
+        : this.resolveCarcassTarget();
+    if (!target) {
+      this.toast('No carcass within reach to drag.', 'info');
+      return false;
+    }
+    if (target.processing.loadedVehicleId) {
+      this.toast('Unload the carcass from the vehicle before dragging it.', 'warning');
+      return false;
+    }
+    if (target.processing.stage === 'whole') {
+      this.toast('Field dress the carcass first to make it safe and light enough to drag.', 'warning');
+      return false;
+    }
+    target.processing.dragging = !target.processing.dragging;
+    this.activeProcessingCarcassId = target.id;
+    this.toast(
+      target.processing.dragging
+        ? `Dragging ${target.displayName} (movement slowed).`
+        : `Released ${target.displayName}.`,
+      'info',
+    );
+    this.emitHud();
+    return true;
+  }
+
+  public loadCarcassIntoVehicle(carcassId?: string): boolean {
+    const target = carcassId
+      ? this.carcasses.find((c) => c.id === carcassId && !c.harvested) || null
+      : this.activeProcessingCarcassId
+        ? this.carcasses.find((c) => c.id === this.activeProcessingCarcassId) || null
+        : this.resolveCarcassTarget();
+    if (!target) return false;
+    if (target.processing.stage === 'whole') {
+      this.toast('Field dress the carcass before loading it into a vehicle.', 'warning');
+      return false;
+    }
+    let nearest: ModularVehicleData | null = null;
+    let best = 9;
+    for (const v of this.vehicles) {
+      const d = Math.hypot(v.x - this.playerX, v.z - this.playerZ);
+      if (d < best) {
+        best = d;
+        nearest = v;
+      }
+    }
+    if (!nearest) {
+      this.toast('Drive a truck or vehicle close to the carcass to load it.', 'warning');
+      return false;
+    }
+    target.processing.loadedVehicleId = nearest.id;
+    target.processing.dragging = false;
+    target.life = Math.max(target.life, 2400);
+    target.x = nearest.x;
+    target.z = nearest.z;
+    target.mesh.visible = false;
+    this.toast(`Loaded ${target.displayName} into ${nearest.name}.`, 'gain');
+    this.emitHud();
+    return true;
+  }
+
+  public unloadCarcassFromVehicle(carcassId?: string): boolean {
+    const target = carcassId
+      ? this.carcasses.find((c) => c.id === carcassId && !c.harvested) || null
+      : this.activeProcessingCarcassId
+        ? this.carcasses.find((c) => c.id === this.activeProcessingCarcassId) || null
+        : null;
+    if (!target || !target.processing.loadedVehicleId) return false;
+    target.processing.loadedVehicleId = undefined;
+    target.x = this.playerX + Math.sin(this.camYaw) * 1.8;
+    target.z = this.playerZ + Math.cos(this.camYaw) * 1.8;
+    target.y = Math.max(
+      getTerrainHeight(target.x, target.z),
+      getWaterLevelAt(target.x, target.z) - 0.15,
+    );
+    target.mesh.position.set(target.x, target.y, target.z);
+    target.mesh.visible = true;
+    this.toast(`Unloaded ${target.displayName} from the vehicle.`, 'gain');
+    this.emitHud();
+    return true;
+  }
+
+  public sharpenHuntingKnife(): boolean {
+    if (!this.hasCarcassKnife()) {
+      this.toast('You need a hunting knife to hone.', 'warning');
+      return false;
+    }
+    if (this.knifeSharpness >= 95) {
+      this.toast('Your knife is already razor sharp.', 'info');
+      return false;
+    }
+    if (this.getItemCount('stone') <= 0) {
+      this.toast('Need 1 Volcanic Stone to hone the blade.', 'warning');
+      return false;
+    }
+    this.removeItem('stone', 1);
+    this.knifeSharpness = Math.min(100, this.knifeSharpness + 40);
+    this.swingTimer = 0.2;
+    this.toast(`Knife honed to ${Math.round(this.knifeSharpness)}% sharpness.`, 'craft');
+    this.emitHud();
     return true;
   }
 
@@ -12556,6 +12966,9 @@ export class GameEngine {
                 : analogWalkSpeed) *
         (this.modSystem?.tweaks.moveSpeedMultiplier ?? 1) *
         tikiSpeedMult;
+    if (this.carcasses.some((c) => c.processing.dragging)) {
+      baseSpeed *= 0.46;
+    }
 
     if (this.flightAndTeleport.flying) {
       const ascendInput =
@@ -16464,9 +16877,35 @@ export class GameEngine {
     // Update collapse physics, aerial drops, settle timers, scavenge cooldowns, and expiration on animal carcasses
     for (let i = this.carcasses.length - 1; i >= 0; i--) {
       const c = this.carcasses[i];
+      const loadedVehicleId = c.processing.loadedVehicleId;
+      if (c.processing.dragging && !loadedVehicleId && !this.activeVehicleId) {
+        const backDist = c.isDino ? 2.2 : 1.35;
+        const targetX = this.playerX + Math.sin(this.camYaw) * backDist;
+        const targetZ = this.playerZ + Math.cos(this.camYaw) * backDist;
+        const follow = Math.min(1, dt * 10);
+        c.x += (targetX - c.x) * follow;
+        c.z += (targetZ - c.z) * follow;
+        c.y = Math.max(getTerrainHeight(c.x, c.z), getWaterLevelAt(c.x, c.z) - 0.15);
+        c.mesh.position.set(c.x, c.y, c.z);
+        c.mesh.rotation.y = this.playerYaw;
+      }
       const cdx = c.x - this.playerX;
       const cdz = c.z - this.playerZ;
-      c.mesh.visible = inOverworld && (cdx * cdx + cdz * cdz <= maxDrawSq);
+      c.mesh.visible =
+        inOverworld &&
+        !loadedVehicleId &&
+        (cdx * cdx + cdz * cdz <= maxDrawSq);
+      if (!loadedVehicleId && c.processing.stage !== 'butchered') {
+        const decay = c.processing.dragging
+          ? 0.00028
+          : c.processing.stage === 'whole'
+            ? 0.0026
+            : 0.00038;
+        c.processing.freshness = Math.max(
+          0,
+          c.processing.freshness - dt * decay,
+        );
+      }
       if (c.currentY !== undefined && c.currentY > c.y) {
         c.fallYVel = (c.fallYVel ?? 0) + 18 * dt;
         c.currentY = Math.max(c.y, c.currentY - c.fallYVel * dt);
@@ -16497,6 +16936,9 @@ export class GameEngine {
       }
       c.life -= dt;
       if (c.life <= 0) {
+        if (this.activeProcessingCarcassId === c.id) {
+          this.activeProcessingCarcassId = null;
+        }
         this.scene.remove(c.mesh);
         this.disposeObject3D(c.mesh);
         this.carcasses.splice(i, 1);
@@ -17522,17 +17964,21 @@ export class GameEngine {
       ? {
           id: nearbyCarcassNode.id,
           displayName: nearbyCarcassNode.displayName,
-          summary:
-            nearbyCarcassNode.drops
-              .filter((d) => d.quantity > 0)
-              .map((d) => `${d.quantity}× ${ITEMS[d.itemId].name}`)
-              .join(' · ') || 'Meat & Hide',
-          hasKnife: this.getItemCount('hunting_knife') > 0,
-          distance: Math.hypot(
-            nearbyCarcassNode.x - this.playerX,
-            nearbyCarcassNode.z - this.playerZ,
-          ),
+          summary: `${FIELD_PROCESSING_STAGE_LABELS[nearbyCarcassNode.processing.stage]} · ${nearbyCarcassNode.processing.weightKg.toFixed(1)} kg · ${Math.round(
+            nearbyCarcassNode.processing.freshness * 100,
+          )}% fresh`,
+          hasKnife: this.hasCarcassKnife(),
+          distance: (() => {
+            const pos = this.getCarcassInteractionPosition(nearbyCarcassNode);
+            return Math.hypot(pos.x - this.playerX, pos.z - this.playerZ);
+          })(),
         }
+      : null;
+    const processingNode = this.activeProcessingCarcassId
+      ? this.carcasses.find((c) => c.id === this.activeProcessingCarcassId) || null
+      : nearbyCarcassNode;
+    const fieldProcessing = processingNode
+      ? this.buildFieldProcessingHud(processingNode)
       : null;
 
     let maxStructStress = 0;
@@ -17934,6 +18380,8 @@ export class GameEngine {
         this.restorationFacility,
       ),
       nearbyCarcass,
+      fieldProcessing,
+      knifeSharpness: Math.round(this.knifeSharpness),
       inventory: this.cachedHudInventory,
       hotbarItemIds: [...this.hotbarItemIds],
       equippedSlot: this.equippedSlot,
@@ -23207,6 +23655,12 @@ export class GameEngine {
             this._onCarcassScavenged,
           );
           nocturnalActiveCount = creatureCycle.nocturnalActiveCount;
+
+          this.globalWildlife?.update(dt, this.elapsed, this.playerX, this.playerZ, {
+            sprinting: this.isSprinting,
+            crouching: this.isCrouching,
+            onPlayerDamaged: this._onCreatureDamage,
+          });
 
           this.structureManager.update(
             { x: this.playerX, y: this.playerY, z: this.playerZ },
@@ -29914,6 +30368,7 @@ export class GameEngine {
     this.waterpark?.setVisible(showIsland);
     this.realisticOcean?.setVisible(showIsland);
     this.creatures?.setOverworldActive(showIsland);
+    this.globalWildlife?.setVisible(showIsland);
     this.structureManager?.setDimensionVisible(showIsland);
     for (const v of this.structureVisuals.values()) v.group.visible = active;
     for (const m of this.structuralMeshes.values()) m.visible = active;
@@ -30813,6 +31268,8 @@ export class GameEngine {
     this.beeReturnAnchor = null;
     this.activeCaveBosses.clear();
     this.creatures?.dispose();
+    this.globalWildlife?.dispose();
+    this.globalWildlife = null;
     this.structureManager?.hibernateAll();
     this.realisticOcean?.dispose();
     this.world?.dispose();

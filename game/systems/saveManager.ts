@@ -142,6 +142,8 @@ export const DEFAULT_SETTINGS: GameSettings = {
   particlesEnabled: true,
   drawDistance: 'medium',
   dynamicAutoFps: true,
+  wildlifeDensity: 0.75,
+  detailedSkinningAnimations: true,
   tvSafetyMode: 'auto',
   touchControlsMode: 'auto',
   cameraSensitivity: 1.0,
@@ -216,6 +218,13 @@ export function loadSettings(): GameSettings {
     }
     if (parsed.drawDistance === undefined) merged.drawDistance = prof.drawDistance;
     if (merged.dynamicAutoFps === undefined) merged.dynamicAutoFps = true;
+    if (typeof merged.wildlifeDensity !== 'number' || !Number.isFinite(merged.wildlifeDensity)) {
+      merged.wildlifeDensity = 0.75;
+    }
+    merged.wildlifeDensity = Math.max(0, Math.min(1, merged.wildlifeDensity));
+    if (merged.detailedSkinningAnimations === undefined) {
+      merged.detailedSkinningAnimations = true;
+    }
     if (
       merged.tvSafetyMode !== 'auto' &&
       merged.tvSafetyMode !== 'safe_mini' &&

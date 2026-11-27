@@ -36,6 +36,7 @@ import {
   GitCommitHorizontal,
   GlassWater,
   Hammer,
+  Heart,
   Home,
   Layers,
   Leaf,
@@ -52,6 +53,7 @@ import {
   Shield,
   ShieldAlert,
   ShieldPlus,
+  Skull,
   Soup,
   Sparkles,
   Sprout,
@@ -195,9 +197,46 @@ export function ItemIcon({
     case 'fish':
       return <Fish {...props} />;
     case 'hide':
+    case 'pelt':
       return <Shield {...props} />;
     case 'bone':
+    case 'ribs':
+    case 'marrow':
+    case 'soup_bones':
       return <Bone {...props} />;
+    case 'organ_heart':
+      return <Heart {...props} />;
+    case 'organ_liver':
+    case 'backstrap':
+    case 'tenderloin':
+    case 'steak':
+    case 'tongue':
+    case 'cooked_backstrap':
+      return <Beef {...props} />;
+    case 'organ_kidney':
+      return <CircleDot {...props} />;
+    case 'roast':
+      return <Utensils {...props} />;
+    case 'tallow':
+      return <Droplet {...props} />;
+    case 'sinew':
+      return <GitCommitHorizontal {...props} />;
+    case 'antlers':
+      return <Trees {...props} />;
+    case 'horns':
+      return <Mountain {...props} />;
+    case 'tusks':
+      return <Gem {...props} />;
+    case 'teeth_claws':
+      return <Skull {...props} />;
+    case 'raw_hide':
+      return <Layers {...props} />;
+    case 'meat_bag':
+      return <Package {...props} />;
+    case 'cooked_organs':
+      return <CookingPot {...props} />;
+    case 'bone_broth':
+      return <Soup {...props} />;
     case 'axe':
       return <Axe {...props} />;
     case 'pickaxe':
