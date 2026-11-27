@@ -244,11 +244,27 @@ function hydrateCustomPhoneOnce(): void {
     const raw = window.localStorage.getItem(CUSTOM_PHONE_STORAGE_KEY);
     if (!raw) return;
     const parsed = JSON.parse(raw) as Partial<CustomPhoneMarketplaceState>;
+    const skins = Array.isArray(parsed.skins) ? parsed.skins : [];
+    // Equipped IDs are cosmetic selections, not entitlements. Restore them only
+    // while the matching local skin still exists; getEquippedBackpackSkin()
+    // still verifies ownership before applying one.
+    const equippedBackpackId =
+      typeof parsed.equippedBackpackId === 'string' &&
+      skins.some(
+        (skin) => skin.id === parsed.equippedBackpackId && skin.category === 'backpack',
+      )
+        ? parsed.equippedBackpackId
+        : null;
+    const equippedWeaponId =
+      typeof parsed.equippedWeaponId === 'string' &&
+      skins.some((skin) => skin.id === parsed.equippedWeaponId && skin.category === 'weapon')
+        ? parsed.equippedWeaponId
+        : null;
     cachedCustomPhoneState = {
-      skins: Array.isArray(parsed.skins) ? parsed.skins : [],
+      skins,
       unlockedIds: [], // Paid unlocks are never persisted solely in unverified localStorage
-      equippedBackpackId: null,
-      equippedWeaponId: null,
+      equippedBackpackId,
+      equippedWeaponId,
     };
   } catch {
     // Ignore storage errors
@@ -263,8 +279,8 @@ function saveCustomPhoneState(): void {
       JSON.stringify({
         skins: cachedCustomPhoneState.skins,
         unlockedIds: [],
-        equippedBackpackId: null,
-        equippedWeaponId: null,
+        equippedBackpackId: cachedCustomPhoneState.equippedBackpackId,
+        equippedWeaponId: cachedCustomPhoneState.equippedWeaponId,
       }),
     );
   } catch {
@@ -346,6 +362,7 @@ export function equipCustomMarketplaceSkin(
       equippedWeaponId: nextId,
     };
   }
+  saveCustomPhoneState();
   notify();
   return getCustomMarketplaceSnapshot();
 }
@@ -443,13 +460,9 @@ export function getEquippedGunSkinForWeapon(
 }
 
 export function getEquippedBackpackSkin(): ExchangeProduct | null {
-  if (cachedState.equippedBackpackSkinId) {
-    const prod = getExchangeItemById(cachedState.equippedBackpackSkinId);
-    if (prod && isProductOwnedByActiveAccount(prod)) {
-      return prod;
-    }
-  }
-
+  // A newly imported pack is the player's most recent explicit choice. Check
+  // it before the server loadout so importing a local skin always takes effect,
+  // even if the account still has an older store backpack equipped.
   if (cachedCustomPhoneState.equippedBackpackId) {
     const customPack = cachedCustomPhoneState.skins.find(
       (s) => s.id === cachedCustomPhoneState.equippedBackpackId && s.category === 'backpack',
@@ -460,6 +473,13 @@ export function getEquippedBackpackSkin(): ExchangeProduct | null {
         (cachedState.authenticated && cachedState.ownedProductIds.includes(customPack.id)))
     ) {
       return toExchangeProductFromSkinCatalogItem(customPack);
+    }
+  }
+
+  if (cachedState.equippedBackpackSkinId) {
+    const prod = getExchangeItemById(cachedState.equippedBackpackSkinId);
+    if (prod && isProductOwnedByActiveAccount(prod)) {
+      return prod;
     }
   }
 
@@ -716,6 +736,17 @@ export async function equipExchangeProduct(
       authRequired: Boolean(data.authRequired),
       error: data.error || 'Could not update equipped cosmetic.',
     };
+  }
+
+  // Equipping a store backpack is also an explicit override of any locally
+  // imported pack, so keep only one backpack source active.
+  if (action === 'equip') {
+    const product = getExchangeItemById(productId);
+    if (product?.category === 'backpack_skin' && cachedCustomPhoneState.equippedBackpackId) {
+      cachedCustomPhoneState = { ...cachedCustomPhoneState, equippedBackpackId: null };
+      saveCustomPhoneState();
+      notify();
+    }
   }
   return { ok: true };
 }

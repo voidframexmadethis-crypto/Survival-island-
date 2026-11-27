@@ -18,6 +18,7 @@ import {
   Shield,
   Sparkles,
   Trash2,
+  UserRound,
   Utensils,
   X,
 } from 'lucide-react';
@@ -32,8 +33,9 @@ import {
   subscribeExchangeState,
 } from '@/game/systems/exchangeManager';
 import { ItemIcon } from './ItemIcon';
+import { PlayerInventoryTab } from './PlayerInventoryTab';
 
-type BackpackTab = 'inventory' | 'crafting' | 'equipment' | 'resources';
+type BackpackTab = 'player' | 'inventory' | 'crafting' | 'equipment' | 'resources';
 
 const RESOURCE_ORDER: ItemId[] = [
   'wood',
@@ -111,7 +113,7 @@ export function InventoryModal({
   onClose,
 }: InventoryModalProps) {
   const [exchangeState, setExchangeState] = useState(() => getExchangeStateSnapshot());
-  const [activeTab, setActiveTab] = useState<BackpackTab>('inventory');
+  const [activeTab, setActiveTab] = useState<BackpackTab>('player');
   const [selectedItemId, setSelectedItemId] = useState<ItemId | null>(
     hud.inventory[0]?.itemId || null,
   );
@@ -261,6 +263,11 @@ export function InventoryModal({
 
   const tabs: { id: BackpackTab; label: string; icon: React.ReactNode }[] = [
     {
+      id: 'player',
+      label: 'Player',
+      icon: <UserRound className="w-4 h-4" />,
+    },
+    {
       id: 'inventory',
       label: 'Inventory',
       icon: <Backpack className="w-4 h-4" />,
@@ -347,6 +354,18 @@ export function InventoryModal({
         </div>
 
         {/* Tab Bodies */}
+        {activeTab === 'player' && (
+          <PlayerInventoryTab
+            hud={hud}
+            onSelectHotbarSlot={onSelectHotbarSlot}
+            onInspectItem={(itemId) => {
+              setSelectedItemId(itemId);
+              setActiveTab('inventory');
+            }}
+            onCosmeticsChanged={onCosmeticsChanged}
+          />
+        )}
+
         {activeTab === 'inventory' && (
           <div className="flex-1 overflow-y-auto survival-scroll grid grid-cols-1 md:grid-cols-12">
             {/* Explorer Inventory Grid */}
