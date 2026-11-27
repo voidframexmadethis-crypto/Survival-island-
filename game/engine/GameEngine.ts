@@ -899,6 +899,17 @@ const FREEZE_SHIELD = {
   maxActiveVines: 120, // Hard cap so vine & extra ambient updates never snowball
 } as const;
 
+/** Survival health ceiling. Sandbox/Flat creative modes still use 9999. */
+const SURVIVAL_MAX_HEALTH = 200;
+/** Only a short pause after a hit: the player should visibly recover during a fight. */
+const HEALTH_REGEN_DELAY_SECONDS = 1.2;
+/** Fast out-of-combat recovery while the player still has food or water. */
+const HEALTH_REGEN_WELL_FED_PER_SECOND = 14;
+/** Base recovery even when hunger or thirst is low. */
+const HEALTH_REGEN_BASE_PER_SECOND = 9;
+/** Emergency recovery below 30% health. */
+const HEALTH_REGEN_CRITICAL_PER_SECOND = 24;
+
 export class GameEngine {
   private container: HTMLElement;
   private callbacks: EngineCallbacks;
@@ -1412,9 +1423,10 @@ export class GameEngine {
   private lostWorldCinematicSubtitle = '';
   private lostWorldAlertCooldown = 0;
   private lostWorldLastAlert = '';
+  private healthRegenDelay = 0;
   private vitals: PlayerVitals = {
-    health: 100,
-    maxHealth: 100,
+    health: SURVIVAL_MAX_HEALTH,
+    maxHealth: SURVIVAL_MAX_HEALTH,
     hunger: 100,
     maxHunger: 100,
     thirst: 100,
@@ -5039,9 +5051,12 @@ export class GameEngine {
         'discovery',
       );
     } else {
-      this.vitals.maxHealth = 100;
-      this.vitals.health = Math.min(100, this.vitals.health);
-      this.toast('Survival Mode active: Biological survival, Fluid Erosion & Blood Moon Sieges', 'discovery');
+      this.vitals.maxHealth = SURVIVAL_MAX_HEALTH;
+      this.vitals.health = Math.min(SURVIVAL_MAX_HEALTH, this.vitals.health);
+      this.toast(
+        `Survival Mode active: ${SURVIVAL_MAX_HEALTH} max health, biological survival, Fluid Erosion & Blood Moon Sieges`,
+        'discovery',
+      );
     }
     this.emitHud();
   }
@@ -5323,8 +5338,8 @@ export class GameEngine {
     this.currentEyeHeight = 1.62;
 
     this.vitals = {
-      health: nextMode === 'sandbox' ? 9999 : 100,
-      maxHealth: nextMode === 'sandbox' ? 9999 : 100,
+      health: nextMode === 'sandbox' ? 9999 : SURVIVAL_MAX_HEALTH,
+      maxHealth: nextMode === 'sandbox' ? 9999 : SURVIVAL_MAX_HEALTH,
       hunger: 100,
       maxHunger: 100,
       thirst: 100,
@@ -5333,6 +5348,7 @@ export class GameEngine {
       maxStamina: 100,
       temperatureC: 37.0,
     };
+    this.healthRegenDelay = 0;
     this.dayCount = 1;
     this.timeOfDay = 0.278;
     this.lastIsNight = false;
@@ -5742,9 +5758,24 @@ export class GameEngine {
     this.camYaw = this.playerYaw - Math.PI;
     this.camPitch = save.player.pitch ?? -0.05;
     this.snapPlayerCamera();
+    const loadedMaxHealth =
+      loadedWorldType === 'flat'
+        ? 9999
+        : Math.max(
+            SURVIVAL_MAX_HEALTH,
+            save.player.vitals.maxHealth ?? SURVIVAL_MAX_HEALTH,
+          );
+    const loadedHealth =
+      loadedWorldType === 'flat'
+        ? 9999
+        : Math.min(
+            loadedMaxHealth,
+            save.player.vitals.health ?? loadedMaxHealth,
+          );
+    this.healthRegenDelay = 0;
     this.vitals = {
-      health: loadedWorldType === 'flat' ? 9999 : (save.player.vitals.health ?? 100),
-      maxHealth: loadedWorldType === 'flat' ? 9999 : (save.player.vitals.maxHealth ?? 100),
+      health: loadedHealth,
+      maxHealth: loadedMaxHealth,
       hunger: loadedWorldType === 'flat' ? 100 : (save.player.vitals.hunger ?? 100),
       maxHunger: save.player.vitals.maxHunger ?? 100,
       thirst: loadedWorldType === 'flat' ? 100 : (save.player.vitals.thirst ?? 100),
@@ -6187,7 +6218,8 @@ export class GameEngine {
         : PLAYER_SPAWN.z;
     const respawnSurfY = this.getPlayerGroundSurfaceY(this.playerX, this.playerZ, 30);
     this.applyPlayerGroundCollision(respawnSurfY, 0, false, false);
-    this.vitals.health = 100;
+    this.vitals.health = this.vitals.maxHealth;
+    this.healthRegenDelay = 0;
     this.vitals.hunger = Math.max(55, this.vitals.hunger);
     this.vitals.thirst = Math.max(55, this.vitals.thirst);
     this.vitals.stamina = 100;
@@ -9786,6 +9818,7 @@ export class GameEngine {
     }
 
     this.vitals.health = Math.max(0, this.vitals.health - dmg);
+    this.healthRegenDelay = HEALTH_REGEN_DELAY_SECONDS;
     this.hurtFlash = 0.42;
     this.sound.playHurt();
     this.toast(`${sourceName} hit you (-${dmg} HP)!`, 'warning');
@@ -12896,24 +12929,39 @@ export class GameEngine {
         }
       }
 
-      // Totem of Undying rapid regeneration OR modest well-fed passive healing
+      // Totem of Undying burst healing, then delayed passive recovery. The
+      // delay keeps combat dangerous while ensuring the player always recovers
+      // from non-fatal damage once they break away.
       if (this.totemRegenTimer > 0) {
         this.totemRegenTimer = Math.max(0, this.totemRegenTimer - dt);
         this.vitals.health = Math.min(
           this.vitals.maxHealth,
           this.vitals.health + dt * 15,
         );
-      } else if (this.vitals.health <= 25) {
-        this.checkAndTriggerTotemOfUndying();
-      } else if (
-        this.vitals.health < this.vitals.maxHealth &&
-        this.vitals.hunger > 75 &&
-        this.vitals.thirst > 65
-      ) {
-        this.vitals.health = Math.min(
-          this.vitals.maxHealth,
-          this.vitals.health + dt * 0.45,
-        );
+      } else {
+        if (this.vitals.health <= 25) {
+          this.checkAndTriggerTotemOfUndying();
+        }
+        if (this.healthRegenDelay > 0) {
+          this.healthRegenDelay = Math.max(0, this.healthRegenDelay - dt);
+        }
+        if (
+          this.healthRegenDelay <= 0 &&
+          this.vitals.health < this.vitals.maxHealth
+        ) {
+          const critical = this.vitals.health <= this.vitals.maxHealth * 0.3;
+          const wellFed =
+            this.vitals.hunger > 40 && this.vitals.thirst > 30;
+          const regenPerSecond = critical
+            ? HEALTH_REGEN_CRITICAL_PER_SECOND
+            : wellFed
+              ? HEALTH_REGEN_WELL_FED_PER_SECOND
+              : HEALTH_REGEN_BASE_PER_SECOND;
+          this.vitals.health = Math.min(
+            this.vitals.maxHealth,
+            this.vitals.health + dt * regenPerSecond,
+          );
+        }
       }
     }
 
@@ -22518,7 +22566,10 @@ export class GameEngine {
     if (result.ok) {
       this.coins -= upgrade.price;
       if (id === 'kevlar_liners') {
-        this.vitals.maxHealth = Math.max(this.vitals.maxHealth, 120);
+        this.vitals.maxHealth = Math.max(
+          this.vitals.maxHealth,
+          SURVIVAL_MAX_HEALTH + 20,
+        );
         this.vitals.health = Math.min(this.vitals.maxHealth, this.vitals.health + 20);
       }
       if (id === 'armory_bench') {
@@ -29849,6 +29900,7 @@ export class GameEngine {
     } else if (packet.type === 'player_hit') {
       if (packet.targetPeerId === this.p2p.localPeerId && this.p2p.pvpEnabled && !this.gameOver) {
         this.vitals.health = Math.max(0, this.vitals.health - packet.damage);
+        this.healthRegenDelay = HEALTH_REGEN_DELAY_SECONDS;
         this.hurtFlash = 0.45;
         this.sound.playHurt();
         this.toast(`${packet.attackerName} shot you (-${packet.damage} HP)!`, 'warning');
@@ -30656,6 +30708,7 @@ export class GameEngine {
     this.sound.unlock();
     this.sound.playExplosion();
     this.vitals.health = Math.max(10, this.vitals.health - 45);
+    this.healthRegenDelay = HEALTH_REGEN_DELAY_SECONDS;
     this.spawnParticles(this.playerX, this.playerY + 1.5, this.playerZ, 0xff5500, 26);
     this.toast(
       `SOLAR CORONA BURN! You burned up approaching ${starName} (-45 HP)! Emergency abort to pad!`,

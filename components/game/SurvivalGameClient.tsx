@@ -2084,6 +2084,7 @@ export function SurvivalGameClient() {
                     icon={<Heart className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-red-400" />}
                     label="Health"
                     value={hud.vitals.health}
+                    max={hud.vitals.maxHealth}
                     barColor="bg-red-500"
                   />
                   {(hud.totemRegenSeconds ?? 0) > 0 && (
@@ -5537,14 +5538,18 @@ function VitalBar({
   icon,
   label,
   value,
+  max = 100,
   barColor,
 }: {
   icon: React.ReactNode;
   label: string;
   value: number;
+  max?: number;
   barColor: string;
 }) {
-  const pct = Math.max(0, Math.min(100, value));
+  const pct =
+    max > 0 ? Math.max(0, Math.min(100, (value / max) * 100)) : 0;
+  const displayValue = max > 999 ? Math.round(pct) : Math.round(value);
   return (
     <div className="flex items-center gap-1.5">
       <div className="shrink-0" aria-label={label}>
@@ -5556,8 +5561,8 @@ function VitalBar({
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className="w-6 text-right text-[10px] sm:text-[11px] font-mono-tabular text-stone-200">
-        {Math.round(pct)}
+      <span className="w-8 text-right text-[10px] sm:text-[11px] font-mono-tabular text-stone-200">
+        {displayValue}
       </span>
     </div>
   );
