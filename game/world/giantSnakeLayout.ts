@@ -12,15 +12,15 @@ import { getTerrainSurfaceHeight } from './terrain';
  *   through the station and up the enormous return spike, then relaunches over
  *   the top hat into the main circuit. The runtime scripts that swing launch
  *   from the four survey markers exported below.
- * - The loop remains one closed circuit for save/editor compatibility. The
- *   backward spike is the final element before the brake run, so a reverse
- *   move from the launch naturally reaches it through the station.
+ * - The main loop closes through the station. The 46 m swing spike is a
+ *   separate dead-end spur beside the transfer table and is never joined back
+ *   into the circuit; the runtime scripts the train up and down it.
  * - Heights and speeds follow a 46 m / 119 km/h modern launch-coaster envelope.
  */
 export const GIANT_SNAKE_ID = 'giant_snake';
 export const GIANT_SNAKE_NAME = 'THE GIANT SNAKE';
 export const GIANT_SNAKE_THEME_TAG = 'giant_snake';
-export const GIANT_SNAKE_LAYOUT_TAG = 'giant_snake_swing_v1';
+export const GIANT_SNAKE_LAYOUT_TAG = 'giant_snake_swing_v2';
 export const GIANT_SNAKE_HEIGHT_M = 46;
 
 /** Modern multi-launch envelope: 33 m/s is 119 km/h. */
@@ -63,8 +63,12 @@ export interface GiantSnakeSwingLaunch {
   switchStop: { x: number; y: number; z: number };
   /** Lead car stalls partway up the first top hat. */
   forwardStall: { x: number; y: number; z: number };
-  /** Lead car reaches the crest of the return spike while travelling backwards. */
+  /** Foot of the dead-end vertical spike, beside the switch. */
+  spikeBase: { x: number; y: number; z: number };
+  /** Lead car reaches the crest of the dead-end spike while travelling backwards. */
   spikeApex: { x: number; y: number; z: number };
+  /** The spike is a separate spur and is never joined back into the circuit. */
+  spikeNodes: { x: number; y: number; z: number }[];
   /** The relaunch hands control back to the gravity simulation here. */
   release: { x: number; y: number; z: number };
   switchTravelM: number;
@@ -266,24 +270,6 @@ class TrackBuilder {
   }
 
   /**
-   * A huge return spike at the end of the circuit. The train approaches it
-   * forward on a lap and climbs it backward during the swing launch.
-   */
-  returnSpike(
-    height: number,
-    climbLength: number,
-    topRadius: number,
-    dropLength: number,
-    topBank: number,
-    direction: 1 | -1 = 1,
-  ): void {
-    this.slope(climbLength, height - this.y, 'lsm_launch', 18, 24);
-    this.markers.spikeApex = { x: this.x, y: this.y, z: this.z };
-    this.hairpin(topRadius, topBank, direction);
-    this.slope(dropLength, 5.5 - this.y, 'coast', undefined, 24);
-  }
-
-  /**
    * A 180-degree hairpin. `direction` mirrors the arc so every switchback leg
    * shifts to the same side of the plot: away from the station.
    */
@@ -348,6 +334,51 @@ class TrackBuilder {
           segmentType: 'inversion',
         } satisfies SavedCoasterNode;
       }),
+    );
+  }
+
+  /**
+   * A steep vertical twist: the rails rise hard, roll through a full 360 and
+   * drop away on the far side. Used immediately after the swing spike's first
+   * hill to give the launch sequence a Kingda Ka-style vertical read.
+   */
+  verticalTwist(length: number, height: number, direction: 1 | -1 = 1): void {
+    this.preset(
+      Array.from({ length: 37 }, (_, i) => {
+        const t = i / 36;
+        const profile = Math.pow(Math.sin(Math.PI * t), 1.45);
+        return {
+          position: {
+            x: direction * 2.2 * Math.sin(Math.PI * t) ** 2,
+            y: height * profile,
+            z: t * length,
+          },
+          bank: 360 * smoothstep(t),
+          segmentType: 'inversion',
+        } satisfies SavedCoasterNode;
+      }),
+    );
+  }
+
+  /** A sharp right-hand climbing turn with an outward banked crest. */
+  sharpRightHill(radius: number, hillHeight: number, bankAngle = 52): void {
+    const steps = 24;
+    this.append(
+      Array.from({ length: steps + 1 }, (_, i) => {
+        const t = i / steps;
+        const theta = (t * Math.PI) / 2;
+        const profile = Math.sin(Math.PI * t) ** 2;
+        return {
+          position: {
+            x: -radius * (1 - Math.cos(theta)),
+            y: hillHeight * profile,
+            z: radius * Math.sin(theta),
+          },
+          bank: bankAngle * profile,
+          segmentType: 'coast',
+        } satisfies SavedCoasterNode;
+      }),
+      -Math.PI / 2,
     );
   }
 
@@ -524,11 +555,10 @@ class TrackBuilder {
   }
 
   /**
-   * Route the long western arm back to the base of the final spike. The spike
-   * itself is the last element before the station, so a reverse launch reaches
-   * it without running the whole return causeway backwards.
+   * Route the long western arm back to the station. The swing spike is a
+   * separate dead-end spur beside the switch, so this return never touches it.
    */
-  closeToReturnSpike(): void {
+  returnToStation(): void {
     const end = new THREE.Vector3(this.x, this.y, this.z);
     // Continue in the end element's eastbound direction, swing around the
     // outside of the southern plot, then return along the north edge. The
@@ -562,7 +592,8 @@ class TrackBuilder {
         new THREE.Vector3(42, 1.35, -34),
         new THREE.Vector3(18, 1.35, -48),
         new THREE.Vector3(0, 1.35, -40),
-        new THREE.Vector3(0, 1.35, -60),
+        new THREE.Vector3(0, 1.35, -20),
+        new THREE.Vector3(0, 1.35, 0),
       ],
       false,
       'centripetal',
@@ -572,82 +603,37 @@ class TrackBuilder {
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
       const p = curve.getPointAt(t);
-      const nearSwitch = t > 0.97;
+      const nearStation = t > 0.985;
+      const nearBrake = t > 0.94;
       this.nodes.push({
         position: { x: p.x, y: Math.max(1.35, p.y), z: p.z },
         bank: this.bankBase,
-        // The long outside return is a boosted multi-launch leg, not a 1 km
-        // brake run. It keeps the train moving through the high flyover and
-        // feeds the final spike before the station brakes.
-        segmentType: nearSwitch ? 'station' : 'lsm_launch',
-        targetSpeed: nearSwitch ? 6 : 24,
+        // Boosted outside return, then a proper final brake run into the
+        // station. The dead-end spike is elsewhere and is never on this line.
+        segmentType: nearStation ? 'station' : nearBrake ? 'block_brake' : 'lsm_launch',
+        targetSpeed: nearStation ? GIANT_SNAKE_STATION_SPEED_MPS : nearBrake ? 5 : 24,
       });
     }
-    // The final spike begins here, facing east out of the station throat.
-    this.x = 0;
-    this.y = 1.35;
-    this.z = -60;
-    this.heading = Math.PI;
-  }
-
-  /** Final transfer from the return spike back to the loading platform. */
-  finalReturn(): void {
-    const start = new THREE.Vector3(this.x, this.y, this.z);
-    // Loop north of the close approach so the last spike descent does not
-    // cross the line that fed the spike. The final 20 m rejoins the station
-    // from the east at precisely the same grade as the loading track.
-    const curve = new THREE.CatmullRomCurve3(
-      [
-        start,
-        new THREE.Vector3(start.x + 12, start.y - 0.5, start.z + 8),
-        new THREE.Vector3(50, 8, -82),
-        new THREE.Vector3(38, 5, -104),
-        new THREE.Vector3(8, 3, -112),
-        new THREE.Vector3(-14, 2, -100),
-        new THREE.Vector3(-20, 1.5, -64),
-        new THREE.Vector3(-20, 1.35, -34),
-        new THREE.Vector3(-12, 1.35, -18),
-        new THREE.Vector3(0, 1.35, 0),
-      ],
-      false,
-      'centripetal',
-    );
-    const curveLength = curve.getLength();
-    const steps = Math.max(60, Math.ceil(curveLength / 2));
-    for (let i = 1; i <= steps; i++) {
-      const t = i / steps;
-      const p = curve.getPointAt(t);
-      this.nodes.push({
-        position: { x: p.x, y: Math.max(1.35, p.y), z: p.z },
-        bank: this.bankBase,
-        segmentType: t > 0.72 ? 'station' : 'block_brake',
-        targetSpeed: t > 0.72 ? GIANT_SNAKE_STATION_SPEED_MPS : 5,
-      });
-    }
-    const last = this.nodes[this.nodes.length - 1];
-    last.position.x = 0;
-    last.position.y = 1.35;
-    last.position.z = 0;
-    last.segmentType = 'station';
-    last.targetSpeed = GIANT_SNAKE_STATION_SPEED_MPS;
     this.x = 0;
     this.y = 1.35;
     this.z = 0;
     this.heading = 0;
   }
+
 }
 
 /**
  * The complete Giant Snake circuit, in ride order:
  *
  * station siding -> transfer switch -> partial launch -> top hat stall ->
- * reverse down the launch -> huge return spike -> relaunch over the top hat ->
- * small hill -> small corkscrew -> tunnel -> huge whippy sweeping turn ->
- * rolling inversion -> descending turn -> overbank -> two speed hills ->
- * dive loop -> tunnel -> vertical loop -> twisted airtime -> large inverted top
- * hat -> half-inverted transition -> flip -> upside-down section -> outward
- * bank -> sweeping right turn -> two large airtime hills -> two corkscrews ->
- * brake run -> station.
+ * reverse to the switch -> dead-end vertical spike -> relaunch over the top
+ * hat -> second top hat -> large hill -> steep vertical twist -> sharp right
+ * climbing turn -> corkscrew -> tunnel -> huge whippy sweeping turn -> rolling
+ * inversion -> descending turn -> overbank -> two speed hills -> dive loop ->
+ * tunnel -> vertical loop -> twisted airtime -> large inverted top hat ->
+ * half-inverted transition -> flip -> upside-down section -> outward bank ->
+ * sweeping right turn -> two large airtime hills -> two corkscrews -> brake run
+ * -> station.
  */
 function buildTrack(): {
   nodes: SavedCoasterNode[];
@@ -659,10 +645,16 @@ function buildTrack(): {
   b.switchSiding(14, -3.5);
   b.slope(24, 2.5, 'lsm_launch', 18);
   b.launchTopHat(42, 58, 12, 58, 6, 0.66);
-  b.hill(6, 20);
+  // Post-spike launch hill: a second top hat, a large airtime hill, a steep
+  // vertical twist and a sharp right-hand climbing turn.
+  b.topHat(32, 48, 10, 48, 12, 24);
+  b.hill(12, 30);
+  b.verticalTwist(26, 13, 1);
+  b.sharpRightHill(24, 11, 52);
+  b.verticalTwist(22, 11, -1);
   b.corkscrew(28);
 
-  b.tunnelDip(46, 10.4, 4.6, 'Cypress Hollow');
+  b.tunnelDip(46, 15.6, 4.6, 'Cypress Hollow');
   b.hairpin(18, 62, 1);
   b.straight(6);
   b.barrelRoll(32, 9);
@@ -673,7 +665,7 @@ function buildTrack(): {
   b.hill(4, 18);
 
   b.diveLoop(7, 2);
-  b.tunnelDip(34, 9.2, 5.4, 'Serpent Vault');
+  b.tunnelDip(34, 14.4, 5.4, 'Serpent Vault');
   b.verticalLoop(7);
   b.barrelRoll(34, 8);
 
@@ -690,20 +682,49 @@ function buildTrack(): {
   b.corkscrew(26);
   b.corkscrew(26);
 
-  b.closeToReturnSpike();
-  b.returnSpike(46, 60, 14, 60, 30, 1);
-  b.finalReturn();
+  b.returnToStation();
 
   const nodes = b.nodes;
   const localTunnels = b.tunnelRanges;
   const markers = b.markers;
-  if (!markers.switchStop || !markers.forwardStall || !markers.spikeApex || !markers.release) {
+  if (!markers.switchStop || !markers.forwardStall || !markers.release) {
     throw new Error('Giant Snake swing markers were not recorded');
   }
+
+  // The spike is deliberately a separate dead-end spur. It starts at the
+  // transfer table, leans away from the station throat, and ends in the air;
+  // nothing is attached to its apex and it is not part of the main circuit.
+  const spikeBaseLocal: MarkerPoint = { x: 12, y: 1.35, z: 45 };
+  const spikeApexLocal: MarkerPoint = { x: 12, y: 46, z: 45 };
+  const spikeApproach = new THREE.CatmullRomCurve3(
+    [
+      new THREE.Vector3(markers.switchStop.x, 1.35, markers.switchStop.z),
+      new THREE.Vector3(markers.switchStop.x + 3, 1.35, markers.switchStop.z + 5),
+      new THREE.Vector3(9, 1.35, 38),
+      new THREE.Vector3(12, 1.35, 45),
+    ],
+    false,
+    'centripetal',
+  );
+  const spikeApproachLocal: MarkerPoint[] = Array.from({ length: 13 }, (_, i) => {
+    const p = spikeApproach.getPointAt(i / 12);
+    return { x: p.x, y: 1.35, z: p.z };
+  });
+  const spikeVerticalLocal: MarkerPoint[] = Array.from({ length: 25 }, (_, i) => ({
+    x: 12,
+    y: 1.35 + (44.65 * i) / 24,
+    z: 45,
+  }));
+  const spikeLocal: MarkerPoint[] = [...spikeApproachLocal, ...spikeVerticalLocal.slice(1)];
+  const spikeNodes = spikeLocal.map(pointToWorld);
+  markers.spikeApex = spikeApexLocal;
+
   const swing: GiantSnakeSwingLaunch = {
     switchStop: pointToWorld(markers.switchStop),
     forwardStall: pointToWorld(markers.forwardStall),
-    spikeApex: pointToWorld(markers.spikeApex),
+    spikeBase: pointToWorld(spikeBaseLocal),
+    spikeApex: pointToWorld(spikeApexLocal),
+    spikeNodes,
     release: pointToWorld(markers.release),
     switchTravelM: 3.5,
     switchDurationS: 2.2,

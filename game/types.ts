@@ -807,7 +807,10 @@ export type CoasterModelType =
 export interface SavedCoasterSwingLaunch {
   switchStop: { x: number; y: number; z: number };
   forwardStall: { x: number; y: number; z: number };
+  spikeBase: { x: number; y: number; z: number };
   spikeApex: { x: number; y: number; z: number };
+  /** Visual/scripted dead-end spur; it is deliberately not part of the main loop. */
+  spikeNodes?: { x: number; y: number; z: number }[];
   release: { x: number; y: number; z: number };
   switchTravelM: number;
   switchDurationS: number;

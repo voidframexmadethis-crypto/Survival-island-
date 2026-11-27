@@ -248,6 +248,80 @@ function buildTunnel(tunnel: GiantSnakeTunnel, index: number): THREE.Group {
   return group;
 }
 
+/**
+ * The isolated vertical spike. It springs from the transfer table, leans
+ * clear of the station, and ends in mid-air; no return track is attached to
+ * the apex. The train only reaches it during the scripted swing launch.
+ */
+function buildSpikeTrack(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'giant-snake-spike';
+  const swing = getGiantSnakeSwingLaunch();
+  const points = (swing.spikeNodes ?? []).map((p) => new THREE.Vector3(p.x, p.y, p.z));
+  if (points.length < 3) return group;
+  const centre = new THREE.CatmullRomCurve3(points, false, 'centripetal');
+  const railMat = new THREE.MeshStandardMaterial({ color: GOLD, roughness: 0.24, metalness: 0.78 });
+  const spineMat = new THREE.MeshStandardMaterial({ color: GUNMETAL, roughness: 0.42, metalness: 0.7 });
+  const supportMat = new THREE.MeshStandardMaterial({ color: SILVER, roughness: 0.38, metalness: 0.72 });
+  const left: THREE.Vector3[] = [];
+  const right: THREE.Vector3[] = [];
+  for (let i = 0; i < points.length; i++) {
+    const tangent = centre.getTangent(i / (points.length - 1)).normalize();
+    const side = new THREE.Vector3(1, 0, 0);
+    if (Math.abs(tangent.dot(side)) > 0.9) side.set(0, 0, 1);
+    side.cross(tangent).normalize().multiplyScalar(0.55);
+    left.push(points[i].clone().add(side));
+    right.push(points[i].clone().sub(side));
+  }
+  const segments = 96;
+  for (const rail of [left, right]) {
+    const curve = new THREE.CatmullRomCurve3(rail, false, 'centripetal');
+    const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, segments, 0.088, 8, false), railMat);
+    tube.castShadow = true;
+    group.add(tube);
+  }
+  const spine = new THREE.Mesh(new THREE.TubeGeometry(centre, segments, 0.16, 8, false), spineMat);
+  spine.castShadow = true;
+  group.add(spine);
+
+  // Cross-ties keep the vertical rails visually tied to the spine.
+  for (let i = 2; i < points.length - 1; i += 2) {
+    const p = points[i];
+    const tie = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.07, 0.14), spineMat);
+    tie.position.copy(p);
+    const tangent = centre.getTangent(i / (points.length - 1));
+    tie.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent);
+    group.add(tie);
+  }
+
+  // Tall silver support bents down the vertical column.
+  for (let i = 18; i < points.length - 2; i += 5) {
+    const p = points[i];
+    const ground = getTerrainHeight(p.x, p.z);
+    const h = p.y - ground;
+    if (h < 2) continue;
+    const col = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.2, h, 8), supportMat);
+    col.position.set(p.x + 1.3, ground + h / 2, p.z);
+    col.castShadow = true;
+    group.add(col);
+    const brace = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.08, 0.08), supportMat);
+    brace.position.set(p.x + 0.65, p.y - 0.4, p.z);
+    group.add(brace);
+  }
+
+  const cap = new THREE.Mesh(
+    new THREE.TorusGeometry(0.72, 0.12, 8, 18),
+    new THREE.MeshStandardMaterial({ color: GOLD_LIGHT, emissive: 0x5c430c, emissiveIntensity: 0.6, metalness: 0.7, roughness: 0.3 }),
+  );
+  cap.position.copy(points[points.length - 1]);
+  cap.rotation.x = Math.PI / 2;
+  group.add(cap);
+  const beacon = new THREE.PointLight(0xfbbf24, 0.7, 18, 2);
+  beacon.position.copy(points[points.length - 1]);
+  group.add(beacon);
+  return group;
+}
+
 /** Switch house and sliding transfer table beside the loading siding. */
 function buildSwitchHouse(
   group: THREE.Group,
@@ -342,10 +416,11 @@ export function buildGiantSnakeEnvironment(): GiantSnakeEnvironment {
   lamp.position.set(archX + 1.5, ground + 4.5, archZ);
   root.add(lamp);
 
-  // Tunnels.
+  // Tunnels and the isolated swing spike.
   getGiantSnakeTunnels().forEach((tunnel, i) => {
     root.add(buildTunnel(tunnel, i));
   });
+  root.add(buildSpikeTrack());
 
   // Switch house/transfer table at the launch siding.
   const swing = getGiantSnakeSwingLaunch();

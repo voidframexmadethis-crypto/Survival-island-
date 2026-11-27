@@ -812,11 +812,11 @@ export class CoasterTrain {
       // entered too slowly. It also keeps the Giant Snake moving through the
       // high overbank and tunnel exits instead of stranding guests mid-circuit.
       if (
-        this.speed < 2.2 &&
+        this.speed < 3.2 &&
         (seg === "coast" || seg === "inversion" || seg === "lsm_launch") &&
         current.tangent.y >= -0.05
       ) {
-        this.speed = Math.min(4.2, this.speed + 5.5 * dt);
+        this.speed = Math.max(this.speed, 3.2);
       }
 
       this.position = Math.min(totalLength, this.position + this.speed * dt);

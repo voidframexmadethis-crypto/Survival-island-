@@ -99,10 +99,30 @@ test('swing markers describe a short forward stall and a huge backward spike', (
   };
   const swing = getGiantSnakeSwingLaunch();
   const forward = marker(swing.forwardStall);
-  const spike = marker(swing.spikeApex);
-  const reverseMetres = ((forward - spike) % total + total) % total;
   assert.ok(forward > 70 && forward < 140, `forward stall at ${forward}`);
-  assert.ok(reverseMetres > 300, `backward spike is only ${reverseMetres} m`);
+  assert.ok(swing.spikeNodes.length > 20);
+  assert.ok(swing.spikeApex.y - swing.spikeBase.y > 40);
+  assert.ok(
+    Math.hypot(
+      swing.spikeNodes[swing.spikeNodes.length - 1].x - swing.spikeApex.x,
+      swing.spikeNodes[swing.spikeNodes.length - 1].y - swing.spikeApex.y,
+      swing.spikeNodes[swing.spikeNodes.length - 1].z - swing.spikeApex.z,
+    ) < 0.01,
+  );
+
+  // The spike is a spur: no main-loop sample reaches its apex.
+  let apexDistance = Number.POSITIVE_INFINITY;
+  for (const sample of samples) {
+    apexDistance = Math.min(
+      apexDistance,
+      Math.hypot(
+        sample.position.x - swing.spikeApex.x,
+        sample.position.y - swing.spikeApex.y,
+        sample.position.z - swing.spikeApex.z,
+      ),
+    );
+  }
+  assert.ok(apexDistance > 5, `spike apex is connected to the main loop (${apexDistance.toFixed(2)} m)`);
   assert.ok(swing.launchSpeedMps > 20);
   assert.ok(swing.boostSpeedMps > swing.launchSpeedMps);
   assert.equal(swing.switchDurationS > 1, true);
@@ -174,6 +194,7 @@ test('dispatch runs the complete swing launch and returns to the station', () =>
       {
         swingState: string;
         swingDirection: 1 | -1;
+        spikeActive: boolean;
         train: { position: number; speed: number };
       }
     >;
@@ -184,22 +205,28 @@ test('dispatch runs the complete swing launch and returns to the station', () =>
 
   const seen = new Set<string>();
   let sawReverse = false;
+  let sawSpike = false;
   let maxSpeed = 0;
   const dt = 1 / 30;
   for (let i = 0; i < 265 / dt; i++) {
     runtime.update(dt);
     seen.add(entry.swingState);
     if (entry.swingDirection === -1) sawReverse = true;
+    if (entry.spikeActive) sawSpike = true;
     maxSpeed = Math.max(maxSpeed, entry.train.speed);
   }
 
   assert.ok(seen.has('to-switch'));
   assert.ok(seen.has('throwing-switch'));
   assert.ok(seen.has('forward-stall'));
-  assert.ok(seen.has('reverse-spike'));
+  assert.ok(seen.has('reverse-return'));
+  assert.ok(seen.has('spike-climb'));
+  assert.ok(seen.has('spike-hold'));
+  assert.ok(seen.has('spike-descend'));
   assert.ok(seen.has('relaunch'));
   assert.ok(seen.has('coast'));
   assert.equal(sawReverse, true);
+  assert.equal(sawSpike, true);
   assert.ok(maxSpeed > 25, `swing only reached ${maxSpeed.toFixed(1)} m/s`);
   assert.equal(runtime.consumeStationArrival(GIANT_SNAKE_ID), true);
   assert.equal(runtime.isTrainAtStation(GIANT_SNAKE_ID), true);
@@ -231,6 +258,7 @@ test('themed environment builds tunnels, switch hardware and a readable sign', (
   });
   assert.ok(names.has('giant-snake-tunnel-bore'));
   assert.ok(names.has('giant-snake-switch-table'));
+  assert.ok(names.has('giant-snake-spike'));
   env.setSwitchOffset(1.4);
   env.update(0.016, 1, 90);
   assert.ok(env.root.children.length > 2);

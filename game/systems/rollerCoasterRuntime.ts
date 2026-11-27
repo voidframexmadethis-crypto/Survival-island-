@@ -78,6 +78,10 @@ interface ActiveCoasterEntry {
   swingTimer: number;
   swingDirection: 1 | -1;
   swingMarkers: SwingMarkers | null;
+  /** True while the train is on the dead-end spike rather than the main loop. */
+  spikeActive: boolean;
+  spikeProgress: number;
+  spikeSpeed: number;
   /** Train lead-car distance where the whole train is inside the station. */
   boardingDistance: number;
   /** A full lap has wrapped and the train is rolling in to park. */
@@ -94,8 +98,10 @@ type SwingState =
   | 'to-switch'
   | 'throwing-switch'
   | 'forward-stall'
-  | 'reverse-spike'
+  | 'reverse-return'
+  | 'spike-climb'
   | 'spike-hold'
+  | 'spike-descend'
   | 'relaunch'
   | 'coast';
 interface SwingMarkers {
@@ -349,6 +355,9 @@ export class RollerCoasterRuntime {
       swingTimer: 0,
       swingDirection: 1,
       swingMarkers: null,
+      spikeActive: false,
+      spikeProgress: 0,
+      spikeSpeed: 0,
       boardingDistance: 0,
       arrivalPending: false,
       arrivedAtStation: false,
@@ -767,6 +776,9 @@ export class RollerCoasterRuntime {
     if (entry.swing) {
       entry.swingTimer = 0;
       entry.swingDirection = 1;
+      entry.spikeActive = false;
+      entry.spikeProgress = 0;
+      entry.spikeSpeed = 0;
       if (entry.running) {
         entry.swingState = 'to-switch';
         entry.train.position = entry.boardingDistance;
@@ -799,6 +811,9 @@ export class RollerCoasterRuntime {
     entry.swingState = 'idle';
     entry.swingTimer = 0;
     entry.swingDirection = 1;
+    entry.spikeActive = false;
+    entry.spikeProgress = 0;
+    entry.spikeSpeed = 0;
     this.syncTrainCarsTransform(entry);
     this.hudCacheDirty = true;
     return true;
@@ -1183,6 +1198,10 @@ export class RollerCoasterRuntime {
 
   private syncTrainCarsTransform(entry: ActiveCoasterEntry): void {
     if (entry.samples.length < 2 || entry.carMeshes.length === 0) return;
+    if (entry.spikeActive && entry.swing?.spikeBase) {
+      this.syncSpikeCarsTransform(entry);
+      return;
+    }
     const total = entry.samples[entry.samples.length - 1].distance;
     const carSpacing = 2.35;
     const isInverted = entry.coasterType === 'inverted';
@@ -1212,6 +1231,28 @@ export class RollerCoasterRuntime {
       const wheels = car.userData.wheels as THREE.Mesh[] | undefined;
       if (wheels) {
         const angle = (carDist / 0.2) % (Math.PI * 2);
+        for (const wheel of wheels) wheel.rotation.x = -angle;
+      }
+    }
+  }
+
+  /** Places the five cars on the vertical dead-end spur, nose-down. */
+  private syncSpikeCarsTransform(entry: ActiveCoasterEntry): void {
+    const swing = entry.swing;
+    if (!swing?.spikeBase) return;
+    const base = swing.spikeBase;
+    const apex = swing.spikeApex;
+    const height = Math.max(1, apex.y - base.y);
+    const carSpacing = 2.35;
+    const pitch = new THREE.Euler(Math.PI / 2, 0, 0);
+    for (let i = 0; i < entry.carMeshes.length; i++) {
+      const car = entry.carMeshes[i];
+      const y = base.y + THREE.MathUtils.clamp(entry.spikeProgress * height - i * carSpacing, 0, height);
+      car.position.set(apex.x, y, apex.z);
+      car.quaternion.setFromEuler(pitch);
+      const wheels = car.userData.wheels as THREE.Mesh[] | undefined;
+      if (wheels) {
+        const angle = (entry.spikeProgress * height / 0.2) % (Math.PI * 2);
         for (const wheel of wheels) wheel.rotation.x = -angle;
       }
     }
@@ -1295,6 +1336,9 @@ export class RollerCoasterRuntime {
         entry.arrivedAtStation = true;
         entry.swingState = 'idle';
         entry.swingDirection = 1;
+        entry.spikeActive = false;
+        entry.spikeProgress = 0;
+        entry.spikeSpeed = 0;
       }
 
       if (hasCoords) {
@@ -1315,9 +1359,10 @@ export class RollerCoasterRuntime {
 
   /**
    * Scripted Pantheon-style swing launch. The train leaves the station, stops
-   * on the transfer siding, launches short of the top-hat crest, rolls back
-   * through the station and up the huge final spike, then relaunches down the
-   * spike, through the station and over the top hat into the main circuit.
+   * on the transfer siding, launches short of the top-hat crest, rolls back to
+   * the switch, then climbs the separate dead-end vertical spike. It descends
+   * and relaunches over the top hat into the main circuit. The spike is never
+   * joined back into the main loop.
    */
   private updateSwing(entry: ActiveCoasterEntry, dt: number): void {
     const swing = entry.swing;
@@ -1328,6 +1373,7 @@ export class RollerCoasterRuntime {
     const step = Math.min(0.08, Math.max(0, dt));
     const accel = themeConfig(entry.theme)?.driveAccel ?? 11.5;
     const brake = 14;
+    const spikeHeight = Math.max(1, swing.spikeApex.y - swing.spikeBase.y);
     const ramp = (current: number, target: number, rate: number, time: number) =>
       current < target
         ? Math.min(target, current + rate * time)
@@ -1369,24 +1415,41 @@ export class RollerCoasterRuntime {
         if (forwardDistance(entry.train.position, markers.forwardStall) > remaining || remaining <= 0.1) {
           entry.train.position = markers.forwardStall;
           entry.train.speed = 0;
-          entry.swingState = 'reverse-spike';
+          entry.swingState = 'reverse-return';
           entry.swingTimer = 0;
         }
         break;
       }
-      case 'reverse-spike': {
+      case 'reverse-return': {
         entry.swingDirection = -1;
-        const remaining = backwardDistance(entry.train.position, markers.spikeApex);
+        const remaining = backwardDistance(entry.train.position, markers.switchStop);
         const stopDistance = (entry.train.speed * entry.train.speed) / (2 * brake);
         const target = remaining <= stopDistance + 0.5 ? 0 : swing.reverseSpeedMps;
         entry.train.speed = ramp(entry.train.speed, target, brake, step);
         entry.train.position = wrap(entry.train.position - entry.train.speed * step);
         if (
-          backwardDistance(entry.train.position, markers.spikeApex) > remaining ||
+          backwardDistance(entry.train.position, markers.switchStop) > remaining ||
           remaining <= 0.1 ||
           (entry.train.speed < 0.5 && remaining < 2)
         ) {
-          entry.train.position = markers.spikeApex;
+          entry.train.position = markers.switchStop;
+          entry.train.speed = 0;
+          entry.spikeActive = true;
+          entry.spikeProgress = 0;
+          entry.spikeSpeed = 0;
+          entry.swingState = 'spike-climb';
+          entry.swingTimer = 0;
+        }
+        break;
+      }
+      case 'spike-climb': {
+        entry.swingDirection = -1;
+        entry.spikeSpeed = ramp(entry.spikeSpeed, swing.reverseSpeedMps, 12, step);
+        entry.spikeProgress = Math.min(1, entry.spikeProgress + (entry.spikeSpeed * step) / spikeHeight);
+        entry.train.speed = entry.spikeSpeed;
+        if (entry.spikeProgress >= 1) {
+          entry.spikeProgress = 1;
+          entry.spikeSpeed = 0;
           entry.train.speed = 0;
           entry.swingState = 'spike-hold';
           entry.swingTimer = 0;
@@ -1395,15 +1458,35 @@ export class RollerCoasterRuntime {
       }
       case 'spike-hold': {
         entry.train.speed = 0;
-        if (entry.swingTimer >= 1.4) {
-          entry.swingState = 'relaunch';
+        entry.spikeSpeed = 0;
+        if (entry.swingTimer >= 1.2) {
+          entry.swingState = 'spike-descend';
           entry.swingTimer = 0;
           entry.swingDirection = 1;
         }
         break;
       }
+      case 'spike-descend': {
+        entry.swingDirection = 1;
+        entry.spikeSpeed = ramp(entry.spikeSpeed, Math.max(10, swing.reverseSpeedMps * 0.8), 12, step);
+        entry.spikeProgress = Math.max(0, entry.spikeProgress - (entry.spikeSpeed * step) / spikeHeight);
+        entry.train.speed = entry.spikeSpeed;
+        if (entry.spikeProgress <= 0) {
+          entry.spikeProgress = 0;
+          entry.spikeSpeed = 0;
+          entry.spikeActive = false;
+          entry.train.position = markers.switchStop;
+          entry.train.speed = 0;
+          entry.swingState = 'relaunch';
+          entry.swingTimer = 0;
+          entry.swingDirection = 1;
+          this.syncTrainCarsTransform(entry);
+        }
+        break;
+      }
       case 'relaunch': {
         entry.swingDirection = 1;
+        entry.spikeActive = false;
         const remaining = forwardDistance(entry.train.position, markers.release);
         entry.train.speed = ramp(entry.train.speed, swing.boostSpeedMps, accel, step);
         entry.train.position = wrap(entry.train.position + entry.train.speed * step);
@@ -1430,8 +1513,10 @@ export class RollerCoasterRuntime {
       offset = swing.switchTravelM * Math.min(1, entry.swingTimer / swing.switchDurationS);
     } else if (
       entry.swingState === 'forward-stall' ||
-      entry.swingState === 'reverse-spike' ||
-      entry.swingState === 'spike-hold'
+      entry.swingState === 'reverse-return' ||
+      entry.swingState === 'spike-climb' ||
+      entry.swingState === 'spike-hold' ||
+      entry.swingState === 'spike-descend'
     ) {
       offset = swing.switchTravelM;
     } else if (entry.swingState === 'relaunch') {
@@ -1454,6 +1539,24 @@ export class RollerCoasterRuntime {
   } | null {
     const entry = this.coasters.get(coasterId);
     if (!entry || entry.samples.length < 2) return null;
+    if (entry.spikeActive && entry.swing?.spikeBase) {
+      const base = entry.swing.spikeBase;
+      const apex = entry.swing.spikeApex;
+      const height = Math.max(1, apex.y - base.y);
+      const eyeY = base.y + entry.spikeProgress * height + 1.5;
+      return {
+        position: new THREE.Vector3(apex.x, eyeY, apex.z),
+        lookAt: new THREE.Vector3(apex.x, eyeY + entry.swingDirection * 8, apex.z),
+        up: new THREE.Vector3(0, 0, 1),
+        coasterName: entry.name,
+        speedKmh: Math.round(entry.spikeSpeed * 3.6),
+        heightM: Math.round(entry.spikeProgress * height * 10) / 10,
+        progressPercent: Math.round(entry.spikeProgress * 100),
+        verticalG: 1,
+        lateralG: 0,
+        segmentLabel: entry.swingDirection < 0 ? 'Vertical spike climb' : 'Vertical spike drop',
+      };
+    }
     const total = entry.samples[entry.samples.length - 1].distance || 1;
     const sample = entry.train.getCurrentPosition() || entry.samples[0];
 
@@ -1651,6 +1754,9 @@ export class RollerCoasterRuntime {
       swingTimer: 0,
       swingDirection: 1,
       swingMarkers: null,
+      spikeActive: false,
+      spikeProgress: 0,
+      spikeSpeed: 0,
       boardingDistance: 0,
       arrivalPending: false,
       arrivedAtStation: true,
