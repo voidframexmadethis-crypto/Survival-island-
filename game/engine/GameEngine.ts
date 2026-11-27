@@ -622,11 +622,42 @@ import {
   getVolcanoFlexSite,
 } from '../world/volcanoFlexLayout';
 import {
+  BAYOU_COMET_ID,
+  BAYOU_COMET_LAYOUT_TAG,
+  buildBayouCometCoasterData,
+  getBayouCometSite,
+} from '../world/bayouCometLayout';
+import {
   VOLCANO_FLEX_STATION_PLACEMENT,
   VOLCANO_FLEX_STATION_PLATFORM,
   getCoasterStationExitPoint,
   getCoasterStationSurfaceY,
 } from '../world/coasterStationLayout';
+
+/** Both island coasters use walk-up boarding stations and the same deck spec. */
+const ISLAND_COASTER_STATIONS: Record<
+  string,
+  { coasterId: string; name: string; sublabel: string }
+> = {
+  volcano_flex_station: {
+    coasterId: VOLCANO_FLEX_ID,
+    name: 'VOLCANO FLEX',
+    sublabel: 'Lead seat · 900-ft tower launch · 15 inversions',
+  },
+  bayou_comet_station: {
+    coasterId: BAYOU_COMET_ID,
+    name: 'BAYOU COMET',
+    sublabel: 'Lead seat · switch-track launch · spike towers & tunnels',
+  },
+};
+
+function islandCoasterForStation(stationId: string) {
+  return ISLAND_COASTER_STATIONS[stationId] ?? null;
+}
+
+function isIslandCoasterId(coasterId: string): boolean {
+  return coasterId === VOLCANO_FLEX_ID || coasterId === BAYOU_COMET_ID;
+}
 import { CoasterRideAudio } from '../systems/coasterRideAudio';
 import { stepSwimPhysics } from '../systems/swimmingPhysics';
 import { RealisticOcean } from '../world/RealisticOcean';
@@ -5407,6 +5438,7 @@ export class GameEngine {
     // Meat Drying Rack right next to the premade shelter (Hilltop House front porch / yard)
     this.ensurePremadeShelterDryingRack();
     this.ensureVolcanoFlexAttraction();
+    this.ensureBayouCometAttraction();
 
     this.visitedBiomes = new Set(['beach']);
     this.exploredCells = new Set();
@@ -5937,7 +5969,10 @@ export class GameEngine {
     }
 
     this.coasterRuntime?.importCoasters(save.coasters);
-    if (loadedWorldType === 'island') this.ensureVolcanoFlexAttraction();
+    if (loadedWorldType === 'island') {
+      this.ensureVolcanoFlexAttraction();
+      this.ensureBayouCometAttraction();
+    }
     this.amusementParkRuntime?.restore(save.amusementParks);
     this.ecosystem = save.ecosystem || createInitialEcosystem();
     this.lostWorld = normalizeLostWorldState(save.lostWorld);
@@ -6918,7 +6953,7 @@ export class GameEngine {
     const built = createCampStructureModel(
       st.type,
       this.world.woodTex,
-      st.type === 'coaster_station' && st.id === 'volcano_flex_station'
+      st.type === 'coaster_station' && islandCoasterForStation(st.id)
         ? VOLCANO_FLEX_STATION_PLATFORM
         : undefined,
     );
@@ -9213,11 +9248,14 @@ export class GameEngine {
         }
       }
       if (near.kind === 'coaster_station') {
-        if (near.structureId === 'volcano_flex_station') {
+        const themed = near.structureId
+          ? islandCoasterForStation(near.structureId)
+          : null;
+        if (themed) {
           // Walk-through boarding: the station gate, train and restraints are
           // all physically present, and E puts the rider into the lead seat.
           if (!this.ridingCoasterId && !this.ridingWaterparkId) {
-            this.boardCoasterRide(VOLCANO_FLEX_ID);
+            this.boardCoasterRide(themed.coasterId);
           }
           return;
         }
@@ -15778,14 +15816,14 @@ export class GameEngine {
     for (const st of this.structures) {
       // The island station's boarding deck is 13.6 m long, so measure to the
       // platform/train rather than only to the structure origin.
-      const platformDistance =
-        st.id === 'volcano_flex_station'
-          ? this.coasterRuntime?.getBoardingProximity(
-              VOLCANO_FLEX_ID,
-              this.playerX,
-              this.playerZ,
-            )
-          : null;
+      const themedStation = islandCoasterForStation(st.id);
+      const platformDistance = themedStation
+        ? this.coasterRuntime?.getBoardingProximity(
+            themedStation.coasterId,
+            this.playerX,
+            this.playerZ,
+          )
+        : null;
       const d =
         typeof platformDistance === 'number'
           ? platformDistance
@@ -15825,15 +15863,12 @@ export class GameEngine {
           drying_rack: 'use',
           coaster_station: 'craft',
         };
-        const isVolcanoStation = st.id === 'volcano_flex_station';
         best = {
           id: st.id,
-          label: isVolcanoStation ? 'Board VOLCANO FLEX' : labels[st.type],
-          sublabel: isVolcanoStation
-            ? 'Lead seat · 900-ft tower launch · 15 inversions'
-            : undefined,
+          label: themedStation ? `Board ${themedStation.name}` : labels[st.type],
+          sublabel: themedStation?.sublabel,
           kind: st.type,
-          actionCategory: isVolcanoStation ? 'use' : catMap[st.type],
+          actionCategory: themedStation ? 'use' : catMap[st.type],
           distance: d,
           targetX: st.x,
           targetY: st.y,
@@ -17146,7 +17181,7 @@ export class GameEngine {
         this.playerX = rideCam.position.x;
         this.playerY = rideCam.position.y;
         this.playerZ = rideCam.position.z;
-        if (this.ridingCoasterId === VOLCANO_FLEX_ID) {
+        if (isIslandCoasterId(this.ridingCoasterId)) {
           this.coasterRideAudio?.update(rideCam.speedKmh, rideCam.segmentLabel);
         }
 
@@ -17154,7 +17189,7 @@ export class GameEngine {
           this.ridingCoasterId,
         );
         const legacyArrival =
-          this.ridingCoasterId !== VOLCANO_FLEX_ID &&
+          !isIslandCoasterId(this.ridingCoasterId) &&
           rideCam.progressPercent >= 98 &&
           rideCam.segmentLabel === 'Load Station';
         if (!this.coasterBoardPendingId && (parkedAtStation || legacyArrival)) {
@@ -23816,11 +23851,17 @@ export class GameEngine {
         bestY = landmarkFloorY;
       }
 
-      // Walkable VOLCANO FLEX boarding deck and staircase. The deck height is
-      // shared with the station model and the train's car floor.
+      // Walkable island-coaster boarding decks and staircases. Both themed
+      // stations share the station model and car-floor height.
       for (const st of this.structures) {
-        if (st.type !== 'coaster_station' || st.id !== 'volcano_flex_station') continue;
-        const stationSurfaceY = getCoasterStationSurfaceY(st, x, z, footY);
+        if (st.type !== 'coaster_station' || !islandCoasterForStation(st.id)) continue;
+        const stationSurfaceY = getCoasterStationSurfaceY(
+          st,
+          x,
+          z,
+          footY,
+          VOLCANO_FLEX_STATION_PLATFORM,
+        );
         if (stationSurfaceY > bestY) bestY = stationSurfaceY;
       }
 
@@ -30924,6 +30965,66 @@ export class GameEngine {
     }
   }
 
+  /**
+   * Sits BAYOU COMET on the far southern Louisiana landmass. Its station runs
+   * west, so the platform structure sits 2.8 m down-track and 0.58 m to the
+   * south, mirrored from VOLCANO FLEX's eastbound station.
+   */
+  private ensureBayouCometAttraction(): void {
+    if (this.worldType !== 'island') return;
+    const site = getBayouCometSite();
+    const stationX = site.station.x - 2.8;
+    const stationY = site.station.y;
+    const stationZ = site.station.z - 0.58;
+    const stationRotation = Math.PI / 2;
+    const station = this.structures.find((structure) => structure.id === 'bayou_comet_station');
+    if (station) {
+      const drifted =
+        Math.abs(station.x - stationX) > 0.01 ||
+        Math.abs(station.y - stationY) > 0.01 ||
+        Math.abs(station.z - stationZ) > 0.01 ||
+        Math.abs(station.rotationY - stationRotation) > 0.001;
+      if (drifted) {
+        station.x = stationX;
+        station.y = stationY;
+        station.z = stationZ;
+        station.rotationY = stationRotation;
+        const visual = this.structureVisuals.get(station.id);
+        if (visual) {
+          visual.group.position.set(stationX, stationY, stationZ);
+          visual.group.rotation.y = stationRotation;
+        }
+      }
+    } else {
+      this.spawnStructure({
+        id: 'bayou_comet_station',
+        type: 'coaster_station',
+        x: stationX,
+        y: stationY,
+        z: stationZ,
+        rotationY: stationRotation,
+      });
+    }
+    if (!this.coasterRuntime) return;
+    const expected = buildBayouCometCoasterData();
+    const existing = this.coasterRuntime
+      .exportCoasters()
+      .find((coaster) => coaster.id === BAYOU_COMET_ID);
+    if (!existing) {
+      this.coasterRuntime.addCoasterData(expected);
+      return;
+    }
+    const staleLayout = !existing.pieceTags?.includes(BAYOU_COMET_LAYOUT_TAG);
+    const stationDrift = Math.hypot(
+      existing.stationPos.x - expected.stationPos.x,
+      existing.stationPos.z - expected.stationPos.z,
+    );
+    if (staleLayout || stationDrift > 0.01) {
+      this.coasterRuntime.deleteCoaster(BAYOU_COMET_ID);
+      this.coasterRuntime.addCoasterData(expected);
+    }
+  }
+
   /** Holds the lead seat at the platform for a short, realistic dispatch. */
   private updateCoasterBoarding(dt: number): void {
     if (!this.coasterBoardPendingId) return;
@@ -30941,7 +31042,10 @@ export class GameEngine {
       return;
     }
     this.cameraShakeTimer = Math.max(this.cameraShakeTimer, 0.12);
-    this.toast('VOLCANO FLEX launch — hold on!', 'discovery');
+    const launchName = this.coasterRuntime.getHudSummaries().find(
+      (summary) => summary.id === coasterId,
+    )?.name;
+    this.toast(`${launchName ?? 'Coaster'} launch — hold on!`, 'discovery');
     this.emitHud();
   }
 
@@ -31409,7 +31513,7 @@ export class GameEngine {
       return false;
     }
     this.ridingCoasterId = coasterId;
-    if (summary.id === VOLCANO_FLEX_ID) {
+    if (isIslandCoasterId(coasterId)) {
       // Put the rider in the lead seat at the gate, then dispatch on a short
       // three-second launch countdown. This also guarantees the train starts
       // from the load station after a saved game or a previous circuit.
@@ -31418,7 +31522,7 @@ export class GameEngine {
       this.coasterBoardCountdown = 3;
       this.coasterRideAudio ??= new CoasterRideAudio();
       this.coasterRideAudio.start();
-      this.toast('Boarded VOLCANO FLEX — launching in 3 seconds', 'discovery');
+      this.toast(`Boarded ${summary.name} — launching in 3 seconds`, 'discovery');
     } else {
       this.coasterRuntime.dispatchTrain(coasterId, true);
       this.toast(`Dispatched front row on ${summary.name} — press E to disembark`, 'discovery');
@@ -31438,13 +31542,16 @@ export class GameEngine {
     this.camera.rotation.order = 'YXZ';
     this.camera.up.set(0, 1, 0);
     if (
-      coasterId === VOLCANO_FLEX_ID &&
+      isIslandCoasterId(coasterId) &&
       ride &&
       this.coasterRuntime?.isTrainAtStation(coasterId)
     ) {
       // Step the rider onto the deck beside the lead car instead of dropping
       // them onto the rails when the train parks.
-      const station = this.structures.find((s) => s.id === 'volcano_flex_station');
+      const stationId = Object.keys(ISLAND_COASTER_STATIONS).find(
+        (id) => ISLAND_COASTER_STATIONS[id].coasterId === coasterId,
+      );
+      const station = this.structures.find((s) => s.id === stationId);
       if (station) {
         const exit = getCoasterStationExitPoint(station, ride.position.x);
         this.playerX = exit.x;

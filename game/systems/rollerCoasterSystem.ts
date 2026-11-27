@@ -109,6 +109,7 @@ export type TrackNode = {
   bank: number;
   segmentType?: TrackSegmentType;
   targetSpeed?: number;
+  frameMode?: 'loop';
 };
 
 export type TrackPieceType =
@@ -143,6 +144,7 @@ export type TrackSample = {
   distance: number;
   segmentType: TrackSegmentType;
   targetSpeed?: number;
+  frameMode?: 'loop';
   curvature: number;
   verticalG: number;
   lateralG: number;
@@ -233,12 +235,14 @@ export class CoasterEditor {
     bank = 0,
     segmentType?: TrackSegmentType,
     targetSpeed?: number,
+    frameMode?: 'loop',
   ) {
     this.nodes.push({
       position,
       bank,
       segmentType,
       targetSpeed,
+      frameMode,
     });
   }
 
@@ -296,6 +300,7 @@ function interpolateNode(
 ): Omit<TrackNode, "segmentType"> & { segmentType: TrackSegmentType; targetSpeed?: number } {
   const seg = b.segmentType ?? c.segmentType ?? "coast";
   const targetSpeed = b.targetSpeed ?? c.targetSpeed;
+  const frameMode = b.frameMode ?? c.frameMode;
   return {
     position: vec(
       catmullRom(a.position.x, b.position.x, c.position.x, d.position.x, t),
@@ -305,6 +310,7 @@ function interpolateNode(
     bank: catmullRom(a.bank, b.bank, c.bank, d.bank, t),
     segmentType: seg,
     targetSpeed,
+    frameMode,
   };
 }
 
@@ -329,6 +335,7 @@ export function buildTrack(nodes: TrackNode[], resolution = 12): TrackSample[] {
     bank: number;
     segmentType: TrackSegmentType;
     targetSpeed?: number;
+    frameMode?: 'loop';
   }[] = [];
 
   for (let i = 0; i < cleanNodes.length - 1; i++) {
@@ -343,12 +350,13 @@ export function buildTrack(nodes: TrackNode[], resolution = 12): TrackSample[] {
     for (let j = 0; j < steps; j++) {
       const t = j / steps;
       const interp = interpolateNode(a, b, c, d, t);
-      rawSamples.push({
-        position: interp.position,
-        bank: interp.bank,
-        segmentType: interp.segmentType,
-        targetSpeed: interp.targetSpeed,
-      });
+              rawSamples.push({
+          position: interp.position,
+          bank: interp.bank,
+          segmentType: interp.segmentType,
+          targetSpeed: interp.targetSpeed,
+          frameMode: interp.frameMode,
+        });
     }
   }
 
@@ -358,6 +366,7 @@ export function buildTrack(nodes: TrackNode[], resolution = 12): TrackSample[] {
     bank: last.bank,
     segmentType: last.segmentType ?? "coast",
     targetSpeed: last.targetSpeed,
+    frameMode: last.frameMode,
   });
 
   // Compute tangents & arc distances
@@ -382,6 +391,7 @@ export function buildTrack(nodes: TrackNode[], resolution = 12): TrackSample[] {
       distance: totalDistance,
       segmentType: rawSamples[i].segmentType,
       targetSpeed: rawSamples[i].targetSpeed,
+      frameMode: rawSamples[i].frameMode,
       curvature: 0,
       verticalG: 1,
       lateralG: 0,

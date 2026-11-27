@@ -770,6 +770,8 @@ export interface SavedCoasterNode {
   bank: number;
   segmentType?: CoasterSegmentKind;
   targetSpeed?: number;
+  /** 'loop' uses the track-following frame so the car stays on the rails. */
+  frameMode?: 'loop';
 }
 
 export type CoasterModelType =
