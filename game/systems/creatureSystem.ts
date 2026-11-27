@@ -76,6 +76,32 @@ export interface SpeciesSpec {
   footprintRadius: number;
 }
 
+/**
+ * Player-avoidance radius for the interactive creature manager.
+ * Predators and livestock are deliberately exempt; every other wild animal
+ * startles when this radius is crossed.
+ */
+export function getWildAnimalFleeRadius(
+  temperament: CreatureTemperament,
+  options: { sprinting?: boolean; crouching?: boolean; visibility?: number } = {},
+): number {
+  if (
+    temperament === 'apex_predator' ||
+    temperament === 'pack_predator' ||
+    temperament === 'domestic_calm' ||
+    temperament === 'friendly_marine'
+  ) {
+    return 0;
+  }
+  const visibility = Math.max(0, Math.min(1, options.visibility ?? 1));
+  return (
+    ANIMAL_FLEE_DISTANCE *
+    (options.sprinting ? 1.65 : 1.0) *
+    (options.crouching ? 0.55 : 1.0) *
+    (0.8 + visibility * 0.55)
+  );
+}
+
 export const SPECIES_SPECS: Record<CreatureSpecies, SpeciesSpec> = {
   // Ordinary Real-World Wildlife
   deer: {
@@ -2763,10 +2789,18 @@ export class CreatureManager {
           }
         }
 
-        // Startle into steep climb if player approaches within flee distance while bird is feeding or swooping low
+        // Startle into a steep climb if the player gets close while the bird is
+        // feeding, swooping low, or perched low enough to be a reachable threat.
+        const birdThreatRange =
+          ANIMAL_FLEE_DISTANCE *
+          (playerSprinting ? 1.45 : 1.0) *
+          (playerCrouching ? 0.6 : 1.0);
+        const lowPerched = c.y < getTerrainHeight(c.x, c.z) + 5.5;
         if (
-          (c.state === 'feed' || (targetCarcass && c.state === 'swoop' && c.y < targetCarcass.y + 4.5)) &&
-          distPlayerBird < ANIMAL_FLEE_DISTANCE
+          (c.state === 'feed' ||
+            (targetCarcass && c.state === 'swoop' && c.y < targetCarcass.y + 4.5) ||
+            (lowPerched && c.state !== 'takeoff')) &&
+          distPlayerBird < birdThreatRange
         ) {
           c.state = 'takeoff';
           c.feedCarcassId = undefined;
@@ -3093,28 +3127,35 @@ export class CreatureManager {
           c.targetZ = c.homeZ;
         }
       } else if (!c.tamed && !c.mounted) {
-        // Wild animals flee for 5s when player enters ANIMAL_FLEE_DISTANCE (15m)
-        const isWildThreatSensitive =
-          c.spec.temperament === 'apex_predator' ||
-          c.spec.temperament === 'pack_predator' ||
-          c.spec.temperament === 'defensive_herbivore' ||
-          c.spec.temperament === 'timid_herbivore';
-
-        const fleeRange = isWildThreatSensitive
-          ? ANIMAL_FLEE_DISTANCE * (playerCrouching ? 0.72 : 1.0)
-          : 0;
+        // Every wild animal except committed predators and domestic livestock
+        // reacts to a nearby player. Sprinting and firing carry farther, while
+        // crouching lets the player approach much closer before an animal bolts.
+        const fleeRange = getWildAnimalFleeRadius(c.spec.temperament, {
+          sprinting: playerSprinting,
+          crouching: playerCrouching,
+          visibility: playerVisibility,
+        });
 
         if (fleeRange > 0 && distToPlayer < fleeRange) {
-          if (c.state !== 'flee') {
-            c.state = 'flee';
-            onCreatureCall(c.species, distToPlayer);
-          }
-          c.stateTimer = 5.0;
+          const wasFleeing = c.state === 'flee';
+          c.state = 'flee';
+          c.stateTimer = Math.max(c.stateTimer, 6.5);
+          c.startledTimer = Math.max(c.startledTimer ?? 0, 2.4);
+          if (!wasFleeing) onCreatureCall(c.species, distToPlayer);
+
+          // Break directly away from the player, with a small tangent so herds
+          // do not run in a perfectly straight line or bunch into each other.
           const dx = c.x - playerX;
           const dz = c.z - playerZ;
           const d = Math.hypot(dx, dz) || 1;
-          c.targetX = c.x + (dx / d) * 24;
-          c.targetZ = c.z + (dz / d) * 24;
+          const nx = dx / d;
+          const nz = dz / d;
+          const tangent = Math.sin(elapsed * 0.7 + i * 1.9) * 0.35;
+          const escapeX = nx + -nz * tangent;
+          const escapeZ = nz + nx * tangent;
+          const escapeLen = Math.hypot(escapeX, escapeZ) || 1;
+          c.targetX = c.x + (escapeX / escapeLen) * 34;
+          c.targetZ = c.z + (escapeZ / escapeLen) * 34;
         }
       }
 
