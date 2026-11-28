@@ -146,6 +146,7 @@ import { CommandConsoleModal } from './CommandConsoleModal';
 import { DimensionWheelModal } from './DimensionWheelModal';
 import { MusicStudioModal } from './MusicStudioModal';
 import { WorldSelectionMenu } from './WorldSelectionMenu';
+import { ConsoleNavigation } from './ConsoleNavigation';
 import { CoasterStudioModal } from './CoasterStudioModal';
 import { ParkCreatorModal } from './ParkCreatorModal';
 import { EcosystemJournalModal } from './EcosystemJournalModal';
@@ -279,6 +280,7 @@ export function SurvivalGameClient() {
     seq: number;
   } | null>(null);
   const [gamepadConnected, setGamepadConnected] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const touchControlsRef = useRef<TouchControlsHandle | null>(null);
   const tvOverlayRef = useRef<PersistentYouTubeOverlayHandle | null>(null);
   const hudRef = useRef<HUDStateSnapshot | null>(null);
@@ -529,30 +531,10 @@ export function SurvivalGameClient() {
           }
         });
 
-        // If a modal is open, allow B button to close it and reset sticks cleanly
+        // Menus are driven by ConsoleNavigation (D-Pad / left stick + A + B)
+        // so every modal gets the same focus behaviour. Here we only make sure
+        // no gameplay input leaks through while one is open.
         if (modalOpen) {
-          if (modalOpen === 'field_processing') {
-            checkEdge(0, () =>
-              window.dispatchEvent(new Event('fieldProcessingAdvance')),
-            );
-            checkEdge(2, () =>
-              window.dispatchEvent(new Event('fieldProcessingSharpen')),
-            );
-            checkEdge(3, () =>
-              window.dispatchEvent(new Event('fieldProcessingDrag')),
-            );
-            checkEdge(5, () =>
-              window.dispatchEvent(new Event('fieldProcessingLoad')),
-            );
-            checkEdge(4, () =>
-              window.dispatchEvent(new Event('fieldProcessingUnload')),
-            );
-          }
-          checkEdge(1, () => {
-            engine.closeCarcassProcessing();
-            setActiveModal(null);
-            engine.setMode('playing');
-          });
           engine.setAiming(false);
           engine.setGamepadDriveState(0, 0, false);
           if (wasGpStickNonZero || lastGpKnobRef.current.x !== 0 || lastGpKnobRef.current.y !== 0) {
@@ -954,16 +936,19 @@ export function SurvivalGameClient() {
   // Keyboard shortcuts for UI modals (I/Tab, B, M, J, Escape)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (screen !== 'playing') return;
+      if (screen !== 'playing' && screen !== 'menu') return;
       if (e.code === 'Escape') {
         if (activeModal) {
           setActiveModal(null);
-          engineRef.current?.setMode('playing');
-        } else {
+          if (screen === 'playing') engineRef.current?.setMode('playing');
+        } else if (screen === 'playing') {
           setActiveModal('pause');
           engineRef.current?.setMode('paused');
         }
-      } else if (!activeModal) {
+        return;
+      }
+      if (screen !== 'playing') return;
+      if (!activeModal) {
         if (e.code === 'KeyI' || e.code === 'Tab') {
           e.preventDefault();
           setActiveModal('inventory');
@@ -1038,6 +1023,25 @@ export function SurvivalGameClient() {
         window.clearTimeout(timeoutFallback);
       }
     };
+  }, [screen]);
+
+  // Best-effort checkpoint when the tab/app closes so console players never
+  // lose progress between the 35 s autosave and the moment they stop playing.
+  useEffect(() => {
+    if (screen !== 'playing') return;
+    const onPageHide = () => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      try {
+        saveGameToSlot(
+          engine.exportSaveData(engine.getCurrentSlotId() || 'slot_1'),
+        );
+      } catch {
+        // A closed tab can refuse storage writes; the last autosave stands.
+      }
+    };
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
   }, [screen]);
 
   // Refresh save list only when viewing Menu or Pause modal
@@ -1449,6 +1453,68 @@ export function SurvivalGameClient() {
 
   const closeModal = closeAllModals;
 
+  // Console presentation: request the whole document (not the canvas) so the
+  // HUD, modals and title screen all use the full TV/monitor area.
+  const toggleFullscreen = useCallback(() => {
+    try {
+      if (document.fullscreenElement) {
+        void document.exitFullscreen();
+        return;
+      }
+      if (!document.documentElement.requestFullscreen) {
+        pushToast({
+          id: `fs_unsupported_${Date.now()}`,
+          text: 'This browser does not support fullscreen — use your browser’s own fullscreen shortcut.',
+          tone: 'info',
+        });
+        return;
+      }
+      void document.documentElement
+        .requestFullscreen({ navigationUI: 'hide' })
+        .catch(() => {
+          // Controller presses are not treated as a user gesture by every
+          // browser; the Fullscreen button always works with mouse/touch.
+          pushToast({
+            id: `fs_blocked_${Date.now()}`,
+            text: 'Tap the Fullscreen button once to allow TV mode in this browser.',
+            tone: 'info',
+          });
+        });
+    } catch {
+      // Browsers without the Fullscreen API keep the normal window.
+    }
+  }, [pushToast]);
+
+  useEffect(() => {
+    const syncFullscreen = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', syncFullscreen);
+    syncFullscreen();
+    return () => document.removeEventListener('fullscreenchange', syncFullscreen);
+  }, []);
+
+  // B / Circle on a controller and Escape on a keyboard both back out one step.
+  const handleConsoleBack = useCallback(() => {
+    if (activeModalRef.current) {
+      engineRef.current?.closeCarcassProcessing();
+      closeAllModals();
+      return;
+    }
+    if (screen === 'playing' && hudRef.current?.cinematicActive) {
+      engineRef.current?.skipCinematic();
+      return;
+    }
+    if (screen === 'playing' && !hudRef.current?.gameOver) {
+      setActiveModal('pause');
+      engineRef.current?.setMode('paused');
+    }
+  }, [screen, closeAllModals]);
+
+  const consoleNavigationActive =
+    screen === 'menu' ||
+    activeModal !== null ||
+    Boolean(hud?.gameOver) ||
+    Boolean(hud?.cinematicActive);
+
   const showTouchControls =
     screen === 'playing' &&
     !activeModal &&
@@ -1661,6 +1727,12 @@ export function SurvivalGameClient() {
         }}
       />
 
+      <ConsoleNavigation
+        active={consoleNavigationActive}
+        onBack={handleConsoleBack}
+        onToggleFullscreen={toggleFullscreen}
+      />
+
       {/* CINEMATIC BOOT SCREEN — paints before the heavy world build starts */}
       {!engineReady && !webglError && (
         <div className="fixed inset-0 z-40 flex items-center justify-center overflow-hidden bg-stone-950">
@@ -1704,6 +1776,9 @@ export function SurvivalGameClient() {
         <WorldSelectionMenu
           latestSave={latestSave}
           saveSlots={saveSlots}
+          gamepadConnected={gamepadConnected}
+          isFullscreen={isFullscreen}
+          onToggleFullscreen={toggleFullscreen}
           multiplayerRoomCode={hud?.multiplayerState?.roomCode}
           multiplayerAvailable={Boolean(engineInstance)}
           onContinueLatest={() => {
@@ -1736,12 +1811,16 @@ export function SurvivalGameClient() {
 
       {/* SHIPWRECK INTRO CINEMATIC OVERLAY */}
       {screen === 'playing' && hud?.cinematicActive && (
-        <div className="pointer-events-none fixed inset-0 z-30 flex flex-col justify-between p-5 sm:p-8 safe-top safe-bottom bg-gradient-to-t from-black/70 via-transparent to-black/45">
+        <div
+          data-console-scope
+          className="pointer-events-none fixed inset-0 z-30 flex flex-col justify-between p-5 sm:p-8 safe-top safe-bottom bg-gradient-to-t from-black/70 via-transparent to-black/45"
+        >
           <div className="flex items-center justify-between">
             <div className="text-xs font-semibold tracking-wider uppercase text-amber-300">
               Survival Island: Lost World
             </div>
             <button
+              data-console-autofocus
               onClick={() => engineRef.current?.skipCinematic()}
               className="pointer-events-auto min-h-[44px] px-4 py-2 rounded-xl bg-stone-950/90 hover:bg-stone-800 border border-stone-600 text-stone-100 text-xs font-semibold flex items-center gap-2"
             >
@@ -5512,6 +5591,8 @@ export function SurvivalGameClient() {
             refreshSaves();
           }}
           onOpenSettings={() => setActiveModal('settings')}
+          isFullscreen={isFullscreen}
+          onToggleFullscreen={toggleFullscreen}
           onQuitToMenu={() => {
             handleSaveNow(engineRef.current?.getCurrentSlotId() || 'slot_1');
             setActiveModal(null);

@@ -13,6 +13,8 @@ import {
   Lock,
   LogOut,
   MapPin,
+  Maximize,
+  Minimize,
   Moon,
   Music,
   Play,
@@ -49,6 +51,9 @@ interface WorldSelectionMenuProps {
   multiplayerRoomCode?: string | null;
   /** Rooms live inside a running world, so the fresh menu hides this entry. */
   multiplayerAvailable?: boolean;
+  gamepadConnected?: boolean;
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
   onContinueLatest: () => void;
   onLoadSlot: (slotId: string) => void;
   onDeleteSlot: (slotId: string) => void;
@@ -107,6 +112,9 @@ export function WorldSelectionMenu({
   saveSlots,
   multiplayerRoomCode,
   multiplayerAvailable = true,
+  gamepadConnected = false,
+  isFullscreen = false,
+  onToggleFullscreen,
   onContinueLatest,
   onLoadSlot,
   onDeleteSlot,
@@ -311,6 +319,23 @@ export function WorldSelectionMenu({
               <Settings className="h-4 w-4 shrink-0 text-stone-200" />
               <span className="min-w-0 break-words text-left">Settings</span>
             </button>
+            {onToggleFullscreen && (
+              <button
+                type="button"
+                onClick={onToggleFullscreen}
+                className="menu-top-action island-wood-plank flex min-h-[42px] min-w-0 items-center justify-center gap-1.5 rounded-lg border border-stone-600/70 px-2.5 text-[11px] font-semibold text-stone-100 sm:px-3.5 sm:text-xs"
+                aria-pressed={isFullscreen}
+              >
+                {isFullscreen ? (
+                  <Minimize className="h-4 w-4 shrink-0 text-amber-300" />
+                ) : (
+                  <Maximize className="h-4 w-4 shrink-0 text-amber-300" />
+                )}
+                <span className="min-w-0 break-words text-left">
+                  {isFullscreen ? 'Windowed' : 'Fullscreen'}
+                </span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -443,8 +468,17 @@ export function WorldSelectionMenu({
               <div className="px-1.5 pb-0.5 text-[9px] font-bold uppercase tracking-[0.34em] text-stone-400">
                 Expedition Command
               </div>
+              <div className="mx-0.5 flex items-center gap-1.5 rounded-lg border border-emerald-500/35 bg-emerald-950/45 px-2.5 py-1.5 text-[9px] font-semibold uppercase tracking-wider text-emerald-200">
+                <Gamepad2 className="h-3.5 w-3.5 shrink-0 text-emerald-300" />
+                <span className="min-w-0 break-words">
+                  {gamepadConnected
+                    ? 'D-Pad Navigate · A Select · B Back · Y Fullscreen'
+                    : 'Arrow Keys Navigate · Enter Select'}
+                </span>
+              </div>
               <button
                 type="button"
+                data-console-autofocus
                 onClick={handlePrimaryPlay}
                 className="menu-primary-cta island-wood-plank-play group relative flex min-h-[78px] w-full min-w-0 cursor-pointer items-center gap-3.5 overflow-hidden rounded-xl border-2 border-emerald-400/80 px-3.5 py-3 text-left text-stone-50"
               >

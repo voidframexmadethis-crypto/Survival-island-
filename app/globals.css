@@ -513,6 +513,20 @@ input[type="range"].daw-mini-slider::-webkit-slider-thumb {
   outline-offset: 2px;
 }
 
+/*
+ * Console / keyboard couch play: focus is moved programmatically by the
+ * gamepad navigation layer, so it must stay visible even though the browser
+ * never saw a Tab key press.
+ */
+body.console-nav-active :is(button, a[href], input, select, textarea, [role='button'], [tabindex]):focus {
+  outline: 3px solid #fbbf24;
+  outline-offset: 3px;
+  box-shadow:
+    0 0 0 6px rgba(251, 191, 36, 0.16),
+    0 0 24px rgba(251, 191, 36, 0.38);
+  border-radius: 0.75rem;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .menu-shell *,
   .menu-shell *::before,

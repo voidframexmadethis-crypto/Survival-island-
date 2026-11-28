@@ -8,6 +8,8 @@ import {
   Gamepad2,
   Gauge,
   Keyboard,
+  Maximize,
+  Minimize,
   PawPrint,
   Play,
   RotateCcw,
@@ -622,6 +624,8 @@ export function PauseModal({
   onDeleteSlot,
   onOpenSettings,
   onQuitToMenu,
+  isFullscreen = false,
+  onToggleFullscreen,
 }: {
   saveSlots: SaveSlotSummary[];
   currentSlotId?: string;
@@ -634,6 +638,8 @@ export function PauseModal({
   onDeleteSlot: (slotId: string) => void;
   onOpenSettings: () => void;
   onQuitToMenu: () => void;
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
 }) {
   const effectiveMode = resolveAllowedGameMode(worldType, gameMode);
   const resumeLabel =
@@ -666,6 +672,7 @@ export function PauseModal({
 
         <div className="p-5 space-y-3 overflow-y-auto survival-scroll">
           <button
+            data-console-autofocus
             onClick={onResume}
             className="w-full min-h-[48px] rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 font-semibold text-sm flex items-center justify-center gap-2"
           >
@@ -688,6 +695,16 @@ export function PauseModal({
             <Settings className="w-4 h-4" />
             <span>Settings</span>
           </button>
+
+          {onToggleFullscreen && (
+            <button
+              onClick={onToggleFullscreen}
+              className="w-full min-h-[46px] rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-100 font-semibold text-sm flex items-center justify-center gap-2"
+            >
+              {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+              <span>{isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}</span>
+            </button>
+          )}
 
           {saveSlots.length > 0 && (
             <div className="pt-2 border-t border-stone-800 space-y-2">
@@ -773,6 +790,8 @@ export function ControlsModal({ onClose }: { onClose: () => void }) {
     ['Look Around', 'Touch & Drag Anywhere on Screen'],
     ['Action / Jump / Sprint', 'Right-Hand Touch Action Pads'],
     ['Gamepad Support', 'Auto-Detected Xbox / PlayStation / MFi'],
+    ['Menu Navigation', 'D-Pad / Left Stick · A Select · B Back'],
+    ['Fullscreen', 'Y on any menu'],
   ];
 
   return (
