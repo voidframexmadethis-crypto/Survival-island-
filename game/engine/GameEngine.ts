@@ -190,7 +190,11 @@ import {
   CreatureManager,
   ScavengerCarcassTarget,
 } from '../systems/creatureSystem';
-import { GlobalWildlifeSystem } from '../systems/globalWildlifeSystem';
+import {
+  GlobalWildlifeSystem,
+  type WildlifeAgent,
+  type WildlifeDamageResult,
+} from '../systems/globalWildlifeSystem';
 import {
   ActiveStructureEntity,
   StructureManager,
@@ -9948,6 +9952,49 @@ export class GameEngine {
     return true;
   }
 
+  /**
+   * Makes the ambient (instanced) wildlife pool killable. These animals can
+   * bite the player, but before this they had no health and could not be hit.
+   */
+  private applyGlobalWildlifeDamage(
+    agent: WildlifeAgent,
+    damage: number,
+    hitX: number,
+    hitY: number,
+    hitZ: number,
+  ): boolean {
+    const result = this.globalWildlife?.damage(
+      agent,
+      damage,
+      this.playerX,
+      this.playerZ,
+    );
+    if (!result) return false;
+
+    this.sound.playBulletImpact('flesh');
+    this.spawnParticles(
+      hitX,
+      hitY,
+      hitZ,
+      result.killed ? 0xdc2626 : 0xfef08a,
+      result.killed ? 12 : 7,
+    );
+    if (result.killed) this.handleGlobalWildlifeDefeated(result);
+    return true;
+  }
+
+  private handleGlobalWildlifeDefeated(result: WildlifeDamageResult): void {
+    this.stats.animalsHunted += 1;
+    this.spawnParticles(result.x, result.y + 0.35, result.z, 0x991b1b, 12);
+    this.spawnParticles(result.x, result.y + 0.55, result.z, 0xfef3c7, 8);
+
+    // Every animal the player fights back against is harvestable.
+    const meat = result.entry.scale >= 1 ? 2 : 1;
+    this.spawnPickup('raw_meat', meat, result.x, result.z, 240, undefined, 0.4);
+    this.toast(`${result.entry.name} killed — +${meat} Raw Meat`, 'craft');
+    this.emitHud();
+  }
+
   private applyPlayerDamage(rawAmount: number, sourceName: string): void {
     const creativeNoNeeds =
       this.worldType === 'flat' ||
@@ -10027,8 +10074,19 @@ export class GameEngine {
             false,
           )
         : null;
+    // Ambient wildlife is instanced and separate from CreatureManager, so it
+    // needs its own sweep before the swing falls through to trees.
+    const wildlifeHit = this.globalWildlife?.raycast(
+      _probeOrigin,
+      _probeDir,
+      range + 1.1,
+    );
 
-    if (structHit && (!zoneHit || structHit.distance < zoneHit.distance)) {
+    if (
+      structHit &&
+      (!zoneHit || structHit.distance < zoneHit.distance) &&
+      (!wildlifeHit || structHit.distance < wildlifeHit.distance)
+    ) {
       this.damageStructureEntity(
         structHit.entity,
         damage,
@@ -10040,7 +10098,7 @@ export class GameEngine {
       return;
     }
 
-    if (zoneHit) {
+    if (zoneHit && zoneHit.distance <= (wildlifeHit?.distance ?? Infinity)) {
       const target = this.creatures.creatures.find((c) => c.id === zoneHit.creatureId);
       if (target) {
         this.applyCreatureZoneWeaponHit(
@@ -10061,6 +10119,17 @@ export class GameEngine {
         );
         return;
       }
+    }
+
+    if (wildlifeHit) {
+      this.applyGlobalWildlifeDamage(
+        wildlifeHit.agent,
+        damage,
+        wildlifeHit.point.x,
+        wildlifeHit.point.y,
+        wildlifeHit.point.z,
+      );
+      return;
     }
 
     // 2. Fallback close-quarters chest/limb arc check if beside target
@@ -10090,6 +10159,25 @@ export class GameEngine {
         );
         return;
       }
+    }
+
+    // Small animals (snakes, crabs, rodents) often sit below the reticle, so
+    // also check a short radius around the player's feet.
+    const ankleWildlife = this.globalWildlife?.nearest(
+      this.playerX,
+      this.playerY,
+      this.playerZ,
+      range + 0.9,
+    );
+    if (ankleWildlife) {
+      this.applyGlobalWildlifeDamage(
+        ankleWildlife,
+        damage,
+        ankleWildlife.x,
+        ankleWildlife.y + ankleWildlife.scale * 0.6,
+        ankleWildlife.z,
+      );
+      return;
     }
 
     if (this.worldType === 'island' && this.currentDimension === 'overworld') {
@@ -17197,6 +17285,11 @@ export class GameEngine {
             this.creatures.creatures,
             a.isBullet ? 0.28 : 0.22,
           );
+          const wildlifeHit = this.globalWildlife?.raycast(
+            _vec3A,
+            _vec3B,
+            segLen + 0.65,
+          );
           const structHit =
             this.worldType === 'island' && this.currentDimension === 'overworld'
               ? this.structureManager.raycastEntities(
@@ -17207,7 +17300,11 @@ export class GameEngine {
                 )
               : null;
 
-          if (structHit && (!zoneHit || structHit.distance < zoneHit.distance)) {
+          if (
+            structHit &&
+            (!zoneHit || structHit.distance < zoneHit.distance) &&
+            (!wildlifeHit || structHit.distance < wildlifeHit.distance)
+          ) {
             this.damageStructureEntity(
               structHit.entity,
               a.damage,
@@ -17225,7 +17322,10 @@ export class GameEngine {
               );
             }
             remove = true;
-          } else if (zoneHit) {
+          } else if (
+            zoneHit &&
+            zoneHit.distance <= (wildlifeHit?.distance ?? Infinity)
+          ) {
             const c = this.creatures.creatures.find((cr) => cr.id === zoneHit.creatureId);
             if (c) {
               this.applyCreatureZoneWeaponHit(
@@ -17250,6 +17350,23 @@ export class GameEngine {
               }
               remove = true;
             }
+          } else if (wildlifeHit) {
+            this.applyGlobalWildlifeDamage(
+              wildlifeHit.agent,
+              a.damage,
+              wildlifeHit.point.x,
+              wildlifeHit.point.y,
+              wildlifeHit.point.z,
+            );
+            if (a.isBullet) {
+              this.spawnBulletImpact(
+                wildlifeHit.point.x,
+                wildlifeHit.point.y,
+                wildlifeHit.point.z,
+                'flesh',
+              );
+            }
+            remove = true;
           }
         }
       }
@@ -25031,6 +25148,9 @@ export class GameEngine {
         }
       }
     }
+    // Ambient wildlife caught in the same blast is killable too.
+    const blastWildlife = this.globalWildlife?.damageNearby(bx, bz, 9.5, 135);
+    blastWildlife?.forEach((result) => this.handleGlobalWildlifeDefeated(result));
 
     // Shatter nearby structural blocks inside inner blast radius, then re-solve integrity for bridges/fortresses!
     let shattered = 0;
@@ -27820,6 +27940,13 @@ export class GameEngine {
           }
         }
       }
+      const wildlifeRam = this.globalWildlife?.damageNearby(
+        v.x,
+        v.z,
+        2.4,
+        Math.round(spd * 1.8),
+      );
+      wildlifeRam?.forEach((result) => this.handleGlobalWildlifeDefeated(result));
     }
 
     // Sync player coordinates inside cockpit & mark exploration

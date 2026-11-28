@@ -36,7 +36,7 @@ export type WildlifeAgentState =
   | 'swim'
   | 'fly';
 
-interface WildlifeAgent {
+export interface WildlifeAgent {
   entry: GlobalWildlifeEntry;
   x: number;
   y: number;
@@ -54,6 +54,29 @@ interface WildlifeAgent {
   attackCooldown: number;
   /** Cached squared distance, refreshed during update. */
   distanceSq: number;
+  hp: number;
+  maxHp: number;
+  /** Seconds of red damage flash remaining after the player lands a hit. */
+  hitFlash: number;
+}
+
+/** Result of the player damaging an ambient wildlife agent. */
+export interface WildlifeDamageResult {
+  killed: boolean;
+  entry: GlobalWildlifeEntry;
+  x: number;
+  y: number;
+  z: number;
+  damage: number;
+  hp: number;
+  maxHp: number;
+}
+
+export interface WildlifeRayHit {
+  agent: WildlifeAgent;
+  entry: GlobalWildlifeEntry;
+  distance: number;
+  point: THREE.Vector3;
 }
 
 const URBAN_ANCHORS = [
@@ -124,6 +147,17 @@ function hashString(value: string): number {
 
 const SPECIES_COLORS = new Map<string, THREE.Color>();
 const FAR_TINT = new THREE.Color(0xa8b6a6);
+const HIT_FLASH = new THREE.Color(0xff5544);
+
+/**
+ * Ambient animals are smaller and simpler than CreatureManager foes, so their
+ * pool is tuned for quick retaliation kills rather than long boss fights.
+ */
+export function wildlifeMaxHp(entry: GlobalWildlifeEntry): number {
+  const base = 6 + entry.scale * 22;
+  const predatorBonus = entry.category === 'aggressive' ? 8 : 0;
+  return Math.max(12, Math.round(base + predatorBonus));
+}
 const ARCHETYPE_INDEX = new Map(
   GLOBAL_WILDLIFE_ARCHETYPES.map((archetype, index) => [archetype, index] as const),
 );
@@ -358,6 +392,148 @@ export class GlobalWildlifeSystem {
     return ids.size;
   }
 
+  /**
+   * Ray/sphere sweep against the instanced wildlife pool. Used by melee swings
+   * and projectiles so ambient animals can be fought back like any other foe.
+   */
+  public raycast(
+    origin: THREE.Vector3,
+    direction: THREE.Vector3,
+    maxDistance: number,
+  ): WildlifeRayHit | null {
+    let best: WildlifeAgent | null = null;
+    let bestDistance = maxDistance;
+    let bestX = 0;
+    let bestY = 0;
+    let bestZ = 0;
+
+    for (const agent of this.agents) {
+      const centerY = agent.y + agent.scale * 0.55;
+      const toX = agent.x - origin.x;
+      const toY = centerY - origin.y;
+      const toZ = agent.z - origin.z;
+      const along = toX * direction.x + toY * direction.y + toZ * direction.z;
+      if (along < 0 || along > bestDistance) continue;
+
+      const px = origin.x + direction.x * along;
+      const py = origin.y + direction.y * along;
+      const pz = origin.z + direction.z * along;
+      const dx = agent.x - px;
+      const dy = centerY - py;
+      const dz = agent.z - pz;
+      const radius = Math.max(0.42, agent.scale * 0.72);
+      if (dx * dx + dy * dy + dz * dz > radius * radius) continue;
+
+      best = agent;
+      bestDistance = along;
+      bestX = px;
+      bestY = py;
+      bestZ = pz;
+    }
+
+    if (!best) return null;
+    return {
+      agent: best,
+      entry: best.entry,
+      distance: bestDistance,
+      point: new THREE.Vector3(bestX, bestY, bestZ),
+    };
+  }
+
+  /** Closest animal around the player, including ankle-height snakes and crabs. */
+  public nearest(
+    x: number,
+    y: number,
+    z: number,
+    maxDistance: number,
+    maxVertical = 2.6,
+  ): WildlifeAgent | null {
+    let best: WildlifeAgent | null = null;
+    let bestSq = maxDistance * maxDistance;
+    for (const agent of this.agents) {
+      if (Math.abs(agent.y - y) > maxVertical + agent.scale) continue;
+      const dx = agent.x - x;
+      const dz = agent.z - z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq < bestSq) {
+        bestSq = distSq;
+        best = agent;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Applies player damage. Wounded animals flee (or fight back when they are a
+   * predator); lethal hits remove them from the pool and report the corpse
+   * position so the engine can spawn particles and loot.
+   */
+  public damage(
+    agent: WildlifeAgent,
+    rawDamage: number,
+    fromX: number,
+    fromZ: number,
+  ): WildlifeDamageResult | null {
+    const index = this.agents.indexOf(agent);
+    if (index < 0) return null;
+    const damage = Math.max(1, Math.round(rawDamage));
+    agent.hp -= damage;
+    agent.hitFlash = 0.22;
+
+    const pushX = agent.x - fromX;
+    const pushZ = agent.z - fromZ;
+    const pushLen = Math.hypot(pushX, pushZ) || 1;
+    const knock = Math.min(1.8, 0.5 + damage * 0.02);
+    agent.x += (pushX / pushLen) * knock;
+    agent.z += (pushZ / pushLen) * knock;
+
+    const result: WildlifeDamageResult = {
+      killed: agent.hp <= 0,
+      entry: agent.entry,
+      x: agent.x,
+      y: agent.y,
+      z: agent.z,
+      damage,
+      hp: Math.max(0, agent.hp),
+      maxHp: agent.maxHp,
+    };
+
+    if (result.hp <= 0) {
+      this.removeAgent(index);
+    } else if (agent.entry.category === 'aggressive') {
+      // Predators answer a hit by charging instead of running away.
+      agent.state = 'chase';
+      agent.stateTimer = 6;
+      agent.targetX = fromX;
+      agent.targetZ = fromZ;
+    } else {
+      agent.state = 'flee';
+      agent.stateTimer = 5.5;
+    }
+
+    return result;
+  }
+
+  /** Area damage for explosions, powder kegs and vehicle rams. */
+  public damageNearby(
+    x: number,
+    z: number,
+    radius: number,
+    rawDamage: number,
+  ): WildlifeDamageResult[] {
+    const targets = this.agents.filter(
+      (agent) => Math.hypot(agent.x - x, agent.z - z) <= radius,
+    );
+    const killed: WildlifeDamageResult[] = [];
+    for (const agent of targets) {
+      const distance = Math.hypot(agent.x - x, agent.z - z);
+      const falloff = Math.max(0.35, 1 - distance / (radius + 1));
+      const result = this.damage(agent, rawDamage * falloff, x, z);
+      if (result?.killed) killed.push(result);
+    }
+    return killed;
+  }
+
   private removeAgent(index: number): void {
     const last = this.agents.pop();
     if (last && index < this.agents.length) {
@@ -404,6 +580,9 @@ export class GlobalWildlifeSystem {
         scale: entry.scale * (0.92 + Math.random() * 0.16),
         attackCooldown: 0,
         distanceSq: Infinity,
+        hp: wildlifeMaxHp(entry),
+        maxHp: wildlifeMaxHp(entry),
+        hitFlash: 0,
       });
       return true;
     }
@@ -443,6 +622,7 @@ export class GlobalWildlifeSystem {
     agent.distanceSq = dist * dist;
     agent.phase += dt * (agent.state === 'flee' || agent.state === 'chase' ? 9 : 2.2);
     agent.attackCooldown = Math.max(0, agent.attackCooldown - dt);
+    agent.hitFlash = Math.max(0, agent.hitFlash - dt);
 
     const aggressive = agent.entry.category === 'aggressive';
     const fearRadius = wildlifeFearRadius(agent.entry, { sprinting, crouching });
@@ -666,6 +846,9 @@ export class GlobalWildlifeSystem {
       mesh.setMatrixAt(count, this.dummy.matrix);
 
       this.colorScratch.copy(getWildlifeSpeciesColor(agent.entry));
+      if (agent.hitFlash > 0) {
+        this.colorScratch.lerp(HIT_FLASH, Math.min(0.8, 0.35 + agent.hitFlash * 2.2));
+      }
       if (!near) {
         // Distance haze: far agents keep their species hue but read as a
         // simpler, slightly desaturated silhouette.

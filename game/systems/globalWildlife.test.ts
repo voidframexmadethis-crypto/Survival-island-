@@ -174,6 +174,40 @@ test('instanced wildlife runtime spawns, pools and shuts off with density', () =
   assert.equal(scene.children.length, 0);
 });
 
+test('ambient wildlife has health and can be killed by player attacks', () => {
+  const scene = new THREE.Scene();
+  const system = new GlobalWildlifeSystem(scene);
+  system.setDensity(1);
+  for (let i = 0; i < 80; i++) {
+    system.update(0.1, i * 0.1, -44, 96);
+  }
+
+  const agent = system.nearest(-44, 0, 96, 1000, 1000);
+  assert.ok(agent, 'wildlife should be present around the player');
+  assert.ok((agent?.maxHp ?? 0) >= 12, 'even the smallest animals need a hit pool');
+
+  // A ray aimed at the animal must resolve to that animal.
+  const rayHit = system.raycast(
+    new THREE.Vector3(agent!.x, agent!.y + agent!.scale * 0.55, agent!.z - 6),
+    new THREE.Vector3(0, 0, 1),
+    12,
+  );
+  assert.equal(rayHit?.agent, agent);
+
+  const activeBefore = system.getActiveCount();
+  const wounded = system.damage(agent!, 1, -44, 96);
+  assert.equal(wounded?.killed, false);
+  assert.ok((wounded?.hp ?? 0) < (agent?.maxHp ?? 0));
+
+  const killed = system.damage(agent!, 9999, -44, 96);
+  assert.equal(killed?.killed, true);
+  assert.equal(killed?.hp, 0);
+  assert.equal(system.getActiveCount(), activeBefore - 1);
+  assert.equal(system.damage(agent!, 10, -44, 96), null);
+
+  system.dispose();
+});
+
 test('species colors are deterministic and varied', () => {
   const a = GLOBAL_WILDLIFE_ROSTER.find((entry) => entry.id === 'scarlet_macaw')!;
   const b = GLOBAL_WILDLIFE_ROSTER.find((entry) => entry.id === 'blue_tang')!;
