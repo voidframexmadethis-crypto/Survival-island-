@@ -60,7 +60,16 @@ export class SoundEngine {
   private nextFireCrackleTime = 0;
   private whiteNoiseBuf: AudioBuffer | null = null;
   private brownNoiseBuf: AudioBuffer | null = null;
+  private audioKeepAliveBound = false;
   private readonly reloadSequencer = new ReloadSoundSequencer();
+
+  private readonly onAudioGesture = () => this.ensureRunning();
+  private readonly onAudioVisibility = () => {
+    if (typeof document === 'undefined' || !document.hidden) this.ensureRunning();
+  };
+  private readonly onAudioContextStateChange = () => {
+    if (this.ctx && (this.ctx.state as string) !== 'running') this.ensureRunning();
+  };
 
   // Continuous real-time multi-powertrain vehicle engine synthesizer
   private engineOsc1: OscillatorNode | null = null;
@@ -134,9 +143,8 @@ export class SoundEngine {
       this.ambienceGain.connect(this.masterGain);
     }
 
-    if (this.ctx.state === 'suspended') {
-      this.ctx.resume().catch(() => {});
-    }
+    this.ensureRunning();
+    this.bindAudioKeepAlive();
 
     if (!this.whiteNoiseBuf || !this.brownNoiseBuf) {
       this.ensureNoiseBuffers();
@@ -144,6 +152,52 @@ export class SoundEngine {
 
     if (!this.ambienceStarted && this.ctx && this.ambienceGain) {
       this.startAmbience();
+    }
+  }
+
+  /**
+   * Keeps the shared AudioContext alive. Mobile Safari reports `interrupted`
+   * (not just `suspended`) after calls, videos or backgrounding, which used to
+   * leave all game audio silent until the player tapped the canvas again.
+   */
+  public ensureRunning(): void {
+    if (!this.ctx) return;
+    const state = this.ctx.state as string;
+    if (state === 'running' || state === 'closed') return;
+    try {
+      this.ctx.resume().catch(() => {});
+    } catch {
+      // Ignore browsers that reject resume outside a user gesture
+    }
+  }
+
+  /**
+   * One-time listeners that re-arm audio after tab switches, app focus,
+   * interruptions and the next touch/key press on any platform.
+   */
+  private bindAudioKeepAlive(): void {
+    if (this.audioKeepAliveBound || typeof window === 'undefined') return;
+    this.audioKeepAliveBound = true;
+    this.ctx?.addEventListener('statechange', this.onAudioContextStateChange);
+    document.addEventListener('visibilitychange', this.onAudioVisibility);
+    window.addEventListener('focus', this.onAudioGesture);
+    window.addEventListener('pointerdown', this.onAudioGesture, { passive: true });
+    window.addEventListener('touchstart', this.onAudioGesture, { passive: true });
+    window.addEventListener('keydown', this.onAudioGesture);
+  }
+
+  private unbindAudioKeepAlive(): void {
+    if (!this.audioKeepAliveBound) return;
+    this.audioKeepAliveBound = false;
+    try {
+      this.ctx?.removeEventListener('statechange', this.onAudioContextStateChange);
+      document.removeEventListener('visibilitychange', this.onAudioVisibility);
+      window.removeEventListener('focus', this.onAudioGesture);
+      window.removeEventListener('pointerdown', this.onAudioGesture);
+      window.removeEventListener('touchstart', this.onAudioGesture);
+      window.removeEventListener('keydown', this.onAudioGesture);
+    } catch {
+      // Ignore teardown races
     }
   }
 
@@ -236,6 +290,7 @@ export class SoundEngine {
     inForest: boolean,
   ): void {
     if (!this.ctx || !this.surfFilter || !this.surfGain || !this.rainGain) return;
+    this.ensureRunning();
     const now = this.ctx.currentTime;
     const wave = 0.5 + 0.5 * Math.sin(time * 0.55);
     const windBoost = weather === 'storm' ? 320 : weather === 'rain' ? 180 : 0;
@@ -3020,6 +3075,7 @@ export class SoundEngine {
       if (this.engineRunning) this.stopVehicleEngine();
       return;
     }
+    this.ensureRunning();
 
     if (!this.engineRunning || this.activeEngineProfileId !== config.profileId) {
       this.startEngineNodes(config);
@@ -3250,6 +3306,7 @@ export class SoundEngine {
   }
 
   public dispose(): void {
+    this.unbindAudioKeepAlive();
     this.stopVehicleEngine();
     try {
       this.surfNoiseSrc?.stop();

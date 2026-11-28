@@ -1547,6 +1547,8 @@ export class GameEngine {
   private flatSurfaceStyle: FlatSurfaceStyle = 'turf_grid';
   private flatWorld!: FlatWorldHandles;
   private waterparkRevealLatched = false;
+  private landmarkPrewarmScheduled = false;
+  private landmarkPrewarmAnchors: { x: number; y: number; z: number }[] = [];
   private coasterRuntime!: RollerCoasterRuntime;
   private amusementParkRuntime!: AmusementParkRuntime;
   private waterpark!: WaterparkRuntime;
@@ -2604,6 +2606,9 @@ export class GameEngine {
       this.clock.start();
       this.clock.getDelta();
       this.resetFrameTiming();
+      // Mobile browsers suspend or interrupt the AudioContext while hidden, so
+      // re-arm it the moment the game comes back instead of waiting for a tap.
+      this.sound.unlock();
       this.fpsController.start(this._stepHandlers);
     }
   };
@@ -3052,19 +3057,15 @@ export class GameEngine {
   }
 
   /**
-   * Uploads the coaster, waterpark, garage and mansion meshes while the world is
-   * still behind the loading overlay. These landmarks are built lazily after
-   * the boot compile, so without this pass their first on-screen frame paid for
-   * hundreds of geometry/texture uploads at once — the hitch players felt when
-   * walking up to the park, waterpark, garage or mansion.
+   * Queues a background GPU warm-up for the coaster, waterpark, garage and
+   * mansion. It runs after the player is actually in the world, one landmark
+   * per idle slice, so it never delays the loading screen or the intro cut.
    */
   public prewarmLandmarks(): void {
-    if (this.disposed || this.isSoftwareGl || !this.world || this.worldType === 'flat') return;
-    if (typeof document !== 'undefined' && document.hidden) return;
-    const renderer = this.renderer;
-    if (!renderer) return;
-
-    const anchors: { x: number; y: number; z: number }[] = [
+    if (this.disposed || this.isSoftwareGl || !this.world || this.worldType !== 'island') return;
+    if (this.landmarkPrewarmScheduled) return;
+    this.landmarkPrewarmScheduled = true;
+    this.landmarkPrewarmAnchors = [
       { x: WATERPARK_SITE.x, y: WATERPARK_SITE.y, z: WATERPARK_SITE.z },
       {
         x: this.world.garagePos.x,
@@ -3078,29 +3079,57 @@ export class GameEngine {
       },
       ...this.coasterRuntime.getStationAnchors(),
     ];
+    this.scheduleLandmarkPrewarm(1500);
+  }
 
-    // Hide/show state must be restored to whatever the active cull wants.
+  private scheduleLandmarkPrewarm(delayMs: number): void {
+    if (this.disposed || typeof window === 'undefined') return;
+    const run = () => {
+      if (this.disposed) {
+        this.landmarkPrewarmAnchors = [];
+        return;
+      }
+      if (this.landmarkPrewarmAnchors.length === 0) return;
+      // Never steal frames from the intro cut, a paused modal or a hidden tab.
+      if (
+        this.cinematicActive ||
+        this.mode !== 'playing' ||
+        (typeof document !== 'undefined' && document.hidden)
+      ) {
+        this.scheduleLandmarkPrewarm(1200);
+        return;
+      }
+      const anchor = this.landmarkPrewarmAnchors.shift();
+      if (anchor) this.warmLandmarkAnchor(anchor);
+      if (this.landmarkPrewarmAnchors.length > 0) {
+        this.scheduleLandmarkPrewarm(280);
+      }
+    };
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(run, { timeout: delayMs + 700 });
+    } else {
+      window.setTimeout(run, delayMs);
+    }
+  }
+
+  /** Uploads one landmark's meshes plus its immediate ground chunks offscreen. */
+  private warmLandmarkAnchor(anchor: { x: number; y: number; z: number }): void {
+    if (!this.world) return;
+    const renderer = this.renderer;
+    if (!renderer) return;
+
     const prevWaterparkVisible = this.waterparkRevealLatched;
     this.waterpark?.setVisible(true);
     this.coasterRuntime.setWarmupVisible(true);
 
-    // Also warm the ground chunks around each landmark so the approach path
-    // does not upload a fresh 64 m chunk every few steps.
     const chunkRestore: { group: THREE.Group; visible: boolean }[] = [];
     const warmRadiusSq = 190 * 190;
     for (const chunk of this.world.worldChunks) {
       const chunkX = (chunk.x + 0.5) * 64;
       const chunkZ = (chunk.z + 0.5) * 64;
-      let nearAnchor = false;
-      for (const anchor of anchors) {
-        const dx = chunkX - anchor.x;
-        const dz = chunkZ - anchor.z;
-        if (dx * dx + dz * dz <= warmRadiusSq) {
-          nearAnchor = true;
-          break;
-        }
-      }
-      if (nearAnchor && !chunk.group.visible) {
+      const dx = chunkX - anchor.x;
+      const dz = chunkZ - anchor.z;
+      if (dx * dx + dz * dz <= warmRadiusSq && !chunk.group.visible) {
         chunkRestore.push({ group: chunk.group, visible: false });
         chunk.group.visible = true;
       }
@@ -3110,7 +3139,7 @@ export class GameEngine {
     const prevPos = camera.position.clone();
     const prevQuat = camera.quaternion.clone();
     const prevTarget = renderer.getRenderTarget();
-    const warmupTarget = new THREE.WebGLRenderTarget(160, 90, {
+    const warmupTarget = new THREE.WebGLRenderTarget(128, 72, {
       depthBuffer: true,
       stencilBuffer: false,
     });
@@ -3118,12 +3147,10 @@ export class GameEngine {
 
     try {
       renderer.setRenderTarget(warmupTarget);
-      for (const anchor of anchors) {
-        camera.position.set(anchor.x + 34, anchor.y + 22, anchor.z + 34);
-        camera.lookAt(anchor.x, anchor.y + 4, anchor.z);
-        camera.updateMatrixWorld();
-        renderer.render(this.scene, camera);
-      }
+      camera.position.set(anchor.x + 34, anchor.y + 22, anchor.z + 34);
+      camera.lookAt(anchor.x, anchor.y + 4, anchor.z);
+      camera.updateMatrixWorld();
+      renderer.render(this.scene, camera);
     } finally {
       renderer.setRenderTarget(prevTarget);
       warmupTarget.dispose();
@@ -3138,9 +3165,6 @@ export class GameEngine {
         this.playerZ,
         this.effectiveMaxDrawDistance,
       );
-      // Shadow maps were rendered from the warm-up camera; force a fresh one.
-      this.shadowLastCamX = Number.NaN;
-      renderer.shadowMap.needsUpdate = true;
     }
   }
 
@@ -3293,6 +3317,8 @@ export class GameEngine {
     if (mode !== 'playing') {
       this.clearMovementInputs();
       if (mode === 'menu' && prevMode !== 'menu') {
+        // Never leave a vehicle engine loop droning under the title screen.
+        this.sound.stopVehicleEngine();
         this.menuCameraSnapped = false;
         // The live title backdrop is always staged at golden hour for a
         // cinematic hero shot; starting or loading a world restores real time.
@@ -4366,6 +4392,11 @@ export class GameEngine {
     this.emitHud();
   }
 
+  /** True while the intro cut or navigator farewell is playing. */
+  public isCutscenePlaying(): boolean {
+    return this.cinematicActive;
+  }
+
   public skipCinematic(): void {
     if (!this.cinematicActive) return;
     if (this.navigatorFarewellCinematic) {
@@ -5275,6 +5306,9 @@ export class GameEngine {
     this.setDayNightMode(options?.dayNightMode ?? 'cycle');
     this.coasterRuntime?.clearAll();
     this.structureManager?.resetCleared();
+    // A new world rebuilds the landmark meshes, so warm their GPU uploads again.
+    this.landmarkPrewarmScheduled = false;
+    this.landmarkPrewarmAnchors = [];
 
     if (nextWorldType === 'flat') {
       this.camYaw = 0;
@@ -12649,10 +12683,9 @@ export class GameEngine {
   }
 
   private updateCinematic(dt: number): void {
-    // Advance smoothly from t=0 on first frame so frame-0 renders cleanly without skipping
-    if (this.cinematicCameraInitialized) {
-      this.cinematicTimer += dt;
-    }
+    // The cut clock is advanced from rendered frame time in handleRender(), so
+    // the intro always plays at its authored pace even when physics substeps
+    // are throttled. This method only samples the current cut frame.
     if (this.navigatorFarewellCinematic) {
       this.updateNavigatorFarewellCinematic(dt);
       return;
@@ -23444,6 +23477,11 @@ export class GameEngine {
       this.frameWatch,
       nowPerf,
     );
+    // Cinematics are wall-clock camera cuts: drive them from real render time
+    // so slow frames cannot stretch the intro into a slow-motion sequence.
+    if (this.cinematicActive && this.mode === 'playing') {
+      this.cinematicTimer = Math.min(this.cinematicTimer + Math.min(clampedDt, 0.06), 600);
+    }
     // Dynamic resolution guard: drop internal resolution a step at a time if
     // the GPU cannot sustain 60 FPS, and restore it when headroom returns.
     // Never let dynamic resolution soften the title screen; gameplay keeps the governor.

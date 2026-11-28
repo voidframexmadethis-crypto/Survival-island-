@@ -809,7 +809,7 @@ export function SurvivalGameClient() {
       void loadGameEngineModule().catch(() => {
         // The launch path retries and surfaces a readable error if this fails.
       });
-    }, 400);
+    }, 120);
 
     const params = new URLSearchParams(window.location.search);
     const autostart = params.get('autostart') === '1';
@@ -1101,12 +1101,28 @@ export function SurvivalGameClient() {
           engine.ensurePlayerHasGun(true);
         }
         engine.prewarmLandmarks();
-        saveGameToSlot(engine.exportSaveData(slotId));
-        refreshSaves();
         engine.setMode('playing');
         setCurrentSlotId(slotId);
         setActiveModal(null);
         setScreen('playing');
+
+        // Serializing a fresh world is the most expensive non-render step here.
+        // Let the player into the world first, then create the save slot once
+        // the intro cut is over so it cannot hitch the cinematic either.
+        const persistInitialSave = () => {
+          if (engineRef.current !== engine) return;
+          if (engine.isCutscenePlaying()) {
+            window.setTimeout(persistInitialSave, 1200);
+            return;
+          }
+          try {
+            saveGameToSlot(engine.exportSaveData(slotId));
+            refreshSaves();
+          } catch (err) {
+            console.error('Failed to persist new world', err);
+          }
+        };
+        window.setTimeout(persistInitialSave, 1200);
       } catch (err) {
         console.error('Failed to start world', err);
         pushToast({

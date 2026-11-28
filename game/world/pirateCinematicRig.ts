@@ -74,10 +74,10 @@ interface FlatWaterSail {
   bobPhase: number;
 }
 
-// The opening was a 19-second slow burn. The same staged beats now play in
-// 12 seconds so players reach the island quickly while every ship, crew,
-// breakup and splash cue still has time to read.
-export const PIRATE_CINEMATIC_DURATION = 12.0;
+// The opening was a 19-second slow burn. The rig maps this shorter cut onto
+// that authored cue timeline, so every ship, crew, breakup and splash beat
+// still fires but the player reaches the island in 9 seconds.
+export const PIRATE_CINEMATIC_DURATION = 9.0;
 const CINEMATIC_TIMELINE_DURATION = 19.0;
 const CINEMATIC_TIME_SCALE = CINEMATIC_TIMELINE_DURATION / PIRATE_CINEMATIC_DURATION;
 
