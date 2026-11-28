@@ -114,6 +114,21 @@ interface BucketRide {
 
 type ActiveRide = SlideRide | LazyRide | WaveRide | BucketRide;
 
+interface SplashExitTransition {
+  elapsed: number;
+  duration: number;
+  speed: number;
+  fromX: number;
+  fromY: number;
+  fromZ: number;
+  fromYaw: number;
+  fromPitch: number;
+  fromBank: number;
+  toX: number;
+  toY: number;
+  toZ: number;
+}
+
 interface PhysicalSlideRide {
   slide: WaterparkSlideHandles;
   entryDistance: number;
@@ -122,6 +137,8 @@ interface PhysicalSlideRide {
   lateral: number;
   lateralVelocity: number;
   elapsed: number;
+  /** Set after the splash lip; the rider drifts/steps to the pool coping. */
+  exit: SplashExitTransition | null;
 }
 
 export interface PhysicalSlideSnapshot {
@@ -131,6 +148,8 @@ export interface PhysicalSlideSnapshot {
   y: number;
   z: number;
   yaw: number;
+  /** Flume pitch in radians, so rafts follow drops instead of floating flat. */
+  pitch: number;
   bank: number;
   lateralOffset: number;
   lateralLimit: number;
@@ -218,6 +237,9 @@ export class WaterparkRuntime {
     bestTimes: {},
   };
   private lastRideSeconds = 0;
+  private detailLevel = 1;
+  private effectScale = 1;
+  private ambientLights: THREE.PointLight[] = [];
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -245,7 +267,42 @@ export class WaterparkRuntime {
     );
     this.particlePoints.frustumCulled = false;
     this.root.add(this.particlePoints);
+    this.root.traverse((object) => {
+      if (object instanceof THREE.PointLight) this.ambientLights.push(object);
+    });
     this.hideAllParticles();
+  }
+
+  /**
+   * Scale purely visual water/effect density from the graphics preset. Slide
+   * collision, stair footprints and ride physics are deliberately independent
+   * of this value so lowering graphics never changes gameplay.
+   */
+  public setDetailLevel(level: number, particleScale = 1): void {
+    this.detailLevel = clamp(Number.isFinite(level) ? level : 1, 0.15, 1);
+    this.effectScale = clamp(
+      Number.isFinite(particleScale) ? particleScale : 1,
+      0,
+      1.5,
+    );
+    const water = this.handles.waterMaterial;
+    if (water) {
+      water.normalScale.setScalar(0.34 * this.detailLevel);
+      water.roughness = 0.08 + (1 - this.detailLevel) * 0.24;
+    }
+    if (this.handles.foamMaterial) {
+      this.handles.foamMaterial.opacity = 0.55 + this.detailLevel * 0.33;
+    }
+    this.particleMaterial.opacity = 0.35 + this.detailLevel * 0.55;
+    this.particleMaterial.size = 0.14 + this.detailLevel * 0.04;
+    const visibleTubes = Math.max(4, Math.round(this.handles.innerTubes.length * this.detailLevel));
+    this.handles.innerTubes.forEach((tube, index) => {
+      tube.mesh.visible = index < visibleTubes;
+    });
+    const visibleLights = Math.max(1, Math.round(this.ambientLights.length * this.detailLevel));
+    this.ambientLights.forEach((light, index) => {
+      light.visible = index < visibleLights;
+    });
   }
 
   public get isActive(): boolean {
@@ -390,6 +447,7 @@ export class WaterparkRuntime {
       lateral,
       lateralVelocity: 0,
       elapsed: 0,
+      exit: null,
     };
     this.physicalCooldown = 0;
     this.stats.visits += 1;
@@ -425,6 +483,7 @@ export class WaterparkRuntime {
       this.placeSlideVehicle(ride.slide, still);
       return still;
     }
+    if (ride.exit) return this.stepPhysicalSplashExit(ride, frameDt);
     // Integrate in short fixed slices. At 30 Hz a fall can advance more than a
     // metre per frame; slicing keeps slope, speed and wall response continuous
     // instead of sampling only once per rendered frame.
@@ -455,7 +514,8 @@ export class WaterparkRuntime {
       ride.distance += ride.speed * step;
 
       if (ride.distance >= ride.slide.length - 0.03) {
-        return this.finishPhysicalSlide(ride);
+        ride.distance = ride.slide.length;
+        return this.beginPhysicalSplashExit(ride);
       }
 
       const limit = this.physicalLateralLimit(ride.slide);
@@ -504,6 +564,7 @@ export class WaterparkRuntime {
     );
     vehicle.rotation.order = 'YXZ';
     vehicle.rotation.y = snapshot.yaw;
+    vehicle.rotation.x = snapshot.pitch;
     vehicle.rotation.z = snapshot.bank;
   }
 
@@ -562,6 +623,7 @@ export class WaterparkRuntime {
       y,
       z,
       yaw,
+      pitch: -Math.asin(clamp(this.scratchTangent.y, -1, 1)),
       bank,
       lateralOffset: lateral,
       lateralLimit: this.physicalLateralLimit(slide),
@@ -579,9 +641,101 @@ export class WaterparkRuntime {
     };
   }
 
+  /**
+   * The flume ends in the splash basin. Rather than snapping the player to a
+   * dry point several metres away, hand control to a short visible drift to the
+   * pool coping. This is a post-splash recovery, not a substitute for the
+   * gravity-fed slide path above.
+   */
+  private beginPhysicalSplashExit(
+    ride: PhysicalSlideRide,
+  ): PhysicalSlideSnapshot {
+    const entrySpeed = clamp(ride.speed, 1.6, 7);
+    const start = this.buildPhysicalSnapshot(
+      ride.slide,
+      ride.slide.length,
+      entrySpeed,
+      ride.elapsed,
+    );
+    const exit = getWaterparkSlideExitPoint(ride.slide.spec);
+    const toX = WATERPARK_SITE.x + exit.x;
+    const toZ = WATERPARK_SITE.z + exit.z;
+    const drift = Math.hypot(toX - start.x, toZ - start.z);
+    ride.speed = entrySpeed;
+    ride.exit = {
+      elapsed: 0,
+      duration: clamp(drift / 5.2, 0.4, 1.8),
+      speed: entrySpeed,
+      fromX: start.x,
+      fromY: start.y,
+      fromZ: start.z,
+      fromYaw: start.yaw,
+      fromPitch: start.pitch,
+      fromBank: start.bank,
+      toX,
+      toY: WATERPARK_DECK_Y,
+      toZ,
+    };
+    this.placeSlideVehicle(ride.slide, start);
+    this.spawnSplash(
+      start.x - WATERPARK_SITE.x,
+      start.y - WATERPARK_SITE.y + 0.1,
+      start.z - WATERPARK_SITE.z,
+      80,
+    );
+    return {
+      ...start,
+      speed: entrySpeed,
+      speedKmh: entrySpeed * 3.6,
+      progressPercent: 100,
+      finished: false,
+    };
+  }
+
+  private stepPhysicalSplashExit(
+    ride: PhysicalSlideRide,
+    dt: number,
+  ): PhysicalSlideSnapshot {
+    const exit = ride.exit!;
+    exit.elapsed = Math.min(exit.duration, exit.elapsed + dt);
+    ride.elapsed += dt;
+    const t = clamp(exit.elapsed / Math.max(0.001, exit.duration), 0, 1);
+    const eased = t * t * (3 - 2 * t);
+    const speed = exit.speed * (1 - eased);
+    ride.speed = speed;
+    const x = exit.fromX + (exit.toX - exit.fromX) * eased;
+    const z = exit.fromZ + (exit.toZ - exit.fromZ) * eased;
+    const y =
+      exit.fromY +
+      (exit.toY - exit.fromY) * eased +
+      Math.sin(t * Math.PI) * 0.05;
+    const snapshot: PhysicalSlideSnapshot = {
+      slideId: ride.slide.spec.id,
+      name: ride.slide.spec.name,
+      x,
+      y,
+      z,
+      yaw: exit.fromYaw,
+      pitch: exit.fromPitch * (1 - eased),
+      bank: exit.fromBank * (1 - eased),
+      lateralOffset: 0,
+      lateralLimit: this.physicalLateralLimit(ride.slide),
+      speed,
+      speedKmh: speed * 3.6,
+      progressPercent: 100,
+      heightM: Math.max(0, y - WATERPARK_DECK_Y),
+      finished: false,
+    };
+    this.placeSlideVehicle(ride.slide, snapshot);
+    if (t >= 1) return this.finishPhysicalSlide(ride);
+    return snapshot;
+  }
+
   private finishPhysicalSlide(ride: PhysicalSlideRide): PhysicalSlideSnapshot {
     const best = this.stats.bestTimes[ride.slide.spec.id] ?? Infinity;
-    const timeSeconds = Math.max(0.1, ride.elapsed);
+    // Record the flume time, not the easy walk-out drift after splashdown.
+    const flumeSeconds = ride.elapsed - (ride.exit?.duration ?? 0);
+    const timeSeconds = Math.max(0.1, flumeSeconds);
     const newBest = timeSeconds < best;
     if (newBest) this.stats.bestTimes[ride.slide.spec.id] = timeSeconds;
     this.stats.ridesCompleted += 1;
@@ -592,7 +746,7 @@ export class WaterparkRuntime {
       rideId: ride.slide.spec.id,
       name: ride.slide.spec.name,
       timeSeconds,
-      speedKmh: ride.speed * 3.6,
+      speedKmh: (ride.exit?.speed ?? ride.speed) * 3.6,
       newBest,
     });
     const exit = getWaterparkSlideExitPoint(ride.slide.spec);
@@ -613,6 +767,7 @@ export class WaterparkRuntime {
       // Keep the splashdown heading continuous with the flume so the camera
       // does not snap to north when the ride hands control back to walking.
       yaw: Math.atan2(this.scratchTangent.x, this.scratchTangent.z),
+      pitch: 0,
       bank: 0,
       lateralOffset: 0,
       lateralLimit: this.physicalLateralLimit(ride.slide),
@@ -926,6 +1081,7 @@ export class WaterparkRuntime {
       y: WATERPARK_SITE.y + this.scratchPoint.y,
       z: WATERPARK_SITE.z + this.scratchPoint.z,
       yaw: Math.atan2(this.scratchTangent.x, this.scratchTangent.z),
+      pitch: -Math.asin(clamp(this.scratchTangent.y, -1, 1)),
       bank: 0,
       lateralOffset: 0,
       lateralLimit: 0,
@@ -1145,21 +1301,24 @@ export class WaterparkRuntime {
   private animateWavePool(dt: number): void {
     this.waveTimer += dt;
     this.waveNormalsTimer += dt;
-    if (this.waveTimer < 0.06) return;
+    const waveInterval = this.detailLevel < 0.5 ? 0.12 : 0.06;
+    if (this.waveTimer < waveInterval) return;
     this.waveTimer = 0;
     const geo = this.handles.waveGeometry;
     const base = this.handles.waveBasePositions;
     if (!geo || !base) return;
     const attr = geo.getAttribute('position') as THREE.BufferAttribute;
     const array = attr.array as Float32Array;
+    const waveScale = 0.55 + this.detailLevel * 0.45;
     for (let i = 0; i < attr.count; i++) {
       const bx = base[i * 3];
       const bz = base[i * 3 + 2];
       array[i * 3 + 1] =
         base[i * 3 + 1] +
-        Math.sin(bx * 0.46 + this.elapsed * 2.0) * 0.22 +
-        Math.cos(bz * 0.55 + this.elapsed * 1.35) * 0.15 +
-        Math.sin((bx + bz) * 0.23 + this.elapsed * 1.1) * 0.08;
+        (Math.sin(bx * 0.46 + this.elapsed * 2.0) * 0.22 +
+          Math.cos(bz * 0.55 + this.elapsed * 1.35) * 0.15 +
+          Math.sin((bx + bz) * 0.23 + this.elapsed * 1.1) * 0.08) *
+          waveScale;
     }
     attr.needsUpdate = true;
     // Vertex normals are far more expensive than the 627 position updates and
@@ -1172,6 +1331,7 @@ export class WaterparkRuntime {
 
   private updateInnerTubes(): void {
     for (const tube of this.handles.innerTubes) {
+      if (!tube.mesh.visible) continue;
       const distance = (tube.offset + this.elapsed * WATERPARK_LAZY_RIVER.speed) % Math.max(1, this.handles.lazyLength);
       sampleWaterparkPath(
         this.handles.lazySamples,
@@ -1291,7 +1451,9 @@ export class WaterparkRuntime {
   }
 
   private spawnSplash(x: number, y: number, z: number, count: number): void {
-    for (let i = 0; i < count; i++) {
+    if (this.effectScale <= 0) return;
+    const scaled = Math.max(1, Math.round(count * this.effectScale));
+    for (let i = 0; i < scaled; i++) {
       this.spawnParticle(x, y, z, 3.8);
     }
   }

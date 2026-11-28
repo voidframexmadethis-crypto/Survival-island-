@@ -223,6 +223,21 @@ export interface CarSubwooferHandles {
   destroy: () => void;
 }
 
+/**
+ * One subwoofer gain calculation for initial setup and every later profile or
+ * 808 toggle. The old setup used the clean/non-clean coefficient while the
+ * profile path used a 0.62 "off" factor, so simply entering a car dropped the
+ * sub by up to 38% before the player touched any control.
+ */
+export function carSubwooferGain(
+  profile: { low: number; subDrive?: number },
+  boosted = false,
+): number {
+  const clean = Math.max(0.8, profile.subDrive ?? 2.6) <= 1.2;
+  const base = Math.min(1, (clean ? 0.62 : 0.5) * profile.low);
+  return boosted ? Math.min(1, base * 1.35) : base;
+}
+
 export function addCarSubwoofer(
   sourceBus: AudioNode,
   carPanner: PannerNode,
@@ -275,7 +290,7 @@ export function addCarSubwoofer(
   limiter.release.value = clean ? 0.2 : 0.16;
 
   const subGain = ctx.createGain();
-  subGain.gain.value = Math.min(1, (clean ? 0.62 : 0.5) * profile.low);
+  subGain.gain.value = carSubwooferGain(profile);
 
   // Parallel branch: original stereo remains untouched.
   sourceBus.connect(subsonic);
@@ -737,7 +752,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     }
     if (this.subwoofer) {
       this.subwoofer.subGain.gain.setTargetAtTime(
-        Math.min(1, 0.5 * profile.low) * (next ? 1 : 0.62),
+        carSubwooferGain(profile, next),
         t,
         0.05,
       );
@@ -791,7 +806,7 @@ export const CABIN_BASS_AND_FIRST_PERSON = {
     }
     if (this.subwoofer && this.audioCtx) {
       this.subwoofer.subGain.gain.setTargetAtTime(
-        Math.min(1, 0.5 * profile.low) * (boost ? 1 : 0.62),
+        carSubwooferGain(profile, Boolean(boost)),
         this.audioCtx.currentTime,
         0.03,
       );
@@ -1149,6 +1164,7 @@ const _carPos3D = new THREE.Vector3();
 const _camPos3D = new THREE.Vector3();
 const _camQuat3D = new THREE.Quaternion();
 const _camForward3D = new THREE.Vector3();
+const _camUp3D = new THREE.Vector3();
 
 export function updateCarStereo3D(
   panner: PannerNode,
@@ -1161,9 +1177,9 @@ export function updateCarStereo3D(
   const pos = car.getWorldPosition(_carPos3D);
   const listener = panner.context.listener;
   const camPos = camera.getWorldPosition(_camPos3D);
-  const forward = _camForward3D
-    .set(0, 0, -1)
-    .applyQuaternion(camera.getWorldQuaternion(_camQuat3D));
+  const camQuat = camera.getWorldQuaternion(_camQuat3D);
+  const forward = _camForward3D.set(0, 0, -1).applyQuaternion(camQuat);
+  const up = _camUp3D.set(0, 1, 0).applyQuaternion(camQuat);
 
   if (panner.positionX) {
     panner.positionX.setTargetAtTime(pos.x, t, 0.04);
@@ -1191,6 +1207,11 @@ export function updateCarStereo3D(
     listener.forwardX.setTargetAtTime(forward.x, t, 0.04);
     listener.forwardY.setTargetAtTime(forward.y, t, 0.04);
     listener.forwardZ.setTargetAtTime(forward.z, t, 0.04);
+    if (listener.upX) {
+      listener.upX.setTargetAtTime(up.x, t, 0.04);
+      listener.upY.setTargetAtTime(up.y, t, 0.04);
+      listener.upZ.setTargetAtTime(up.z, t, 0.04);
+    }
   } else {
     const legacyListener = listener as unknown as {
       setOrientation?: (
@@ -1202,7 +1223,14 @@ export function updateCarStereo3D(
         uz: number,
       ) => void;
     };
-    legacyListener.setOrientation?.(forward.x, forward.y, forward.z, 0, 1, 0);
+    legacyListener.setOrientation?.(
+      forward.x,
+      forward.y,
+      forward.z,
+      up.x,
+      up.y,
+      up.z,
+    );
   }
 }
 

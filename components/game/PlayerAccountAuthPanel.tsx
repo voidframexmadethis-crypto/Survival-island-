@@ -41,6 +41,24 @@ export function PlayerAccountAuthPanel({
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(!compact);
 
+  const handleLogout = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const res = await logoutPlayerAccount();
+      if (!res.ok) {
+        setError(res.error || 'Sign out failed. Please try again.');
+        return;
+      }
+      setRecoveryCode(null);
+      setPassword('');
+    } catch {
+      setError('Cannot reach the account server. Check your connection and try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (authenticated && account) {
     return (
       <div className="space-y-2">
@@ -55,13 +73,15 @@ export function PlayerAccountAuthPanel({
           </div>
           <button
             type="button"
-            onClick={() => void logoutPlayerAccount()}
-            className="px-2.5 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-700 text-[11px] font-semibold text-stone-300 flex items-center gap-1"
+            onClick={() => void handleLogout()}
+            disabled={busy}
+            className="px-2.5 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 disabled:opacity-50 border border-stone-700 text-[11px] font-semibold text-stone-300 flex items-center gap-1"
           >
             <LogOut className="w-3 h-3" />
-            <span>Sign Out</span>
+            <span>{busy ? 'Signing out…' : 'Sign Out'}</span>
           </button>
         </div>
+        {error && <div className="text-[11px] font-semibold text-red-400">{error}</div>}
       </div>
     );
   }
@@ -89,39 +109,43 @@ export function PlayerAccountAuthPanel({
     setError(null);
     setBusy(true);
 
-    if (mode === 'reset') {
-      const res = await resetPlayerPassword(email, resetCode, newPassword);
-      setBusy(false);
-      if (!res.ok) {
-        setError(res.error || 'Password reset failed.');
+    try {
+      if (mode === 'reset') {
+        const res = await resetPlayerPassword(email, resetCode, newPassword);
+        if (!res.ok) {
+          setError(res.error || 'Password reset failed.');
+          return;
+        }
+        setRecoveryCode(res.recoveryCode || null);
+        setResetCode('');
+        setNewPassword('');
+        setPassword('');
+        setMode('login');
         return;
       }
-      setRecoveryCode(res.recoveryCode || null);
-      setResetCode('');
-      setNewPassword('');
-      setPassword('');
-      setMode('login');
-      return;
-    }
 
-    const res =
-      mode === 'register'
-        ? await registerPlayerAccount(email, password, username)
-        : await loginPlayerAccount(email, password);
-    setBusy(false);
-    if (!res.ok) {
-      setError(res.error || 'Authentication failed.');
-      return;
+      const res =
+        mode === 'register'
+          ? await registerPlayerAccount(email, password, username)
+          : await loginPlayerAccount(email, password);
+      if (!res.ok) {
+        setError(res.error || 'Authentication failed.');
+        return;
+      }
+      if (
+        mode === 'register' &&
+        'recoveryCode' in res &&
+        typeof res.recoveryCode === 'string'
+      ) {
+        setRecoveryCode(res.recoveryCode);
+      }
+      setPassword('');
+      onAuthenticated?.();
+    } catch {
+      setError('Cannot reach the account server. Check your connection and try again.');
+    } finally {
+      setBusy(false);
     }
-    if (
-      mode === 'register' &&
-      'recoveryCode' in res &&
-      typeof res.recoveryCode === 'string'
-    ) {
-      setRecoveryCode(res.recoveryCode);
-    }
-    setPassword('');
-    onAuthenticated?.();
   };
 
   const switchMode = (next: AuthMode) => {

@@ -155,8 +155,15 @@ export function resolveCinematicPostQuality(params: {
   isTouch: boolean;
   isSoftwareGl: boolean;
 }): CinematicPostQuality {
-  if (params.isSoftwareGl || params.preset === 'low') return 'off';
-  if (params.isTouch) return params.preset === 'medium' ? 'low' : 'medium';
+  if (
+    params.isSoftwareGl ||
+    params.preset === 'legacy' ||
+    params.preset === 'low'
+  ) {
+    return 'off';
+  }
+  if (params.preset === 'balanced') return params.isTouch ? 'low' : 'medium';
+  if (params.isTouch) return 'medium';
   return params.preset;
 }
 

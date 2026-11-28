@@ -243,7 +243,18 @@ async function getMongoCollection(): Promise<Collection<MongoExchangeStateDocume
   if (!uri) return null;
   if (!globalForExchange.__siMongoClientPromise) {
     const client = new MongoClient(uri, { maxPoolSize: 5 });
-    globalForExchange.__siMongoClientPromise = client.connect();
+    let connection: Promise<MongoClient>;
+    connection = client.connect().catch((error: unknown) => {
+      // Never cache a rejected connection. A transient cold-start outage used
+      // to poison the process until restart, so every later request returned
+      // 503 even after MongoDB recovered.
+      if (globalForExchange.__siMongoClientPromise === connection) {
+        globalForExchange.__siMongoClientPromise = undefined;
+      }
+      void client.close().catch(() => undefined);
+      throw error;
+    });
+    globalForExchange.__siMongoClientPromise = connection;
   }
   const client = await globalForExchange.__siMongoClientPromise;
   return client

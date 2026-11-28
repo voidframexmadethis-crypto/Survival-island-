@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import {
   AUDIO_PROFILES,
   CABIN_BASS_AND_FIRST_PERSON,
+  carSubwooferGain,
   resolveCarAudioType,
   setupCarAudio,
   shouldEnableTrunkRattle,
@@ -152,6 +153,22 @@ test('lowrider profiles get the loudest clean bass and never rattle', () => {
   assert.equal(shouldEnableTrunkRattle('lowrider', false), false);
 });
 
+test('subwoofer gain is stable across profile application and the 808 toggle', () => {
+  const classicBase = Math.min(1, 0.62 * AUDIO_PROFILES.classic.low);
+  assert.ok(Math.abs(carSubwooferGain(AUDIO_PROFILES.classic) - classicBase) < 1e-6);
+  assert.ok(
+    carSubwooferGain(AUDIO_PROFILES.classic, true) >=
+      carSubwooferGain(AUDIO_PROFILES.classic),
+  );
+
+  // Applying a profile used to multiply this by 0.62 even with 808 off, which
+  // made the stereo quieter as soon as the player entered the car.
+  const supercar = AUDIO_PROFILES.supercar;
+  assert.ok(carSubwooferGain(supercar) > 0);
+  assert.ok(carSubwooferGain(supercar, true) > carSubwooferGain(supercar));
+  assert.ok(carSubwooferGain(supercar, true) <= 1);
+});
+
 test('Blue DONK is the loudest car and carries the 182 dB showcase', () => {
   assert.equal(resolveCarAudioType({ preset: 'donk' }), 'donk');
   const donk = AUDIO_PROFILES.donk;
@@ -208,6 +225,9 @@ test('updateCarStereo3D updates panner position, listener position, and camera f
         forwardX: makeParam(),
         forwardY: makeParam(),
         forwardZ: makeParam(),
+        upX: makeParam(),
+        upY: makeParam(),
+        upZ: makeParam(),
       },
     },
   };
@@ -239,6 +259,9 @@ test('updateCarStereo3D updates panner position, listener position, and camera f
   assert.ok(Math.abs(listener.forwardX.calls[0].val - -1) < 1e-6);
   assert.ok(Math.abs(listener.forwardY.calls[0].val) < 1e-6);
   assert.ok(Math.abs(listener.forwardZ.calls[0].val) < 1e-6);
+  assert.ok(Math.abs(listener.upX.calls[0].val) < 1e-6);
+  assert.equal(listener.upY.calls[0].val, 1);
+  assert.ok(Math.abs(listener.upZ.calls[0].val) < 1e-6);
 });
 
 test('setupCarAudio routes through HRTF PannerNode with 100Hz bass, 48Hz sub filters, and parallel addCarSubwoofer branch', () => {

@@ -18,6 +18,7 @@ import {
   loadObjectives,
   loadRewards,
   loadSettings,
+  GRAPHICS_PRESET_PROFILES,
   saveCheckpoint,
   saveGame,
   saveGameToSlot,
@@ -396,7 +397,7 @@ test('RollerCoasterRuntime supports wooden, inverted, and log flume coaster type
   runtime.dispose();
 });
 
-test('desktop medium settings receive one cinematic upgrade and respect a later reset', () => {
+test('legacy medium settings migrate to the balanced tier without overshooting hardware', () => {
   const storage = installMockLocalStorage();
   storage.set(
     'survival_island_settings_v1',
@@ -407,19 +408,37 @@ test('desktop medium settings receive one cinematic upgrade and respect a later 
       dynamicAutoFps: true,
     }),
   );
-  const upgraded = loadSettings();
-  assert.equal(upgraded.graphicsPreset, 'ultra');
-  assert.equal(upgraded.drawDistance, 'far');
-  assert.equal(upgraded.dynamicAutoFps, false);
+  const migrated = loadSettings();
+  assert.equal(migrated.graphicsPreset, 'balanced');
+  assert.equal(migrated.graphicsQuality, 'balanced');
+  assert.equal(migrated.drawDistance, 'medium');
+  assert.equal(migrated.shadowsEnabled, true);
+  assert.equal(migrated.postProcessingEnabled, true);
+  assert.equal(migrated.dynamicAutoFps, true);
 
+  // A deliberate low choice survives reloads; no automatic upgrade overrides it.
   saveSettings({
-    ...upgraded,
-    graphicsPreset: 'medium',
-    graphicsQuality: 'medium',
-    drawDistance: 'medium',
+    ...migrated,
+    graphicsPreset: 'low',
+    graphicsQuality: 'low',
+    drawDistance: 'near',
     dynamicAutoFps: true,
   });
-  assert.equal(loadSettings().graphicsPreset, 'medium');
+  assert.equal(loadSettings().graphicsPreset, 'low');
+});
+
+test('every scalable preset defines the full console-era graphics controls', () => {
+  for (const preset of ['legacy', 'low', 'balanced', 'high', 'ultra'] as const) {
+    const profile = GRAPHICS_PRESET_PROFILES[preset];
+    assert.equal(profile.graphicsPreset, preset);
+    assert.equal(typeof profile.shadowsEnabled, 'boolean');
+    assert.equal(typeof profile.waterReflectionsEnabled, 'boolean');
+    assert.equal(typeof profile.waterEffectsEnabled, 'boolean');
+    assert.equal(typeof profile.postProcessingEnabled, 'boolean');
+    assert.equal(typeof profile.particlesEnabled, 'boolean');
+    assert.equal(typeof profile.vegetationDensity, 'number');
+    assert.ok(profile.vegetationDensity >= 0 && profile.vegetationDensity <= 1);
+  }
 });
 
 test('launchSave persists game snapshot, checkpoint, settings, objectives, and unique rewards safely', () => {

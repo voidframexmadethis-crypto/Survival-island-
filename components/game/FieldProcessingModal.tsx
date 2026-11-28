@@ -178,7 +178,10 @@ export function FieldProcessingModal({
     view?.stage === 'whole' ? 0 : view?.stage === 'field_dressed' ? 1 : 2;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 sm:p-4">
+    <div
+      data-console-scope
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 sm:p-4"
+    >
       <div className="flex max-h-[94vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-amber-900/70 bg-stone-900 shadow-2xl">
         <div className="flex items-center justify-between border-b border-stone-800 px-4 py-3">
           <div className="flex min-w-0 items-center gap-2.5">
@@ -389,6 +392,7 @@ export function FieldProcessingModal({
                 ) : null}
                 <button
                   type="button"
+                  data-console-autofocus
                   onClick={() => startCut(view.nextStep!)}
                   disabled={!view.canPerformNext}
                   className="mt-3 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border-2 border-amber-300 bg-amber-500 px-4 py-2 text-sm font-extrabold text-stone-950 shadow-lg hover:bg-amber-400 disabled:cursor-not-allowed disabled:border-stone-700 disabled:bg-stone-800 disabled:text-stone-500"
@@ -489,7 +493,7 @@ export function FieldProcessingModal({
         </div>
 
         <div className="flex items-center justify-between gap-2 border-t border-stone-800 px-4 py-2 text-[9px] text-stone-500">
-          <span>Xbox: A cut · X hone · Y drag · B close</span>
+          <span>Xbox: A cut · X hone · Y drag · LB unload · RB load · B close</span>
           <span>Touch: tap actions · Detailed animations in Settings</span>
         </div>
       </div>

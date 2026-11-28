@@ -60,6 +60,9 @@ export interface WaterparkModelHandles {
   waveGeometry: THREE.BufferGeometry | null;
   waveBasePositions: Float32Array | null;
   waterNormalTexture: THREE.Texture | null;
+  /** Shared pool/slide water material, scaled by the active graphics preset. */
+  waterMaterial: THREE.MeshStandardMaterial;
+  foamMaterial: THREE.MeshStandardMaterial;
   bucketPivot: THREE.Group | null;
   bucketWater: THREE.Mesh | null;
   bucketStream: THREE.Mesh | null;
@@ -606,6 +609,7 @@ export function buildWaterparkModel(): WaterparkModelHandles {
   });
   materials.add(poolFloorMat);
   const waterMat = new THREE.MeshStandardMaterial({
+    name: 'waterpark-water',
     color: 0x2bb6d1,
     emissive: 0x0b4654,
     emissiveIntensity: 0.32,
@@ -619,6 +623,7 @@ export function buildWaterparkModel(): WaterparkModelHandles {
   });
   materials.add(waterMat);
   const foamMat = new THREE.MeshStandardMaterial({
+    name: 'waterpark-foam',
     color: 0xe8fbff,
     emissive: 0x8adcef,
     emissiveIntensity: 0.6,
@@ -637,6 +642,14 @@ export function buildWaterparkModel(): WaterparkModelHandles {
   materials.add(whiteMat);
   const woodMat = new THREE.MeshStandardMaterial({ color: 0x7d5a3a, roughness: 0.88 });
   materials.add(woodMat);
+  // Dark, slightly raised nosings and walkway strips read as non-slip edges
+  // and make the stair treads legible from the tower deck above.
+  const nonSlipMat = new THREE.MeshStandardMaterial({
+    color: 0x303b3d,
+    roughness: 0.96,
+    metalness: 0.02,
+  });
+  materials.add(nonSlipMat);
   const leafMat = new THREE.MeshStandardMaterial({ color: 0x3f7a46, roughness: 0.92, side: THREE.DoubleSide });
   materials.add(leafMat);
   const trunkMat = new THREE.MeshStandardMaterial({ color: 0x705236, roughness: 0.95 });
@@ -735,7 +748,9 @@ export function buildWaterparkModel(): WaterparkModelHandles {
   deck.position.y = -0.35;
   deck.receiveShadow = true;
   root.add(deck);
-  addBox(root, concreteMat, 95.2, 1.15, 89.2, 0, -1.0, 0, 0, false);
+  // Deep perimeter plinth reaches below the lowest surrounding terrain, so the
+  // deck reads as a founded structure instead of a slab hovering over the hill.
+  addBox(root, concreteMat, 95.2, 2.6, 89.2, 0, -1.5, 0, 0, false);
   addBox(root, poolWallMat, 94.3, 0.22, 0.35, 0, -0.02, -44);
   addBox(root, poolWallMat, 94.3, 0.22, 0.35, 0, -0.02, 44);
   addBox(root, poolWallMat, 0.35, 0.22, 88.3, -47, -0.02, 0);
@@ -1041,6 +1056,8 @@ export function buildWaterparkModel(): WaterparkModelHandles {
       const sx = Math.cos(angle) * WATERPARK_TOWER_STAIR.radius;
       const sz = Math.sin(angle) * WATERPARK_TOWER_STAIR.radius;
       const y = WATERPARK_TOWER_STAIR.baseRise + t * (tower.height - 0.1);
+      const tangentX = -Math.sin(angle);
+      const tangentZ = Math.cos(angle);
       addBox(
         towerGroup,
         concreteMat,
@@ -1052,9 +1069,20 @@ export function buildWaterparkModel(): WaterparkModelHandles {
         sz,
         -angle,
       );
+      // Contrasting non-slip nosing across the full tread width.
+      addBox(
+        towerGroup,
+        nonSlipMat,
+        WATERPARK_TOWER_STAIR.width * 0.86,
+        0.018,
+        Math.max(0.06, stepDepth * 0.22),
+        sx - tangentX * stepDepth * 0.34,
+        y + 0.047,
+        sz - tangentZ * stepDepth * 0.34,
+        -angle,
+        false,
+      );
       // Riser face at the leading edge of each tread.
-      const tangentX = -Math.sin(angle);
-      const tangentZ = Math.cos(angle);
       addBox(
         towerGroup,
         concreteMat,
@@ -1071,16 +1099,31 @@ export function buildWaterparkModel(): WaterparkModelHandles {
     for (const t of [0.25, 0.5, 0.75]) {
       const angle = t * turns * Math.PI * 2;
       const y = WATERPARK_TOWER_STAIR.baseRise + t * (tower.height - 0.1);
+      const lx = Math.cos(angle) * WATERPARK_TOWER_STAIR.radius;
+      const lz = Math.sin(angle) * WATERPARK_TOWER_STAIR.radius;
       addBox(
         towerGroup,
         concreteMat,
         2.35,
         0.11,
-        2.35,
-        Math.cos(angle) * WATERPARK_TOWER_STAIR.radius,
+        1.0,
+        lx,
         y,
-        Math.sin(angle) * WATERPARK_TOWER_STAIR.radius,
+        lz,
         -angle,
+      );
+      // Landing safety strip along the leading edge of the wider platform.
+      addBox(
+        towerGroup,
+        nonSlipMat,
+        2.15,
+        0.016,
+        0.12,
+        lx - Math.sin(angle) * 0.42,
+        y + 0.063,
+        lz + Math.cos(angle) * 0.42,
+        -angle,
+        false,
       );
     }
     // Handrails and guard posts.
@@ -1362,23 +1405,61 @@ export function buildWaterparkModel(): WaterparkModelHandles {
         );
       }
     }
-    // Guard the launch deck on three sides, leaving the flume mouth and the
-    // catwalk approach open.
+    // Guard the launch deck, leaving the flume mouth and the actual catwalk
+    // approach open. The old four-sided rail boxed the platform in and put
+    // steel across both the slide mouth and the only walk-in route.
     const deckYaw = Math.atan2(startTan.x, startTan.z);
     const deckRail = new THREE.Group();
     deckRail.position.set(start.x, start.y, start.z);
     deckRail.rotation.y = deckYaw;
     root.add(deckRail);
-    for (const side of [-1, 1]) {
-      addBox(deckRail, steelMat, 0.06, 0.9, 3.0, side * 1.72, 0.45, 0);
-      for (const end of [-1.3, 1.3]) {
-        addBox(deckRail, steelMat, 0.055, 0.9, 0.055, side * 1.72, 0.45, end, 0, false);
+    const lastCatwalk = access.catwalk[access.catwalk.length - 1];
+    const prevCatwalk = access.catwalk[Math.max(0, access.catwalk.length - 2)];
+    let catwalkSide = 0;
+    if (lastCatwalk && prevCatwalk) {
+      let approachAngle = Math.atan2(
+        prevCatwalk.x - lastCatwalk.x,
+        prevCatwalk.z - lastCatwalk.z,
+      ) - deckYaw;
+      while (approachAngle > Math.PI) approachAngle -= Math.PI * 2;
+      while (approachAngle < -Math.PI) approachAngle += Math.PI * 2;
+      catwalkSide = Math.round(approachAngle / (Math.PI * 0.5));
+      if (catwalkSide < -2) catwalkSide += 4;
+      if (catwalkSide > 2) catwalkSide -= 4;
+    }
+    // Side indices: 0 = +Z (flume mouth), 1 = +X, 2 = -Z, -1 = -X.
+    const openSides = new Set<number>([0, catwalkSide]);
+    const railHalf = 1.82;
+    for (const sideIndex of [-1, 0, 1, 2]) {
+      if (openSides.has(sideIndex)) continue;
+      const alongX = sideIndex === 0 || sideIndex === 2;
+      const sign = sideIndex === 1 || sideIndex === 0 ? 1 : -1;
+      for (const [railY, railHeight] of [
+        [0.96, 0.055],
+        [0.49, 0.04],
+      ] as const) {
+        addBox(
+          deckRail,
+          steelMat,
+          alongX ? 3.56 : 0.055,
+          railHeight,
+          alongX ? 0.055 : 3.56,
+          alongX ? 0 : sign * railHalf,
+          railY,
+          alongX ? sign * railHalf : 0,
+          0,
+          false,
+        );
       }
     }
-    addBox(deckRail, steelMat, 3.4, 0.06, 0.06, 0, 0.9, -1.72);
-    addBox(deckRail, steelMat, 3.4, 0.06, 0.06, 0, 0.9, 1.72);
-    addBox(deckRail, steelMat, 0.06, 0.9, 0.06, -1.72, 0.45, -1.72, 0, false);
-    addBox(deckRail, steelMat, 0.06, 0.9, 0.06, 1.72, 0.45, -1.72, 0, false);
+    for (const px of [-railHalf, railHalf]) {
+      for (const pz of [-railHalf, railHalf]) {
+        addBox(deckRail, steelMat, 0.06, 1.0, 0.06, px, 0.5, pz, 0, false);
+      }
+    }
+    // Bright boarding gates at the two openings, without narrowing them.
+    addBox(deckRail, whiteMat, 0.1, 0.08, 0.1, -0.72, 0.02, railHalf, 0, false);
+    addBox(deckRail, whiteMat, 0.1, 0.08, 0.1, 0.72, 0.02, railHalf, 0, false);
     addBox(root, whiteMat, 2.4, 1.7, 0.25, start.x, start.y + 0.9, start.z + 1.5);
     addSign(root, spec.name, spec.accent, 2.4, 0.42, start.x, start.y + 0.9, start.z + 1.64);
 
@@ -1406,6 +1487,19 @@ export function buildWaterparkModel(): WaterparkModelHandles {
           0,
           -0.07,
           0,
+        );
+        // Full-length anti-slip grit strip down the centre of the catwalk.
+        addBox(
+          catwalk,
+          nonSlipMat,
+          length + 0.1,
+          0.016,
+          0.24,
+          0,
+          0.008,
+          0,
+          0,
+          false,
         );
         addBox(
           catwalk,
@@ -1907,6 +2001,8 @@ export function buildWaterparkModel(): WaterparkModelHandles {
     waveGeometry,
     waveBasePositions,
     waterNormalTexture,
+    waterMaterial: waterMat,
+    foamMaterial: foamMat,
     bucketPivot,
     bucketWater,
     bucketStream,

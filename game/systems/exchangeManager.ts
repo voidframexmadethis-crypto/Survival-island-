@@ -13,12 +13,60 @@ import { ItemId } from '../types';
 import { apiUrl } from './apiConfig';
 import { getAuthHeaders, setSessionToken } from './sessionToken';
 
+const ACCOUNT_SERVER_UNREACHABLE =
+  'Cannot reach the account server. Check your connection and try again.';
+
 async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   for (const [key, value] of Object.entries(getAuthHeaders())) {
     if (!headers.has(key)) headers.set(key, value);
   }
   return fetch(apiUrl(path), { ...init, headers });
+}
+
+async function readJson<T>(res: Response): Promise<T | null> {
+  try {
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Account-scoped fields must never survive an account switch. Clearing them
+ * before a refresh prevents an offline storefront request from showing the
+ * previous player's purchases or cosmetics to the next signed-in account.
+ */
+function clearAccountScopedState(): void {
+  cachedState = {
+    ...cachedState,
+    authenticated: false,
+    account: null,
+    playerId: null,
+    coinBalance: 0,
+    ownedProductIds: [],
+    revokedProductIds: [],
+    ownedProducts: [],
+    equippedGunSkinsByClass: {},
+    equippedBackpackSkinId: null,
+    equippedCosmeticIds: [],
+    transactions: [],
+    pendingCheckouts: [],
+  };
+  saveEquippedCache();
+  notify();
+}
+
+function applyAuthenticatedSession(account: PlayerProfileSummary): void {
+  clearAccountScopedState();
+  cachedState = {
+    ...cachedState,
+    authenticated: true,
+    account,
+    playerId: account.playerId,
+  };
+  saveEquippedCache();
+  notify();
 }
 
 export interface PaymentProviderStatus {
@@ -507,22 +555,37 @@ export async function loginPlayerAccount(
   email: string,
   password: string,
 ): Promise<{ ok: boolean; account?: PlayerProfileSummary; error?: string }> {
-  const res = await apiFetch('/api/exchange/auth', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mode: 'login', email, password }),
-  });
-  const data = (await res.json()) as {
+  let res: Response;
+  try {
+    res = await apiFetch('/api/exchange/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'login', email, password }),
+    });
+  } catch {
+    return { ok: false, error: ACCOUNT_SERVER_UNREACHABLE };
+  }
+  const data = await readJson<{
     ok?: boolean;
     account?: PlayerProfileSummary;
     sessionToken?: string;
     error?: string;
-  };
-  if (!res.ok || !data.ok) {
-    return { ok: false, error: data.error || 'Sign in failed.' };
+  }>(res);
+  if (!res.ok || !data?.ok || !data.account) {
+    return {
+      ok: false,
+      error:
+        data?.error ||
+        (res.ok ? 'The account server returned an invalid response.' : 'Sign in failed.'),
+    };
   }
   setSessionToken(data.sessionToken || null);
-  await refreshStorefront();
+  applyAuthenticatedSession(data.account);
+  try {
+    await refreshStorefront();
+  } catch {
+    // The signed-in account is valid even if the storefront catalog is down.
+  }
   return { ok: true, account: data.account };
 }
 
@@ -536,23 +599,38 @@ export async function registerPlayerAccount(
   recoveryCode?: string;
   error?: string;
 }> {
-  const res = await apiFetch('/api/exchange/auth', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mode: 'register', email, password, username }),
-  });
-  const data = (await res.json()) as {
+  let res: Response;
+  try {
+    res = await apiFetch('/api/exchange/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'register', email, password, username }),
+    });
+  } catch {
+    return { ok: false, error: ACCOUNT_SERVER_UNREACHABLE };
+  }
+  const data = await readJson<{
     ok?: boolean;
     account?: PlayerProfileSummary;
     sessionToken?: string;
     recoveryCode?: string;
     error?: string;
-  };
-  if (!res.ok || !data.ok) {
-    return { ok: false, error: data.error || 'Registration failed.' };
+  }>(res);
+  if (!res.ok || !data?.ok || !data.account) {
+    return {
+      ok: false,
+      error:
+        data?.error ||
+        (res.ok ? 'The account server returned an invalid response.' : 'Registration failed.'),
+    };
   }
   setSessionToken(data.sessionToken || null);
-  await refreshStorefront();
+  applyAuthenticatedSession(data.account);
+  try {
+    await refreshStorefront();
+  } catch {
+    // The new account is valid even if the storefront catalog is down.
+  }
   return { ok: true, account: data.account, recoveryCode: data.recoveryCode };
 }
 
@@ -561,31 +639,60 @@ export async function resetPlayerPassword(
   recoveryCode: string,
   newPassword: string,
 ): Promise<{ ok: boolean; recoveryCode?: string; error?: string }> {
-  const res = await apiFetch('/api/exchange/auth/reset', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, recoveryCode, newPassword }),
-  });
-  const data = (await res.json()) as {
+  let res: Response;
+  try {
+    res = await apiFetch('/api/exchange/auth/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, recoveryCode, newPassword }),
+    });
+  } catch {
+    return { ok: false, error: ACCOUNT_SERVER_UNREACHABLE };
+  }
+  const data = await readJson<{
     ok?: boolean;
     recoveryCode?: string;
     error?: string;
-  };
-  if (!res.ok || !data.ok) {
-    return { ok: false, error: data.error || 'Password reset failed.' };
+  }>(res);
+  if (!res.ok || !data?.ok) {
+    return {
+      ok: false,
+      error:
+        data?.error ||
+        (res.ok ? 'The account server returned an invalid response.' : 'Password reset failed.'),
+    };
   }
   return { ok: true, recoveryCode: data.recoveryCode };
 }
 
-export async function logoutPlayerAccount(): Promise<void> {
+export async function logoutPlayerAccount(): Promise<{ ok: boolean; error?: string }> {
+  let res: Response;
+  try {
+    res = await apiFetch('/api/exchange/auth', { method: 'DELETE' });
+  } catch {
+    return { ok: false, error: ACCOUNT_SERVER_UNREACHABLE };
+  }
+  if (!res.ok) {
+    return {
+      ok: false,
+      error: 'The account server could not complete sign-out. Please try again.',
+    };
+  }
+
   setSessionToken(null);
-  await apiFetch('/api/exchange/auth', { method: 'DELETE' });
   cachedCustomPhoneState = {
     ...cachedCustomPhoneState,
     equippedBackpackId: null,
     equippedWeaponId: null,
   };
-  await refreshStorefront();
+  saveCustomPhoneState();
+  clearAccountScopedState();
+  try {
+    await refreshStorefront();
+  } catch {
+    // The local session cache is already cleared; do not report a false failure.
+  }
+  return { ok: true };
 }
 
 // ---- Payhip Checkout & Automatic Verification Polling ----

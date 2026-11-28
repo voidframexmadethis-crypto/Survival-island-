@@ -520,21 +520,46 @@ export function SurvivalGameClient() {
           prevButtonStates.set(btnIdx, pressed);
         };
 
-        // Start button toggles Pause modal
-        checkEdge(9, () => {
-          if (activeModalRef.current) {
-            setActiveModal(null);
-            engine.setMode('playing');
-          } else {
-            setActiveModal('pause');
-            engine.setMode('paused');
+                  // Start button toggles Pause modal
+          checkEdge(9, () => {
+            if (activeModalRef.current) {
+              setActiveModal(null);
+              engine.setMode('playing');
+            } else {
+              setActiveModal('pause');
+              engine.setMode('paused');
+            }
+          });
+
+          // View / Share button opens the backpack (with its Crafting tab), so
+          // inventory and crafting are reachable without a keyboard.
+          if (!modalOpen) {
+            checkEdge(8, () => {
+              setActiveModal('inventory');
+              engine.setMode('paused');
+            });
           }
-        });
 
         // Menus are driven by ConsoleNavigation (D-Pad / left stick + A + B)
         // so every modal gets the same focus behaviour. Here we only make sure
         // no gameplay input leaks through while one is open.
         if (modalOpen) {
+          if (modalOpen === 'field_processing') {
+            // A and B stay with ConsoleNavigation so focus and close keep one
+            // owner; X, Y and the bumpers are unique to field processing.
+            checkEdge(2, () =>
+              window.dispatchEvent(new Event('fieldProcessingSharpen')),
+            );
+            checkEdge(3, () =>
+              window.dispatchEvent(new Event('fieldProcessingDrag')),
+            );
+            checkEdge(5, () =>
+              window.dispatchEvent(new Event('fieldProcessingLoad')),
+            );
+            checkEdge(4, () =>
+              window.dispatchEvent(new Event('fieldProcessingUnload')),
+            );
+          }
           engine.setAiming(false);
           engine.setGamepadDriveState(0, 0, false);
           if (wasGpStickNonZero || lastGpKnobRef.current.x !== 0 || lastGpKnobRef.current.y !== 0) {
@@ -987,11 +1012,22 @@ export function SurvivalGameClient() {
     if (screen !== 'playing') return;
     let idleHandle: number | null = null;
     let timeoutFallback: number | null = null;
+    let warnedAboutAutosaveFailure = false;
 
     const runIdleSave = () => {
       if (!engineRef.current) return;
       const slotId = engineRef.current.getCurrentSlotId() || 'slot_1';
-      saveGameToSlot(engineRef.current.exportSaveData(slotId));
+      const saved = saveGameToSlot(engineRef.current.exportSaveData(slotId));
+      if (!saved && !warnedAboutAutosaveFailure) {
+        warnedAboutAutosaveFailure = true;
+        pushToast({
+          id: `autosave_failed_${Date.now()}`,
+          text: 'Autosave failed — browser storage is full or unavailable. Free up space before leaving the game.',
+          tone: 'warning',
+        });
+      } else if (saved) {
+        warnedAboutAutosaveFailure = false;
+      }
     };
 
     const scheduleSave = () => {
@@ -1023,7 +1059,7 @@ export function SurvivalGameClient() {
         window.clearTimeout(timeoutFallback);
       }
     };
-  }, [screen]);
+  }, [screen, pushToast]);
 
   // Best-effort checkpoint when the tab/app closes so console players never
   // lose progress between the 35 s autosave and the moment they stop playing.
@@ -1120,10 +1156,22 @@ export function SurvivalGameClient() {
             return;
           }
           try {
-            saveGameToSlot(engine.exportSaveData(slotId));
+            const saved = saveGameToSlot(engine.exportSaveData(slotId));
             refreshSaves();
+            if (!saved) {
+              pushToast({
+                id: `initial_save_failed_${Date.now()}`,
+                text: 'This world could not be saved — browser storage is full or unavailable.',
+                tone: 'warning',
+              });
+            }
           } catch (err) {
             console.error('Failed to persist new world', err);
+            pushToast({
+              id: `initial_save_failed_${Date.now()}`,
+              text: 'This world could not be saved — browser storage is full or unavailable.',
+              tone: 'warning',
+            });
           }
         };
         window.setTimeout(persistInitialSave, 1200);
@@ -1279,8 +1327,15 @@ export function SurvivalGameClient() {
 
   const handleSettingsChange = (next: GameSettings) => {
     setSettings(next);
-    saveSettings(next);
+    const saved = saveSettings(next);
     engineRef.current?.updateSettings(next);
+    if (!saved) {
+      pushToast({
+        id: `settings_save_failed_${Date.now()}`,
+        text: 'Settings changed for this session but could not be saved — browser storage is full or unavailable.',
+        tone: 'warning',
+      });
+    }
   };
 
   const openElevatorComputer = useCallback((structureId?: string) => {
@@ -1730,7 +1785,9 @@ export function SurvivalGameClient() {
       <ConsoleNavigation
         active={consoleNavigationActive}
         onBack={handleConsoleBack}
-        onToggleFullscreen={toggleFullscreen}
+        onToggleFullscreen={
+          activeModal === 'field_processing' ? undefined : toggleFullscreen
+        }
       />
 
       {/* CINEMATIC BOOT SCREEN — paints before the heavy world build starts */}
@@ -5591,6 +5648,7 @@ export function SurvivalGameClient() {
             refreshSaves();
           }}
           onOpenSettings={() => setActiveModal('settings')}
+          onOpenMap={hud ? () => setActiveModal('map') : undefined}
           isFullscreen={isFullscreen}
           onToggleFullscreen={toggleFullscreen}
           onQuitToMenu={() => {

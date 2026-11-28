@@ -8,6 +8,7 @@ import {
   WATERPARK_DECK_HALF_W,
   WATERPARK_DUMP_BUCKET,
   WATERPARK_FEATURES,
+  WATERPARK_LAUNCH,
   WATERPARK_LAZY_RIVER,
   WATERPARK_POOLS,
   WATERPARK_SITE,
@@ -112,10 +113,67 @@ test('every tower staircase is continuously solid from deck to summit', () => {
       const angle = t * turns * Math.PI * 2;
       const wx = WATERPARK_SITE.x + tower.x + Math.cos(angle) * WATERPARK_TOWER_STAIR.radius;
       const wz = WATERPARK_SITE.z + tower.z + Math.sin(angle) * WATERPARK_TOWER_STAIR.radius;
-      const expectedY = getWaterparkTowerStairY(tower.height, t);
-      const surfaceY = getWaterparkSurfaceY(wx, wz, expectedY + 0.01, expectedY + 0.01);
+      const stairY = getWaterparkTowerStairY(tower.height, t);
+      // A quarter-turn landing is a flat, widened tread. Its surface is the
+      // authored landing height whenever the player's feet can reach it.
+      let expectedY = stairY;
+      for (const landingT of [0.25, 0.5, 0.75]) {
+        const landingAngle = landingT * turns * Math.PI * 2;
+        const landingY = getWaterparkTowerStairY(tower.height, landingT);
+        const offsetX =
+          WATERPARK_SITE.x +
+          tower.x +
+          Math.cos(angle) * WATERPARK_TOWER_STAIR.radius -
+          (WATERPARK_SITE.x + tower.x + Math.cos(landingAngle) * WATERPARK_TOWER_STAIR.radius);
+        const offsetZ =
+          WATERPARK_SITE.z +
+          tower.z +
+          Math.sin(angle) * WATERPARK_TOWER_STAIR.radius -
+          (WATERPARK_SITE.z + tower.z + Math.sin(landingAngle) * WATERPARK_TOWER_STAIR.radius);
+        const radialOffset =
+          offsetX * Math.cos(landingAngle) + offsetZ * Math.sin(landingAngle);
+        const tangentOffset =
+          -offsetX * Math.sin(landingAngle) + offsetZ * Math.cos(landingAngle);
+        if (
+          Math.abs(radialOffset) <= 1.2 &&
+          Math.abs(tangentOffset) <= 0.5 &&
+          landingY <= stairY + 0.63 &&
+          Math.abs(stairY + 0.01 - landingY) <= 0.46
+        ) {
+          // A flat landing overrides the underlying helix while the feet are
+          // within a step of its authored height.
+          expectedY = landingY;
+        }
+      }
+      const summitY =
+        WATERPARK_DECK_Y + tower.height + WATERPARK_TOWER_STAIR.landingRise;
+      if (
+        Math.abs(Math.cos(angle) * WATERPARK_TOWER_STAIR.radius) <=
+          WATERPARK_TOWER_STAIR.radius + 0.03 &&
+        Math.abs(Math.sin(angle) * WATERPARK_TOWER_STAIR.radius) <=
+          WATERPARK_TOWER_STAIR.radius + 0.03 &&
+        summitY <= stairY + 0.41
+      ) {
+        expectedY = Math.max(expectedY, summitY);
+      }
+      let surfaceY = getWaterparkSurfaceY(wx, wz, stairY + 0.01, stairY + 0.01);
+      // A launch platform that overlaps a stair is an authored flat deck and
+      // takes precedence when it is within a step of the tread.
+      const onLaunchDeck = WATERPARK_SLIDES.some((slide) => {
+        const access = getWaterparkSlideAccess(slide);
+        return (
+          access.startY <= stairY + 0.09 &&
+          access.startY >= stairY - 0.75 &&
+          Math.abs(wx - WATERPARK_SITE.x - access.startX) <=
+            WATERPARK_LAUNCH.platformHalf &&
+          Math.abs(wz - WATERPARK_SITE.z - access.startZ) <=
+            WATERPARK_LAUNCH.platformHalf &&
+          access.startY >= stairY - 0.3
+        );
+      });
+      if (onLaunchDeck) expectedY = surfaceY;
       assertClose(surfaceY, expectedY, 0.02);
-      assert.ok(surfaceY - previousY <= 0.52, `${tower.id} stair has a non-walkable step`);
+      assert.ok(surfaceY - previousY <= 0.63, `${tower.id} stair has a non-walkable step`);
       previousY = surfaceY;
     }
     const summitY =

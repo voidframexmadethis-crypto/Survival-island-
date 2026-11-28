@@ -11,6 +11,7 @@ import {
   resolveAllowedGameMode,
 } from '../types';
 
+import { detectGraphicsHardware } from './graphicsDetection';
 import {
   KEY as LAUNCH_SAVE_KEY,
   loadCheckpoint,
@@ -40,7 +41,6 @@ export {
 };
 
 const SAVE_INDEX_KEY = 'survival_island_lost_world_saves_v1';
-const PHOTOREAL_GRAPHICS_KEY = 'survival_island_photoreal_graphics_v1';
 const SAVE_SLOT_PREFIX = 'survival_island_slot_v1_';
 const SETTINGS_KEY = 'survival_island_settings_v1';
 const ACTIVE_SESSION_KEY = 'survival_island_active_session_v1';
@@ -50,43 +50,72 @@ export interface GraphicsPresetProfile {
   graphicsPreset: GraphicsPreset;
   shadowsEnabled: boolean;
   waterReflectionsEnabled: boolean;
+  waterEffectsEnabled: boolean;
+  postProcessingEnabled: boolean;
   particlesEnabled: boolean;
   drawDistance: DrawDistanceTier;
+  vegetationDensity: number;
   dynamicAutoFps: boolean;
   tvSafetyMode: TvSafetyMode;
 }
 
+/**
+ * Maps old saved preset names onto the five-tier console-era scale.
+ * "medium" was the previous Balanced tier and is preserved as an alias so no
+ * existing save loses its chosen quality.
+ */
 export function normalizeGraphicsPreset(
   rawPreset?: string,
   rawQuality?: string,
 ): GraphicsPreset {
+  if (rawPreset === 'legacy' || rawPreset === 'minimum') return 'legacy';
   if (rawPreset === 'low' || rawPreset === 'performance') return 'low';
   if (rawPreset === 'ultra' || rawQuality === 'ultra') return 'ultra';
   if (rawPreset === 'high' || rawQuality === 'high') return 'high';
-  if (rawPreset === 'medium' || rawPreset === 'balanced') return 'medium';
-  if (rawQuality === 'high') return 'high';
+  if (rawPreset === 'medium' || rawPreset === 'balanced') return 'balanced';
+  if (rawQuality === 'medium' || rawQuality === 'balanced') return 'balanced';
   if (rawQuality === 'low') return 'low';
-  return 'medium';
+  if (rawQuality === 'legacy') return 'legacy';
+  return 'balanced';
 }
 
 export const GRAPHICS_PRESET_PROFILES: Record<GraphicsPreset, GraphicsPresetProfile> = {
+  legacy: {
+    graphicsQuality: 'legacy',
+    graphicsPreset: 'legacy',
+    shadowsEnabled: false,
+    waterReflectionsEnabled: false,
+    waterEffectsEnabled: false,
+    postProcessingEnabled: false,
+    particlesEnabled: false,
+    drawDistance: 'near',
+    vegetationDensity: 0.2,
+    dynamicAutoFps: true,
+    tvSafetyMode: 'safe_mini',
+  },
   low: {
     graphicsQuality: 'low',
     graphicsPreset: 'low',
     shadowsEnabled: false,
     waterReflectionsEnabled: false,
+    waterEffectsEnabled: false,
+    postProcessingEnabled: false,
     particlesEnabled: true,
     drawDistance: 'near',
+    vegetationDensity: 0.45,
     dynamicAutoFps: true,
     tvSafetyMode: 'safe_mini',
   },
-  medium: {
-    graphicsQuality: 'medium',
-    graphicsPreset: 'medium',
+  balanced: {
+    graphicsQuality: 'balanced',
+    graphicsPreset: 'balanced',
     shadowsEnabled: true,
     waterReflectionsEnabled: true,
+    waterEffectsEnabled: true,
+    postProcessingEnabled: true,
     particlesEnabled: true,
     drawDistance: 'medium',
+    vegetationDensity: 0.8,
     dynamicAutoFps: true,
     tvSafetyMode: 'auto',
   },
@@ -95,8 +124,11 @@ export const GRAPHICS_PRESET_PROFILES: Record<GraphicsPreset, GraphicsPresetProf
     graphicsPreset: 'high',
     shadowsEnabled: true,
     waterReflectionsEnabled: true,
+    waterEffectsEnabled: true,
+    postProcessingEnabled: true,
     particlesEnabled: true,
     drawDistance: 'far',
+    vegetationDensity: 0.95,
     dynamicAutoFps: true,
     tvSafetyMode: 'auto',
   },
@@ -105,8 +137,11 @@ export const GRAPHICS_PRESET_PROFILES: Record<GraphicsPreset, GraphicsPresetProf
     graphicsPreset: 'ultra',
     shadowsEnabled: true,
     waterReflectionsEnabled: true,
+    waterEffectsEnabled: true,
+    postProcessingEnabled: true,
     particlesEnabled: true,
     drawDistance: 'far',
+    vegetationDensity: 1,
     dynamicAutoFps: false,
     tvSafetyMode: 'full_3d',
   },
@@ -135,12 +170,15 @@ export const DEFAULT_SETTINGS: GameSettings = {
   masterVolume: 0.7,
   sfxEnabled: true,
   ambienceEnabled: true,
-  graphicsQuality: 'medium',
-  graphicsPreset: 'medium',
+  graphicsQuality: 'balanced',
+  graphicsPreset: 'balanced',
   shadowsEnabled: true,
   waterReflectionsEnabled: true,
+  waterEffectsEnabled: true,
+  postProcessingEnabled: true,
   particlesEnabled: true,
   drawDistance: 'medium',
+  vegetationDensity: 0.8,
   dynamicAutoFps: true,
   wildlifeDensity: 0.75,
   detailedSkinningAnimations: true,
@@ -153,9 +191,10 @@ export const DEFAULT_SETTINGS: GameSettings = {
 };
 
 export function getDefaultSettingsForDevice(): GameSettings {
-  // Desktop hardware starts on the cinematic preset. Touch devices stay at
-  // Medium so the high-resolution PBR pass does not melt a phone GPU.
-  const defaultPreset: GraphicsPreset = isMobileOrTouchClient() ? 'medium' : 'ultra';
+  // Probe the browser GPU once for a safe first-run profile. Ultra is never
+  // selected automatically; players can opt into it from Settings.
+  const detected = detectGraphicsHardware();
+  const defaultPreset: GraphicsPreset = detected.preset;
   return {
     ...DEFAULT_SETTINGS,
     ...GRAPHICS_PRESET_PROFILES[defaultPreset],
@@ -180,23 +219,10 @@ export function loadSettings(): GameSettings {
       graphicsPreset?: string;
       graphicsQuality?: string;
     };
-    let normalizedPreset = normalizeGraphicsPreset(
+    const normalizedPreset = normalizeGraphicsPreset(
       parsed.graphicsPreset,
       parsed.graphicsQuality,
     );
-    // Existing desktop saves that still carry the old Medium default get one
-    // automatic upgrade to the cinematic profile. The marker means a later
-    // deliberate choice of Medium is respected.
-    let promotedForPhotorealism = false;
-    if (
-      !isMobileOrTouchClient() &&
-      normalizedPreset === 'medium' &&
-      window.localStorage.getItem(PHOTOREAL_GRAPHICS_KEY) !== '1'
-    ) {
-      normalizedPreset = 'ultra';
-      promotedForPhotorealism = true;
-      window.localStorage.setItem(PHOTOREAL_GRAPHICS_KEY, '1');
-    }
     const prof = GRAPHICS_PRESET_PROFILES[normalizedPreset];
     const merged: GameSettings = {
       ...base,
@@ -204,24 +230,38 @@ export function loadSettings(): GameSettings {
       graphicsPreset: normalizedPreset,
       graphicsQuality: normalizedPreset,
     };
-    if (promotedForPhotorealism) {
-      // The old Medium save also carries Medium draw distance and dynamic FPS;
-      // replace the whole profile, not just its label.
-      Object.assign(merged, prof);
-    }
+    // Older settings files predate individual effect toggles. Fill missing
+    // values from the chosen preset, not from whatever hardware is detected
+    // today, so a deliberate preset choice keeps its intended look.
     if (parsed.shadowsEnabled === undefined) merged.shadowsEnabled = prof.shadowsEnabled;
     if (parsed.waterReflectionsEnabled === undefined) {
       merged.waterReflectionsEnabled = prof.waterReflectionsEnabled;
+    }
+    if (parsed.waterEffectsEnabled === undefined) {
+      merged.waterEffectsEnabled = prof.waterEffectsEnabled;
+    }
+    if (parsed.postProcessingEnabled === undefined) {
+      merged.postProcessingEnabled = prof.postProcessingEnabled;
     }
     if (parsed.particlesEnabled === undefined) {
       merged.particlesEnabled = prof.particlesEnabled;
     }
     if (parsed.drawDistance === undefined) merged.drawDistance = prof.drawDistance;
-    if (merged.dynamicAutoFps === undefined) merged.dynamicAutoFps = true;
+    if (parsed.vegetationDensity === undefined) {
+      merged.vegetationDensity = prof.vegetationDensity;
+    }
+    if (merged.dynamicAutoFps === undefined) merged.dynamicAutoFps = prof.dynamicAutoFps;
     if (typeof merged.wildlifeDensity !== 'number' || !Number.isFinite(merged.wildlifeDensity)) {
       merged.wildlifeDensity = 0.75;
     }
     merged.wildlifeDensity = Math.max(0, Math.min(1, merged.wildlifeDensity));
+    if (
+      typeof merged.vegetationDensity !== 'number' ||
+      !Number.isFinite(merged.vegetationDensity)
+    ) {
+      merged.vegetationDensity = prof.vegetationDensity;
+    }
+    merged.vegetationDensity = Math.max(0, Math.min(1, merged.vegetationDensity));
     if (merged.detailedSkinningAnimations === undefined) {
       merged.detailedSkinningAnimations = true;
     }
@@ -238,14 +278,15 @@ export function loadSettings(): GameSettings {
   }
 }
 
-export function saveSettings(settings: GameSettings): void {
-  if (typeof window === 'undefined') return;
+export function saveSettings(settings: GameSettings): boolean {
+  if (typeof window === 'undefined') return false;
   try {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-    window.localStorage.setItem(PHOTOREAL_GRAPHICS_KEY, '1');
     saveLaunchSettings(settings);
+    return true;
   } catch {
-    // Ignore storage quota errors gracefully
+    // Callers surface the failure instead of silently losing preferences.
+    return false;
   }
 }
 

@@ -1160,7 +1160,12 @@ export interface GameStats {
   daysSurvived: number;
 }
 
-export type GraphicsPreset = 'low' | 'medium' | 'high' | 'ultra';
+export type GraphicsPreset =
+  | 'legacy'
+  | 'low'
+  | 'balanced'
+  | 'high'
+  | 'ultra';
 export type DrawDistanceTier = 'near' | 'medium' | 'far';
 export type TvSafetyMode = 'auto' | 'safe_mini' | 'full_3d';
 export type TvBassMode = 'off' | 'trunk' | 'extreme';
@@ -1173,8 +1178,12 @@ export interface GameSettings {
   graphicsPreset?: GraphicsPreset;
   shadowsEnabled?: boolean;
   waterReflectionsEnabled?: boolean;
+  waterEffectsEnabled?: boolean;
+  postProcessingEnabled?: boolean;
   particlesEnabled?: boolean;
   drawDistance?: DrawDistanceTier;
+  /** 0 hides all grass/clutter batches; 1 keeps the authored density. */
+  vegetationDensity?: number;
   dynamicAutoFps?: boolean;
   /** 0 disables ambient global wildlife; 1 fills every pooled instance slot. */
   wildlifeDensity?: number;

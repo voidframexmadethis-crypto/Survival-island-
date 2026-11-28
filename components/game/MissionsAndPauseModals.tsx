@@ -1,15 +1,18 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   CheckCircle2,
   Circle,
+  Cpu,
   Eye,
   Gamepad2,
   Gauge,
   Keyboard,
+  MapPin,
   Maximize,
   Minimize,
+  MonitorPlay,
   PawPrint,
   Play,
   RotateCcw,
@@ -21,6 +24,7 @@ import {
   Sparkles,
   Sun,
   Trash2,
+  Trees,
   Trophy,
   Tv,
   Waves,
@@ -28,7 +32,14 @@ import {
   Zap,
 } from 'lucide-react';
 import { STAGE_1_MISSIONS } from '@/game/data/missions';
-import { getPresetSettings, normalizeGraphicsPreset } from '@/game/systems/saveManager';
+import {
+  getPresetSettings,
+  normalizeGraphicsPreset,
+} from '@/game/systems/saveManager';
+import {
+  describeGraphicsPreset,
+  detectGraphicsHardware,
+} from '@/game/systems/graphicsDetection';
 import {
   DrawDistanceTier,
   GameMode,
@@ -151,8 +162,9 @@ const PRESET_CARDS: {
   title: string;
   subtitle: string;
 }[] = [
-  { id: 'low', title: 'Low', subtitle: 'Max Battery & FPS' },
-  { id: 'medium', title: 'Medium', subtitle: 'iPhone Default' },
+  { id: 'legacy', title: 'Legacy', subtitle: 'Software GPU' },
+  { id: 'low', title: 'Low', subtitle: 'Battery / FPS' },
+  { id: 'balanced', title: 'Balanced', subtitle: 'Recommended' },
   { id: 'high', title: 'High', subtitle: 'Full Shadows' },
   { id: 'ultra', title: 'Ultra', subtitle: 'Cinematic PBR' },
 ];
@@ -172,8 +184,15 @@ export function SettingsModal({
   );
   const shadowsOn = settings.shadowsEnabled !== false;
   const reflectionsOn = settings.waterReflectionsEnabled !== false;
+  const waterEffectsOn = settings.waterEffectsEnabled !== false;
+  const postFxOn = settings.postProcessingEnabled !== false;
   const particlesOn = settings.particlesEnabled !== false;
   const autoFpsOn = settings.dynamicAutoFps !== false;
+  const vegetationDensity = Math.max(
+    0,
+    Math.min(1, settings.vegetationDensity ?? 0.8),
+  );
+  const [detectNote, setDetectNote] = useState('');
   const drawDist: DrawDistanceTier = settings.drawDistance ?? 'medium';
   const wildlifeDensity = Math.max(
     0,
@@ -216,8 +235,24 @@ export function SettingsModal({
             </div>
 
             <div>
-              <div className="text-xs text-stone-300 mb-2">Quality Preset</div>
-              <div className="grid grid-cols-4 gap-1.5">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-xs text-stone-300">Quality Preset</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const report = detectGraphicsHardware();
+                    onChange(getPresetSettings(settings, report.preset));
+                    setDetectNote(
+                      `${report.preset.toUpperCase()} · ${report.reason}`,
+                    );
+                  }}
+                  className="flex min-h-[32px] items-center gap-1.5 rounded-lg border border-emerald-600/60 bg-emerald-950/50 px-2.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-200 hover:bg-emerald-900/60"
+                >
+                  <Cpu className="h-3.5 w-3.5" />
+                  Auto-Detect
+                </button>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-5">
                 {PRESET_CARDS.map((card) => {
                   const selected = activePreset === card.id;
                   return (
@@ -245,7 +280,16 @@ export function SettingsModal({
                 })}
               </div>
               <p className="text-[10px] text-stone-500 mt-1.5">
-                Cinematic HDR post-FX — bloom, filmic color grade, sharpening &amp; vignette — scales with the preset.
+                {describeGraphicsPreset(activePreset)}
+              </p>
+              {detectNote && (
+                <p className="mt-1 rounded-lg border border-emerald-800/70 bg-emerald-950/40 px-2 py-1 text-[10px] leading-snug text-emerald-200">
+                  Detected: {detectNote}
+                </p>
+              )}
+              <p className="text-[10px] text-stone-500 mt-1">
+                Graphics changes never alter saves, world simulation, vehicles or
+                gameplay balance.
               </p>
             </div>
 
@@ -289,6 +333,26 @@ export function SettingsModal({
 
               <button
                 onClick={() =>
+                  onChange({
+                    ...settings,
+                    waterEffectsEnabled: !waterEffectsOn,
+                  })
+                }
+                className={`min-h-[44px] px-3 rounded-xl border text-xs font-semibold flex items-center justify-between gap-2 ${
+                  waterEffectsOn
+                    ? 'bg-amber-600/20 border-amber-500 text-amber-200'
+                    : 'bg-stone-900 border-stone-800 text-stone-400'
+                }`}
+              >
+                <span className="flex items-center gap-1.5">
+                  <Waves className="w-3.5 h-3.5 shrink-0" />
+                  Ocean Detail
+                </span>
+                <span>{waterEffectsOn ? 'On' : 'Off'}</span>
+              </button>
+
+              <button
+                onClick={() =>
                   onChange({ ...settings, particlesEnabled: !particlesOn })
                 }
                 className={`min-h-[44px] px-3 rounded-xl border text-xs font-semibold flex items-center justify-between gap-2 ${
@@ -302,6 +366,23 @@ export function SettingsModal({
                   Particles
                 </span>
                 <span>{particlesOn ? 'On' : 'Off'}</span>
+              </button>
+
+              <button
+                onClick={() =>
+                  onChange({ ...settings, postProcessingEnabled: !postFxOn })
+                }
+                className={`min-h-[44px] px-3 rounded-xl border text-xs font-semibold flex items-center justify-between gap-2 ${
+                  postFxOn
+                    ? 'bg-amber-600/20 border-amber-500 text-amber-200'
+                    : 'bg-stone-900 border-stone-800 text-stone-400'
+                }`}
+              >
+                <span className="flex items-center gap-1.5">
+                  <MonitorPlay className="w-3.5 h-3.5 shrink-0" />
+                  Post-FX
+                </span>
+                <span>{postFxOn ? 'On' : 'Off'}</span>
               </button>
 
               <button
@@ -378,7 +459,41 @@ export function SettingsModal({
               <p className="mt-1 text-[10px] leading-relaxed text-stone-400">
                 Global ambient animals spawn natively by biome. Distant wildlife
                 swaps to low-poly LODs and returns to the pool beyond 136 m.
-                Slide to 0 for a completely still wilderness.
+                Slide to 0 for a completely still wilderness. This is a gameplay
+                setting and is not changed by graphics presets.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-lime-900/70 bg-lime-950/20 p-3">
+              <div className="flex items-center justify-between gap-2 text-xs text-stone-200">
+                <span className="flex items-center gap-1.5 font-semibold">
+                  <Trees className="w-3.5 h-3.5 text-lime-400" />
+                  Vegetation Density
+                </span>
+                <span className="font-mono-tabular text-lime-300">
+                  {vegetationDensity <= 0
+                    ? 'Off'
+                    : `${Math.round(vegetationDensity * 100)}%`}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={vegetationDensity}
+                onChange={(e) =>
+                  onChange({
+                    ...settings,
+                    vegetationDensity: parseFloat(e.target.value),
+                  })
+                }
+                className="mt-2 w-full accent-lime-500"
+                aria-label="Vegetation Density"
+              />
+              <p className="mt-1 text-[10px] leading-relaxed text-stone-400">
+                Visual-only grass, flowers and beach clutter. Trees, resource
+                nodes and collision stay intact at every setting.
               </p>
             </div>
 
@@ -626,6 +741,7 @@ export function PauseModal({
   onQuitToMenu,
   isFullscreen = false,
   onToggleFullscreen,
+  onOpenMap,
 }: {
   saveSlots: SaveSlotSummary[];
   currentSlotId?: string;
@@ -640,6 +756,7 @@ export function PauseModal({
   onQuitToMenu: () => void;
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
+  onOpenMap?: () => void;
 }) {
   const effectiveMode = resolveAllowedGameMode(worldType, gameMode);
   const resumeLabel =
@@ -695,6 +812,16 @@ export function PauseModal({
             <Settings className="w-4 h-4" />
             <span>Settings</span>
           </button>
+
+          {onOpenMap && (
+            <button
+              onClick={onOpenMap}
+              className="w-full min-h-[46px] rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-100 font-semibold text-sm flex items-center justify-center gap-2"
+            >
+              <MapPin className="w-4 h-4" />
+              <span>Map &amp; Objectives</span>
+            </button>
+          )}
 
           {onToggleFullscreen && (
             <button
@@ -791,6 +918,7 @@ export function ControlsModal({ onClose }: { onClose: () => void }) {
     ['Action / Jump / Sprint', 'Right-Hand Touch Action Pads'],
     ['Gamepad Support', 'Auto-Detected Xbox / PlayStation / MFi'],
     ['Menu Navigation', 'D-Pad / Left Stick · A Select · B Back'],
+    ['Backpack & Crafting', 'View / Share button'],
     ['Fullscreen', 'Y on any menu'],
   ];
 

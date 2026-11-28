@@ -245,6 +245,7 @@ import {
   getDimensionTerrainHeight,
 } from '../systems/multiverse';
 import {
+  GRAPHICS_PRESET_PROFILES,
   isMobileOrTouchClient,
   normalizeGraphicsPreset,
 } from '../systems/saveManager';
@@ -1450,7 +1451,7 @@ export class GameEngine {
   // Starting/loading a world sets the real gameplay time explicitly.
   private timeOfDay = 0.71;
   private dayNightMode: DayNightMode = 'cycle';
-  private activeGraphicsPreset: GraphicsPreset = 'medium';
+  private activeGraphicsPreset: GraphicsPreset = 'balanced';
   private inventory: InventorySlot[] = [];
   private backpackCompartments: BackpackCompartmentEntry[] = [];
   private hotbarItemIds: (ItemId | null)[] = [
@@ -2419,9 +2420,8 @@ export class GameEngine {
       shadowsEnabled: !this.isSoftwareGl,
       envMapIntensity: 1.0,
     });
-    this.cinematicFx = new CinematicPostFx(this.renderer, this.scene, this.camera, {
-      samples: this.isTouchDevice ? 0 : 2,
-    });
+    // applyGraphicsProfile creates the post-FX chain only when the selected
+    // preset (or a later settings change) actually uses it.
     this.applyGraphicsProfile();
 
     if (!this.isSoftwareGl) {
@@ -3161,6 +3161,11 @@ export class GameEngine {
       camera.position.copy(prevPos);
       camera.quaternion.copy(prevQuat);
       camera.updateMatrixWorld();
+      // The offscreen render consumed the one-shot shadow refresh. Re-arm it so
+      // the first visible frame is not lit from the warm-up camera far away.
+      if (this.effectiveShadowsEnabled && renderer.shadowMap.enabled) {
+        renderer.shadowMap.needsUpdate = true;
+      }
       for (const entry of chunkRestore) entry.group.visible = entry.visible;
       this.waterpark?.setVisible(prevWaterparkVisible);
       this.coasterRuntime.setWarmupVisible(false);
@@ -3302,7 +3307,13 @@ export class GameEngine {
   /** The title screen is a showcase: full cinematic grade regardless of gameplay preset. */
   private applyCinematicQualityForMode(): void {
     if (!this.cinematicFx) return;
-    const menuShowcase = this.mode === 'menu' && !this.isSoftwareGl;
+    // The title-screen showcase may only borrow a richer grade on machines
+    // that already run High/Ultra; low-end devices must not pay for bloom.
+    const menuShowcase =
+      this.mode === 'menu' &&
+      !this.isSoftwareGl &&
+      (this.activeGraphicsPreset === 'high' ||
+        this.activeGraphicsPreset === 'ultra');
     this.cinematicFx.setQuality(
       menuShowcase
         ? 'high'
@@ -3312,6 +3323,25 @@ export class GameEngine {
             isSoftwareGl: this.isSoftwareGl,
           }),
     );
+  }
+
+  /**
+   * Creates or tears down the post-processing chain with the graphics preset.
+   * Legacy/Low and players who disable post-FX never allocate bloom targets.
+   */
+  private syncCinematicFx(enabled: boolean): void {
+    if (!this.renderer || !this.scene || !this.camera) return;
+    if (enabled && !this.cinematicFx) {
+      this.cinematicFx = new CinematicPostFx(this.renderer, this.scene, this.camera, {
+        samples: this.isTouchDevice ? 0 : 2,
+      });
+      this.applyCinematicQualityForMode();
+      return;
+    }
+    if (!enabled && this.cinematicFx) {
+      this.cinematicFx.dispose();
+      this.cinematicFx = null;
+    }
   }
 
   public setMode(mode: 'menu' | 'playing' | 'paused'): void {
@@ -3401,23 +3431,28 @@ export class GameEngine {
 
     // Stable Hardware-Calibrated Graphics Profile (zero mid-game shader recompilations or framebuffer resizes):
     // Respects the user's chosen preset, shadows, and draw distance permanently without oscillating.
+    const legacy = preset === 'legacy';
+    const low = preset === 'low';
+    const balanced = preset === 'balanced';
     const shadowsOn =
       this.settings.shadowsEnabled !== false &&
-      preset !== 'low' &&
+      !legacy &&
+      !low &&
       !this.isSoftwareGl;
 
-    // Ultra gets the only large shadow atlas. Medium/high keep a smaller map so
-    // the depth pass does not stall integrated GPUs during busy scenes.
+    // Ultra gets the only large shadow atlas. Balanced/High keep a smaller map
+    // so the depth pass does not stall integrated GPUs during busy scenes.
     const shadowMapSize =
-      !this.isTouchDevice && !this.isSoftwareGl && preset !== 'low'
+      !this.isTouchDevice && !this.isSoftwareGl && !legacy && !low
         ? preset === 'ultra'
           ? 3072
           : preset === 'high'
             ? 2048
             : 1536
         : 1024;
-    const shadowHalfExtent =
-      preset === 'ultra'
+    const shadowHalfExtent = legacy
+      ? 30
+      : preset === 'ultra'
         ? this.isTouchDevice
           ? 50
           : 82
@@ -3425,32 +3460,40 @@ export class GameEngine {
           ? this.isTouchDevice
             ? 44
             : 58
-          : preset === 'medium'
+          : preset === 'balanced'
             ? this.isTouchDevice
               ? 38
               : 44
-            : 36;
+            : 34;
     const shadowFar =
       preset === 'ultra' && !this.isTouchDevice
         ? 290
         : preset === 'high' && !this.isTouchDevice
           ? 195
-          : 165;
+          : preset === 'balanced'
+            ? 165
+            : 140;
     const shadowRadius = this.isTouchDevice
       ? 1.0
       : preset === 'ultra'
         ? 2.6
-        : 2.0;
+        : preset === 'high'
+          ? 2.2
+          : 2.0;
 
     let dpr = 1;
-    if (!this.isSoftwareGl) {
+    if (this.isSoftwareGl) {
+      dpr = 0.7;
+    } else {
       const nativeDpr = window.devicePixelRatio || 1;
-      if (preset === 'low') {
+      if (legacy) {
+        dpr = Math.min(nativeDpr, 0.75);
+      } else if (low) {
         dpr = 1;
       } else if (this.isTouchDevice) {
         // Crisp Retina clarity without a 3x fill-rate meltdown on phones.
         dpr = Math.min(nativeDpr, preset === 'ultra' || preset === 'high' ? 1.2 : 1.1);
-      } else if (preset === 'medium') {
+      } else if (balanced) {
         dpr = Math.min(nativeDpr, 1.2);
       } else if (preset === 'high') {
         dpr = Math.min(nativeDpr, 1.35);
@@ -3461,26 +3504,37 @@ export class GameEngine {
 
     const waterRefl =
       this.settings.waterReflectionsEnabled !== false &&
-      preset !== 'low' &&
+      !legacy &&
+      !low &&
+      !this.isSoftwareGl;
+    const waterEffectsOn = this.settings.waterEffectsEnabled !== false;
+    // Post-FX is gated here as well as at creation time so a player can turn
+    // bloom/grade off without giving up shadows.
+    const postProcessingOn =
+      this.settings.postProcessingEnabled !== false &&
+      !legacy &&
+      !low &&
       !this.isSoftwareGl;
     const particlesOn = this.settings.particlesEnabled !== false;
     const particleScale = !particlesOn
       ? 0
-      : preset === 'low'
-        ? 0.5
-        : preset === 'medium'
-          ? 0.8
-          : preset === 'ultra'
-            ? this.isTouchDevice
-              ? 1.0
-              : 1.25
-            : this.isTouchDevice
-              ? 0.85
-              : 1.0;
+      : legacy
+        ? 0.25
+        : low
+          ? 0.45
+          : balanced
+            ? 0.8
+            : preset === 'ultra'
+              ? this.isTouchDevice
+                ? 1.0
+                : 1.25
+              : this.isTouchDevice
+                ? 0.85
+                : 1.0;
     this.effectiveParticleScale = particleScale;
 
     this.shaderQualityTier =
-      this.isSoftwareGl || preset === 'low'
+      this.isSoftwareGl || legacy || low
         ? 0
         : preset === 'ultra'
           ? this.isTouchDevice
@@ -3492,23 +3546,43 @@ export class GameEngine {
               : 2
             : 1;
 
-    this.oceanDetailLevel =
-      this.isSoftwareGl || preset === 'low'
+    this.oceanDetailLevel = !waterEffectsOn || this.isSoftwareGl || legacy
+      ? 0.25
+      : low
         ? 0.4
-        : this.isTouchDevice
-          ? 0.72
-          : 1.0;
+        : balanced
+          ? this.isTouchDevice
+            ? 0.55
+            : 0.78
+          : this.isTouchDevice
+            ? 0.72
+            : 1.0;
     this.realisticOcean?.setDetailLevel(this.oceanDetailLevel);
+    // Waterpark water/particle detail follows the preset, while every stair and
+    // slide collision footprint in waterparkLayout stays resolution-independent.
+    this.waterpark?.setDetailLevel(this.oceanDetailLevel, particleScale);
 
     this.maxActivePointLights = this.isSoftwareGl
       ? 1
-      : this.isTouchDevice
-        ? 3
-        : 6;
+      : legacy
+        ? 1
+        : low
+          ? 2
+          : balanced
+            ? this.isTouchDevice
+              ? 3
+              : 4
+            : this.isTouchDevice
+              ? 3
+              : 6;
 
     const userDistTier =
       this.settings.drawDistance ??
-      (preset === 'high' ? 'far' : preset === 'low' ? 'near' : 'medium');
+      (preset === 'high' || preset === 'ultra'
+        ? 'far'
+        : preset === 'balanced'
+          ? 'medium'
+          : 'near');
     let cullDist = userDistTier === 'near' ? 135 : userDistTier === 'far' ? 310 : 215;
     if (this.isTouchDevice && userDistTier === 'far') {
       cullDist = 240;
@@ -3534,7 +3608,7 @@ export class GameEngine {
     this.applyCinematicQualityForMode();
     this.renderer.shadowMap.enabled = shadowsOn;
     this.renderer.shadowMap.type =
-      this.isTouchDevice || preset === 'medium'
+      this.isTouchDevice || preset === 'balanced' || legacy || low
         ? THREE.PCFShadowMap
         : THREE.PCFSoftShadowMap;
     if (this.sunLight) {
@@ -3571,11 +3645,24 @@ export class GameEngine {
     // reflection toggle is off; otherwise every PBR material loses its ambient
     // specular response and the scene flattens out.
     this.scene.environment = this.envTexture;
-    this.scene.environmentIntensity =
-      preset === 'ultra' ? 1.0 : preset === 'high' ? 0.92 : 0.85;
+    this.scene.environmentIntensity = legacy
+      ? 0.65
+      : low
+        ? 0.75
+        : preset === 'ultra'
+          ? 1.0
+          : preset === 'high'
+            ? 0.92
+            : 0.85;
     if (this.world) {
       this.world.setWorldShadowCasting(shadowsOn);
       this.world.setUltraFidelity(preset === 'ultra' && !this.isSoftwareGl);
+      // Vegetation density is purely visual; gameplay colliders, trees and
+      // world simulation are untouched by this call.
+      this.world.setVegetationDensity(
+        this.settings.vegetationDensity ??
+          GRAPHICS_PRESET_PROFILES[preset].vegetationDensity,
+      );
       const waterMats = [
         this.world.oceanMesh?.material,
         this.world.lakeMesh?.material,
@@ -3605,6 +3692,8 @@ export class GameEngine {
         disc.visible = !shadowsOn;
       }
     }
+
+    this.syncCinematicFx(postProcessingOn);
   }
 
   public setTouchJoystick(x: number, y: number): void {
@@ -26816,6 +26905,7 @@ export class GameEngine {
     const startHop = (mode: 'three' | 'front' | 'rear' | 'all', corners: LowriderCorner[]) => {
       if (this.lowriderHopMode === mode) {
         stopHop();
+        if (mode === 'front' || mode === 'rear') this.hydraulicMode = 'level';
         this.toast(`${av.name}: ${mode === 'three' ? '3-wheel' : mode} hop released`, 'info');
         this.emitHud();
         return;
@@ -27100,6 +27190,9 @@ export class GameEngine {
     if (this.lowriderHopTimer <= 0) {
       this.lowriderHopMode = null;
       this.lowriderHopTimer = 0;
+      if (this.hydraulicMode === 'front_hop' || this.hydraulicMode === 'rear_hop') {
+        this.hydraulicMode = 'level';
+      }
       return;
     }
     if (this.lowriderHopNextPulse > 0) return;

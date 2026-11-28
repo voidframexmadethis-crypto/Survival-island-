@@ -114,8 +114,11 @@ export function getWaterparkTowerStairY(height: number, t: number): number {
 
 /** Physical access catwalk from the tower stair to each slide's launch mouth. */
 export const WATERPARK_LAUNCH = {
-  platformHalf: 1.7,
+  /** Half-width of the 3.8 m fabricated launch deck. */
+  platformHalf: 1.9,
   catwalkHalfWidth: 0.68,
+  /** Collision footprint follows the visible treads rather than their centreline. */
+  catwalkWalkHalfWidth: 0.7,
 } as const;
 
 export interface WaterparkSlideAccess {
@@ -157,7 +160,7 @@ export function isPointOnWaterparkSlideAccess(
         access.catwalk[i].x,
         access.catwalk[i].z,
       ) <=
-      WATERPARK_LAUNCH.catwalkHalfWidth + 0.32
+      WATERPARK_LAUNCH.catwalkWalkHalfWidth + 0.04
     ) {
       return true;
     }
@@ -859,36 +862,63 @@ export function getWaterparkSurfaceY(
     bestY = WATERPARK_DECK_Y;
   }
 
+  let launchPlatformY = -9999;
+  let landingPlatformY = -9999;
   for (const tower of WATERPARK_TOWERS) {
     const localX = dx - tower.x;
     const localZ = dz - tower.z;
     const summitY = WATERPARK_DECK_Y + tower.height + WATERPARK_TOWER_STAIR.landingRise;
 
-    // Summit landing, inset just enough that the rising spiral stair is not
-    // mistaken for the deck on the turn directly below it.
+    // Summit landing. The visible deck is a 9.2 m square; using its real
+    // footprint (rather than an inset circle) closes the last-tread seam where
+    // the spiral stair meets the platform.
     if (
-      Math.abs(localX) <= 4.6 &&
-      Math.abs(localZ) <= 4.6 &&
-      Math.hypot(localX, localZ) <= 4.18 &&
-      sweepFootY >= summitY - 0.65 &&
+      Math.abs(localX) <= WATERPARK_TOWER_STAIR.radius + 0.03 &&
+      Math.abs(localZ) <= WATERPARK_TOWER_STAIR.radius + 0.03 &&
+      sweepFootY >= summitY - 0.4 &&
       summitY > bestY
     ) {
       bestY = summitY;
     }
 
     // Spiral stair ribbon. Multiple turns occupy the same X/Z footprint at
-    // different heights, so pick the tread closest to the player's feet.
+    // different heights, so pick the tread closest to the player's feet. The
+    // collision band matches the full 1.45 m tread width; the old 1.0 m band
+    // left both visible edges unsupported.
+    const stairHalfWidth = WATERPARK_TOWER_STAIR.width * 0.5 + 0.03;
     const radial = Math.hypot(localX, localZ);
-    if (Math.abs(radial - WATERPARK_TOWER_STAIR.radius) > 0.5) continue;
-    let angle = Math.atan2(localZ, localX);
-    if (angle < 0) angle += Math.PI * 2;
+    const onStairBand = Math.abs(radial - WATERPARK_TOWER_STAIR.radius) <= stairHalfWidth;
     const turns = getWaterparkTowerStairTurns(tower.height);
-    for (let turn = 0; turn <= turns; turn++) {
-      const t = (angle / (Math.PI * 2) + turn) / turns;
-      if (t > 1.000001) continue;
-      const stairY = getWaterparkTowerStairY(tower.height, t);
-      if (stairY <= sweepFootY + 0.62 && stairY > bestY) {
-        bestY = stairY;
+    if (onStairBand) {
+      let angle = Math.atan2(localZ, localX);
+      if (angle < 0) angle += Math.PI * 2;
+      for (let turn = 0; turn <= turns; turn++) {
+        const t = (angle / (Math.PI * 2) + turn) / turns;
+        if (t > 1.000001) continue;
+        const stairY = getWaterparkTowerStairY(tower.height, t);
+        if (stairY <= sweepFootY + 0.62 && stairY > bestY) {
+          bestY = stairY;
+        }
+      }
+    }
+
+    // Widened quarter-turn landings extend beyond the helix band. Their flat
+    // treads are intentionally shallow (1 m) so the plateau never exceeds a
+    // normal step above the adjacent stair tread.
+    for (const landingT of [0.25, 0.5, 0.75]) {
+      if (landingT > turns) continue;
+      const angle = landingT * turns * Math.PI * 2;
+      const landingY = getWaterparkTowerStairY(tower.height, landingT);
+      const offsetX = localX - Math.cos(angle) * WATERPARK_TOWER_STAIR.radius;
+      const offsetZ = localZ - Math.sin(angle) * WATERPARK_TOWER_STAIR.radius;
+      const radialOffset = offsetX * Math.cos(angle) + offsetZ * Math.sin(angle);
+      const tangentOffset = -offsetX * Math.sin(angle) + offsetZ * Math.cos(angle);
+      if (
+        Math.abs(radialOffset) <= 1.2 &&
+        Math.abs(tangentOffset) <= 0.5 &&
+        landingY <= sweepFootY + 0.62
+      ) {
+        landingPlatformY = Math.max(landingPlatformY, landingY);
       }
     }
   }
@@ -905,10 +935,9 @@ export function getWaterparkSurfaceY(
     if (
       reachable &&
       Math.abs(dx - access.startX) <= WATERPARK_LAUNCH.platformHalf &&
-      Math.abs(dz - access.startZ) <= WATERPARK_LAUNCH.platformHalf &&
-      access.startY > bestY
+      Math.abs(dz - access.startZ) <= WATERPARK_LAUNCH.platformHalf
     ) {
-      bestY = access.startY;
+      launchPlatformY = Math.max(launchPlatformY, access.startY);
     }
     let catwalkDistance = Infinity;
     for (let i = 1; i < access.catwalk.length; i++) {
@@ -932,11 +961,32 @@ export function getWaterparkSurfaceY(
     if (
       reachable &&
       !nearTowerCore &&
-      catwalkDistance <= WATERPARK_LAUNCH.catwalkHalfWidth + 0.24 &&
+      catwalkDistance <= WATERPARK_LAUNCH.catwalkWalkHalfWidth &&
       access.startY > bestY
     ) {
       bestY = access.startY;
     }
+  }
+
+  // Authored flat landings and launch decks take precedence when the player's
+  // feet are actually at their level. A spiral tread from another turn may
+  // pass above the same XZ footprint, but it must not lift someone standing on
+  // the flat deck into the air.
+  if (
+    landingPlatformY > -9999 &&
+    Math.abs(footY - landingPlatformY) <= 0.45
+  ) {
+    bestY = landingPlatformY;
+  }
+  if (
+    launchPlatformY > -9999 &&
+    Math.abs(footY - launchPlatformY) <= 0.42 &&
+    // A platform may sit under a much higher tread (the player is on the
+    // platform, not the flight above it), but a lower platform must never pull
+    // a stair climber down through the deck.
+    launchPlatformY >= bestY - 0.55
+  ) {
+    bestY = launchPlatformY;
   }
 
   const bx0 = HILL_HOUSE_POS.x - 8;

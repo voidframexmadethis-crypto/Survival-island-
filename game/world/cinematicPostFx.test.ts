@@ -15,7 +15,7 @@ test('cinematic post FX stays off on software GL and the low preset', () => {
 
 test('cinematic post FX tier is capped on touch devices', () => {
   assert.equal(
-    resolveCinematicPostQuality({ preset: 'medium', isTouch: true, isSoftwareGl: false }),
+    resolveCinematicPostQuality({ preset: 'balanced', isTouch: true, isSoftwareGl: false }),
     'low',
   );
   assert.equal(
@@ -29,10 +29,23 @@ test('cinematic post FX tier is capped on touch devices', () => {
 });
 
 test('cinematic post FX follows the desktop preset through ultra', () => {
-  for (const preset of ['medium', 'high', 'ultra'] as const) {
+  assert.equal(
+    resolveCinematicPostQuality({ preset: 'balanced', isTouch: false, isSoftwareGl: false }),
+    'medium',
+  );
+  for (const preset of ['high', 'ultra'] as const) {
     assert.equal(
       resolveCinematicPostQuality({ preset, isTouch: false, isSoftwareGl: false }),
       preset,
+    );
+  }
+});
+
+test('legacy and low presets never enable post FX', () => {
+  for (const preset of ['legacy', 'low'] as const) {
+    assert.equal(
+      resolveCinematicPostQuality({ preset, isTouch: false, isSoftwareGl: false }),
+      'off',
     );
   }
 });

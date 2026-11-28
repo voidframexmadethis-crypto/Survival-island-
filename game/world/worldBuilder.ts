@@ -314,6 +314,8 @@ export interface WorldHandles {
   setRainPerformanceMode: (enabled: boolean, playerX?: number, playerZ?: number) => void;
   /** Ultra preset: maximum texture filtering, richer PBR response and denser grass clumps. */
   setUltraFidelity: (enabled: boolean) => void;
+  /** Visual-only foliage/decor density (0..1). Never changes colliders or world sim. */
+  setVegetationDensity: (density: number) => void;
   cullWorldByDistance: (
     px: number,
     pz: number,
@@ -6591,6 +6593,7 @@ export function buildIslandWorld(
   }[] = [];
   let grassUltraActive = false;
   let grassRainPerformanceMode = false;
+  let foliageDensity = 1;
   let lastGrassLodX = Number.NaN;
   let lastGrassLodZ = Number.NaN;
   const applyGrassLod = (px: number, pz: number, force = false): void => {
@@ -7676,6 +7679,26 @@ gl_Position = projectionMatrix * mvPosition;`,
     applyGrassLod(lastGrassLodX, lastGrassLodZ, true);
   };
 
+  /**
+   * Scales instanced grass, flowers, pebbles and beach clutter without touching
+   * terrain, trees, resource nodes or any gameplay collision data.
+   */
+  const setVegetationDensity = (density: number): void => {
+    const clamped = Math.max(0, Math.min(1, density));
+    if (Math.abs(clamped - foliageDensity) < 0.005) return;
+    foliageDensity = clamped;
+    for (const chunk of worldChunkManager.foliageChunks) {
+      for (const child of chunk.group.children) {
+        if (!(child instanceof THREE.InstancedMesh)) continue;
+        const stored = child.userData.foliageBaseCount;
+        const base =
+          typeof stored === 'number' ? stored : Math.max(1, child.count);
+        child.userData.foliageBaseCount = base;
+        child.count = Math.max(0, Math.min(base, Math.round(base * clamped)));
+      }
+    }
+  };
+
   const dispose = (): void => {
     for (let i = 0; i < worldChunkManager.chunks.length; i++) {
       const g = worldChunkManager.chunks[i].group;
@@ -7794,6 +7817,7 @@ gl_Position = projectionMatrix * mvPosition;`,
     setWorldShadowCasting,
     setRainPerformanceMode,
     setUltraFidelity,
+    setVegetationDensity,
     cullWorldByDistance,
     resetTerrainIndex,
     setCaveOpenings,
